@@ -61,26 +61,19 @@ class Agent:
         return loop.run(user_message)
 
     def prompt(self, user_message: str) -> str:
-        """组装完整 prompt 文本。
+        """组装完整 prompt 文本（经 ContextManager token 预算控制）。
 
         Args:
             user_message: 当前用户输入。
 
         Returns:
-            完整的 prompt 文本（prefix + 历史 + 当前请求）。
+            完整的 prompt 文本。
         """
-        parts = [self._prefix.text]
+        from agent_runtime.context_manager import ContextManager
 
-        # 历史对话
-        if self.session["history"]:
-            history_text = self._format_history()
-            if history_text:
-                parts.append(history_text)
-
-        # 当前用户请求
-        parts.append(f"\n## 当前任务\n\n{user_message}")
-
-        return "\n".join(parts)
+        cm = ContextManager(self)
+        prompt_text, _metadata = cm.build(user_message)
+        return prompt_text
 
     def record(self, item: dict):
         """向会话历史追加一条记录。
