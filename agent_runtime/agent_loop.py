@@ -59,10 +59,13 @@ class AgentLoop:
             # 1. 组装 prompt
             prompt_text = self.agent.prompt(user_message)
 
-            # 2. 调用模型
+            # 2. 调用模型（附 cache key）
             self.attempts += 1
+            cache_key = getattr(self.agent._prefix, "hash", "")
             raw = self.agent.model_client.complete(
-                prompt_text, max_new_tokens=self.agent.config.max_new_tokens
+                prompt_text,
+                max_new_tokens=self.agent.config.max_new_tokens,
+                prompt_cache_key=cache_key,
             )
 
             # 3. 解析输出

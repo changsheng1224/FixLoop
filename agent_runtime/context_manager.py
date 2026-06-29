@@ -72,14 +72,14 @@ class ContextManager:
     def build(self, user_message: str) -> tuple[str, dict]:
         """组装完整 prompt，返回 (prompt_text, metadata)。
 
-        Args:
-            user_message: 当前用户输入。
-
-        Returns:
-            (prompt_text, metadata_dict) 元组。
-            metadata 含各 section 的 rendered_tokens 和裁剪日志。
+        metadata 含各 section token 数、裁剪日志和 prompt_cache_key。
         """
         metadata = {"sections": {}, "cuts": []}
+
+        # Prompt Cache key = prefix hash
+        metadata["prompt_cache_key"] = getattr(
+            self.agent._prefix, "hash", ""
+        )
 
         # 收集各 section 源文本
         prefix_text = self._get_prefix()

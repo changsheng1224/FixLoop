@@ -22,7 +22,9 @@ class FakeModelClient:
         self.supports_prompt_cache = False
         self.prompts: list[str] = []
 
-    def complete(self, prompt: str, max_new_tokens: int = 512) -> str:
+    def complete(
+        self, prompt: str, max_new_tokens: int = 512, prompt_cache_key: str = ""
+    ) -> str:
         """弹出下一个预设输出。
 
         Args:
@@ -66,29 +68,29 @@ class AnthropicCompatibleModelClient:
         self.api_key = api_key
         self.temperature = temperature
         self.timeout = timeout
-        self.supports_prompt_cache = False  # M2 启用
+        self.supports_prompt_cache = True
 
-    def complete(self, prompt: str, max_new_tokens: int = 512) -> str:
-        """向模型 API 发送请求并返回文本。
+    def complete(
+        self,
+        prompt: str,
+        max_new_tokens: int = 512,
+        prompt_cache_key: str = "",
+    ) -> str:
+        """向模型 API 发送请求，可选透传 prompt cache key。
 
         Args:
             prompt: 完整 prompt 文本。
             max_new_tokens: 最大生成 token 数。
-
-        Returns:
-            模型返回的文本内容。
-
-        Raises:
-            RuntimeError: 请求失败且重试耗尽。
+            prompt_cache_key: 可缓存的 prefix hash。
         """
+        content = [{"type": "text", "text": prompt}]
+        # 标记 prefix 为可缓存（Anthropic ephemeral cache）
+        if prompt_cache_key and self.supports_prompt_cache:
+            content[0]["cache_control"] = {"type": "ephemeral"}
+
         payload = {
             "model": self.model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [{"type": "text", "text": prompt}],
-                }
-            ],
+            "messages": [{"role": "user", "content": content}],
             "max_tokens": max_new_tokens,
             "temperature": self.temperature,
         }

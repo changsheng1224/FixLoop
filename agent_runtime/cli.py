@@ -59,6 +59,10 @@ def main() -> int:
         workspace=workspace,
         cwd=args.cwd,
     )
+    agent._dry_run = args.dry_run
+
+    if args.dry_run:
+        print("[agent_runtime] DRY-RUN MODE — 不会实际修改文件", file=sys.stderr)
 
     print(f"[agent_runtime] provider={config.provider} model={config.model}", file=sys.stderr)
     print(f"[agent_runtime] workspace={workspace.repo_root}", file=sys.stderr)
