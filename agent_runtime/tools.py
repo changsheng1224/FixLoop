@@ -251,6 +251,73 @@ def _search_python(pattern: str, target: Path) -> str:
 
 
 # ============================================================================
+# 高风险写工具执行函数
+# ============================================================================
+
+
+def tool_write_file(context, args: dict) -> str:
+    """创建或覆盖文件，自动创建父目录。
+
+    Args 必须包含 'path' 和 'content'。
+    """
+    raw_path = args.get("path", "")
+    if not raw_path:
+        return "Error: 缺少必填参数 path"
+    content = args.get("content", "")
+
+    try:
+        target = context.resolve(raw_path)
+    except ValueError as e:
+        return f"Error: {e}"
+
+    # 自动创建父目录
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        target.write_text(content, encoding="utf-8")
+    except OSError as e:
+        return f"Error: 写入文件失败: {e}"
+
+    return f"已写入 {raw_path}（{len(content)} 字符）"
+
+
+def tool_patch_file(context, args: dict) -> str:
+    """精确文本替换：old_text 必须出现恰好 1 次。
+
+    Args 必须包含 'path'、'old_text'、'new_text'。
+    """
+    raw_path = args.get("path", "")
+    if not raw_path:
+        return "Error: 缺少必填参数 path"
+    old_text = args.get("old_text", "")
+    new_text = args.get("new_text", "")
+
+    try:
+        target = context.resolve(raw_path)
+    except ValueError as e:
+        return f"Error: {e}"
+
+    if not target.exists():
+        return f"Error: 文件不存在: {raw_path}"
+    if not target.is_file():
+        return f"Error: 不是文件: {raw_path}"
+
+    try:
+        text = target.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return f"Error: 无法以 UTF-8 编码读取: {raw_path}"
+
+    count = text.count(old_text)
+    if count == 0:
+        return "Error: old_text 在文件中未找到（出现 0 次）。old_text 必须恰好出现 1 次。"
+    if count > 1:
+        return f"Error: old_text 出现 {count} 次，必须恰好出现 1 次。请提供更多上下文使其唯一。"
+
+    target.write_text(text.replace(old_text, new_text, 1), encoding="utf-8")
+    return f"已修补 {raw_path}（替换 1 处，{len(new_text) - len(old_text):+d} 字符）"
+
+
+# ============================================================================
 # 工具注册表
 # ============================================================================
 
@@ -288,6 +355,24 @@ def build_tool_registry(context) -> dict:
         "risky": False,
         "description": "代码搜索（rg 优先，Python fallback）。参数: pattern, path（默认 '.'）",
         "run": lambda args: tool_search(context, args),
+    }
+
+    # ---- write_file ----
+    registry["write_file"] = {
+        "schema": auto_schema(WriteFileArgs),
+        "risky": True,
+        "description": "创建或覆盖文件，自动创建父目录。参数: path, content",
+        "run": lambda args: tool_write_file(context, args),
+    }
+
+    # ---- patch_file ----
+    registry["patch_file"] = {
+        "schema": auto_schema(PatchFileArgs),
+        "risky": True,
+        "description": (
+            "精确文本替换：old_text 必须恰好出现 1 次。参数: path, old_text, new_text"
+        ),
+        "run": lambda args: tool_patch_file(context, args),
     }
 
     return registry
