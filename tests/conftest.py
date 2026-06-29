@@ -1,10 +1,9 @@
 """共享测试 fixtures：FakeClient, 临时 workspace 等。"""
 
 import tempfile
-import os
 from pathlib import Path
-import pytest
 
+import pytest
 from agent_runtime.providers.clients import FakeModelClient
 
 
