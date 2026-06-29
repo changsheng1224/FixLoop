@@ -61,7 +61,8 @@ class TestAnthropicClientIntegration:
     @REQUIRES_API
     def test_simple_completion(self, client):
         """发送简单 prompt，验证返回非空文本。"""
-        result = client.complete("Say 'hello' in one word.", max_new_tokens=20)
+        # DeepSeek v4 含 thinking tokens，需 >= 100 才够输出文本
+        result = client.complete("Say 'hello' in one word.", max_new_tokens=200)
         assert result is not None
         assert len(result.strip()) > 0
         assert isinstance(result, str)
@@ -69,8 +70,9 @@ class TestAnthropicClientIntegration:
     @REQUIRES_API
     def test_returns_chinese_text(self, client):
         """发送中文 prompt，验证返回中文响应。"""
+        # 中文 token 密度低 + thinking tokens，需较大限额
         result = client.complete(
-            "请用一句话介绍 Python。", max_new_tokens=100
+            "请用一句话介绍 Python。", max_new_tokens=500
         )
         assert len(result.strip()) > 0
         # 至少包含一些中文字符
