@@ -1,0 +1,139 @@
+"""工具执行函数单测：list_files, read_file, search, 路径逃逸检测。"""
+
+
+import pytest
+
+from agent_runtime.tool_context import ToolContext
+from agent_runtime.tools import (
+    build_tool_registry,
+    legal_tool_names,
+    tool_list_files,
+    tool_read_file,
+    tool_search,
+)
+
+
+@pytest.fixture
+def ctx(temp_workspace):
+    """基于临时 git 仓库的 ToolContext。"""
+    return ToolContext(root=str(temp_workspace))
+
+
+class TestListFiles:
+    """list_files 工具测试。"""
+
+    def test_lists_directory(self, ctx, temp_workspace):
+        result = tool_list_files(ctx, {"path": "."})
+        assert "[F] README.md" in result
+        assert "[F] pyproject.toml" in result
+
+    def test_nonexistent_directory(self, ctx):
+        result = tool_list_files(ctx, {"path": "nonexistent"})
+        assert "Error" in result
+
+
+class TestReadFile:
+    """read_file 工具测试。"""
+
+    def test_reads_file_with_line_numbers(self, ctx):
+        result = tool_read_file(ctx, {"path": "README.md"})
+        assert "# Test Project" in result
+        assert "1 |" in result  # 行号前缀
+
+    def test_missing_path(self, ctx):
+        result = tool_read_file(ctx, {})
+        assert "Error" in result
+        assert "path" in result
+
+    def test_nonexistent_file(self, ctx):
+        result = tool_read_file(ctx, {"path": "ghost.py"})
+        assert "Error" in result
+
+    def test_line_range(self, ctx, temp_workspace):
+        # 创建一个多行文件
+        (temp_workspace / "multiline.py").write_text(
+            "line1\nline2\nline3\nline4\nline5\n"
+        )
+        result = tool_read_file(ctx, {"path": "multiline.py", "start": 2, "end": 3})
+        assert "2 | line2" in result
+        assert "3 | line3" in result
+        assert "1 |" not in result
+        assert "4 |" not in result
+
+
+class TestSearch:
+    """search 工具测试。"""
+
+    def test_search_finds_pattern(self, ctx):
+        result = tool_search(ctx, {"pattern": "Test Project", "path": "."})
+        assert "README.md" in result
+
+    def test_search_no_match(self, ctx):
+        result = tool_search(ctx, {"pattern": "xyzzy_not_found_42", "path": "."})
+        assert "无匹配" in result
+
+    def test_missing_pattern(self, ctx):
+        result = tool_search(ctx, {})
+        assert "Error" in result
+        assert "pattern" in result
+
+    def test_nonexistent_path(self, ctx):
+        result = tool_search(ctx, {"pattern": "test", "path": "ghost_dir"})
+        assert "Error" in result
+
+
+class TestToolRegistry:
+    """build_tool_registry 测试。"""
+
+    def test_registry_contains_readonly_tools(self, ctx):
+        registry = build_tool_registry(ctx)
+        assert "list_files" in registry
+        assert "read_file" in registry
+        assert "search" in registry
+
+    def test_all_tools_are_readonly(self, ctx):
+        registry = build_tool_registry(ctx)
+        for name, spec in registry.items():
+            assert spec["risky"] is False, f"{name} 应为只读工具"
+
+    def test_tools_have_schema(self, ctx):
+        registry = build_tool_registry(ctx)
+        for name, spec in registry.items():
+            assert "schema" in spec, f"{name} 缺少 schema"
+            assert isinstance(spec["schema"], dict)
+
+    def test_tools_runnable(self, ctx):
+        """验证工具可以被调用。"""
+        registry = build_tool_registry(ctx)
+        result = registry["list_files"]["run"]({"path": "."})
+        assert "README.md" in result
+
+    def test_legal_tool_names(self, ctx):
+        registry = build_tool_registry(ctx)
+        names = legal_tool_names(registry)
+        assert names == {"list_files", "read_file", "search"}
+
+
+class TestPathEscape:
+    """路径逃逸检测测试。"""
+
+    def test_parent_directory_escape(self, temp_workspace):
+        ctx = ToolContext(root=str(temp_workspace))
+        with pytest.raises(ValueError, match="路径逃逸"):
+            ctx.resolve("../etc/passwd")
+
+    def test_absolute_path_outside_root(self, temp_workspace):
+        ctx = ToolContext(root=str(temp_workspace))
+        with pytest.raises(ValueError, match="路径逃逸"):
+            ctx.resolve("/etc/passwd")
+
+    def test_normal_path_allowed(self, temp_workspace):
+        ctx = ToolContext(root=str(temp_workspace))
+        resolved = ctx.resolve("README.md")
+        assert resolved.is_file()
+
+    def test_subdirectory_allowed(self, temp_workspace):
+        ctx = ToolContext(root=str(temp_workspace))
+        (temp_workspace / "src").mkdir(exist_ok=True)
+        resolved = ctx.resolve("src")
+        assert resolved.is_dir()
