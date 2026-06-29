@@ -317,6 +317,45 @@ def tool_patch_file(context, args: dict) -> str:
     return f"已修补 {raw_path}（替换 1 处，{len(new_text) - len(old_text):+d} 字符）"
 
 
+def tool_run_shell(context, args: dict) -> str:
+    """在 workspace 根目录执行 Shell 命令。
+
+    Args 必须包含 'command'，可选 'timeout'(默认20s)。
+    环境变量经过白名单过滤，禁止泄露密钥。
+    """
+    from agent_runtime.security import shell_env as _shell_env
+
+    command = args.get("command", "")
+    if not command:
+        return "Error: 缺少必填参数 command"
+    timeout = int(args.get("timeout", 20))
+    timeout = max(1, min(timeout, 120))  # 限制 1-120 秒
+
+    root = context.root
+
+    try:
+        result = subprocess.run(
+            command,
+            cwd=root,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=_shell_env(root=root),
+        )
+    except subprocess.TimeoutExpired:
+        return f"Error: 命令超时（{timeout} 秒）: {command[:100]}"
+
+    out = []
+    if result.stdout.strip():
+        out.append(f"stdout:\n{result.stdout.rstrip()}")
+    if result.stderr.strip():
+        out.append(f"stderr:\n{result.stderr.rstrip()}")
+    out.insert(0, f"exit_code: {result.returncode}")
+
+    return "\n".join(out)
+
+
 # ============================================================================
 # 工具注册表
 # ============================================================================
@@ -373,6 +412,14 @@ def build_tool_registry(context) -> dict:
             "精确文本替换：old_text 必须恰好出现 1 次。参数: path, old_text, new_text"
         ),
         "run": lambda args: tool_patch_file(context, args),
+    }
+
+    # ---- run_shell ----
+    registry["run_shell"] = {
+        "schema": auto_schema(RunShellArgs),
+        "risky": True,
+        "description": "执行 Shell 命令。参数: command, timeout(默认20s，最大120s)",
+        "run": lambda args: tool_run_shell(context, args),
     }
 
     return registry
