@@ -41,3 +41,20 @@ M{m}/D{d}/{task-slug}
 ```bash
 git remote -v  # origin git@github.com:changsheng1224/FixLoop.git
 ```
+
+## 网络环境
+
+GitHub HTTPS (443) 被 GFW 阻断，需通过代理访问。SSH (22) 直连正常。
+
+```bash
+# git 已全局配置代理
+git config --global http.proxy http://127.0.0.1:7897
+git config --global https.proxy http://127.0.0.1:7897
+
+# gh CLI 需要在每次调用前设置环境变量
+export HTTPS_PROXY=http://127.0.0.1:7897
+export HTTP_PROXY=http://127.0.0.1:7897
+export PATH="$PATH:/c/Program Files/GitHub CLI"
+```
+
+> 注意：`gh` 命令（pr create / pr merge 等）需要 `HTTPS_PROXY` 环境变量，否则会连接超时。
