@@ -120,7 +120,8 @@ class TestToolRegistry:
     def test_legal_tool_names(self, ctx):
         registry = build_tool_registry(ctx)
         names = legal_tool_names(registry)
-        assert names == {"list_files", "read_file", "search", "write_file", "patch_file"}
+        expected = {"list_files", "read_file", "search", "write_file", "patch_file", "run_shell"}
+        assert names == expected
 
 
 class TestPathEscape:
