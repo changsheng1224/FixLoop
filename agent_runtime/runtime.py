@@ -90,22 +90,20 @@ class Agent:
         """
         self.session["history"].append(item)
 
-    def execute_tool(self, name: str, args: dict) -> str:
-        """执行指定工具并返回结果。
+    def execute_tool(self, name: str, args: dict):
+        """执行指定工具（经 ToolExecutor 闸口），返回 ToolExecutionResult。
 
         Args:
             name: 工具名称。
             args: 工具参数字典。
 
         Returns:
-            工具执行结果字符串。
+            ToolExecutionResult 实例。
         """
-        if name not in self.tools:
-            return f"Error: 未知工具 '{name}'。可用工具: {', '.join(sorted(self._tool_names))}"
-        try:
-            return self.tools[name]["run"](args)
-        except Exception as e:
-            return f"Error: 工具 '{name}' 执行失败: {e}"
+        from agent_runtime.tool_executor import ToolExecutor
+
+        executor = ToolExecutor(agent=self, approval_policy=self.config.approval)
+        return executor.execute(name, args)
 
     def is_tool_available(self, name: str) -> bool:
         """检查工具是否在注册表中。"""

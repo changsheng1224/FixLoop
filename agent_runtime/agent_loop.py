@@ -80,17 +80,25 @@ class AgentLoop:
                 self.tool_steps += 1
 
                 # 记录工具调用
-                self.agent.record(
-                    {"role": "assistant", "content": f"调用工具: {tool_name}"}
-                )
+                self.agent.record({
+                    "role": "assistant",
+                    "content": f"调用工具: {tool_name}",
+                    "tool_name": tool_name,
+                    "tool_args": tool_args,
+                })
 
-                # 执行工具
+                # 执行工具（经 ToolExecutor 闸口）
                 result = self.agent.execute_tool(tool_name, tool_args)
-                self.agent.record({"role": "tool", "content": result})
+                # 处理 ToolExecutionResult
+                if hasattr(result, 'content'):
+                    result_text = result.content
+                else:
+                    result_text = str(result)
+                self.agent.record({"role": "tool", "content": result_text})
 
-                # 更新 user_message 为工具结果反馈（后续轮次不再重复原始请求）
+                # 更新 user_message 为工具结果反馈
                 user_message = (
-                    f"工具 {tool_name} 执行完成。\n结果:\n{result}"
+                    f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
                 )
 
             elif kind == "retry":
