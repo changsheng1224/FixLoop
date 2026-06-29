@@ -45,10 +45,10 @@ class ToolExecutor:
         approval_policy: "auto" | "ask" | "never"
     """
 
-    def __init__(self, agent, approval_policy: str = "ask"):
+    def __init__(self, agent, approval_policy: str = "ask", dry_run: bool = False):
         self.agent = agent
         self.approval_policy = approval_policy or agent.config.approval
-        # 需要审批的工具名集合
+        self.dry_run = dry_run
         self._high_risk_tools = self._collect_high_risk()
 
     def execute(self, name: str, args: dict) -> ToolExecutionResult:
@@ -95,6 +95,13 @@ class ToolExecutor:
                 content=f"Error: 重复调用检测：'{name}' 与最近调用完全相同，可能是死循环。"
                 f"请尝试不同的参数或切换到其他工具。",
                 metadata={"tool_status": "rejected", "tool_error_code": "duplicate"},
+            )
+
+        # ---- Dry-Run 模式（在审批之前，因为不实际修改） ----
+        if self.dry_run:
+            return ToolExecutionResult(
+                content=f"[DRY RUN] Would {name}({args})",
+                metadata={"tool_status": "success", "dry_run": True},
             )
 
         # ---- Gate 5: 审批检查 ----

@@ -95,7 +95,11 @@ class Agent:
         """
         from agent_runtime.tool_executor import ToolExecutor
 
-        executor = ToolExecutor(agent=self, approval_policy=self.config.approval)
+        executor = ToolExecutor(
+            agent=self,
+            approval_policy=self.config.approval,
+            dry_run=getattr(self, "_dry_run", False),
+        )
         return executor.execute(name, args)
 
     def is_tool_available(self, name: str) -> bool:
