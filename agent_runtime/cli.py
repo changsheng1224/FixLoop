@@ -31,9 +31,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.prompt is None:
-        print("[REPL] 交互模式尚未实现，请提供 prompt 参数。")
-        print("使用 --help 查看参数说明。")
-        return 0
+        return _repl_mode(args)
 
     # 加载 .env
     _load_dotenv()
@@ -113,6 +111,96 @@ def _build_model_client(args, config: AgentConfig):
         api_key=api_key,
         temperature=config.temperature,
     )
+
+
+def _repl_mode(args) -> int:
+    """交互式 REPL 模式。"""
+    import os
+
+    _load_dotenv()
+
+    config = AgentConfig(
+        provider=args.provider,
+        model=args.model or os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"),
+        max_steps=args.max_steps,
+        temperature=args.temperature,
+    )
+
+    workspace = WorkspaceContext.build(args.cwd)
+    model_client = _build_model_client(args, config)
+
+    agent = Agent(
+        config=config,
+        model_client=model_client,
+        workspace=workspace,
+        cwd=args.cwd,
+    )
+    agent._dry_run = args.dry_run
+
+    print(f"agent_runtime REPL | provider={config.provider} model={config.model}", file=sys.stderr)
+    print(f"workspace={workspace.repo_root}", file=sys.stderr)
+    if args.dry_run:
+        print("⚠ DRY-RUN MODE", file=sys.stderr)
+    print('输入 /help 查看命令，/exit 退出', file=sys.stderr)
+    print("─" * 50, file=sys.stderr)
+
+    while True:
+        try:
+            user_input = input("\n> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n再见！")
+            return 0
+
+        if not user_input:
+            continue
+
+        # 内置命令
+        if user_input.startswith("/"):
+            result = _handle_command(user_input, agent)
+            if result == "exit":
+                return 0
+            continue
+
+        # 发送给 Agent
+        print("", end="", flush=True)  # 换行
+        answer = agent.ask(user_input)
+        print(answer)
+
+
+def _handle_command(cmd: str, agent: Agent) -> str:
+    """处理 REPL 内置命令。"""
+    parts = cmd.strip().split()
+    name = parts[0].lower()
+
+    if name == "/exit":
+        return "exit"
+
+    if name == "/help":
+        print("""可用命令:
+  /help     显示此帮助
+  /memory   显示工作记忆（M3 完整实现）
+  /session  显示当前会话信息
+  /reset    清空对话历史
+  /exit     退出""")
+    elif name == "/memory":
+        # M3 接入工作记忆
+        print("工作记忆（M3 实现）:")
+        print("  (当前暂无持久记忆条目)")
+    elif name == "/session":
+        sid = agent.session.get("id", "?")
+        history_len = len(agent.session.get("history", []))
+        print(f"会话 ID: {sid}")
+        print(f"对话轮数: {history_len}")
+        print(f"approval_policy: {agent.config.approval}")
+        print(f"max_steps: {agent.config.max_steps}")
+        print(f"dry_run: {getattr(agent, '_dry_run', False)}")
+    elif name == "/reset":
+        agent.session["history"] = []
+        print("对话历史已清空。")
+    else:
+        print(f"未知命令: {name}，输入 /help 查看可用命令。")
+
+    return ""
 
 
 if __name__ == "__main__":
