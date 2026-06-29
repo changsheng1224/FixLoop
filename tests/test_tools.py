@@ -91,10 +91,19 @@ class TestToolRegistry:
         assert "read_file" in registry
         assert "search" in registry
 
-    def test_all_tools_are_readonly(self, ctx):
+    def test_readonly_tools_are_marked_safe(self, ctx):
         registry = build_tool_registry(ctx)
-        for name, spec in registry.items():
-            assert spec["risky"] is False, f"{name} 应为只读工具"
+        readonly = {"list_files", "read_file", "search"}
+        for name in readonly:
+            assert name in registry, f"{name} 缺失"
+            assert registry[name]["risky"] is False, f"{name} 应为安全工具"
+
+    def test_write_tools_are_marked_risky(self, ctx):
+        registry = build_tool_registry(ctx)
+        risky = {"write_file", "patch_file"}
+        for name in risky:
+            assert name in registry, f"{name} 缺失"
+            assert registry[name]["risky"] is True, f"{name} 应为高风险工具"
 
     def test_tools_have_schema(self, ctx):
         registry = build_tool_registry(ctx)
@@ -111,7 +120,7 @@ class TestToolRegistry:
     def test_legal_tool_names(self, ctx):
         registry = build_tool_registry(ctx)
         names = legal_tool_names(registry)
-        assert names == {"list_files", "read_file", "search"}
+        assert names == {"list_files", "read_file", "search", "write_file", "patch_file"}
 
 
 class TestPathEscape:
