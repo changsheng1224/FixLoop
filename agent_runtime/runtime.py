@@ -55,18 +55,16 @@ class Agent:
             except json.JSONDecodeError:
                 return ("retry", "工具调用 JSON 格式无效，请检查后重试。")
 
-        # 尝试匹配 XML 属性格式
+        # 尝试匹配 XML 属性格式：<tool name="x" ...>body</tool>
         tool_xml_match = re.search(
-            r'<tool\s+name="([^"]+)"(.*?)>',
+            r'<tool\s+name="([^"]+)"(.*?)>(.*?)</tool>',
             raw,
             re.DOTALL,
         )
         if tool_xml_match:
             name = tool_xml_match.group(1)
             attrs = tool_xml_match.group(2).strip()
-            # 提取 body
-            body_match = re.search(r"</tool>(.*)", raw, re.DOTALL)
-            body = body_match.group(1).strip() if body_match else ""
+            body = tool_xml_match.group(3).strip()
             return ("tool", {"name": name, "attrs": attrs, "body": body})
 
         # 都不匹配
