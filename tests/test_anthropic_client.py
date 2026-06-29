@@ -72,7 +72,7 @@ class TestAnthropicClientIntegration:
         """发送中文 prompt，验证返回中文响应。"""
         # 中文 token 密度低 + thinking tokens，需较大限额
         result = client.complete(
-            "请用一句话介绍 Python。", max_new_tokens=800
+            "请用一句话介绍 Python。", max_new_tokens=2000
         )
         assert len(result.strip()) > 0
         # 至少包含一些中文字符
