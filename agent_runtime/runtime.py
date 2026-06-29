@@ -1,9 +1,16 @@
-"""Agent 运行时：Agent 类骨架 + 模型输出解析。
+"""Agent 运行时：Agent 类 + 模型输出解析 + ask() 入口。
 
 Agent 是最外层的用户接口，封装了模型客户端、工具注册表、工作区和上下文管理器。
 """
 
+import json
+import re
+from pathlib import Path
+
 from agent_runtime.config import AgentConfig
+from agent_runtime.prompt_prefix import build_prompt_prefix
+from agent_runtime.tool_context import ToolContext
+from agent_runtime.tools import build_tool_registry
 
 
 class Agent:
@@ -12,11 +19,99 @@ class Agent:
     封装模型客户端、工具注册、工作区上下文和 prompt 组装。
     """
 
-    def __init__(self, config: AgentConfig, model_client, workspace, tools: dict):
+    def __init__(
+        self,
+        config: AgentConfig,
+        model_client,
+        workspace,
+        cwd: str | None = None,
+    ):
         self.config = config
         self.model_client = model_client
         self.workspace = workspace
-        self.tools = tools
+        self._cwd = cwd or workspace.repo_root or str(Path.cwd())
+
+        # 构建工具上下文和注册表
+        self.tool_context = ToolContext(root=self._cwd)
+        self.tools = build_tool_registry(self.tool_context)
+        self._tool_names = set(self.tools.keys())
+
+        # 会话状态
+        self.session: dict = {"id": self._new_session_id(), "history": []}
+
+        # 缓存 prefix（工具不变时复用）
+        self._prefix = self._build_prefix()
+
+    # ---- 公开方法 ----
+
+    def ask(self, user_message: str) -> str:
+        """执行一次用户请求，返回最终答案。
+
+        这是 Agent 的核心入口方法。
+
+        Args:
+            user_message: 用户输入。
+
+        Returns:
+            模型返回的最终答案文本。
+        """
+        from agent_runtime.agent_loop import AgentLoop
+
+        loop = AgentLoop(agent=self)
+        return loop.run(user_message)
+
+    def prompt(self, user_message: str) -> str:
+        """组装完整 prompt 文本。
+
+        Args:
+            user_message: 当前用户输入。
+
+        Returns:
+            完整的 prompt 文本（prefix + 历史 + 当前请求）。
+        """
+        parts = [self._prefix.text]
+
+        # 历史对话
+        if self.session["history"]:
+            history_text = self._format_history()
+            if history_text:
+                parts.append(history_text)
+
+        # 当前用户请求
+        parts.append(f"\n## 当前任务\n\n{user_message}")
+
+        return "\n".join(parts)
+
+    def record(self, item: dict):
+        """向会话历史追加一条记录。
+
+        Args:
+            item: 包含 role 和 content 的字典。
+        """
+        self.session["history"].append(item)
+
+    def execute_tool(self, name: str, args: dict) -> str:
+        """执行指定工具并返回结果。
+
+        Args:
+            name: 工具名称。
+            args: 工具参数字典。
+
+        Returns:
+            工具执行结果字符串。
+        """
+        if name not in self.tools:
+            return f"Error: 未知工具 '{name}'。可用工具: {', '.join(sorted(self._tool_names))}"
+        try:
+            return self.tools[name]["run"](args)
+        except Exception as e:
+            return f"Error: 工具 '{name}' 执行失败: {e}"
+
+    def is_tool_available(self, name: str) -> bool:
+        """检查工具是否在注册表中。"""
+        return name in self._tool_names
+
+    # ---- 静态方法 ----
 
     @staticmethod
     def parse(raw: str) -> tuple[str, dict | str]:
@@ -24,8 +119,7 @@ class Agent:
 
         支持两种工具调用格式 + 最终答案：
         - ``<tool>{"name":"x","args":{...}}</tool>`` → (\"tool\", payload_dict)
-        - ``<tool name="x" path="f.py"><content>...</content></tool>`` →
-          (\"tool\", payload_dict)
+        - ``<tool name="x" path="f.py">body</tool>`` → (\"tool\", payload_dict)
         - ``<final>text</final>`` → (\"final\", text)
         - 格式不匹配 → (\"retry\", notice_text)
 
@@ -33,13 +127,11 @@ class Agent:
             raw: 模型的原始文本输出。
 
         Returns:
-            (kind, payload) 元组。kind 为 "tool" / "final" / "retry"。
+            (kind, payload) 元组。kind 为 \"tool\" / \"final\" / \"retry\"。
         """
         raw = raw.strip()
 
         # 尝试匹配 <final>...</final>
-        import re
-
         final_match = re.search(r"<final>(.*?)</final>", raw, re.DOTALL)
         if final_match:
             return ("final", final_match.group(1).strip())
@@ -47,8 +139,6 @@ class Agent:
         # 尝试匹配 JSON 格式 <tool>{...}</tool>
         tool_json_match = re.search(r"<tool>\s*(\{.*?\})\s*</tool>", raw, re.DOTALL)
         if tool_json_match:
-            import json
-
             try:
                 payload = json.loads(tool_json_match.group(1))
                 return ("tool", payload)
@@ -73,3 +163,30 @@ class Agent:
             f"或 <final>text</final> 格式。\n收到: {raw[:200]}"
         )
         return ("retry", notice)
+
+    # ---- 内部方法 ----
+
+    def _build_prefix(self):
+        """构建 System Prompt 前缀（缓存）。"""
+        return build_prompt_prefix(self.workspace, self.tools)
+
+    def _new_session_id(self) -> str:
+        """生成新的会话 ID。"""
+        import uuid
+
+        return str(uuid.uuid4())[:8]
+
+    def _format_history(self) -> str:
+        """将会话历史格式化为 prompt 文本。"""
+        lines = ["## 对话历史", ""]
+        for item in self.session["history"]:
+            role = item.get("role", "unknown")
+            content = str(item.get("content", ""))
+            # 截断过长的工具输出
+            if role == "tool" and len(content) > 500:
+                content = content[:500] + f"\n... (截断，共 {len(content)} 字符)"
+            if role == "user" and len(content) > 300:
+                content = content[:300] + "..."
+            lines.append(f"**{role}**: {content}")
+            lines.append("")
+        return "\n".join(lines)
