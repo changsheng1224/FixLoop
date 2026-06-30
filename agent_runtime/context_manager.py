@@ -232,9 +232,9 @@ class ContextManager:
 
         summary_prompt = "\n".join(prompt_lines)
 
-        raw = self.agent.model_client.complete(
-            summary_prompt, max_new_tokens=200
-        )
+        # 优先用轻量模型（本地 Ollama），更快且不消耗 API 配额
+        client = self.agent.light_client or self.agent.model_client
+        raw = client.complete(summary_prompt, max_new_tokens=300)
         return raw.strip()[:300] if raw else ""
 
     def _compress_old_entries(self, entries: list) -> str:

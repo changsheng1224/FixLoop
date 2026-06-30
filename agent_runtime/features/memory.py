@@ -115,11 +115,14 @@ def _filter_existing(paths: list[str], root: str) -> list[str]:
 
 
 def set_task_summary(state: dict, user_message: str):
-    """设置当前任务的一句话摘要（截断到 300 字符）。
+    """设置当前任务的一句话摘要。
+
+    优先用预生成的摘要（调用方通过 light_client 生成后传入）；
+    没有时退化为截断用户输入前 300 字符。
 
     Args:
         state: 记忆状态。
-        user_message: 用户输入，用于生成摘要。
+        user_message: 用户输入或预生成的摘要文本。
     """
     summary = user_message.strip().replace("\n", " ")[:300]
     state["working"]["task_summary"] = summary

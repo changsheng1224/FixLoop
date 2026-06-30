@@ -26,6 +26,9 @@ class AgentLoop:
 
         self.agent.record({"role": "user", "content": user_message})
 
+        # 用轻量模型生成一句话任务摘要（如可用）
+        self._gen_task_summary(user_message)
+
         while True:
             # 停机检查
             if self.tool_steps > self.max_steps:
@@ -103,6 +106,26 @@ class AgentLoop:
             elif kind == "retry":
                 self.agent.record({"role": "system", "content": str(payload)})
                 user_message = str(payload)
+
+    def _gen_task_summary(self, user_message: str):
+        """用轻量模型生成一句话任务摘要。"""
+        from agent_runtime.features.memory import set_task_summary
+
+        client = getattr(self.agent, "light_client", None)
+        if client is None:
+            set_task_summary(self.agent.session["memory"], user_message)
+            return
+
+        try:
+            raw = client.complete(
+                f"Summarize this task in one short sentence (max 20 words):\n{user_message[:500]}",
+                max_new_tokens=60,
+            )
+            summary = raw.strip()[:300] if raw else user_message[:300]
+        except Exception:
+            summary = user_message[:300]
+
+        set_task_summary(self.agent.session["memory"], summary)
 
     def _emit(self, event: str, payload: dict | None = None):
         """发送 trace 事件到 RunStore。"""

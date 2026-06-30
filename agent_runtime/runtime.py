@@ -25,9 +25,11 @@ class Agent:
         model_client,
         workspace,
         cwd: str | None = None,
+        light_client=None,
     ):
         self.config = config
         self.model_client = model_client
+        self.light_client = light_client  # 可选：摘要等轻量任务用本地模型
         self.workspace = workspace
         self._cwd = cwd or workspace.repo_root or str(Path.cwd())
 
