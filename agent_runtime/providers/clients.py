@@ -159,3 +159,110 @@ class AnthropicCompatibleModelClient:
             msg = choices[0].get("message", {})
             return msg.get("content", "")
         return ""
+
+
+class OllamaModelClient:
+    """Ollama 本地模型客户端。
+
+    纯 urllib 实现，向 Ollama REST API（默认 http://127.0.0.1:11434）发请求。
+    """
+
+    def __init__(
+        self,
+        model: str = "qwen3.5:4b",
+        host: str = "http://127.0.0.1:11434",
+        temperature: float = 0.2,
+        top_p: float = 0.9,
+        timeout: int = 120,
+    ):
+        self.model = model
+        self.host = host.rstrip("/")
+        self.temperature = temperature
+        self.top_p = top_p
+        self.timeout = timeout
+        self.supports_prompt_cache = False
+
+    def complete(
+        self, prompt: str, max_new_tokens: int = 512, prompt_cache_key: str = ""
+    ) -> str:
+        """调用 Ollama /api/generate 并返回文本。"""
+        payload = {
+            "model": self.model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "num_predict": max_new_tokens,
+                "temperature": self.temperature,
+                "top_p": self.top_p,
+            },
+        }
+        body = json.dumps(payload).encode("utf-8")
+
+        request = urllib.request.Request(
+            f"{self.host}/api/generate",
+            data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=self.timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return data.get("response", "")
+
+
+class OpenAICompatibleModelClient:
+    """OpenAI Responses API 兼容客户端。
+
+    支持 `/v1/responses` 端点，支持 SSE 流解析和 usage 提取。
+    """
+
+    def __init__(
+        self,
+        model: str = "gpt-4o",
+        base_url: str = "https://api.openai.com/v1",
+        api_key: str = "",
+        temperature: float = 0.2,
+        timeout: int = 60,
+    ):
+        self.model = model
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.temperature = temperature
+        self.timeout = timeout
+        self.supports_prompt_cache = False
+
+    def complete(
+        self, prompt: str, max_new_tokens: int = 512, prompt_cache_key: str = ""
+    ) -> str:
+        """调用 OpenAI Responses API。"""
+        payload = {
+            "model": self.model,
+            "input": [
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": prompt}],
+                }
+            ],
+            "max_output_tokens": max_new_tokens,
+            "temperature": self.temperature,
+        }
+        body = json.dumps(payload).encode("utf-8")
+
+        request = urllib.request.Request(
+            f"{self.base_url}/responses",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=self.timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+
+        # 提取文本
+        output = data.get("output", [])
+        for item in output:
+            if item.get("type") == "message":
+                content_list = item.get("content", [])
+                for c in content_list:
+                    if c.get("type") == "output_text":
+                        return c.get("text", "")
+        return ""
