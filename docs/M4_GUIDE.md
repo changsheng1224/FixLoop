@@ -19,7 +19,7 @@
 
 ## 2. 新增模块
 
-### 2.1 Semantic Memory
+### 2.1 语义记忆 — Semantic Memory
 
 **`features/memory.py`** (+131 行)
 
@@ -35,7 +35,7 @@ retrieval_candidates_semantic(state, query)
   → 合并去重 → top_k
 ```
 
-### 2.2 Circuit Breaker
+### 2.2 API 熔断 — Circuit Breaker
 
 **`providers/circuit_breaker.py`** (83 行)
 
@@ -52,7 +52,7 @@ call(fn) 包裹执行:
   - HALF_OPEN: 允许 1 次探测调用
 ```
 
-### 2.3 QuotaEnforcer
+### 2.3 工具配额 — QuotaEnforcer
 
 **`tool_executor.py`** (+70 行)
 
@@ -75,7 +75,7 @@ Gate 9 后: record(name) → 计数器 +1
 | `OllamaModelClient` | `/api/generate` | 本地模型，零网络费用 |
 | `OpenAICompatibleModelClient` | `/v1/responses` | Responses API，usage 提取 |
 
-### 2.5 ProgressCallback + Replay
+### 2.5 进度回调与回放 — ProgressCallback + Replay
 
 **`callbacks.py`** (44 行)
 ```
