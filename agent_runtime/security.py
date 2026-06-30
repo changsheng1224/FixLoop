@@ -88,3 +88,37 @@ def _detect_secret_values() -> list[str]:
         if looks_sensitive_env_name(key):
             values.append(val)
     return values
+
+
+def redact_artifact(value, secret_values: list[str] | None = None):
+    """递归脱敏 dict/list/str 中的敏感值。
+
+    遇到 key 名含敏感词 → 值替换为 "<redacted>"。
+    遇到 str 值匹配敏感值列表 → 替换为 "<redacted>"。
+
+    Args:
+        value: 任意值（dict/list/str/其他）。
+        secret_values: 已知敏感值列表（从环境变量自动检测）。
+
+    Returns:
+        脱敏后的副本。
+    """
+    if secret_values is None:
+        secret_values = _detect_secret_values()
+
+    if isinstance(value, dict):
+        result = {}
+        for k, v in value.items():
+            if looks_sensitive_env_name(k):
+                result[k] = "<redacted>"
+            else:
+                result[k] = redact_artifact(v, secret_values)
+        return result
+    elif isinstance(value, list):
+        return [redact_artifact(v, secret_values) for v in value]
+    elif isinstance(value, str):
+        for sv in secret_values:
+            if sv and len(sv) > 4 and sv in value:
+                value = value.replace(sv, "<redacted>")
+        return value
+    return value
