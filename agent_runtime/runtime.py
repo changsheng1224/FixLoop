@@ -36,8 +36,8 @@ class Agent:
         self.tools = build_tool_registry(self.tool_context)
         self._tool_names = set(self.tools.keys())
 
-        # 会话状态
-        self.session: dict = {"id": self._new_session_id(), "history": []}
+        # 会话状态 + 记忆
+        self.session: dict = self._new_session()
 
         # 缓存 prefix（工具不变时复用）
         self._prefix = self._build_prefix()
@@ -168,8 +168,72 @@ class Agent:
     def _new_session_id(self) -> str:
         """生成新的会话 ID。"""
         import uuid
-
         return str(uuid.uuid4())[:8]
+
+    def _new_session(self) -> dict:
+        """创建新会话（含记忆状态）。"""
+        from agent_runtime.features.memory import default_memory_state
+
+        return {
+            "id": self._new_session_id(),
+            "history": [],
+            "memory": default_memory_state(),
+        }
+
+    def update_memory_after_tool(self, name: str, args: dict, result_text: str):
+        """工具执行后更新记忆（Working + Episodic）。
+
+        由 AgentLoop 在每个工具执行成功后调用。
+        """
+        from agent_runtime.features.memory import (
+            append_note,
+            invalidate_file_summary,
+            remember_file,
+            set_file_summary,
+        )
+
+        mem = self.session["memory"]
+        path = args.get("path", "")
+
+        if name == "read_file" and path:
+            remember_file(mem, path)
+            # 从结果中取前 180 字符作为摘要
+            summary = result_text[:180]
+            set_file_summary(mem, path, summary)
+
+        elif name in ("write_file", "patch_file") and path:
+            remember_file(mem, path)
+            invalidate_file_summary(mem, path)
+
+        elif name == "run_shell":
+            command = args.get("command", "")
+            if "Error" in result_text or "exit_code: 1" in result_text:
+                append_note(
+                    mem,
+                    f"Shell 命令失败: {command[:100]} — {result_text[:100]}",
+                    tags=["shell", "error"],
+                    source=command[:80],
+                    kind="error",
+                )
+            else:
+                append_note(
+                    mem,
+                    f"Shell 命令成功: {command[:100]}",
+                    tags=["shell"],
+                    source=command[:80],
+                    kind="observation",
+                )
+
+        elif name == "search":
+            pattern = args.get("pattern", "")
+            if pattern:
+                append_note(
+                    mem,
+                    f"搜索 '{pattern}': {result_text[:150]}",
+                    tags=["search"],
+                    source=pattern,
+                    kind="observation",
+                )
 
     def _format_history(self) -> str:
         """将会话历史格式化为 prompt 文本。"""
