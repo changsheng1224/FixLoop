@@ -17,7 +17,7 @@ class TestTaskState:
         ts = TaskState.create(user_request="test")
         assert ts.status == "running"
         assert ts.user_request == "test"
-        assert len(ts.run_id) == 8
+        assert len(ts.run_id) == 15  # YYYYMMDD-HHMMSS
 
     def test_state_machine(self):
         ts = TaskState.create(user_request="fix bug")
