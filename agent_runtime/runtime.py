@@ -42,6 +42,15 @@ class Agent:
         # 缓存 prefix（工具不变时复用）
         self._prefix = self._build_prefix()
 
+        # M4 模块：配额 + 熔断 + 语义记忆
+        from agent_runtime.features.memory import SemanticMemory
+        from agent_runtime.providers.circuit_breaker import CircuitBreaker
+        from agent_runtime.tool_executor import QuotaEnforcer
+
+        self.semantic_memory = SemanticMemory()
+        self.circuit_breaker = CircuitBreaker()
+        self.quota = QuotaEnforcer()
+
     # ---- 公开方法 ----
 
     def ask(self, user_message: str) -> str:
