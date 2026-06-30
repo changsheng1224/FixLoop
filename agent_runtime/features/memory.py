@@ -280,6 +280,137 @@ def retrieval_candidates(state: dict, query: str, limit: int = 3) -> list[dict]:
 
 
 # ============================================================================
+# Semantic Memory — 基于 embedding 的语义检索（补充 keywords 匹配）
+# ============================================================================
+
+_SEMANTIC_MODEL = None  # 懒加载单例
+
+
+def _get_semantic_model():
+    """懒加载 sentence-transformers 模型（约 80MB）。
+
+    Returns:
+        SentenceTransformer 实例，加载失败返回 None。
+    """
+    global _SEMANTIC_MODEL
+    if _SEMANTIC_MODEL is not None:
+        return _SEMANTIC_MODEL
+    try:
+        from sentence_transformers import SentenceTransformer
+        _SEMANTIC_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
+        return _SEMANTIC_MODEL
+    except Exception:
+        return None
+
+
+class SemanticMemory:
+    """基于 embedding 的语义记忆。
+
+    使用本地 all-MiniLM-L6-v2 模型（约 80MB）做 embedding，
+    cosine similarity 检索。keywords 匹配的补充——处理同义词和英文变体。
+    """
+
+    def __init__(self):
+        self.model = _get_semantic_model()
+        self._notes: list[dict] = []  # [{text, embedding, tags, ...}]
+
+    @property
+    def available(self) -> bool:
+        return self.model is not None
+
+    def add(self, note: dict):
+        """添加一条记忆条目（含 embedding）。
+
+        Args:
+            note: 记忆条目 dict（必须含 'text' 字段）。
+        """
+        if not self.available:
+            return
+        text = note.get("text", "")
+        if not text:
+            return
+        try:
+            embedding = self.model.encode(text)
+            self._notes.append({
+                **note,
+                "embedding": embedding,
+            })
+        except Exception:
+            pass
+
+    def search(self, query: str, top_k: int = 3) -> list[dict]:
+        """语义检索：cosine similarity 排序。
+
+        Args:
+            query: 搜索查询。
+            top_k: 返回条数。
+
+        Returns:
+            相关记忆条目列表。
+        """
+        if not self.available or not self._notes:
+            return []
+        try:
+            import numpy as np
+
+            query_emb = self.model.encode(query)
+            scores = []
+            for note in self._notes:
+                emb = note.get("embedding")
+                if emb is None:
+                    continue
+                sim = float(
+                    np.dot(query_emb, emb)
+                    / (np.linalg.norm(query_emb) * np.linalg.norm(emb))
+                )
+                if sim > 0.3:  # 阈值：太低不算相关
+                    scores.append((sim, note))
+
+            scores.sort(key=lambda x: x[0], reverse=True)
+            return [note for _, note in scores[:top_k]]
+        except Exception:
+            return []
+
+
+def retrieval_candidates_semantic(
+    state: dict, query: str, limit: int = 3
+) -> list[dict]:
+    """语义 + keywords 混合检索。
+
+    先做 keywords 精确匹配（快速），再用 semantic 补充（同义词/变体）。
+    两路结果合并去重后取 top_k。
+
+    Args:
+        state: 记忆状态。
+        query: 搜索查询。
+        limit: 返回条数上限。
+
+    Returns:
+        相关记忆条目列表。
+    """
+    # 第一路：keywords
+    kw_results = retrieval_candidates(state, query, limit)
+
+    # 第二路：semantic（如果模型可用）
+    sem = SemanticMemory()
+    notes = state.get("episodic_notes", [])
+    for note in notes[-20:]:  # 只索引最近 20 条
+        sem.add(note)
+    sem_results = sem.search(query, limit)
+
+    # 合并去重（按 note_index）
+    seen = set()
+    merged = []
+    for note in kw_results + sem_results:
+        idx = note.get("note_index")
+        if idx is not None and idx not in seen:
+            seen.add(idx)
+            merged.append(note)
+
+    return merged[:limit]
+
+
+# ============================================================================
 # Durable Memory 层 — 跨会话持久化（Markdown 文件）
 # ============================================================================
 
