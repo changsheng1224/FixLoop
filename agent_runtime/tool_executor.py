@@ -45,10 +45,14 @@ class ToolExecutor:
         approval_policy: "auto" | "ask" | "never"
     """
 
-    def __init__(self, agent, approval_policy: str = "ask", dry_run: bool = False):
+    def __init__(
+        self, agent, approval_policy: str = "ask",
+        dry_run: bool = False, quota: "QuotaEnforcer | None" = None,
+    ):
         self.agent = agent
         self.approval_policy = approval_policy or agent.config.approval
         self.dry_run = dry_run
+        self._quota = quota
         self._high_risk_tools = self._collect_high_risk()
 
     def execute(self, name: str, args: dict) -> ToolExecutionResult:
@@ -89,7 +93,15 @@ class ToolExecutor:
                     metadata={"tool_status": "rejected", "tool_error_code": "invalid_args"},
                 )
 
-        # ---- Gate 4: 重复调用检测 ----
+        # ---- Gate 4: 配额检查 ----
+        if self._quota is not None:
+            if not self._quota.check(name):
+                return ToolExecutionResult(
+                    content=f"Error: 工具 '{name}' 超出配额限制。{self._quota.status()}",
+                    metadata={"tool_status": "rejected", "tool_error_code": "quota_exceeded"},
+                )
+
+        # ---- Gate 5: 重复调用检测 ----
         if self._is_duplicate(name, args):
             return ToolExecutionResult(
                 content=f"Error: 重复调用检测：'{name}' 与最近调用完全相同，可能是死循环。"
@@ -115,7 +127,7 @@ class ToolExecutor:
                     metadata={"tool_status": "rejected", "tool_error_code": "approval_denied"},
                 )
 
-        # ---- Gate 6: 执行前工作区快照 ----
+        # ---- Gate 7: 执行前工作区快照 ----
         is_risky = name in self._high_risk_tools
         before_snapshot = self._capture_snapshot() if is_risky else {}
 
@@ -128,11 +140,15 @@ class ToolExecutor:
                 metadata={"tool_status": "error", "tool_error_code": "runtime_error"},
             )
 
-        # ---- Gate 8: 执行后快照对比 ----
+        # ---- Gate 9: 执行后快照对比 ----
         metadata = {"tool_status": "success"}
         if is_risky:
             after_snapshot = self._capture_snapshot()
             metadata.update(self._diff_snapshots(before_snapshot, after_snapshot))
+
+        # 记录配额
+        if self._quota is not None:
+            self._quota.record(name)
 
         return ToolExecutionResult(content=result_text, metadata=metadata)
 
@@ -236,6 +252,52 @@ class ToolExecutor:
             "affected_paths": sorted(affected),
             "diff_summary": "\n".join(summary_parts) if summary_parts else "(无变更)",
         }
+
+
+class QuotaEnforcer:
+    """工具执行配额控制。
+
+    限制每类工具在单次会话中的最大调用次数。
+    """
+
+    def __init__(self, max_writes: int = 20, max_shell: int = 10, max_total: int = 50):
+        self._limits = {"write": max_writes, "shell": max_shell, "total": max_total}
+        self._counts = {"write": 0, "shell": 0, "total": 0}
+
+    def check(self, tool_name: str) -> bool:
+        """检查工具是否在配额内。
+
+        Args:
+            tool_name: 工具名称。
+
+        Returns:
+            True 如果允许执行。
+        """
+        if self._counts["total"] >= self._limits["total"]:
+            return False
+        if tool_name in ("write_file", "patch_file"):
+            return self._counts["write"] < self._limits["write"]
+        if tool_name == "run_shell":
+            return self._counts["shell"] < self._limits["shell"]
+        return True  # 只读工具不受限
+
+    def record(self, tool_name: str):
+        """记录一次工具调用。"""
+        self._counts["total"] += 1
+        if tool_name in ("write_file", "patch_file"):
+            self._counts["write"] += 1
+        elif tool_name == "run_shell":
+            self._counts["shell"] += 1
+
+    def status(self) -> str:
+        """返回当前配额使用情况。"""
+        cnt = self._counts
+        lim = self._limits
+        return (
+            f"配额: writes {cnt['write']}/{lim['write']}, "
+            f"shell {cnt['shell']}/{lim['shell']}, "
+            f"total {cnt['total']}/{lim['total']}"
+        )
 
 
 def _sha256_file(path: Path) -> str:
