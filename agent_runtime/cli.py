@@ -27,6 +27,7 @@ def main() -> int:
     parser.add_argument("--api-key", default=None, help="API Key（覆盖 .env）")
     parser.add_argument("--base-url", default=None, help="API Base URL（覆盖 .env）")
     parser.add_argument("--dry-run", action="store_true", help="Dry-run 模式：不实际修改文件")
+    parser.add_argument("--resume", default=None, help="恢复会话（latest / session_id）")
 
     args = parser.parse_args()
 
@@ -50,14 +51,8 @@ def main() -> int:
     # 装配 ModelClient
     model_client = _build_model_client(args, config)
 
-    # 装配 Agent
-    agent = Agent(
-        config=config,
-        model_client=model_client,
-        workspace=workspace,
-        cwd=args.cwd,
-    )
-    agent._dry_run = args.dry_run
+    # 装配 Agent（支持 --resume）
+    agent = _build_agent(args, config, workspace, model_client)
 
     if args.dry_run:
         print("[agent_runtime] DRY-RUN MODE — 不会实际修改文件", file=sys.stderr)
@@ -69,6 +64,35 @@ def main() -> int:
     answer = agent.ask(args.prompt)
     print(answer)
     return 0
+
+
+def _build_agent(args, config, workspace, model_client) -> Agent:
+    """装配 Agent，支持 --resume 恢复会话。"""
+    if args.resume:
+        from agent_runtime.checkpoint import evaluate_resume_state
+        from agent_runtime.session_store import SessionStore
+
+        store = SessionStore(root=workspace.repo_root)
+        session_id = store.latest() if args.resume == "latest" else args.resume
+        if session_id is None:
+            print("[agent_runtime] 无可恢复的 session，创建新会话", file=sys.stderr)
+        else:
+            agent = Agent.from_session(
+                model_client, workspace, store, session_id, config=config, cwd=args.cwd
+            )
+            if agent:
+                agent._dry_run = args.dry_run
+                resume_state = evaluate_resume_state(agent)
+                status = resume_state["status"]
+                print(f"[agent_runtime] 恢复会话 {session_id} (status={status})", file=sys.stderr)
+                if resume_state["stale_files"]:
+                    print(f"  ⚠ 文件已变更: {resume_state['stale_files']}", file=sys.stderr)
+                return agent
+
+    # 默认：创建新 Agent
+    agent = Agent(config=config, model_client=model_client, workspace=workspace, cwd=args.cwd)
+    agent._dry_run = args.dry_run
+    return agent
 
 
 def _load_dotenv():
@@ -128,14 +152,7 @@ def _repl_mode(args) -> int:
 
     workspace = WorkspaceContext.build(args.cwd)
     model_client = _build_model_client(args, config)
-
-    agent = Agent(
-        config=config,
-        model_client=model_client,
-        workspace=workspace,
-        cwd=args.cwd,
-    )
-    agent._dry_run = args.dry_run
+    agent = _build_agent(args, config, workspace, model_client)
 
     print(f"agent_runtime REPL | provider={config.provider} model={config.model}", file=sys.stderr)
     print(f"workspace={workspace.repo_root}", file=sys.stderr)

@@ -106,6 +106,58 @@ class Agent:
         """检查工具是否在注册表中。"""
         return name in self._tool_names
 
+    # ---- 类方法 ----
+
+    @classmethod
+    def from_session(
+        cls,
+        model_client,
+        workspace,
+        session_store,
+        session_id: str,
+        **kwargs,
+    ):
+        """从持久化的 session 恢复 Agent 实例。
+
+        Args:
+            model_client: 模型客户端。
+            workspace: WorkspaceContext。
+            session_store: SessionStore 实例。
+            session_id: 要恢复的 session id。
+            **kwargs: 传递给 __init__ 的额外参数。
+
+        Returns:
+            恢复的 Agent 实例，如果 session 不存在则返回 None。
+        """
+        session = session_store.load(session_id)
+        if session is None:
+            return None
+
+        config = kwargs.pop("config", None)
+        if config is None:
+            from agent_runtime.config import AgentConfig
+            config = AgentConfig()
+
+        cwd = kwargs.pop("cwd", None) or workspace.repo_root
+
+        # 创建 Agent（先不注入 session）
+        agent = cls(
+            config=config,
+            model_client=model_client,
+            workspace=workspace,
+            cwd=cwd,
+            **kwargs,
+        )
+
+        # 恢复 session 数据
+        agent.session = session
+        # 恢复 memory 状态
+        from agent_runtime.features.memory import default_memory_state
+        agent.session.setdefault("memory", default_memory_state())
+        agent.session.setdefault("checkpoints", [])
+
+        return agent
+
     # ---- 静态方法 ----
 
     @staticmethod
