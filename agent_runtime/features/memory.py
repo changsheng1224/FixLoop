@@ -2,9 +2,10 @@
 
 Working Memory：当前任务上下文（容量有限，频繁读写）
 Episodic Memory：本轮会话的事件笔记（容量有限，FIFO 淘汰）
-Durable Memory：跨会话持久记忆（M3D2 实现，读写 Markdown 文件）
+Durable Memory：跨会话持久记忆（读写 .agent/memory/ Markdown 文件）
 """
 
+import re
 import time
 from pathlib import Path
 
@@ -276,3 +277,260 @@ def retrieval_candidates(state: dict, query: str, limit: int = 3) -> list[dict]:
     # 按分数降序，取 top_k
     scored.sort(key=lambda x: x[0], reverse=True)
     return [note for _, note in scored[:limit]]
+
+
+# ============================================================================
+# Durable Memory 层 — 跨会话持久化（Markdown 文件）
+# ============================================================================
+
+# 内置主题
+DURABLE_TOPICS = [
+    "project-conventions",
+    "key-decisions",
+    "dependency-facts",
+    "user-preferences",
+]
+
+# 意图检测词：用户想保存到 durable memory
+SAVE_INTENT_WORDS = [
+    "remember", "记住", "保存", "记录", "永记",
+    "don't forget", "备忘", "存下来",
+]
+
+# 行前缀映射：从 final_answer 提取特定类型的记忆
+PREFIX_MAP = {
+    "Convention:": "project-conventions",
+    "Decision:": "key-decisions",
+    "Dependency:": "dependency-facts",
+    "Preference:": "user-preferences",
+}
+
+
+class DurableMemoryStore:
+    """跨会话持久记忆存储。
+
+    记忆目录结构：
+        .agent/memory/
+        ├── MEMORY.md          # 索引文件（所有主题的列表）
+        └── topics/
+            ├── project-conventions.md
+            ├── key-decisions.md
+            ├── dependency-facts.md
+            └── user-preferences.md
+    """
+
+    def __init__(self, root: str):
+        self.root = Path(root)
+        self.memory_dir = self.root / ".agent" / "memory"
+        self.topics_dir = self.memory_dir / "topics"
+
+    def ensure_dirs(self):
+        """确保记忆目录存在。"""
+        self.topics_dir.mkdir(parents=True, exist_ok=True)
+
+    def promote(self, promotions: list[tuple[str, str]]):
+        """将一批 (topic, text) 条目持久化到对应主题文件。
+
+        同一主题下的旧条目如 subject（首行）相同则自动替换。
+
+        Args:
+            promotions: [(topic, text), ...] 列表。
+        """
+        if not promotions:
+            return
+        self.ensure_dirs()
+
+        entries_by_topic: dict[str, list[str]] = {}
+        for topic, text in promotions:
+            topic = self._normalize_topic(topic)
+            if topic not in entries_by_topic:
+                entries_by_topic[topic] = []
+            entries_by_topic[topic].append(text)
+
+        for topic, texts in entries_by_topic.items():
+            topic_file = self.topics_dir / f"{topic}.md"
+            existing = self._read_topic(topic_file)
+            for text in texts:
+                existing = self._upsert_entry(existing, text)
+            self._write_topic(topic_file, existing)
+
+        # 更新索引
+        self._update_index()
+
+    def retrieval(self, query: str, limit: int = 3) -> list[str]:
+        """从 durable memory 检索相关条目。
+
+        Args:
+            query: 搜索词。
+            limit: 返回条数上限。
+
+        Returns:
+            匹配的文本条目列表。
+        """
+        query_lower = query.lower()
+        results = []
+        if not self.topics_dir.exists():
+            return results
+
+        for topic_file in sorted(self.topics_dir.glob("*.md")):
+            entries = self._read_topic(topic_file)
+            for entry in entries:
+                if query_lower in entry.lower():
+                    results.append(entry)
+                    if len(results) >= limit:
+                        return results
+        return results
+
+    def _normalize_topic(self, topic: str) -> str:
+        """规范化 topic 名（未知 topic 归入 project-conventions）。"""
+        mapping = {
+            "project-conventions": "project-conventions",
+            "key-decisions": "key-decisions",
+            "dependency-facts": "dependency-facts",
+            "user-preferences": "user-preferences",
+            "preference": "user-preferences",
+            "convention": "project-conventions",
+            "decision": "key-decisions",
+            "dependency": "dependency-facts",
+        }
+        return mapping.get(topic.lower(), "project-conventions")
+
+    @staticmethod
+    def _read_topic(path: Path) -> list[str]:
+        if not path.exists():
+            return []
+        content = path.read_text(encoding="utf-8")
+        # 按 "---" 分隔条目
+        entries = [e.strip() for e in content.split("\n---\n") if e.strip()]
+        return entries
+
+    @staticmethod
+    def _write_topic(path: Path, entries: list[str]):
+        if entries:
+            path.write_text("\n\n---\n\n".join(entries) + "\n", encoding="utf-8")
+        elif path.exists():
+            path.unlink()
+
+    @staticmethod
+    def _upsert_entry(entries: list[str], new_text: str) -> list[str]:
+        """插入或替换条目。首行作为 subject 用于去重。"""
+        new_subject = new_text.split("\n")[0].strip()
+        for i, entry in enumerate(entries):
+            subject = entry.split("\n")[0].strip()
+            if subject.lower() == new_subject.lower():
+                entries[i] = new_text  # 替换
+                return entries
+        entries.append(new_text)  # 新增
+        return entries
+
+    def _update_index(self):
+        """重建索引文件 MEMORY.md。"""
+        lines = [
+            "# Agent Memory Index",
+            "",
+            f"_{len(DURABLE_TOPICS)} topics_",
+            "",
+        ]
+        for topic in DURABLE_TOPICS:
+            topic_file = self.topics_dir / f"{topic}.md"
+            count = len(self._read_topic(topic_file))
+            lines.append(f"- **{topic}** ({count} entries)")
+        lines.append("")
+        index_path = self.memory_dir / "MEMORY.md"
+        index_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def promote_durable_memory(
+    user_message: str,
+    final_answer: str,
+    store: DurableMemoryStore | None = None,
+    root: str = ".",
+) -> bool:
+    """检测用户意图，从 final_answer 提取记忆条目并持久化。
+
+    Args:
+        user_message: 用户原始输入。
+        final_answer: Agent 的最终答案。
+        store: DurableMemoryStore 实例（可选，如不传则用 root 创建）。
+        root: workspace 根目录。
+
+    Returns:
+        True 如果至少成功 promote 了一条。
+    """
+    # 检测保存意图
+    if not _has_save_intent(user_message):
+        return False
+
+    # 从 final_answer 中提取带前缀的条目
+    promotions = _extract_promotions(final_answer)
+    if not promotions:
+        return False
+
+    # 创建 store（如果未传入）
+    if store is None:
+        store = DurableMemoryStore(root)
+
+    # 过滤
+    valid = []
+    for topic, text in promotions:
+        reason = reject_durable_reason(text)
+        if reason:
+            continue
+        valid.append((topic, text))
+
+    if not valid:
+        return False
+
+    store.promote(valid)
+    return True
+
+
+def _has_save_intent(user_message: str) -> bool:
+    """检测用户消息中是否含保存意图词。"""
+    msg_lower = user_message.lower()
+    return any(word.lower() in msg_lower for word in SAVE_INTENT_WORDS)
+
+
+def _extract_promotions(text: str) -> list[tuple[str, str]]:
+    """从文本中提取带前缀的记忆条目。
+
+    支持的格式：
+        Convention: <text>
+        Decision: <text>
+        Dependency: <text>
+        Preference: <text>
+    每行独立解析。
+    """
+    promotions = []
+    for line in text.splitlines():
+        line = line.strip()
+        for prefix, topic in PREFIX_MAP.items():
+            if line.startswith(prefix):
+                body = line[len(prefix):].strip()
+                if body:
+                    promotions.append((topic, f"{prefix} {body}"))
+                break
+    return promotions
+
+
+def reject_durable_reason(text: str) -> str:
+    """拒绝写入 durable memory 的理由。返回空字符串表示通过。
+
+    拒绝条件：
+    - 空内容
+    - 含疑似 API key / token
+    - 过短（< 5 字符）
+    - 超长噪音（> 500 字符）
+    """
+    text = text.strip()
+    if not text:
+        return "空内容"
+    if len(text) < 5:
+        return "内容过短"
+    if len(text) > 500:
+        return "内容过长"
+    if re.search(r"sk-[a-zA-Z0-9]{20,}", text):
+        return "疑似包含 API key"
+    if re.search(r"gh[pous]_[a-zA-Z0-9]{20,}", text):
+        return "疑似包含 GitHub token"
+    return ""
