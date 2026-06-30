@@ -6,6 +6,8 @@
 - **Layer 1**：Agent 运行时内核（~1900行，M1-M4）
 - **Layer 2**：多 Agent 修复系统（~1000行，M5-M8）
 
+详细设计见 `docs/DEVELOPMENT_PLAN_ALL.md`，每日计划见 `docs/M1-M2-DAILY.md` 等。
+
 ## 执行规范
 
 执行每个任务前，必须先向用户说明：
