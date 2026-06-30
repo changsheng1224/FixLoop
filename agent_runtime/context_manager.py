@@ -161,7 +161,6 @@ class ContextManager:
         for item in recent:
             role = item.get("role", "unknown")
             content = str(item.get("content", ""))
-            # 截断过长的单条
             if role == "tool" and len(content) > 500:
                 content = content[:500] + f"\n... (截断，共 {len(content)} 字符)"
             if role == "user" and len(content) > 300:
@@ -170,6 +169,73 @@ class ContextManager:
             lines.append("")
 
         return "\n".join(lines)
+
+    def _maybe_summarize_history(self, history: list, trigger_tokens: int = 2600) -> list:
+        """当 history token 数超阈值时，用 LLM 压缩前一半为摘要。
+
+        成功：返回 [{"role":"system","content":"[Earlier summary]: ..."}, *recent]
+        失败：退化为简单裁剪（保留最近 8 条）
+
+        Args:
+            history: 原始 history 列表。
+            trigger_tokens: 触发摘要的 token 阈值。
+
+        Returns:
+            压缩后的 history 列表。
+        """
+        # 序列化并计数
+        raw_text = self._format_history_text(history)
+        token_count = self.budget.count(raw_text)
+
+        if token_count <= trigger_tokens:
+            return history
+
+        # 取前一半作为"旧历史"
+        mid = len(history) // 2
+        old_history = history[:mid]
+        recent_history = history[mid:]
+
+        # 尝试 LLM 摘要
+        try:
+            summary = self._generate_summary(old_history)
+            if summary:
+                return [
+                    {"role": "system", "content": f"[Earlier summary]: {summary}"},
+                ] + recent_history
+        except Exception:
+            pass
+
+        # 降级：保留最近 8 条
+        return history[-8:]
+
+    def _format_history_text(self, history: list) -> str:
+        """将 history 列表格式化为纯文本（用于计数）。"""
+        lines = []
+        for item in history:
+            role = item.get("role", "unknown")
+            content = str(item.get("content", ""))[:200]
+            lines.append(f"{role}: {content}")
+        return "\n".join(lines)
+
+    def _generate_summary(self, old_history: list) -> str:
+        """用模型生成旧历史的摘要（最多 200 tokens）。"""
+        prompt_lines = [
+            "Summarize the following conversation in 1-2 sentences.",
+            "Focus on: files read, tools used, errors encountered, decisions made.",
+            "",
+        ]
+        # 只取关键信息
+        for item in old_history[-20:]:
+            role = item.get("role", "unknown")
+            content = str(item.get("content", ""))[:150]
+            prompt_lines.append(f"{role}: {content}")
+
+        summary_prompt = "\n".join(prompt_lines)
+
+        raw = self.agent.model_client.complete(
+            summary_prompt, max_new_tokens=200
+        )
+        return raw.strip()[:300] if raw else ""
 
     def _compress_old_entries(self, entries: list) -> str:
         """压缩旧历史条目。
