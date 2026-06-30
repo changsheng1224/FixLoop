@@ -119,7 +119,7 @@ class AgentLoop:
         try:
             raw = client.complete(
                 f"Summarize this task in one short sentence (max 20 words):\n{user_message[:500]}",
-                max_new_tokens=60,
+                max_new_tokens=2048,
             )
             summary = raw.strip()[:300] if raw else user_message[:300]
         except Exception:

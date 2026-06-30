@@ -46,10 +46,12 @@ class Agent:
 
         # M4 模块：配额 + 熔断 + 语义记忆
         import sys as _sys
+
         from agent_runtime.providers.circuit_breaker import CircuitBreaker
         from agent_runtime.tool_executor import QuotaEnforcer
 
-        print("[agent_runtime] 加载语义模型 (all-MiniLM-L6-v2, ~90MB)...", file=_sys.stderr, end="", flush=True)
+        print("[agent_runtime] 加载语义模型 (~90MB)...",
+              file=_sys.stderr, end="", flush=True)
         from agent_runtime.features.memory import SemanticMemory
         self.semantic_memory = SemanticMemory()
         if self.semantic_memory.available:
