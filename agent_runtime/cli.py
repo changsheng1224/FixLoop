@@ -26,6 +26,8 @@ def main() -> int:
     parser.add_argument("--temperature", type=float, default=0.2, help="模型温度")
     parser.add_argument("--api-key", default=None, help="API Key（覆盖 .env）")
     parser.add_argument("--base-url", default=None, help="API Base URL（覆盖 .env）")
+    parser.add_argument("--approval", default="ask", choices=["auto","ask","never"],
+                        help="高风险工具审批策略: auto/ask/never（默认 ask）")
     parser.add_argument("--dry-run", action="store_true", help="Dry-run 模式：不实际修改文件")
     parser.add_argument("--resume", default=None, help="恢复会话（latest / session_id）")
 
@@ -43,6 +45,7 @@ def main() -> int:
         model=args.model or os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"),
         max_steps=args.max_steps,
         temperature=args.temperature,
+        approval=args.approval,
     )
 
     # 装配 Workspace
@@ -148,6 +151,7 @@ def _repl_mode(args) -> int:
         model=args.model or os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"),
         max_steps=args.max_steps,
         temperature=args.temperature,
+        approval=args.approval,
     )
 
     workspace = WorkspaceContext.build(args.cwd)
