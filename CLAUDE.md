@@ -38,7 +38,10 @@ M{m}/D{d}/{task-slug}
 8. git checkout master && git pull
 ```
 
-**⚠ 禁止本地 merge + push master**：不得使用 `git checkout master && git merge --no-ff ... && git push origin master` 绕过 PR 流程。若 `gh` 代理暂时不可用，向用户报告错误并等待指导，不可退化为本地合并。
+**⚠ 禁止直接 push master**：
+- 小修改可在当前分支本地 commit，但**推送到远端前必须经用户同意**。
+- 所有远端合并**必须走 PR 流程**（`gh pr create` + `gh pr merge`），不得直接 `git push origin master`。
+- 若 `gh` 代理暂时不可用，向用户报告错误并等待指导，不可退化为本地合并+推送。
 
 ## 远程仓库
 

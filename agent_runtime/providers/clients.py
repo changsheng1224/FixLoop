@@ -169,7 +169,7 @@ class OllamaModelClient:
 
     def __init__(
         self,
-        model: str = "qwen3.5:4b",
+        model: str = "qwen3.5:9b",
         host: str = "http://127.0.0.1:11434",
         temperature: float = 0.2,
         top_p: float = 0.9,

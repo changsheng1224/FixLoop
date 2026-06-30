@@ -28,6 +28,10 @@ def main() -> int:
     parser.add_argument("--base-url", default=None, help="API Base URL（覆盖 .env）")
     parser.add_argument("--approval", default="ask", choices=["auto","ask","never"],
                         help="高风险工具审批策略: auto/ask/never（默认 ask）")
+    parser.add_argument("--light-provider", default=None,
+                        help="轻量模型 Provider（摘要等简单任务，如 ollama）")
+    parser.add_argument("--light-model", default="qwen3.5:9b",
+                        help="轻量模型名称（默认 qwen3.5:9b）")
     parser.add_argument("--dry-run", action="store_true", help="Dry-run 模式：不实际修改文件")
     parser.add_argument("--resume", default=None, help="恢复会话（latest / session_id）")
 
@@ -93,7 +97,8 @@ def _build_agent(args, config, workspace, model_client) -> Agent:
                 return agent
 
     # 默认：创建新 Agent
-    agent = Agent(config=config, model_client=model_client, workspace=workspace, cwd=args.cwd)
+    agent = Agent(config=config, model_client=model_client, workspace=workspace,
+                  cwd=args.cwd, light_client=_build_light_client(args))
     agent._dry_run = args.dry_run
     return agent
 
@@ -138,6 +143,21 @@ def _build_model_client(args, config: AgentConfig):
         api_key=api_key,
         temperature=config.temperature,
     )
+
+
+def _build_light_client(args):
+    """根据 --light-provider 创建轻量模型客户端（用于摘要等简单任务）。"""
+    if not args.light_provider:
+        return None
+
+    if args.light_provider == "ollama":
+        from agent_runtime.providers.clients import OllamaModelClient
+        host = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+        return OllamaModelClient(model=args.light_model, host=host)
+    elif args.light_provider in ("deepseek", "anthropic", "openai"):
+        return _build_model_client(args, AgentConfig(provider=args.light_provider))
+
+    return None
 
 
 def _repl_mode(args) -> int:
