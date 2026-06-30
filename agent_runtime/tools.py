@@ -328,7 +328,10 @@ def tool_run_shell(context, args: dict) -> str:
     command = args.get("command", "")
     if not command:
         return "Error: 缺少必填参数 command"
-    timeout = int(args.get("timeout", 20))
+    try:
+        timeout = int(args.get("timeout", 20))
+    except (ValueError, TypeError):
+        timeout = 20
     timeout = max(1, min(timeout, 120))  # 限制 1-120 秒
 
     root = context.root
