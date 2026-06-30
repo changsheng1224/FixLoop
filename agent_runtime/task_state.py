@@ -3,8 +3,8 @@
 状态机：running → completed / stopped / failed
 """
 
-import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 
 @dataclass
@@ -37,9 +37,10 @@ class TaskState:
         Returns:
             初始状态为 "running" 的 TaskState 实例。
         """
+        ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
         return cls(
-            run_id=str(uuid.uuid4())[:8],
-            task_id=task_id or str(uuid.uuid4())[:8],
+            run_id=ts,
+            task_id=task_id or ts,
             user_request=user_request,
         )
 
