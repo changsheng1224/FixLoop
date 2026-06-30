@@ -97,6 +97,12 @@ class AgentLoop:
                     result_text = result.content
                 else:
                     result_text = str(result)
+
+                # 更新记忆（工具执行后）
+                self.agent.update_memory_after_tool(
+                    tool_name, tool_args, result_text
+                )
+
                 self.agent.record({"role": "tool", "content": result_text})
 
                 # 更新 user_message 为工具结果反馈
