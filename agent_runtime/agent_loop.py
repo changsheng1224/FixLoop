@@ -17,7 +17,7 @@ class AgentLoop:
         self.stop_reason = ""
         self._task_state = None
 
-    def run(self, user_message: str) -> str:
+    def run(self, user_message: str, callback=None) -> str:
         from agent_runtime.task_state import TaskState
 
         ts = TaskState.create(user_request=user_message)
@@ -92,6 +92,9 @@ class AgentLoop:
                 self.agent.update_memory_after_tool(tool_name, tool_args, result_text)
                 self.agent.record({"role": "tool", "content": result_text})
                 self._emit("tool_executed", {"tool": tool_name})
+
+                if callback:
+                    callback.on_tool_executed(tool_name, result_text)
 
                 user_message = (
                     f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
