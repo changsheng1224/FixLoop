@@ -18,7 +18,7 @@ class AgentConfig(BaseModel):
     model: str = Field(default="deepseek-v4-pro", description="模型名称")
     max_steps: int = Field(default=6, ge=1, le=50, description="最大工具调用步数")
     max_new_tokens: int = Field(
-        default=512, ge=1, le=4096, description="每次 LLM 调用的最大输出 token 数"
+        default=1024, ge=1, le=4096, description="每次 LLM 调用的最大输出 token 数"
     )
     approval: str = Field(
         default="ask", description="高风险工具审批策略: auto / ask / never"

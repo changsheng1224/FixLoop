@@ -14,7 +14,7 @@ class TestAgentConfigDefault:
         assert config.provider == "deepseek"
         assert config.model == "deepseek-v4-pro"
         assert config.max_steps == 6
-        assert config.max_new_tokens == 512
+        assert config.max_new_tokens == 1024
         assert config.approval == "ask"
         assert config.temperature == 0.2
 

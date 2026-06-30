@@ -192,11 +192,11 @@ class Agent:
         if final_match:
             return ("final", final_match.group(1).strip())
 
-        # 尝试匹配 JSON 格式 <tool>{...}</tool>
-        tool_json_match = re.search(r"<tool>\s*(\{.*?\})\s*</tool>", raw, re.DOTALL)
-        if tool_json_match:
+        # 尝试匹配 JSON 格式 <tool>{...}</tool>（支持嵌套 JSON）
+        json_match = _extract_json_between_tags(raw, "<tool>", "</tool>")
+        if json_match:
             try:
-                payload = json.loads(tool_json_match.group(1))
+                payload = json.loads(json_match)
                 return ("tool", payload)
             except json.JSONDecodeError:
                 return ("retry", "工具调用 JSON 格式无效，请检查后重试。")
@@ -310,3 +310,24 @@ class Agent:
             lines.append(f"**{role}**: {content}")
             lines.append("")
         return "\n".join(lines)
+
+
+def _extract_json_between_tags(text: str, open_tag: str, close_tag: str) -> str:
+    """从标签之间提取 JSON 文本（正确处理嵌套大括号）。
+
+    Args:
+        text: 原始文本。
+        open_tag: 开标签。
+        close_tag: 闭标签。
+
+    Returns:
+        标签之间的文本，未找到返回空字符串。
+    """
+    start = text.find(open_tag)
+    if start == -1:
+        return ""
+    start += len(open_tag)
+    end = text.find(close_tag, start)
+    if end == -1:
+        return ""
+    return text[start:end].strip()
