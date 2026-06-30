@@ -43,11 +43,18 @@ class Agent:
         self._prefix = self._build_prefix()
 
         # M4 模块：配额 + 熔断 + 语义记忆
-        from agent_runtime.features.memory import SemanticMemory
+        import sys as _sys
         from agent_runtime.providers.circuit_breaker import CircuitBreaker
         from agent_runtime.tool_executor import QuotaEnforcer
 
+        print("[agent_runtime] 加载语义模型 (all-MiniLM-L6-v2, ~90MB)...", file=_sys.stderr, end="", flush=True)
+        from agent_runtime.features.memory import SemanticMemory
         self.semantic_memory = SemanticMemory()
+        if self.semantic_memory.available:
+            print(" ✅", file=_sys.stderr)
+        else:
+            print(" ⚠ 不可用（语义检索降级为 keywords 模式）", file=_sys.stderr)
+
         self.circuit_breaker = CircuitBreaker()
         self.quota = QuotaEnforcer()
 
