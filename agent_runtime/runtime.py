@@ -26,10 +26,12 @@ class Agent:
         workspace,
         cwd: str | None = None,
         light_client=None,
+        dry_run: bool = False,
     ):
         self.config = config
         self.model_client = model_client
-        self.light_client = light_client  # 可选：摘要等轻量任务用本地模型
+        self.light_client = light_client
+        self.dry_run = dry_run
         self.workspace = workspace
         self._cwd = cwd or workspace.repo_root or str(Path.cwd())
 
@@ -103,28 +105,17 @@ class Agent:
         self.session["history"].append(item)
 
     def execute_tool(self, name: str, args: dict):
-        """执行指定工具（经 ToolExecutor 闸口），返回 ToolExecutionResult。
-
-        Args:
-            name: 工具名称。
-            args: 工具参数字典。
-
-        Returns:
-            ToolExecutionResult 实例。
-        """
+        """执行指定工具（经 ToolExecutor 闸口），返回 ToolExecutionResult。"""
         from agent_runtime.tool_executor import ToolExecutor
 
-        executor = ToolExecutor(
-            agent=self,
-            approval_policy=self.config.approval,
-            dry_run=getattr(self, "_dry_run", False),
-            quota=self.quota,
-        )
-        return executor.execute(name, args)
-
-    def is_tool_available(self, name: str) -> bool:
-        """检查工具是否在注册表中。"""
-        return name in self._tool_names
+        if not hasattr(self, "_tool_executor"):
+            self._tool_executor = ToolExecutor(
+                agent=self,
+                approval_policy=self.config.approval,
+                dry_run=self.dry_run,
+                quota=self.quota,
+            )
+        return self._tool_executor.execute(name, args)
 
     # ---- 类方法 ----
 
@@ -306,22 +297,6 @@ class Agent:
                     source=pattern,
                     kind="observation",
                 )
-
-    def _format_history(self) -> str:
-        """将会话历史格式化为 prompt 文本。"""
-        lines = ["## 对话历史", ""]
-        for item in self.session["history"]:
-            role = item.get("role", "unknown")
-            content = str(item.get("content", ""))
-            # 截断过长的工具输出
-            if role == "tool" and len(content) > 500:
-                content = content[:500] + f"\n... (截断，共 {len(content)} 字符)"
-            if role == "user" and len(content) > 300:
-                content = content[:300] + "..."
-            lines.append(f"**{role}**: {content}")
-            lines.append("")
-        return "\n".join(lines)
-
 
 def _extract_json_between_tags(text: str, open_tag: str, close_tag: str) -> str:
     """从标签之间提取 JSON 文本（正确处理嵌套大括号）。

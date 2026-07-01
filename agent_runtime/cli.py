@@ -10,70 +10,78 @@ from agent_runtime.runtime import Agent
 from agent_runtime.workspace import WorkspaceContext
 
 
+def _make_parser() -> argparse.ArgumentParser:
+    """构建 CLI 参数解析器。默认值来自 AgentConfig。"""
+    cfg = AgentConfig()
+    p = argparse.ArgumentParser(prog="agent_runtime", description="手写的 LLM Agent 运行时内核")
+    p.add_argument("prompt", nargs="?", default=None, help="用户输入（缺省进入 REPL 模式）")
+    p.add_argument("--cwd", default=".", help="工作目录")
+    p.add_argument("--provider", default=cfg.provider,
+                   help=f"模型 Provider（默认 {cfg.provider}）")
+    p.add_argument("--model", default=None, help=f"模型名称（默认 {cfg.model}）")
+    p.add_argument("--max-steps", type=int, default=cfg.max_steps,
+                   help=f"最大工具步数（默认 {cfg.max_steps}）")
+    p.add_argument("--temperature", type=float, default=cfg.temperature,
+                   help=f"模型温度（默认 {cfg.temperature}）")
+    p.add_argument("--api-key", default=None, help="API Key（覆盖 .env）")
+    p.add_argument("--base-url", default=None, help="API Base URL（覆盖 .env）")
+    p.add_argument("--approval", default=cfg.approval,
+                   choices=["auto", "ask", "never"],
+                   help=f"审批策略（默认 {cfg.approval}）")
+    p.add_argument("--quota-writes", type=int, default=20,
+                   help="每会话最大写入次数（默认 20）")
+    p.add_argument("--quota-shell", type=int, default=10,
+                   help="每会话最大 Shell 调用次数（默认 10）")
+    p.add_argument("--quota-total", type=int, default=50,
+                   help="每会话最大工具调用总数（默认 50）")
+    p.add_argument("--light-provider", default=None,
+                   help="轻量模型 Provider（如 ollama）")
+    p.add_argument("--light-model", default="qwen3.5:9b",
+                   help="轻量模型名称（默认 qwen3.5:9b）")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Dry-run 模式：不实际修改文件")
+    p.add_argument("--resume", default=None,
+                   help="恢复会话（latest / session_id）")
+    return p
+
+
+def _make_config(args) -> AgentConfig:
+    """从 CLI args 构建 Config。"""
+    cfg_kw = {
+        "provider": args.provider,
+        "model": args.model or os.environ.get("DEEPSEEK_MODEL", AgentConfig().model),
+        "max_steps": args.max_steps,
+        "temperature": args.temperature,
+        "approval": args.approval,
+    }
+    return AgentConfig(**{k: v for k, v in cfg_kw.items() if v is not None})
+
+
+def _make_agent(args) -> Agent:
+    """装配完整 Agent 管线：Config → Workspace → ModelClient → Agent。"""
+    _load_dotenv()
+    config = _make_config(args)
+    workspace = WorkspaceContext.build(args.cwd)
+    model_client = _build_model_client(args, config)
+    return _build_agent(args, config, workspace, model_client)
+
+
 def main() -> int:
     """命令行入口，one-shot 模式。"""
-    parser = argparse.ArgumentParser(
-        prog="agent_runtime",
-        description="手写的 LLM Agent 运行时内核",
-    )
-    parser.add_argument(
-        "prompt", nargs="?", default=None, help="用户输入（缺省进入 REPL 模式）"
-    )
-    parser.add_argument("--cwd", default=".", help="工作目录")
-    parser.add_argument("--provider", default="deepseek", help="模型 Provider: deepseek / fake")
-    parser.add_argument("--model", default=None, help="模型名称")
-    parser.add_argument("--max-steps", type=int, default=6, help="最大工具调用步数")
-    parser.add_argument("--temperature", type=float, default=0.2, help="模型温度")
-    parser.add_argument("--api-key", default=None, help="API Key（覆盖 .env）")
-    parser.add_argument("--base-url", default=None, help="API Base URL（覆盖 .env）")
-    parser.add_argument("--approval", default="ask", choices=["auto","ask","never"],
-                        help="高风险工具审批策略: auto/ask/never（默认 ask）")
-    parser.add_argument("--quota-writes", type=int, default=20,
-                        help="每会话最大写入次数（默认 20）")
-    parser.add_argument("--quota-shell", type=int, default=10,
-                        help="每会话最大 Shell 调用次数（默认 10）")
-    parser.add_argument("--quota-total", type=int, default=50,
-                        help="每会话最大工具调用总数（默认 50）")
-    parser.add_argument("--light-provider", default=None,
-                        help="轻量模型 Provider（摘要等简单任务，如 ollama）")
-    parser.add_argument("--light-model", default="qwen3.5:9b",
-                        help="轻量模型名称（默认 qwen3.5:9b）")
-    parser.add_argument("--dry-run", action="store_true", help="Dry-run 模式：不实际修改文件")
-    parser.add_argument("--resume", default=None, help="恢复会话（latest / session_id）")
-
+    parser = _make_parser()
     args = parser.parse_args()
 
     if args.prompt is None:
         return _repl_mode(args)
 
-    # 加载 .env
-    _load_dotenv()
-
-    # 装配 Config
-    config = AgentConfig(
-        provider=args.provider,
-        model=args.model or os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"),
-        max_steps=args.max_steps,
-        temperature=args.temperature,
-        approval=args.approval,
-    )
-
-    # 装配 Workspace
-    workspace = WorkspaceContext.build(args.cwd)
-
-    # 装配 ModelClient
-    model_client = _build_model_client(args, config)
-
-    # 装配 Agent（支持 --resume）
-    agent = _build_agent(args, config, workspace, model_client)
+    agent = _make_agent(args)
 
     if args.dry_run:
         print("[agent_runtime] DRY-RUN MODE — 不会实际修改文件", file=sys.stderr)
+    cfg = agent.config
+    print(f"[agent_runtime] provider={cfg.provider} model={cfg.model}", file=sys.stderr)
+    print(f"[agent_runtime] workspace={agent.workspace.repo_root}", file=sys.stderr)
 
-    print(f"[agent_runtime] provider={config.provider} model={config.model}", file=sys.stderr)
-    print(f"[agent_runtime] workspace={workspace.repo_root}", file=sys.stderr)
-
-    # 执行（带进度回调）
     from agent_runtime.callbacks import CLIProgressCallback
     answer = agent.ask(args.prompt, callback=CLIProgressCallback())
     print(answer)
@@ -95,7 +103,7 @@ def _build_agent(args, config, workspace, model_client) -> Agent:
                 model_client, workspace, store, session_id, config=config, cwd=args.cwd
             )
             if agent:
-                agent._dry_run = args.dry_run
+                agent.dry_run = args.dry_run
                 resume_state = evaluate_resume_state(agent)
                 status = resume_state["status"]
                 agent.session.setdefault("resume_status", status)
@@ -106,8 +114,8 @@ def _build_agent(args, config, workspace, model_client) -> Agent:
 
     # 默认：创建新 Agent
     agent = Agent(config=config, model_client=model_client, workspace=workspace,
-                  cwd=args.cwd, light_client=_build_light_client(args))
-    agent._dry_run = args.dry_run
+                  cwd=args.cwd, light_client=_build_light_client(args),
+                  dry_run=args.dry_run)
     # 应用 CLI 配额参数
     agent.quota._limits["write"] = args.quota_writes
     agent.quota._limits["shell"] = args.quota_shell
@@ -174,24 +182,11 @@ def _build_light_client(args):
 
 def _repl_mode(args) -> int:
     """交互式 REPL 模式。"""
-    import os
+    agent = _make_agent(args)
 
-    _load_dotenv()
-
-    config = AgentConfig(
-        provider=args.provider,
-        model=args.model or os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"),
-        max_steps=args.max_steps,
-        temperature=args.temperature,
-        approval=args.approval,
-    )
-
-    workspace = WorkspaceContext.build(args.cwd)
-    model_client = _build_model_client(args, config)
-    agent = _build_agent(args, config, workspace, model_client)
-
-    print(f"agent_runtime REPL | provider={config.provider} model={config.model}", file=sys.stderr)
-    print(f"workspace={workspace.repo_root}", file=sys.stderr)
+    cfg = agent.config
+    print(f"agent_runtime REPL | provider={cfg.provider} model={cfg.model}", file=sys.stderr)
+    print(f"workspace={agent.workspace.repo_root}", file=sys.stderr)
     if args.dry_run:
         print("⚠ DRY-RUN MODE", file=sys.stderr)
     print('输入 /help 查看命令，/exit 退出', file=sys.stderr)
@@ -247,7 +242,7 @@ def _handle_command(cmd: str, agent: Agent) -> str:
         print(f"对话轮数: {history_len}")
         print(f"approval_policy: {agent.config.approval}")
         print(f"max_steps: {agent.config.max_steps}")
-        print(f"dry_run: {getattr(agent, '_dry_run', False)}")
+        print(f"dry_run: {agent.dry_run}")
     elif name == "/reset":
         agent.session["history"] = []
         print("对话历史已清空。")

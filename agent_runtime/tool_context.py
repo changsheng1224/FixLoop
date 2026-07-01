@@ -17,15 +17,11 @@ class ToolContext:
         root: workspace 根目录（绝对路径），所有文件访问必须在此目录内。
         path_resolver: 将相对路径解析为绝对路径的函数。
         shell_env_provider: 返回安全环境变量 dict 的可调用对象（M2 使用）。
-        depth: 当前工具调用深度（用于配额检查）。
-        max_depth: 最大工具调用深度。
     """
 
     root: str
     path_resolver: Callable[[str], Path] = field(default=None)
     shell_env_provider: Callable[[], dict] = field(default=dict)
-    depth: int = 0
-    max_depth: int = 50
 
     def __post_init__(self):
         if self.path_resolver is None:
