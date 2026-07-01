@@ -40,14 +40,16 @@ class SearchArgs:
 
     pattern: str  # 必填
     path: str = "."
+    context_lines: int = 0  # 匹配行前后各多显示 N 行
 
 
 @dataclass
 class WriteFileArgs:
-    """创建或覆盖文件（M2 实现）。"""
+    """创建或覆盖文件。"""
 
     path: str = ""
     content: str = ""
+    append: bool = False  # True 时追加而非覆盖
 
 
 @dataclass
@@ -170,12 +172,13 @@ def tool_read_file(context, args: dict) -> str:
 def tool_search(context, args: dict) -> str:
     """代码搜索：优先使用 ripgrep，不可用时 fallback 到纯 Python。
 
-    Args 必须包含 'pattern'，可选 'path'(默认".")。
+    Args 必须包含 'pattern'，可选 'path'、'context_lines'。
     """
     pattern = args.get("pattern", "")
     if not pattern:
         return "Error: 缺少必填参数 pattern"
     raw_path = args.get("path", ".")
+    ctx = int(args.get("context_lines", 0))
 
     try:
         target = context.resolve(raw_path)
@@ -186,25 +189,24 @@ def tool_search(context, args: dict) -> str:
         return f"Error: 路径不存在: {raw_path}"
 
     # 优先使用 ripgrep
-    result = _search_rg(pattern, target)
+    result = _search_rg(pattern, target, context_lines=ctx)
     if result is not None:
         return result
 
     # Fallback: 纯 Python 搜索
-    return _search_python(pattern, target)
+    return _search_python(pattern, target, context_lines=ctx)
 
 
-def _search_rg(pattern: str, target: Path) -> str | None:
+def _search_rg(pattern: str, target: Path, context_lines: int = 0) -> str | None:
     """尝试用 ripgrep 搜索，失败返回 None。"""
     try:
-        result = subprocess.run(
-            ["rg", "-n", "--smart-case", pattern, str(target)],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
+        cmd = ["rg", "-n", "--smart-case"]
+        if context_lines > 0:
+            cmd.extend(["-C", str(context_lines)])
+        cmd.extend([pattern, str(target)])
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode == 0:
-            lines = result.stdout.strip().splitlines()[:50]  # 最多 50 条
+            lines = result.stdout.strip().splitlines()[:50]
             if not lines or not lines[0]:
                 return "(无匹配)"
             return "\n".join(lines)
@@ -215,16 +217,15 @@ def _search_rg(pattern: str, target: Path) -> str | None:
         return None
 
 
-def _search_python(pattern: str, target: Path) -> str:
+def _search_python(pattern: str, target: Path, context_lines: int = 0) -> str:
     """纯 Python 搜索：逐文件遍历匹配。"""
     pattern_lower = pattern.lower()
     matches = []
-    count = 0
+    seen = set()  # (file, line) 去重
 
     for filepath in target.rglob("*"):
-        if count >= 50:
+        if len(matches) >= 50:
             break
-        # 跳过目录和忽略的路径
         if filepath.is_dir():
             continue
         if any(ign in filepath.parts for ign in IGNORED_PATH_NAMES):
@@ -237,12 +238,23 @@ def _search_python(pattern: str, target: Path) -> str:
         except (UnicodeDecodeError, OSError):
             continue
 
-        for i, line in enumerate(text.splitlines(), 1):
+        lines_list = text.splitlines()
+        total = len(lines_list)
+        for i, line in enumerate(lines_list, 1):
             if pattern_lower in line.lower():
                 rel = filepath.relative_to(target)
-                matches.append(f"{rel}:{i}: {line.strip()[:200]}")
-                count += 1
-                if count >= 50:
+                # 上下文范围
+                ctx_start = max(1, i - context_lines)
+                ctx_end = min(total, i + context_lines)
+                for j in range(ctx_start, ctx_end + 1):
+                    key = (str(rel), j)
+                    if key not in seen:
+                        seen.add(key)
+                        prefix = ">" if j == i else " "
+                        matches.append(f"{rel}:{j}:{prefix} {lines_list[j-1].strip()[:200]}")
+                        if len(matches) >= 50:
+                            break
+                if len(matches) >= 50:
                     break
 
     if not matches:
@@ -258,12 +270,13 @@ def _search_python(pattern: str, target: Path) -> str:
 def tool_write_file(context, args: dict) -> str:
     """创建或覆盖文件，自动创建父目录。
 
-    Args 必须包含 'path' 和 'content'。
+    Args 必须包含 'path' 和 'content'，可选 'append'（默认 False）。
     """
     raw_path = args.get("path", "")
     if not raw_path:
         return "Error: 缺少必填参数 path"
     content = args.get("content", "")
+    append = args.get("append", False)
 
     try:
         target = context.resolve(raw_path)
@@ -274,11 +287,17 @@ def tool_write_file(context, args: dict) -> str:
     target.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        target.write_text(content, encoding="utf-8")
+        if append and target.exists():
+            with open(target, "a", encoding="utf-8") as f:
+                f.write(content)
+            mode = "已追加到"
+        else:
+            target.write_text(content, encoding="utf-8")
+            mode = "已写入"
     except OSError as e:
         return f"Error: 写入文件失败: {e}"
 
-    return f"已写入 {raw_path}（{len(content)} 字符）"
+    return f"{mode} {raw_path}（{len(content)} 字符）"
 
 
 def tool_patch_file(context, args: dict) -> str:

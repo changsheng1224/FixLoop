@@ -38,6 +38,22 @@ class TestWriteFile:
         result = tool_write_file(ctx, {"content": "no path"})
         assert "Error" in result
 
+    def test_append_to_existing(self, ctx, temp_workspace):
+        (temp_workspace / "log.txt").write_text("line1\n")
+        result = tool_write_file(
+            ctx, {"path": "log.txt", "content": "line2\n", "append": True}
+        )
+        assert "已追加到" in result
+        assert (temp_workspace / "log.txt").read_text() == "line1\nline2\n"
+
+    def test_append_to_new_file(self, ctx, temp_workspace):
+        """append 到不存在的文件 → 创建新文件。"""
+        result = tool_write_file(
+            ctx, {"path": "new.txt", "content": "hello", "append": True}
+        )
+        assert "已写入" in result
+        assert (temp_workspace / "new.txt").read_text() == "hello"
+
 
 class TestPatchFile:
     """patch_file 工具测试。"""
