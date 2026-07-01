@@ -146,10 +146,11 @@ class AgentLoop:
             pass
 
     def _finalize_run(self, ts):
-        """完成 run：写入 task_state + report + checkpoint + durable memory。"""
+        """完成 run：写入工件 + checkpoint + durable memory + session 保存。"""
         from agent_runtime.checkpoint import create_checkpoint
         from agent_runtime.features.memory import promote_durable_memory
         from agent_runtime.run_store import RunStore
+        from agent_runtime.session_store import SessionStore
 
         try:
             store = RunStore(root=self.agent._cwd)
@@ -160,14 +161,16 @@ class AgentLoop:
                 "attempts": ts.attempts,
                 "stop_reason": ts.stop_reason,
                 "status": ts.status,
+                "prompt_cache_key": getattr(self.agent._prefix, "hash", ""),
             })
             create_checkpoint(
                 self.agent, ts,
                 ts.user_request, trigger="ask_end",
             )
-            # 自动保存 durable memory（如用户说"记住xxx"）
             promote_durable_memory(
                 ts.user_request, ts.final_answer, root=self.agent._cwd,
             )
+            # 自动保存会话（支持 --resume）
+            SessionStore(root=self.agent._cwd).save(self.agent.session)
         except Exception:
             pass

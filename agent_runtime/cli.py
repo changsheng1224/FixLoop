@@ -28,6 +28,12 @@ def main() -> int:
     parser.add_argument("--base-url", default=None, help="API Base URL（覆盖 .env）")
     parser.add_argument("--approval", default="ask", choices=["auto","ask","never"],
                         help="高风险工具审批策略: auto/ask/never（默认 ask）")
+    parser.add_argument("--quota-writes", type=int, default=20,
+                        help="每会话最大写入次数（默认 20）")
+    parser.add_argument("--quota-shell", type=int, default=10,
+                        help="每会话最大 Shell 调用次数（默认 10）")
+    parser.add_argument("--quota-total", type=int, default=50,
+                        help="每会话最大工具调用总数（默认 50）")
     parser.add_argument("--light-provider", default=None,
                         help="轻量模型 Provider（摘要等简单任务，如 ollama）")
     parser.add_argument("--light-model", default="qwen3.5:9b",
@@ -67,8 +73,9 @@ def main() -> int:
     print(f"[agent_runtime] provider={config.provider} model={config.model}", file=sys.stderr)
     print(f"[agent_runtime] workspace={workspace.repo_root}", file=sys.stderr)
 
-    # 执行
-    answer = agent.ask(args.prompt)
+    # 执行（带进度回调）
+    from agent_runtime.callbacks import CLIProgressCallback
+    answer = agent.ask(args.prompt, callback=CLIProgressCallback())
     print(answer)
     return 0
 
@@ -100,6 +107,10 @@ def _build_agent(args, config, workspace, model_client) -> Agent:
     agent = Agent(config=config, model_client=model_client, workspace=workspace,
                   cwd=args.cwd, light_client=_build_light_client(args))
     agent._dry_run = args.dry_run
+    # 应用 CLI 配额参数
+    agent.quota._limits["write"] = args.quota_writes
+    agent.quota._limits["shell"] = args.quota_shell
+    agent.quota._limits["total"] = args.quota_total
     return agent
 
 
@@ -203,8 +214,9 @@ def _repl_mode(args) -> int:
             continue
 
         # 发送给 Agent
-        print("", end="", flush=True)  # 换行
-        answer = agent.ask(user_input)
+        from agent_runtime.callbacks import CLIProgressCallback
+        print("", end="", flush=True)
+        answer = agent.ask(user_input, callback=CLIProgressCallback())
         print(answer)
 
 

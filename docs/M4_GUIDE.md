@@ -165,6 +165,12 @@ Agent ──CircuitBreaker──→ 模型 (Anthropic / Ollama / OpenAI / Fake)
 | #34 | promote_durable_memory | 实现了但无人调用 | `AgentLoop._finalize_run` 自动保存 |
 | #34 | _maybe_summarize_history | 实现了但 history 压缩不用它 | `_get_compressed_history` 优先 LLM 摘要，降级规则压缩 |
 | #33 | M3 Memory | Working/Episodic Memory 已实现但 prompt 中为空 | `_get_memory()` + `_get_relevant()` 返回记忆内容 |
+| — | Quota CLI | 配额硬编码无法配置 | `--quota-writes/--quota-shell/--quota-total` CLI 参数 |
+| — | ProgressCallback | 实现了但 CLI 未传入 | one-shot + REPL 均传 `CLIProgressCallback` |
+| — | Agent.ask() | 不支持 callback 参数 | `ask(user_message, callback=None)` |
+| — | Session 自动保存 | 会话不持久化 | `_finalize_run` 调 `SessionStore.save()` |
+| — | Durable retrieval | 持久记忆只写不读 | `_get_relevant` 查询 `DurableMemoryStore` |
+| — | `_maybe_summarize_history` | 接入 `_get_compressed_history` | 优先 LLM 摘要，降级规则压缩 |
 
 ### 功能增强
 
@@ -179,6 +185,9 @@ Agent ──CircuitBreaker──→ 模型 (Anthropic / Ollama / OpenAI / Fake)
 |:--:|------|------|
 | #31 | 覆盖率提升 | +21 tests：CLI / schema_utils 边界 / providers / replay，覆盖率 80%→84% |
 | #32 | gitignore | 排除 `.coverage` 临时文件 |
+| — | 接线模块测试 | +8 tests：Quota / Callback / SessionSave / DurableRetrieval / CB |
+| — | `bonus_memory.md` | 29 项记忆系统改进（Working/Episodic/Durable/Semantic） |
+| — | `bonus_context.md` | 30 项上下文工程改进（TokenBudget/ContextManager/Summarization/Cache） |
 | #27 | M4_GUIDE | 本文档 |
 
 ### 安全修复
@@ -191,13 +200,14 @@ Agent ──CircuitBreaker──→ 模型 (Anthropic / Ollama / OpenAI / Fake)
 
 | 指标 | M4 sprint 结束 | 当前 |
 |------|:--:|:--:|
-| PR 总数 | 26 | **34** |
-| 测试数 | 215 | **246** |
+| PR 总数 | 26 | **36** |
+| 测试数 | 215 | **254** |
 | 覆盖率 | — | **84%（行）/ 86%（分支）** |
-| 总行数 | 6442 | **6989** |
-| 源码行数 | — | **3978** |
-| 测试行数 | — | **3011** |
+| 总行数 | 6442 | **~7200** |
+| 源码行数 | — | **~4000** |
+| 测试行数 | — | **~3200** |
+| Bonus 文档 | 2 | **4**（m1-m2 / m3-m4 / memory / context） |
 
 ---
 
-*M4 完成日期：2026-07-01 | git tag: m4-done | 246 tests green | 6989 total LOC | Layer 1 竣工*
+*M4 完成日期：2026-07-01 | 最终更新：2026-07-02 | git tag: m4-done | 254 tests green | ~7200 total LOC | Layer 1 竣工*
