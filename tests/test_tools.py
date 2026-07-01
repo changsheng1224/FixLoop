@@ -81,6 +81,31 @@ class TestSearch:
         result = tool_search(ctx, {"pattern": "test", "path": "ghost_dir"})
         assert "Error" in result
 
+    def test_context_lines_shows_surrounding(self, ctx, temp_workspace):
+        """context_lines 显示匹配行前后的上下文。"""
+        (temp_workspace / "data.txt").write_text(
+            "line A\nline B\nTODO fix this\nline D\nline E\n"
+        )
+        result = tool_search(
+            ctx, {"pattern": "TODO", "path": str(temp_workspace), "context_lines": 1}
+        )
+        assert "> TODO" in result   # 匹配行有 > 标记
+        assert "line B" in result   # 前一行
+        assert "line D" in result   # 后一行
+        assert "line A" not in result  # 太远
+        assert "line E" not in result
+
+    def test_context_lines_zero(self, ctx, temp_workspace):
+        """context_lines=0 时只显示匹配行。"""
+        (temp_workspace / "data.txt").write_text(
+            "a\nb TODO here\nc\n"
+        )
+        result = tool_search(
+            ctx, {"pattern": "TODO", "path": str(temp_workspace), "context_lines": 0}
+        )
+        assert "TODO" in result
+        assert "> " in result   # 匹配行标记
+
 
 class TestToolRegistry:
     """build_tool_registry 测试。"""
