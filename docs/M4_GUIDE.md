@@ -151,4 +151,53 @@ Agent ──CircuitBreaker──→ 模型 (Anthropic / Ollama / OpenAI / Fake)
 
 ---
 
-*M4 完成日期：2026-07-01 | git tag: m4-done | 215 tests green | 6442 total LOC | Layer 1 竣工*
+## 4. M4 后改进（PR #27～#34）
+
+> M4 sprint 结束后持续补全的模块接线、测试覆盖和工程质量提升。
+
+### 接线修复（5 个"已完成但未接入"的模块）
+
+| PR | 模块 | 问题 | 修复 |
+|:--:|------|------|------|
+| #34 | CircuitBreaker | Agent 初始化了但 AgentLoop 未用 | `cb.call()` 包裹模型调用，熔断时优雅终止 |
+| #34 | QuotaEnforcer | Agent 创建了实例但 ToolExecutor 收不到 | `execute_tool()` 传 `self.quota` |
+| #34 | redact_artifact | 实现了但 trace/report 写入前未调 | `append_trace` + `write_report` 写入前自动脱敏 |
+| #34 | promote_durable_memory | 实现了但无人调用 | `AgentLoop._finalize_run` 自动保存 |
+| #34 | _maybe_summarize_history | 实现了但 history 压缩不用它 | `_get_compressed_history` 优先 LLM 摘要，降级规则压缩 |
+| #33 | M3 Memory | Working/Episodic Memory 已实现但 prompt 中为空 | `_get_memory()` + `_get_relevant()` 返回记忆内容 |
+
+### 功能增强
+
+| PR | 改动 | 说明 |
+|:--:|------|------|
+| #29 | light-client + token quota | light_client 支持、max_new_tokens 2048、摘要配额适配 thinking 模型 |
+| #30 | timestamp run_id | 运行目录从 UUID 改为 `YYYYMMDD-HHMMSS` 格式 |
+
+### 测试与规范
+
+| PR | 改动 | 说明 |
+|:--:|------|------|
+| #31 | 覆盖率提升 | +21 tests：CLI / schema_utils 边界 / providers / replay，覆盖率 80%→84% |
+| #32 | gitignore | 排除 `.coverage` 临时文件 |
+| #27 | M4_GUIDE | 本文档 |
+
+### 安全修复
+
+| PR | 改动 | 说明 |
+|:--:|------|------|
+| #34 | `looks_sensitive_env_name` | 修复子串误判：`total_tokens` 不再因含 `TOKEN` 被脱敏 |
+
+### 更新后的 Layer 1 数据
+
+| 指标 | M4 sprint 结束 | 当前 |
+|------|:--:|:--:|
+| PR 总数 | 26 | **34** |
+| 测试数 | 215 | **246** |
+| 覆盖率 | — | **84%（行）/ 86%（分支）** |
+| 总行数 | 6442 | **6989** |
+| 源码行数 | — | **3978** |
+| 测试行数 | — | **3011** |
+
+---
+
+*M4 完成日期：2026-07-01 | git tag: m4-done | 246 tests green | 6989 total LOC | Layer 1 竣工*
