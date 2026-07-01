@@ -58,13 +58,9 @@ class RunStore:
         return path
 
     def append_trace(self, task_state, event: str, payload: dict | None = None):
-        """追加一行 JSONL 追踪事件。
+        """追加一行 JSONL 追踪事件（经脱敏）。"""
+        from agent_runtime.security import redact_artifact
 
-        Args:
-            task_state: TaskState 实例。
-            event: 事件类型（如 'run_started', 'tool_executed'）。
-            payload: 事件相关数据（可选）。
-        """
         run_dir = self.start_run(task_state)
         path = run_dir / "trace.jsonl"
         record = {
@@ -72,20 +68,18 @@ class RunStore:
             "created_at": datetime.now(UTC).isoformat(),
         }
         if payload:
-            record["payload"] = payload
+            record["payload"] = redact_artifact(payload)
         line = json.dumps(record, ensure_ascii=False, default=str)
         with open(path, "a", encoding="utf-8") as f:
             f.write(line + "\n")
 
     def write_report(self, task_state, report: dict):
-        """写入 report.json（原子写）。
+        """写入 report.json（原子写，经脱敏）。"""
+        from agent_runtime.security import redact_artifact
 
-        Args:
-            task_state: TaskState 实例。
-            report: 报告字典。
-        """
         run_dir = self.start_run(task_state)
         path = run_dir / "report.json"
+        report = redact_artifact(report)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(
             json.dumps(report, ensure_ascii=False, indent=2, default=str),

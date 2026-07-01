@@ -119,6 +119,7 @@ class Agent:
             agent=self,
             approval_policy=self.config.approval,
             dry_run=getattr(self, "_dry_run", False),
+            quota=self.quota,
         )
         return executor.execute(name, args)
 
