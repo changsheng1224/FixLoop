@@ -54,14 +54,21 @@ class AgentLoop:
             # 1. 组装 prompt
             prompt_text = self.agent.prompt(user_message)
 
-            # 2. 调用模型（附 cache key）
+            # 2. 调用模型（经 CircuitBreaker 包裹，附 cache key）
             self.attempts += 1
             cache_key = getattr(self.agent._prefix, "hash", "")
-            raw = self.agent.model_client.complete(
-                prompt_text,
-                max_new_tokens=self.agent.config.max_new_tokens,
-                prompt_cache_key=cache_key,
-            )
+            try:
+                raw = self.agent.circuit_breaker.call(
+                    self.agent.model_client.complete,
+                    prompt_text,
+                    max_new_tokens=self.agent.config.max_new_tokens,
+                    prompt_cache_key=cache_key,
+                )
+            except Exception as e:
+                if "Circuit breaker is open" in str(e):
+                    self.stop_reason = "circuit_breaker"
+                    return f"<final>API 熔断：{e}</final>"
+                raise
 
             # 3. 解析输出
             kind, payload = self.agent.parse(raw)
@@ -139,8 +146,9 @@ class AgentLoop:
             pass
 
     def _finalize_run(self, ts):
-        """完成 run：写入 task_state + report + checkpoint。"""
+        """完成 run：写入 task_state + report + checkpoint + durable memory。"""
         from agent_runtime.checkpoint import create_checkpoint
+        from agent_runtime.features.memory import promote_durable_memory
         from agent_runtime.run_store import RunStore
 
         try:
@@ -156,6 +164,10 @@ class AgentLoop:
             create_checkpoint(
                 self.agent, ts,
                 ts.user_request, trigger="ask_end",
+            )
+            # 自动保存 durable memory（如用户说"记住xxx"）
+            promote_durable_memory(
+                ts.user_request, ts.final_answer, root=self.agent._cwd,
             )
         except Exception:
             pass

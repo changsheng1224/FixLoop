@@ -168,18 +168,22 @@ class ContextManager:
         return "\n".join(lines)
 
     def _get_compressed_history(self) -> str:
-        """获取压缩后的对话历史。"""
+        """获取压缩后的对话历史。优先 LLM 摘要，降级为规则压缩。"""
         history = self.agent.session.get("history", [])
         if not history:
             return ""
 
-        # 最近 KEEP_RECENT_HISTORY 条完整保留
+        # 先尝试 LLM 摘要（超 2600 tokens 时触发）
+        summarized = self._maybe_summarize_history(history)
+        if summarized is not history:  # 返回了新列表（触发了摘要）
+            return self._format_compressed_result(summarized)
+
+        # 降级：规则压缩
         recent = history[-KEEP_RECENT_HISTORY:]
         old = history[:-KEEP_RECENT_HISTORY]
 
         lines = ["## 对话历史", ""]
 
-        # 旧历史压缩
         if old:
             compressed = self._compress_old_entries(old)
             if compressed:
@@ -187,7 +191,6 @@ class ContextManager:
                 lines.append(compressed)
                 lines.append("")
 
-        # 近期历史完整保留
         lines.append("### 最近对话")
         for item in recent:
             role = item.get("role", "unknown")
@@ -199,6 +202,18 @@ class ContextManager:
             lines.append(f"**{role}**: {content}")
             lines.append("")
 
+        return "\n".join(lines)
+
+    def _format_compressed_result(self, history: list) -> str:
+        """将 _maybe_summarize_history 的输出格式化为 prompt 文本。"""
+        lines = ["## 对话历史", ""]
+        for item in history:
+            role = item.get("role", "unknown")
+            content = str(item.get("content", ""))
+            if len(content) > 500:
+                content = content[:500] + "..."
+            lines.append(f"**{role}**: {content}")
+            lines.append("")
         return "\n".join(lines)
 
     def _maybe_summarize_history(self, history: list, trigger_tokens: int = 2600) -> list:

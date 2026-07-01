@@ -58,7 +58,16 @@ def looks_sensitive_env_name(name: str) -> bool:
     """
     sensitive = {"API_KEY", "TOKEN", "SECRET", "PASSWORD", "PASS", "CREDENTIAL"}
     upper = name.upper()
-    return any(kw in upper for kw in sensitive)
+    for kw in sensitive:
+        if kw in upper:
+            # 避免子串误判：total_tokens 含 TOKEN 但不应匹配
+            # 只有 kw 出现在边界位置才判定为敏感
+            idx = upper.find(kw)
+            before_ok = idx == 0 or not upper[idx - 1].isalpha()
+            after_ok = (idx + len(kw) == len(upper)) or not upper[idx + len(kw)].isalpha()
+            if before_ok and after_ok:
+                return True
+    return False
 
 
 def redact_text(text: str, secret_values: list[str] | None = None) -> str:
