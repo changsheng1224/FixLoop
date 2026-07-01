@@ -12,8 +12,6 @@ class AgentLoop:
     def __init__(self, agent, max_steps: int | None = None):
         self.agent = agent
         self.max_steps = max_steps or agent.config.max_steps
-        self.tool_steps = 0
-        self.attempts = 0
         self.stop_reason = ""
         self._task_state = None
 
@@ -31,7 +29,7 @@ class AgentLoop:
 
         while True:
             # 停机检查
-            if self.tool_steps > self.max_steps:
+            if ts.tool_steps > self.max_steps:
                 self.stop_reason = f"tool_steps >= {self.max_steps}"
                 ts.stop_step_limit(self.max_steps)
                 self._emit("run_finished", {"stop_reason": self.stop_reason})
@@ -41,7 +39,7 @@ class AgentLoop:
                     f"({self.max_steps})，当前任务未完成。</final>"
                 )
 
-            if self.attempts >= self.max_steps * 3 + 4:
+            if ts.attempts >= self.max_steps * 3 + 4:
                 self.stop_reason = f"attempts >= {self.max_steps * 3 + 4}"
                 ts.stop_retry_limit(self.max_steps * 3 + 4)
                 self._emit("run_finished", {"stop_reason": self.stop_reason})
@@ -55,7 +53,7 @@ class AgentLoop:
             prompt_text = self.agent.prompt(user_message)
 
             # 2. 调用模型（经 CircuitBreaker 包裹，附 cache key）
-            self.attempts += 1
+            ts.record_attempt()
             cache_key = getattr(self.agent._prefix, "hash", "")
             try:
                 raw = self.agent.circuit_breaker.call(
@@ -85,7 +83,6 @@ class AgentLoop:
             elif kind == "tool":
                 tool_name = payload.get("name", "unknown")
                 tool_args = payload.get("args", {})
-                self.tool_steps += 1
                 ts.record_tool(tool_name)
 
                 self.agent.record({
@@ -154,6 +151,8 @@ class AgentLoop:
 
         try:
             store = RunStore(root=self.agent._cwd)
+            cp = create_checkpoint(self.agent, ts, ts.user_request, trigger="ask_end")
+            ts.checkpoint_id = cp.get("run_id", "") if cp else ""
             store.write_task_state(ts)
             store.write_report(ts, {
                 "run_id": ts.run_id,
@@ -163,10 +162,6 @@ class AgentLoop:
                 "status": ts.status,
                 "prompt_cache_key": getattr(self.agent._prefix, "hash", ""),
             })
-            create_checkpoint(
-                self.agent, ts,
-                ts.user_request, trigger="ask_end",
-            )
             promote_durable_memory(
                 ts.user_request, ts.final_answer, root=self.agent._cwd,
             )
