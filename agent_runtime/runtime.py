@@ -64,13 +64,12 @@ class Agent:
 
     # ---- 公开方法 ----
 
-    def ask(self, user_message: str) -> str:
+    def ask(self, user_message: str, callback=None) -> str:
         """执行一次用户请求，返回最终答案。
-
-        这是 Agent 的核心入口方法。
 
         Args:
             user_message: 用户输入。
+            callback: 可选的 ProgressCallback 实例。
 
         Returns:
             模型返回的最终答案文本。
@@ -78,7 +77,7 @@ class Agent:
         from agent_runtime.agent_loop import AgentLoop
 
         loop = AgentLoop(agent=self)
-        return loop.run(user_message)
+        return loop.run(user_message, callback=callback)
 
     def prompt(self, user_message: str) -> str:
         """组装完整 prompt 文本（经 ContextManager token 预算控制）。

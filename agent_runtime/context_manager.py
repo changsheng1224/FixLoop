@@ -154,18 +154,37 @@ class ContextManager:
         return "\n".join(parts) if parts else ""
 
     def _get_relevant(self, query: str = "") -> str:
-        """Episodic Memory 检索：与当前查询相关的历史笔记。"""
+        """Episodic + Durable Memory 检索：与当前查询相关的笔记和持久知识。"""
         if not query:
             return ""
-        from agent_runtime.features.memory import retrieval_candidates_semantic
+        from agent_runtime.features.memory import (
+            DurableMemoryStore,
+            retrieval_candidates_semantic,
+        )
+        parts = []
+
+        # Episodic 检索
         mem = self.agent.session.get("memory", {})
-        results = retrieval_candidates_semantic(mem, query, limit=3)
-        if not results:
-            return ""
-        lines = ["相关记忆:"]
-        for r in results:
-            lines.append(f"  - {r.get('text', '')[:150]}")
-        return "\n".join(lines)
+        results = retrieval_candidates_semantic(mem, query, limit=2)
+        if results:
+            lines = ["相关记忆:"]
+            for r in results:
+                lines.append(f"  - {r.get('text', '')[:150]}")
+            parts.append("\n".join(lines))
+
+        # Durable 检索
+        try:
+            store = DurableMemoryStore(root=self.agent._cwd)
+            durable_results = store.retrieval(query, limit=2)
+            if durable_results:
+                lines = ["持久知识:"]
+                for r in durable_results:
+                    lines.append(f"  - {r[:150]}")
+                parts.append("\n".join(lines))
+        except Exception:
+            pass
+
+        return "\n".join(parts) if parts else ""
 
     def _get_compressed_history(self) -> str:
         """获取压缩后的对话历史。优先 LLM 摘要，降级为规则压缩。"""
