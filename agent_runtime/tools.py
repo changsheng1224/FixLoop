@@ -44,10 +44,11 @@ class SearchArgs:
 
 @dataclass
 class WriteFileArgs:
-    """创建或覆盖文件（M2 实现）。"""
+    """创建或覆盖文件。"""
 
     path: str = ""
     content: str = ""
+    append: bool = False  # True 时追加而非覆盖
 
 
 @dataclass
@@ -258,12 +259,13 @@ def _search_python(pattern: str, target: Path) -> str:
 def tool_write_file(context, args: dict) -> str:
     """创建或覆盖文件，自动创建父目录。
 
-    Args 必须包含 'path' 和 'content'。
+    Args 必须包含 'path' 和 'content'，可选 'append'（默认 False）。
     """
     raw_path = args.get("path", "")
     if not raw_path:
         return "Error: 缺少必填参数 path"
     content = args.get("content", "")
+    append = args.get("append", False)
 
     try:
         target = context.resolve(raw_path)
@@ -274,11 +276,17 @@ def tool_write_file(context, args: dict) -> str:
     target.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        target.write_text(content, encoding="utf-8")
+        if append and target.exists():
+            with open(target, "a", encoding="utf-8") as f:
+                f.write(content)
+            mode = "已追加到"
+        else:
+            target.write_text(content, encoding="utf-8")
+            mode = "已写入"
     except OSError as e:
         return f"Error: 写入文件失败: {e}"
 
-    return f"已写入 {raw_path}（{len(content)} 字符）"
+    return f"{mode} {raw_path}（{len(content)} 字符）"
 
 
 def tool_patch_file(context, args: dict) -> str:
