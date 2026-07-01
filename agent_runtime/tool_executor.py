@@ -1,4 +1,4 @@
-"""工具执行闸口：7 道安全检查，按序执行。
+"""工具执行闸口：9 道安全检查，按序执行。
 
 所有工具调用必须经过此闸口，每道闸口失败返回结构化结果，不抛异常。
 
@@ -6,11 +6,12 @@
 1. allowed_tools 白名单
 2. 工具存在检查
 3. 参数校验（含路径逃逸检测）
-4. 重复调用检测（最近 2 次完全相同 → 拒绝）
-5. 审批检查（高风险工具根据 approval_policy）
-6. 执行前工作区快照
-7. 执行工具
-8. 执行后快照对比（生成 affected_paths）
+4. 配额检查（writes/shell/total）
+5. 重复调用检测（最近 2 次完全相同 → 拒绝）
+6. Dry-Run 模式（返回计划，跳过后续）
+7. 审批检查（高风险工具根据 approval_policy）
+8. 执行前工作区快照
+9. 执行工具 + 执行后快照对比（生成 affected_paths）
 """
 
 import hashlib
@@ -109,14 +110,14 @@ class ToolExecutor:
                 metadata={"tool_status": "rejected", "tool_error_code": "duplicate"},
             )
 
-        # ---- Dry-Run 模式（在审批之前，因为不实际修改） ----
+        # ---- Gate 6: Dry-Run 模式（在审批之前，因为不实际修改） ----
         if self.dry_run:
             return ToolExecutionResult(
                 content=f"[DRY RUN] Would {name}({args})",
                 metadata={"tool_status": "success", "dry_run": True},
             )
 
-        # ---- Gate 5: 审批检查 ----
+        # ---- Gate 7: 审批检查 ----
         if name in self._high_risk_tools:
             if not self._approve(name, args):
                 return ToolExecutionResult(
@@ -127,11 +128,11 @@ class ToolExecutor:
                     metadata={"tool_status": "rejected", "tool_error_code": "approval_denied"},
                 )
 
-        # ---- Gate 7: 执行前工作区快照 ----
+        # ---- Gate 8: 执行前工作区快照 ----
         is_risky = name in self._high_risk_tools
         before_snapshot = self._capture_snapshot() if is_risky else {}
 
-        # ---- Gate 7: 执行工具 ----
+        # ---- Gate 9: 执行工具 ----
         try:
             result_text = tool_spec["run"](args)
         except Exception as e:
@@ -140,7 +141,7 @@ class ToolExecutor:
                 metadata={"tool_status": "error", "tool_error_code": "runtime_error"},
             )
 
-        # ---- Gate 9: 执行后快照对比 ----
+        # ---- Gate 9 续: 执行后快照对比 ----
         metadata = {"tool_status": "success"}
         if is_risky:
             after_snapshot = self._capture_snapshot()

@@ -84,7 +84,7 @@ class ContextManager:
         # 收集各 section 源文本
         prefix_text = self._get_prefix()
         memory_text = self._get_memory()
-        relevant_text = self._get_relevant()
+        relevant_text = self._get_relevant(user_message)
         history_text = self._get_compressed_history()
 
         # 逐 section 填充，超限时按优先级裁剪
@@ -129,12 +129,43 @@ class ContextManager:
         return self.agent._prefix.text
 
     def _get_memory(self) -> str:
-        # M3 工作记忆接入点
-        return ""
+        """Working Memory：当前任务 + 最近文件 + 文件摘要。"""
+        mem = self.agent.session.get("memory", {})
+        working = mem.get("working", {})
+        parts = []
 
-    def _get_relevant(self) -> str:
-        # M3 记忆检索接入点
-        return ""
+        task = working.get("task_summary", "")
+        if task:
+            parts.append(f"任务: {task}")
+
+        files = working.get("recent_files", [])
+        if files:
+            parts.append(f"最近文件: {', '.join(files[-5:])}")
+
+        summaries = mem.get("file_summaries", {})
+        if summaries:
+            lines = []
+            for path, info in list(summaries.items())[-3:]:
+                if isinstance(info, dict):
+                    lines.append(f"  {path}: {info.get('summary', '')[:100]}")
+            if lines:
+                parts.append("文件摘要:\n" + "\n".join(lines))
+
+        return "\n".join(parts) if parts else ""
+
+    def _get_relevant(self, query: str = "") -> str:
+        """Episodic Memory 检索：与当前查询相关的历史笔记。"""
+        if not query:
+            return ""
+        from agent_runtime.features.memory import retrieval_candidates_semantic
+        mem = self.agent.session.get("memory", {})
+        results = retrieval_candidates_semantic(mem, query, limit=3)
+        if not results:
+            return ""
+        lines = ["相关记忆:"]
+        for r in results:
+            lines.append(f"  - {r.get('text', '')[:150]}")
+        return "\n".join(lines)
 
     def _get_compressed_history(self) -> str:
         """获取压缩后的对话历史。"""
