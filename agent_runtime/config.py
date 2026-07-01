@@ -24,10 +24,3 @@ class AgentConfig(BaseModel):
         default="ask", description="高风险工具审批策略: auto / ask / never"
     )
     temperature: float = Field(default=0.2, ge=0.0, le=2.0, description="模型温度")
-
-    # Provider 连接参数
-    deepseek_api_key: str = Field(default="", description="DeepSeek API Key")
-    deepseek_base_url: str = Field(
-        default="https://api.deepseek.com/anthropic/v1",
-        description="DeepSeek API 地址",
-    )

@@ -14,6 +14,7 @@ class AgentLoop:
         self.max_steps = max_steps or agent.config.max_steps
         self.stop_reason = ""
         self._task_state = None
+        self._store = None  # 缓存的 RunStore
 
     def run(self, user_message: str, callback=None) -> str:
         from agent_runtime.task_state import TaskState
@@ -131,14 +132,18 @@ class AgentLoop:
 
         set_task_summary(self.agent.session["memory"], summary)
 
+    def _get_store(self):
+        """获取缓存的 RunStore 实例。"""
+        if self._store is None:
+            from agent_runtime.run_store import RunStore
+            self._store = RunStore(root=self.agent._cwd)
+        return self._store
+
     def _emit(self, event: str, payload: dict | None = None):
         """发送 trace 事件到 RunStore。"""
-        from agent_runtime.run_store import RunStore
-
         try:
-            store = RunStore(root=self.agent._cwd)
             if self._task_state:
-                store.append_trace(self._task_state, event, payload)
+                self._get_store().append_trace(self._task_state, event, payload)
         except Exception:
             pass
 
@@ -146,11 +151,10 @@ class AgentLoop:
         """完成 run：写入工件 + checkpoint + durable memory + session 保存。"""
         from agent_runtime.checkpoint import create_checkpoint
         from agent_runtime.features.memory import promote_durable_memory
-        from agent_runtime.run_store import RunStore
         from agent_runtime.session_store import SessionStore
 
         try:
-            store = RunStore(root=self.agent._cwd)
+            store = self._get_store()
             cp = create_checkpoint(self.agent, ts, ts.user_request, trigger="ask_end")
             ts.checkpoint_id = cp.get("run_id", "") if cp else ""
             store.write_task_state(ts)
