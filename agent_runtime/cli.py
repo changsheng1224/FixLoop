@@ -40,6 +40,9 @@ def _make_parser() -> argparse.ArgumentParser:
                    help="轻量模型名称（默认 qwen3.5:9b）")
     p.add_argument("--dry-run", action="store_true",
                    help="Dry-run 模式：不实际修改文件")
+    p.add_argument("--profile", default=None,
+                   choices=["dev", "prod", "ci"],
+                   help="预设配置: dev(宽松)/prod(默认)/ci(严格)")
     p.add_argument("--resume", default=None,
                    help="恢复会话（latest / session_id）")
     return p
@@ -116,11 +119,31 @@ def _build_agent(args, config, workspace, model_client) -> Agent:
     agent = Agent(config=config, model_client=model_client, workspace=workspace,
                   cwd=args.cwd, light_client=_build_light_client(args),
                   dry_run=args.dry_run)
-    # 应用 CLI 配额参数
+    # 应用 profile（覆盖配额和审批）
+    if args.profile:
+        _apply_profile(agent, args.profile)
+    # 应用 CLI 配额参数（profile 之后，允许 CLI 覆盖）
     agent.quota._limits["write"] = args.quota_writes
     agent.quota._limits["shell"] = args.quota_shell
     agent.quota._limits["total"] = args.quota_total
     return agent
+
+
+def _apply_profile(agent, profile: str):
+    """应用预设配置 profile。"""
+    if profile == "ci":
+        agent.config.approval = "never"
+        agent.quota._limits["write"] = 0
+        agent.quota._limits["shell"] = 0
+        agent.quota._limits["total"] = 0
+        agent.dry_run = True
+        print("[agent_runtime] CI profile: approval=never, quota=0, dry_run", file=sys.stderr)
+    elif profile == "dev":
+        agent.config.approval = "auto"
+        agent.quota._limits["write"] = 100
+        agent.quota._limits["shell"] = 50
+        agent.quota._limits["total"] = 300
+        print("[agent_runtime] DEV profile: approval=auto, high quotas", file=sys.stderr)
 
 
 def _load_dotenv():
