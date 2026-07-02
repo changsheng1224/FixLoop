@@ -43,6 +43,8 @@ def _make_parser() -> argparse.ArgumentParser:
     p.add_argument("--profile", default=None,
                    choices=["dev", "prod", "ci"],
                    help="预设配置: dev(宽松)/prod(默认)/ci(严格)")
+    p.add_argument("--health", action="store_true",
+                   help="健康检查：检查所有模块状态并退出")
     p.add_argument("--resume", default=None,
                    help="恢复会话（latest / session_id）")
     return p
@@ -73,6 +75,9 @@ def main() -> int:
     """命令行入口，one-shot 模式。"""
     parser = _make_parser()
     args = parser.parse_args()
+
+    if args.health:
+        return _health_check()
 
     if args.prompt is None:
         return _repl_mode(args)
@@ -144,6 +149,65 @@ def _apply_profile(agent, profile: str):
         agent.quota._limits["shell"] = 50
         agent.quota._limits["total"] = 300
         print("[agent_runtime] DEV profile: approval=auto, high quotas", file=sys.stderr)
+
+
+def _health_check() -> int:
+    """健康检查：输出所有模块状态 JSON。"""
+    import json as _json
+    import shutil as _shutil
+    import sys as _sys
+
+    result = {}
+
+    # Python version
+    result["python"] = f"{_sys.version_info.major}.{_sys.version_info.minor}"
+    result["status"] = "ok"
+
+    # Git
+    result["git"] = "ok" if _shutil.which("git") else "missing"
+
+    # Ripgrep
+    result["rg"] = "ok" if _shutil.which("rg") else "missing"
+
+    # TikToken
+    try:
+        import tiktoken
+        tiktoken.get_encoding("cl100k_base")
+        result["tiktoken"] = "ok"
+    except Exception:
+        result["tiktoken"] = "error"
+        result["status"] = "degraded"
+
+    # Storage
+    try:
+        store_path = Path(".agent")
+        store_path.mkdir(parents=True, exist_ok=True)
+        test_file = store_path / ".health_check"
+        test_file.write_text("ok")
+        test_file.unlink()
+        result["storage"] = "ok"
+    except Exception:
+        result["storage"] = "error"
+        result["status"] = "degraded"
+
+    # Semantic model
+    from agent_runtime.features.memory.semantic import _get_semantic_model
+    try:
+        model = _get_semantic_model()
+        result["semantic_model"] = "ok" if model else "unavailable"
+    except Exception:
+        result["semantic_model"] = "error"
+
+    # Config
+    try:
+        _ = AgentConfig()
+        result["config"] = "ok"
+    except Exception:
+        result["config"] = "error"
+        result["status"] = "degraded"
+
+    print(_json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
 
 
 def _load_dotenv():
