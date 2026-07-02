@@ -14,15 +14,16 @@
 4. 用 git_diff 查看最近变更
 5. 输出 RetrievedContext JSON
 
-输出格式（严格遵守 JSON）：
+输出格式（只输出 JSON 对象，不要任何其他文本）：
+```json
 {
-  "similar_snippets": [{"file": "路径", "snippet": "相似代码", "line": 行号}],
-  "caller_locations": ["调用方文件:行号"],
-  "related_tests": ["测试文件::测试函数"],
-  "similar_fixes": [{"description": "描述", "relevance": "相关度"}]
+  "similar_snippets": [],
+  "caller_locations": [],
+  "related_tests": [],
+  "similar_fixes": []
 }
+```
 
-注意：
+规则：
+- 只输出上面的 JSON，不要加解释或描述
 - 不要判断对错，只提供搜索结果
-- 不要生成补丁
-- 搜索结果要带文件和行号

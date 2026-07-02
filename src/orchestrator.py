@@ -278,11 +278,31 @@ class Orchestrator:
 
 
 def _extract_json_block(text: str) -> str:
-    """从文本中提取 JSON 块（数组或对象）。"""
+    """从文本中提取 JSON 块（优先处理 markdown 代码块）。"""
     text = text.strip()
-    # 尝试直接作为 JSON 解析
+
+    # 1. 从 markdown ```json...``` 代码块提取
+    m = re.search(r"```(?:json)?\s*(\[.*?\]|\{.*?\})\s*```", text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+
+    # 2. 尝试直接作为 JSON 解析
     if text.startswith("[") or text.startswith("{"):
         return text
-    # 搜索 JSON 块
-    m = re.search(r"(\[.*\]|\{.*\})", text, re.DOTALL)
-    return m.group(1) if m else text
+
+    # 3. 搜索最近邻的完整 JSON 块（从最后一个 [ 或 { 开始）
+    for start_char in ("[", "{"):
+        end_char = "]" if start_char == "[" else "}"
+        last_start = text.rfind(start_char)
+        if last_start >= 0:
+            # 从该位置找到配对的闭合
+            depth = 0
+            for i in range(last_start, len(text)):
+                if text[i] == start_char:
+                    depth += 1
+                elif text[i] == end_char:
+                    depth -= 1
+                    if depth == 0:
+                        return text[last_start:i + 1]
+
+    return text

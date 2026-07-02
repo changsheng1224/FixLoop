@@ -47,5 +47,5 @@ class TestPatcherPrompt:
 
     def test_forbids_self_localization(self):
         text = _read("patcher.txt")
-        assert "不要自己重新定位" in text
+        assert "不要重新定位" in text
         assert "定位已由 Localizer 完成" in text

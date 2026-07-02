@@ -45,8 +45,11 @@ def _repair(args) -> int:
     )
     ws = WorkspaceContext.build(args.repo)
 
-    localizer = create_localizer(client, ws)
-    retriever = create_retriever(client, ws)
+    # 本地模型加速搜索/定位（不消耗 API）
+    from agent_runtime.providers.clients import OllamaModelClient
+    light = OllamaModelClient()
+    localizer = create_localizer(client, ws, light_client=light)
+    retriever = create_retriever(client, ws, light_client=light)
     patcher = create_patcher(client, ws)
 
     if args.dry_run:

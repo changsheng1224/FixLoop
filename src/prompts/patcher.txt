@@ -11,20 +11,20 @@
 3. 需要创建新文件时用 write_file
 4. 输出 CandidatePatch 列表（每个补丁含 diff 和解释）
 
-输出格式（严格遵守 JSON）：
+输出格式（只输出 JSON 数组，不要任何其他文本）：
+```json
 [
   {
     "file_path": "calculator.py",
     "original_lines": "return a + b",
     "patched_lines": "return int(a) + int(b)",
     "diff": "-return a + b\n+return int(a) + int(b)",
-    "explanation": "添加 int() 类型转换防止 TypeError"
+    "explanation": "添加 int() 类型转换"
   }
 ]
+```
 
-注意：
+规则：
+- 只输出上面的 JSON，不要加解释或描述
 - 只改必要的最小行数
-- 不要自己重新定位——定位已由 Localizer 完成
-- 不要运行测试——测试由 Verifier 完成
-- 不要使用 ast_parse 或 stack_parse——这些工具不可用
-- 只使用 read_file / write_file / patch_file
+- 不要重新定位——定位已由 Localizer 完成

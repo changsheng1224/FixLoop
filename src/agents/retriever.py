@@ -9,7 +9,7 @@ from agent_runtime.tools import build_tool_registry
 from src.tools.registry import build_repair_tools
 
 
-def create_retriever(model_client, workspace, cwd: str = "") -> Agent:
+def create_retriever(model_client, workspace, cwd: str = "", light_client=None) -> Agent:
     root = cwd or workspace.repo_root
     ctx = ToolContext(root=root)
 
@@ -27,9 +27,10 @@ def create_retriever(model_client, workspace, cwd: str = "") -> Agent:
     system_prompt = prompt_file.read_text(encoding="utf-8") if prompt_file.exists() else ""
 
     agent = Agent(
-        config=AgentConfig(provider="deepseek", max_steps=6, max_new_tokens=1024, approval="auto"),
+        config=AgentConfig(provider="deepseek", max_steps=4, max_new_tokens=512, approval="auto"),
         model_client=model_client, workspace=workspace, cwd=root,
         tools=tools, system_prompt=system_prompt,
+        light_client=light_client,
     )
 
     from src.middleware import build_repair_gateway
