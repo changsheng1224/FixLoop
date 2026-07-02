@@ -54,21 +54,21 @@ Agent (runtime.py) — 对外唯一接口
 
 | 文件 | 行数 | M | 职责 |
 |------|:--:|:--:|------|
-| `runtime.py` | 300 | M1/M3/M4 | Agent 类：构造装配、ask()、parse()、记忆钩子、from_session |
-| `agent_loop.py` | 170 | M1/M3/M4 | AgentLoop：while 循环、停机条件、trace 发射、run 收尾 |
+| `runtime.py` | 310 | M1/M3/M4/B | Agent 类：构造装配、ask()、parse()、记忆钩子、from_session、dry_run→ctor |
+| `agent_loop.py` | 180 | M1/M3/M4/B | AgentLoop：while 循环、停机条件、trace 发射、retry 指数退避、node_timings |
 
 ### 2.4 模型后端
 
 | 文件 | 行数 | M | 职责 |
 |------|:--:|:--:|------|
 | `providers/clients.py` | 270 | M1/M4 | FakeClient + AnthropicCompatible + Ollama + OpenAICompatible |
-| `providers/circuit_breaker.py` | 83 | M4 | CLOSED/OPEN/HALF_OPEN 三态熔断 |
+| `providers/circuit_breaker.py` | 83 | M4 | CLOSED/OPEN/HALF_OPEN 三态熔断 + latency_stats（平均/p50/p99） |
 
 ### 2.5 工具系统
 
 | 文件 | 行数 | M | 职责 |
 |------|:--:|:--:|------|
-| `tools.py` | 400 | M1/M2 | 6 工具 dataclass + 执行函数 + registry + fallback |
+| `tools.py` | 410 | M1/M2/B | 6 工具 + write_file append + search context_lines + fallback |
 | `schema_utils.py` | 51 | M1 | auto_schema() + auto_validate() — 从 type hints 推导 |
 | `tool_context.py` | 24 | M1 | ToolContext — 路径解析 + 逃逸检测 |
 | `tool_executor.py` | 310 | M2/M4 | ToolExecutor(9闸口) + QuotaEnforcer + 快照对比 |
@@ -78,7 +78,7 @@ Agent (runtime.py) — 对外唯一接口
 | 文件 | 行数 | M | 职责 |
 |------|:--:|:--:|------|
 | `prompt_prefix.py` | 48 | M1/M2 | System Prompt — Persona + Rules + Tools + Examples + Workspace |
-| `context_manager.py` | 290 | M2/M3/M4 | TokenBudget + 5-section 组装 + 历史压缩 + LLM 摘要 + Memory 检索 |
+| `context_manager.py` | 360 | M2/M3/M4/B | TokenBudget + 5-section 组装 + 历史压缩 + LLM 摘要 + 智能截断 + 摘要缓存 |
 
 ### 2.7 记忆系统
 
@@ -95,7 +95,7 @@ Agent (runtime.py) — 对外唯一接口
 
 | 文件 | 行数 | M | 职责 |
 |------|:--:|:--:|------|
-| `task_state.py` | 55 | M3 | TaskState 状态机 — running→completed/stopped/failed |
+| `task_state.py` | 60 | M3/B | TaskState 状态机 + node_timings 耗时分布 |
 | `session_store.py` | 65 | M3 | JSON 原子写 + latest() |
 | `run_store.py` | 95 | M3 | task_state.json + trace.jsonl + report.json |
 | `checkpoint.py` | 120 | M3 | create_checkpoint + evaluate_resume_state(5 状态) |
@@ -105,8 +105,14 @@ Agent (runtime.py) — 对外唯一接口
 | 文件 | 行数 | M | 职责 |
 |------|:--:|:--:|------|
 | `security.py` | 135 | M2/M3 | shell_env + redact_text + redact_artifact + looks_sensitive |
-| `callbacks.py` | 44 | M4 | ProgressCallback Protocol + CLIProgressCallback |
+| `callbacks.py` | 50 | M4/B | ProgressCallback + CLIProgressCallback（ANSI彩色 + 耗时统计） |
 | `replay.py` | 75 | M4 | ReplayRunner — 从 trace 回放工具执行 |
+
+### 2.10 CLI（入口 + Bonus 增强）
+
+| 文件 | 行数 | M | 职责 |
+|------|:--:|:--:|------|
+| `cli.py` | 310 | M1/B | argparse + 装配 Config/Workspace/Client/Agent + REPL + --profile/--health/请求重放/_save_request |
 
 ---
 
@@ -164,16 +170,20 @@ AgentLoop.run(user_message, callback)
         │           ├─ ① allowed_tools ② exists ③ validate ④ quota
         │           ├─ ⑤ duplicate ⑥ dry_run ⑦ approval ⑧ snapshot
         │           └─ ⑨ execute → snapshot diff
-        │     → update_memory_after_tool → record → emit → callback 显示
+        │     → update_memory_after_tool → record → emit → callback (耗时+彩色)
         │
-        └── [retry] → record 纠错 → user_message=纠错提示
+        └── [retry] → 指数退避 sleep → record 纠错 → user_message=纠错提示
 
 _finalize_run(ts):
   ├── create_checkpoint → session.checkpoints
-  ├── write_task_state   → .agent/runs/{id}/task_state.json
-  ├── write_report       → .agent/runs/{id}/report.json
+  ├── write_task_state   → .agent/runs/{id}/task_state.json (含 node_timings)
+  ├── write_report       → .agent/runs/{id}/report.json (含 token_usage)
   ├── promote_durable_memory → .agent/memory/topics/
   └── SessionStore.save  → .agent/sessions/{id}.json
+
+每次 API 调用后:
+  ├── _save_request → .agent/last_request.json
+  └── latency_stats 更新 → /session 显示 avg/p50/p99
 ```
 
 ### 3.2 各模块编写顺序
@@ -195,6 +205,12 @@ M3 (记忆+持久化):
 M4 (高级能力):
   memory(Semantic) → clients(Ollama+OpenAI)
   → circuit_breaker → callbacks → replay → tool_executor(Quota)
+
+Bonus (工具/体验/性能增强):
+  tools(append+context_lines) → clients(replay+latency) → callbacks(color+timing)
+  → CB(status) → task_state(timings) → context(truncate+cache)
+  → prompt(dynamic rules) → agent_loop(backoff) → memory(scores+topic+mirror)
+  → cli(profile+health) → tests(+35)
 ```
 
 ---
@@ -269,6 +285,8 @@ Agent 的 `__init__` 完成所有装配：tool registry、prompt prefix、circui
 │   ├── trace.jsonl        # 逐事件时间线
 │   └── report.json        # 运行摘要
 ├── sessions/{id}.json     # 会话持久化
+├── last_request.json       # 最近 API 请求（调试用）
+├── audit/                  # 闸口审计日志
 └── memory/                # Durable Memory
     ├── MEMORY.md
     └── topics/
@@ -300,6 +318,12 @@ python -m agent_runtime --resume latest
 # 本地模型加速摘要
 python -m agent_runtime --light-provider ollama --light-model qwen3.5:9b
 
+# CI 模式（零配额、零审批）
+python -m agent_runtime --profile ci "fix the bug"
+
+# 健康检查
+python -m agent_runtime --health
+
 # 全部测试
 pytest tests/ -v
 
@@ -309,4 +333,4 @@ pytest tests/ --cov=agent_runtime --cov-branch
 
 ---
 
-*Layer 1 完成 | 254 tests | 84% 行覆盖 / 86% 分支覆盖 | ~4000 行源码*
+*Layer 1 完成 | 281 tests | 82% 行覆盖 / 86% 分支覆盖 | ~4300 行源码 | 13 bonus PRs*
