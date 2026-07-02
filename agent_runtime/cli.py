@@ -243,6 +243,18 @@ def _handle_command(cmd: str, agent: Agent) -> str:
         print(f"approval_policy: {agent.config.approval}")
         print(f"max_steps: {agent.config.max_steps}")
         print(f"dry_run: {agent.dry_run}")
+        cb = agent.circuit_breaker
+        import time
+        if cb.state == "open":
+            remain = cb.recovery_timeout - (time.time() - cb._opened_at)
+            print(
+                f"CB: OPEN (恢复 {remain:.0f}s, "
+                f"失败 {cb._failure_count}/{cb.failure_threshold})"
+            )
+        elif cb.state == "half_open":
+            print("CB: HALF_OPEN (探测中)")
+        else:
+            print(f"CB: CLOSED (失败 {cb._failure_count}/{cb.failure_threshold})")
         if hasattr(agent.model_client, "latency_stats"):
             stats = agent.model_client.latency_stats()
             if stats["count"] > 0:

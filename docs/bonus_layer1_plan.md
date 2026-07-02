@@ -27,16 +27,13 @@
 
 - **[P1] [C:⭐⭐⭐ I:⭐⭐⭐] Ollama streaming**：`stream=True` + SSE 解析，REPL 实时显示生成过程
 - **[P1] [C:⭐⭐⭐ I:⭐⭐⭐] OpenAI streaming**：SSE 流解析，`text/event-stream` content-type 处理
-- **[P1] [C:⭐ I:⭐⭐⭐] 响应时间统计**：每次 `complete()` 记录延迟，`/session` 显示 avg/p50/p99
 - **[P2] [C:⭐⭐ I:⭐⭐⭐] 多 Provider 独立熔断**：当前一个 CB 管所有，应为每个 Provider 独立实例
-- **[P2] [C:⭐ I:⭐⭐⭐] 请求重放**：记录最后一次请求的完整 payload 到 `.agent/last_request.json`
 
 ---
 
 ## 4. CLI / REPL — cli.py
 
 - **[P1] [C:⭐ I:⭐⭐⭐] 命令历史**：集成 `readline`，↑↓ 浏览历史、Ctrl-R 搜索
-- **[P1] [C:⭐⭐ I:⭐⭐⭐] 彩色输出**：`[DRY RUN]` 蓝、Error 红、success 绿、工具调用黄（ANSI）
 - **[P2] [C:⭐⭐ I:⭐⭐⭐] Tab 自动补全**：工具名 / 路径 / `/` 命令
 - **[P2] [C:⭐ I:⭐⭐] 多行输入**：`\` 续行符支持
 - **[P2] [C:⭐⭐ I:⭐⭐⭐] /save /load 会话**：导出/恢复 session JSON，跨机器迁移
@@ -47,8 +44,6 @@
 
 ## 5. 进度回调 — callbacks.py
 
-- **[P1] [C:⭐ I:⭐⭐⭐] 彩色输出**：`[DRY RUN]` 蓝、Error 红、success 绿（ANSI）
-- **[P2] [C:⭐⭐ I:⭐⭐⭐] 耗时统计**：每个工具执行后显示耗时 `✅ read_file (320 chars, 1.2s)`
 
 ---
 
