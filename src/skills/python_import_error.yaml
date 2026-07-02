@@ -1,0 +1,6 @@
+name: python_import_error_fix
+language: python
+trigger_pattern: "ImportError|ModuleNotFoundError"
+suggested_tools: [search, read_file, patch_file]
+example_issue: "ModuleNotFoundError: No module named 'calculator.utils' at main.py:3"
+example_patch: "补全 __init__.py 或修正 import 路径"
