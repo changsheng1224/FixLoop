@@ -243,6 +243,13 @@ def _handle_command(cmd: str, agent: Agent) -> str:
         print(f"approval_policy: {agent.config.approval}")
         print(f"max_steps: {agent.config.max_steps}")
         print(f"dry_run: {agent.dry_run}")
+        if hasattr(agent.model_client, "latency_stats"):
+            stats = agent.model_client.latency_stats()
+            if stats["count"] > 0:
+                print(
+                    f"API latency: avg={stats['avg']}s p50={stats['p50']}s "
+                    f"p99={stats['p99']}s ({stats['count']} calls)"
+                )
     elif name == "/reset":
         agent.session["history"] = []
         print("对话历史已清空。")
