@@ -49,4 +49,4 @@ def retrieval_candidates(state: dict, query: str, limit: int = 3) -> list[dict]:
                 score += 1.0 * (1 - age_hours)
             scored.append((score, note))
     scored.sort(key=lambda x: x[0], reverse=True)
-    return [note for _, note in scored[:limit]]
+    return [{**note, "score": round(s, 2)} for s, note in scored[:limit]]
