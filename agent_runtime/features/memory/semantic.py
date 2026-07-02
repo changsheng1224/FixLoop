@@ -1,4 +1,9 @@
-"""语义记忆 — Semantic Memory：基于 embedding 的同义词检索。"""
+"""语义记忆 — Semantic Memory：基于 embedding 的同义词检索。
+
+GFW 下设置环境变量 HF_ENDPOINT=https://hf-mirror.com 即可从镜像下载。
+"""
+
+import os
 
 _SEMANTIC_MODEL = None
 
@@ -8,6 +13,11 @@ def _get_semantic_model():
     if _SEMANTIC_MODEL is not None:
         return _SEMANTIC_MODEL
     try:
+        # 支持 HF 镜像（解决 GFW 下载问题）
+        # export HF_ENDPOINT=https://hf-mirror.com
+        if os.environ.get("HF_ENDPOINT"):
+            os.environ.setdefault("HF_ENDPOINT", os.environ["HF_ENDPOINT"])
+
         from sentence_transformers import SentenceTransformer
         _SEMANTIC_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
         return _SEMANTIC_MODEL
