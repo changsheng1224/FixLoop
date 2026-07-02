@@ -64,7 +64,8 @@ class TestDurableMemoryStore:
         store.promote([("key-decisions", "Decision: use tiktoken for token counting")])
         results = store.retrieval("tiktoken")
         assert len(results) == 1
-        assert "tiktoken" in results[0]
+        assert "tiktoken" in results[0]["text"]
+        assert results[0]["topic"] == "key-decisions"
 
     def test_retrieval_no_match(self, store):
         store.promote([("key-decisions", "Decision: use tiktoken")])

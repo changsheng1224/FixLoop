@@ -37,15 +37,17 @@ class DurableMemoryStore:
             self._write_topic(topic_file, existing)
         self._update_index()
 
-    def retrieval(self, query: str, limit: int = 3) -> list[str]:
+    def retrieval(self, query: str, limit: int = 3) -> list[dict]:
+        """返回带 topic 标注的结果列表。"""
         query_lower = query.lower()
         results = []
         if not self.topics_dir.exists():
             return results
         for topic_file in sorted(self.topics_dir.glob("*.md")):
+            topic = topic_file.stem
             for entry in self._read_topic(topic_file):
                 if query_lower in entry.lower():
-                    results.append(entry)
+                    results.append({"topic": topic, "text": entry})
                     if len(results) >= limit:
                         return results
         return results
