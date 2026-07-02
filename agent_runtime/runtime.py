@@ -27,6 +27,8 @@ class Agent:
         cwd: str | None = None,
         light_client=None,
         dry_run: bool = False,
+        tools: dict | None = None,
+        system_prompt: str = "",
     ):
         self.config = config
         self.model_client = model_client
@@ -35,16 +37,16 @@ class Agent:
         self.workspace = workspace
         self._cwd = cwd or workspace.repo_root or str(Path.cwd())
 
-        # 构建工具上下文和注册表
+        # 构建工具上下文和注册表（允许外部注入）
         self.tool_context = ToolContext(root=self._cwd)
-        self.tools = build_tool_registry(self.tool_context)
+        self.tools = tools if tools is not None else build_tool_registry(self.tool_context)
         self._tool_names = set(self.tools.keys())
 
         # 会话状态 + 记忆
         self.session: dict = self._new_session()
 
-        # 缓存 prefix（工具不变时复用）
-        self._prefix = self._build_prefix()
+        # 缓存 prefix（工具不变时复用，支持自定义 prompt）
+        self._prefix = self._build_prefix(system_prompt)
 
         # M4 模块：配额 + 熔断 + 语义记忆
         import sys as _sys
@@ -221,8 +223,17 @@ class Agent:
 
     # ---- 内部方法 ----
 
-    def _build_prefix(self):
-        """构建 System Prompt 前缀（缓存）。"""
+    def _build_prefix(self, system_prompt: str = ""):
+        """构建 System Prompt 前缀。system_prompt 非空时用它替代默认前缀。"""
+        if system_prompt:
+            from agent_runtime.prompt_prefix import PromptPrefix
+            text = system_prompt + "\n\n" + self.workspace.text()
+            return PromptPrefix(
+                text=text,
+                hash="",
+                workspace_fingerprint=self.workspace.fingerprint(),
+                tool_signature="",
+            )
         return build_prompt_prefix(
             self.workspace, self.tools,
             dry_run=self.dry_run,
