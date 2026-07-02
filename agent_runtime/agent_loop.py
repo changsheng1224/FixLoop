@@ -15,7 +15,8 @@ class AgentLoop:
         self.stop_reason = ""
         self._task_state = None
         self._store = None
-        self._last_token_meta = {}  # 最近一次 prompt 的 token 元数据
+        self._last_token_meta = {}
+        self._retry_count = 0  # 最近一次 prompt 的 token 元数据
 
     def run(self, user_message: str, callback=None) -> str:
         from agent_runtime.task_state import TaskState
@@ -120,6 +121,9 @@ class AgentLoop:
                 )
 
             elif kind == "retry":
+                # 指数退避：1s→2s→4s→8s（防密集重试浪费配额）
+                self._retry_count += 1
+                _time.sleep(min(2 ** (self._retry_count - 1), 8))
                 self.agent.record({"role": "system", "content": str(payload)})
                 user_message = str(payload)
 

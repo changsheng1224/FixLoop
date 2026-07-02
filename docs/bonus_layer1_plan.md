@@ -50,7 +50,6 @@
 ## 6. 熔断与回放 — circuit_breaker.py / replay.py
 
 - **[P1] [C:⭐ I:⭐⭐⭐] 熔断指标暴露**：`/session` 显示 CB 状态、失败计数、距恢复剩余秒数
-- **[P2] [C:⭐⭐ I:⭐⭐⭐] 半开渐进恢复**：HALF_OPEN 逐步增加（1→2→4→全开），类似 TCP 拥塞控制
 - **[P2] [C:⭐⭐⭐ I:⭐⭐⭐⭐] replay 完整参数回放**：emit_trace 记录完整 tool_args（经 redact），replay 可重新执行对比
 - **[P2] [C:⭐⭐ I:⭐⭐⭐] 回归检测**：CI 中 `--replay all` 回放最近 N 个 trace，任一 diff 阻断
 - **[P2] [C:⭐⭐⭐ I:⭐⭐⭐] 可视化 diff**：replay 差异以 unified diff 格式输出
@@ -60,7 +59,7 @@
 
 ## 7. 持久化与恢复 — task_state / stores / checkpoint
 
-- **[P1] [C:⭐ I:⭐⭐⭐⭐] task_state 记录耗时**：`node_timings: {prompt_build_ms, model_call_ms, tool_exec_ms}`
+
 - **[P1] [C:⭐⭐ I:⭐⭐⭐] run 自动清理**：`.agent/runs/` 无限增长，`--max-runs 100` 自动删旧
 - **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] checkpoint 每轮创建**：当前只在 ask 结束时创建，应在每轮工具执行后也创建
 - **[P2] [C:⭐⭐⭐ I:⭐⭐⭐] 自动补做缺失步骤**：partial-stale 时自动重新读文件 + 执行
@@ -71,24 +70,18 @@
 ## 8. 上下文工程 — TokenBudget / ContextManager / 压缩 / 摘要
 
 - **[P1] [C:⭐ I:⭐⭐⭐] 多模型 tokenizer 切换**：根据 config.provider 自动选择对应 tokenizer
-- **[P1] [C:⭐ I:⭐⭐⭐] 实际 token 消耗追踪**：trace 记录各 section 的 rendered_tokens vs budget_tokens
 - **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] memory section 优先级排序**：超出预算时按 task > modified > read > old summaries 取舍
-- **[P1] [C:⭐ I:⭐⭐⭐] build() 性能优化**：prefix 不变部分的 token count 应缓存
-- **[P1] [C:⭐⭐ I:⭐⭐⭐] 工具结果智能截断**：按工具类型差异化——`read_file` 保留更多，`list_files` 保留更少
-- **[P2] [C:⭐⭐ I:⭐⭐⭐] 重要信息标记保留**：Error 行、文件路径、行号信息优先保留
 - **[P2] [C:⭐⭐ I:⭐⭐⭐] 增量压缩**：在上一轮压缩结果上追加新条目
 - **[P2] [C:⭐ I:⭐⭐⭐] build() metadata 暴露**：在 `/session` 或 trace 中展示
 - **[P2] [C:⭐⭐ I:⭐⭐⭐] 动态预算分配**：简单任务收紧预算，复杂任务放宽
 - **[P1] [C:⭐ I:⭐⭐⭐⭐] 摘要质量评估**：记录压缩比和关键实体保留率，差时自动调整
 - **[P1] [C:⭐⭐ I:⭐⭐⭐] 摘要触发优化**：当前只看 token，应同时考虑轮数（>10 轮即触发）
 - **[P2] [C:⭐⭐ I:⭐⭐⭐] 增量摘要**：已有摘要基础上追加，而非每次从头生成
-- **[P2] [C:⭐⭐ I:⭐⭐⭐] 摘要缓存**：同一段旧历史摘要结果缓存
 
 ---
 
 ## 9. Prompt 工程 — prompt_prefix.py / context_manager.py
 
-- **[P1] [C:⭐ I:⭐⭐⭐⭐] rules 动态注入**：根据 `--approval` 和 `--dry-run` 动态增减规则
 - **[P1] [C:⭐ I:⭐⭐⭐⭐] Cache 命中率统计**：`/session` 显示 `cache_hits / cache_misses`
 - **[P2] [C:⭐⭐ I:⭐⭐⭐] few-shot 示例从文件加载**：`.agent/examples.md` → TOOL_EXAMPLES
 
