@@ -1,10 +1,11 @@
-"""修复工具单测：stack_parser + git_tools + find_test。"""
+"""修复工具单测：stack_parser + git_tools + find_test + registry。"""
 
 import json
 
 from agent_runtime.tool_context import ToolContext
 from src.tools.find_test import find_test_for_function
 from src.tools.git_tools import git_blame, git_diff
+from src.tools.registry import build_repair_tools
 from src.tools.stack_parser import stack_parse
 
 
@@ -72,3 +73,18 @@ class TestFindTest:
             "file_path": "calculator.py",
         })
         assert "test_calculator" in result
+
+
+class TestRepairRegistry:
+    def test_all_tools_registered(self, temp_workspace):
+        ctx = ToolContext(root=str(temp_workspace))
+        registry = build_repair_tools(ctx)
+        assert set(registry.keys()) == {
+            "ast_parse", "stack_parse", "git_blame", "git_diff", "find_test",
+        }
+
+    def test_tools_runnable(self, temp_workspace):
+        ctx = ToolContext(root=str(temp_workspace))
+        registry = build_repair_tools(ctx)
+        r = registry["ast_parse"]["run"]({"path": "README.md"})
+        assert isinstance(r, str)
