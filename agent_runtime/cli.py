@@ -77,7 +77,7 @@ def main() -> int:
     agent = _make_agent(args)
 
     if args.dry_run:
-        print("[agent_runtime] DRY-RUN MODE — 不会实际修改文件", file=sys.stderr)
+        print("\033[34m[agent_runtime] DRY-RUN MODE\033[0m — 不会实际修改文件", file=sys.stderr)
     cfg = agent.config
     print(f"[agent_runtime] provider={cfg.provider} model={cfg.model}", file=sys.stderr)
     print(f"[agent_runtime] workspace={agent.workspace.repo_root}", file=sys.stderr)
@@ -188,7 +188,7 @@ def _repl_mode(args) -> int:
     print(f"agent_runtime REPL | provider={cfg.provider} model={cfg.model}", file=sys.stderr)
     print(f"workspace={agent.workspace.repo_root}", file=sys.stderr)
     if args.dry_run:
-        print("⚠ DRY-RUN MODE", file=sys.stderr)
+        print("\033[34m⚠ DRY-RUN MODE\033[0m", file=sys.stderr)
     print('输入 /help 查看命令，/exit 退出', file=sys.stderr)
     print("─" * 50, file=sys.stderr)
 
