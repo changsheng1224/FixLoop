@@ -29,11 +29,18 @@ class CLIProgressCallback:
     def __init__(self, output=sys.stderr):
         self._output = output
         self._step = 0
+        self._t0 = None
 
     def on_step_start(self, step: int, max_steps: int):
         self._step = step
 
     def on_tool_executed(self, name: str, result_preview: str):
+        import time
+        if self._t0 is None:
+            self._t0 = time.time()
+        elapsed = time.time() - self._t0
+        self._t0 = time.time()
+
         preview = result_preview[:80].replace("\n", " ")
         if "[DRY RUN]" in preview:
             color = _BLUE
@@ -45,7 +52,7 @@ class CLIProgressCallback:
             color = _GREEN
             status = "OK"
         print(
-            f"  {color}[{self._step}] {name} {status}{_RESET} ({len(result_preview)} chars)",
+            f"  {color}[{self._step}] {name} {status} ({elapsed:.1f}s){_RESET}",
             file=self._output,
         )
 
