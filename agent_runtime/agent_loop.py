@@ -1,9 +1,9 @@
 """Agent 控制循环：感知 → 决策 → 行动 → 记录 → 循环。
 
-每个循环周期：
-1. 组装 prompt → 2. 调模型 → 3. 解析 → 4. tool/final/retry
-停机后产出 task_state.json + trace.jsonl + report.json。
+停机后产出 task_state.json + trace.jsonl + report.json（含 node_timings 耗时分布）。
 """
+
+import time as _time
 
 
 class AgentLoop:
@@ -51,10 +51,14 @@ class AgentLoop:
                 )
 
             # 1. 组装 prompt
+            t0 = _time.time()
             prompt_text = self.agent.prompt(user_message)
+            ts.node_timings.setdefault("prompt_build_ms", 0)
+            ts.node_timings["prompt_build_ms"] += int((_time.time() - t0) * 1000)
 
             # 2. 调用模型（经 CircuitBreaker 包裹，附 cache key）
             ts.record_attempt()
+            t1 = _time.time()
             cache_key = getattr(self.agent._prefix, "hash", "")
             try:
                 raw = self.agent.circuit_breaker.call(
@@ -63,6 +67,8 @@ class AgentLoop:
                     max_new_tokens=self.agent.config.max_new_tokens,
                     prompt_cache_key=cache_key,
                 )
+                ts.node_timings.setdefault("model_call_ms", 0)
+                ts.node_timings["model_call_ms"] += int((_time.time() - t1) * 1000)
             except Exception as e:
                 if "Circuit breaker is open" in str(e):
                     self.stop_reason = "circuit_breaker"
@@ -93,10 +99,13 @@ class AgentLoop:
                     "tool_args": tool_args,
                 })
 
+                t2 = _time.time()
                 result = self.agent.execute_tool(tool_name, tool_args)
                 result_text = (
                     result.content if hasattr(result, 'content') else str(result)
                 )
+                ts.node_timings.setdefault("tool_exec_ms", 0)
+                ts.node_timings["tool_exec_ms"] += int((_time.time() - t2) * 1000)
                 self.agent.update_memory_after_tool(tool_name, tool_args, result_text)
                 self.agent.record({"role": "tool", "content": result_text})
                 self._emit("tool_executed", {"tool": tool_name})

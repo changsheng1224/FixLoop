@@ -3,7 +3,7 @@
 状态机：running → completed / stopped / failed
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 
@@ -24,7 +24,8 @@ class TaskState:
     stop_reason: str = ""
     final_answer: str = ""
     checkpoint_id: str = ""
-    resume_status: str = ""  # no-checkpoint | full-valid | partial-stale | workspace-mismatch
+    resume_status: str = ""
+    node_timings: dict = field(default_factory=dict)  # 如 {"prompt_build_ms": 5, ...}
 
     @classmethod
     def create(cls, task_id: str = "", user_request: str = "") -> "TaskState":
@@ -90,6 +91,7 @@ class TaskState:
             "final_answer": self.final_answer,
             "checkpoint_id": self.checkpoint_id,
             "resume_status": self.resume_status,
+            "node_timings": self.node_timings,
         }
 
     @classmethod
@@ -107,4 +109,5 @@ class TaskState:
             final_answer=data.get("final_answer", ""),
             checkpoint_id=data.get("checkpoint_id", ""),
             resume_status=data.get("resume_status", ""),
+            node_timings=data.get("node_timings", {}),
         )
