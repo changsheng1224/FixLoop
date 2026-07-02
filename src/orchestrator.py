@@ -9,6 +9,9 @@
 
 import re
 import time
+from pathlib import Path
+
+import yaml
 
 from src.state import (
     CandidatePatch,
@@ -43,9 +46,12 @@ class Orchestrator:
         state = RepairState(issue_input=issue, max_retries=max_retries)
         timings = {}
 
-        # Step 1: 解析 Issue → RepairPlan
+        # Step 1: 解析 Issue → RepairPlan + 匹配 Skill
         t0 = time.time()
         state.repair_plan = self._parse_issue(issue)
+        skill = self._match_skill(issue)
+        if skill and state.repair_plan:
+            state.repair_plan.estimated_impact = skill.get("suggested_tools", [])
         timings["parse_issue_ms"] = int((time.time() - t0) * 1000)
 
         # Step 2: 定位（并行：Localizer + Retriever）
@@ -93,6 +99,21 @@ class Orchestrator:
             plan.reasoning = issue[:200]
 
         return plan
+
+    def _match_skill(self, issue: str) -> dict | None:
+        """从 YAML Skill 文件中匹配 Issue 对应的修复策略。"""
+        skills_dir = Path(__file__).parent / "skills"
+        if not skills_dir.exists():
+            return None
+        for yaml_file in skills_dir.glob("*.yaml"):
+            try:
+                data = yaml.safe_load(yaml_file.read_text(encoding="utf-8"))
+                pattern = data.get("trigger_pattern", "")
+                if pattern and re.search(pattern, issue):
+                    return data
+            except Exception:
+                pass
+        return None
 
     def _classify_error(self, exc_type: str) -> str:
         mapping = {
