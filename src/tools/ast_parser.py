@@ -14,23 +14,6 @@ class AstParseArgs:
     path: str  # 必填
 
 
-def auto_schema_for(cls):
-    """简化版 auto_schema（避免循环依赖 agent_runtime.schema_utils）。"""
-    from dataclasses import MISSING, fields
-
-    schema = {}
-    for f in fields(cls):
-        if f.default is not MISSING:
-            schema[f.name] = f"{_type_name(f.type)}={f.default}"
-        else:
-            schema[f.name] = _type_name(f.type)
-    return schema
-
-
-def _type_name(t) -> str:
-    return "str"
-
-
 def ast_parse(context, args: dict) -> str:
     """解析 Python 文件为结构化函数/类/方法列表。
 

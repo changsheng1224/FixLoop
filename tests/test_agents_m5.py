@@ -51,6 +51,33 @@ class TestAgentFactories:
         assert "ok" in create_patcher(c3, workspace).ask("test")
 
 
+class TestToolGatewayWired:
+    """ToolGateway 实际接入 Agent.execute_tool 测试。"""
+
+    def test_localizer_blocked_from_write(self, workspace):
+        """Localizer 工厂创建的 Agent 不能调 write_file。"""
+        client = FakeModelClient(["<final>ok</final>"])
+        agent = create_localizer(client, workspace)
+        result = agent.execute_tool("write_file", {"path": "x", "content": "y"})
+        assert result.metadata["tool_error_code"] == "permission_denied"
+
+    def test_patcher_blocked_from_ast(self, workspace):
+        """Patcher 不能调 ast_parse。"""
+        client = FakeModelClient(["<final>ok</final>"])
+        agent = create_patcher(client, workspace)
+        result = agent.execute_tool("ast_parse", {"path": "x.py"})
+        assert result.metadata["tool_error_code"] == "permission_denied"
+
+    def test_localizer_can_ast_parse(self, workspace):
+        """Localizer 可以调 ast_parse。"""
+        client = FakeModelClient(["<final>ok</final>"])
+        agent = create_localizer(client, workspace)
+        result = agent.execute_tool(
+            "search", {"pattern": "test", "path": str(workspace.repo_root)}
+        )
+        assert "permission_denied" not in str(result.metadata.get("tool_error_code", ""))
+
+
 class TestToolGatewayIntegration:
     def test_localizer_cannot_write(self, client, workspace):
         gw = ToolGateway({
