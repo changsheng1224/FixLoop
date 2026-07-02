@@ -14,7 +14,8 @@ class AgentLoop:
         self.max_steps = max_steps or agent.config.max_steps
         self.stop_reason = ""
         self._task_state = None
-        self._store = None  # 缓存的 RunStore
+        self._store = None
+        self._last_token_meta = {}  # 最近一次 prompt 的 token 元数据
 
     def run(self, user_message: str, callback=None) -> str:
         from agent_runtime.task_state import TaskState
@@ -52,7 +53,8 @@ class AgentLoop:
 
             # 1. 组装 prompt
             t0 = _time.time()
-            prompt_text = self.agent.prompt(user_message)
+            prompt_text, token_meta = self.agent._build_prompt_with_meta(user_message)
+            self._last_token_meta = token_meta
             ts.node_timings.setdefault("prompt_build_ms", 0)
             ts.node_timings["prompt_build_ms"] += int((_time.time() - t0) * 1000)
 
@@ -174,6 +176,9 @@ class AgentLoop:
                 "stop_reason": ts.stop_reason,
                 "status": ts.status,
                 "prompt_cache_key": getattr(self.agent._prefix, "hash", ""),
+                "node_timings": ts.node_timings,
+                "token_usage": self._last_token_meta.get("sections", {}),
+                "total_tokens": self._last_token_meta.get("total_tokens", 0),
             })
             promote_durable_memory(
                 ts.user_request, ts.final_answer, root=self.agent._cwd,
