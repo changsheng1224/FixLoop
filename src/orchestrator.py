@@ -8,6 +8,7 @@
 """
 
 import re
+import sys as _sys
 import time
 from pathlib import Path
 
@@ -48,47 +49,71 @@ class Orchestrator:
         state = RepairState(issue_input=issue, max_retries=max_retries)
         timings = {}
 
+        t_start = time.time()
+        print(f"[{_ts()}] Orchestrator 开始\n", end="", file=_sys.stderr, flush=True)
+
         # Step 1: 解析 Issue → RepairPlan + 匹配 Skill
         t0 = time.time()
         state.repair_plan = self._parse_issue(issue)
         skill = self._match_skill(issue)
         if skill and state.repair_plan:
             state.repair_plan.estimated_impact = skill.get("suggested_tools", [])
-        timings["parse_issue_ms"] = int((time.time() - t0) * 1000)
+        ms = int((time.time() - t0) * 1000)
+        timings["parse_issue_ms"] = ms
+        print(f"[{_ts()}] parse_issue: {ms}ms\n", end="", file=_sys.stderr, flush=True)
 
-        # Step 2: 定位（并行：Localizer + Retriever）
+        # Step 2: Localizer
+        print(f"[{_ts()}] Localizer 开始...\n", end="", file=_sys.stderr, flush=True)
         t0 = time.time()
         state.suspect_locations = self._run_localizer(state)
-        timings["localizer_ms"] = int((time.time() - t0) * 1000)
+        ms = int((time.time() - t0) * 1000)
+        timings["localizer_ms"] = ms
+        n = len(state.suspect_locations)
+        print(f"[{_ts()}] Localizer 完成: {ms}ms, {n} suspect\n",
+              end="", file=_sys.stderr, flush=True)
 
+        # Step 3: Retriever
+        print(f"[{_ts()}] Retriever 开始...\n", end="", file=_sys.stderr, flush=True)
         t0 = time.time()
         state.retrieved_context = self._run_retriever(state)
-        timings["retriever_ms"] = int((time.time() - t0) * 1000)
+        ms = int((time.time() - t0) * 1000)
+        timings["retriever_ms"] = ms
+        print(f"[{_ts()}] Retriever 完成: {ms}ms\n", end="", file=_sys.stderr, flush=True)
 
-        # Step 3: 修补 → 验证 → 自愈循环
+        # Step 4: Patcher → Verifier → 自愈
         while state.retry_count < max_retries:
+            print(f"[{_ts()}] Patcher 开始 (retry={state.retry_count})...\n",
+                  end="", file=_sys.stderr, flush=True)
             t0 = time.time()
             state.candidate_patches = self._run_patcher(state)
-            timings["patcher_ms"] = int((time.time() - t0) * 1000)
+            ms = int((time.time() - t0) * 1000)
+            timings["patcher_ms"] = ms
+            n = len(state.candidate_patches)
+            print(f"[{_ts()}] Patcher 完成: {ms}ms, {n}个补丁\n",
+                  end="", file=_sys.stderr, flush=True)
 
             if self.verifier is None:
                 state.status = "patched"
                 break
 
-            # M6: 调用 Verifier
+            print(f"[{_ts()}] Verifier 开始...\n", end="", file=_sys.stderr, flush=True)
             t0 = time.time()
             state.verification_result = self._run_verifier(state)
-            timings["verifier_ms"] = int((time.time() - t0) * 1000)
+            ms = int((time.time() - t0) * 1000)
+            timings["verifier_ms"] = ms
+            print(f"[{_ts()}] Verifier 完成: {ms}ms\n", end="", file=_sys.stderr, flush=True)
 
             if state.verification_result.all_passed:
                 state.status = "fixed"
                 break
 
-            # 失败 → 构建反馈 → 重试
             state.feedback = self._build_feedback(state.verification_result)
             state.retry_count += 1
 
         state.node_timings = timings
+        total_ms = int((time.time() - t_start) * 1000)
+        print(f"[{_ts()}] 总耗时: {total_ms}ms, status={state.status}\n",
+              end="", file=_sys.stderr, flush=True)
         return state
 
     def _parse_issue(self, issue: str) -> RepairPlan:
@@ -156,7 +181,7 @@ class Orchestrator:
         import json as _json
         from pathlib import Path as _Path
         try:
-            runs_dir = _Path(agent._cwd) / ".agent" / "runs"
+            runs_dir = _Path(agent.workspace.repo_root) / ".agent" / "runs"
             if not runs_dir.exists():
                 return {}
             latest = max(runs_dir.iterdir(), key=lambda p: p.stat().st_mtime)
@@ -300,6 +325,11 @@ class Orchestrator:
         except (json.JSONDecodeError, KeyError):
             pass
         return []
+
+
+def _ts() -> str:
+    """返回当前时间戳字符串 HH:MM:SS。"""
+    return time.strftime("%H:%M:%S")
 
 
 def _extract_json_block(text: str) -> str:

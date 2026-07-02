@@ -123,7 +123,10 @@ class AgentLoop:
             elif kind == "retry":
                 # 指数退避：1s→2s→4s→8s（防密集重试浪费配额）
                 self._retry_count += 1
-                _time.sleep(min(2 ** (self._retry_count - 1), 8))
+                delay = min(2 ** (self._retry_count - 1), 8)
+                # 分小段 sleep，使 Ctrl+C 可中断
+                for _ in range(int(delay * 10)):
+                    _time.sleep(0.1)
                 self.agent.record({"role": "system", "content": str(payload)})
                 user_message = str(payload)
 

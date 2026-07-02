@@ -45,12 +45,12 @@ def _repair(args) -> int:
     )
     ws = WorkspaceContext.build(args.repo)
 
-    # 本地模型加速搜索/定位（不消耗 API）
+    # Retriever 用本地模型（纯搜索，不需要推理）
     from agent_runtime.providers.clients import OllamaModelClient
     light = OllamaModelClient()
-    localizer = create_localizer(client, ws, light_client=light)
-    retriever = create_retriever(client, ws, light_client=light)
-    patcher = create_patcher(client, ws)
+    localizer = create_localizer(client, ws)     # 定位需要 AST 推理 → DeepSeek
+    retriever = create_retriever(light, ws)      # 搜索不需要推理 → Ollama
+    patcher = create_patcher(client, ws)          # 补丁需要推理 → DeepSeek
 
     if args.dry_run:
         localizer.dry_run = True
