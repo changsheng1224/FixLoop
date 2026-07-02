@@ -82,19 +82,16 @@ class Agent:
         return loop.run(user_message, callback=callback)
 
     def prompt(self, user_message: str) -> str:
-        """组装完整 prompt 文本（经 ContextManager token 预算控制）。
+        """组装完整 prompt 文本（经 ContextManager token 预算控制）。"""
+        prompt_text, _ = self._build_prompt_with_meta(user_message)
+        return prompt_text
 
-        Args:
-            user_message: 当前用户输入。
-
-        Returns:
-            完整的 prompt 文本。
-        """
+    def _build_prompt_with_meta(self, user_message: str) -> tuple[str, dict]:
+        """同 prompt()，但返回 (text, metadata)。"""
         from agent_runtime.context_manager import ContextManager
 
         cm = ContextManager(self)
-        prompt_text, _metadata = cm.build(user_message)
-        return prompt_text
+        return cm.build(user_message)
 
     def record(self, item: dict):
         """向会话历史追加一条记录。

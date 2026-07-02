@@ -8,6 +8,43 @@
 
 import tiktoken
 
+# 按工具类型的截断上限（字符数）
+TOOL_TRUNCATION = {
+    "list_files": 200,
+    "search": 800,
+    "read_file": 2000,
+    "write_file": 300,
+    "patch_file": 300,
+    "run_shell": 500,
+}
+DEFAULT_TRUNCATION = 500
+
+
+def _truncate_tool_content(content: str, tool_name: str = "") -> str:
+    """按工具类型差异化截断，重要行优先保留。"""
+    limit = TOOL_TRUNCATION.get(tool_name, DEFAULT_TRUNCATION)
+    if len(content) <= limit:
+        return content
+
+    lines = content.splitlines()
+    # 收集重要行（Error、文件路径、行号）
+    important = []
+    other = []
+    for line in lines:
+        if "Error" in line or "error" in line or "Fail" in line or "/" in line:
+            important.append(line)
+        else:
+            other.append(line)
+
+    result = important.copy()
+    for line in other:
+        result.append(line)
+        if sum(len(ln) for ln in result) > limit:
+            break
+
+    return "\n".join(result) + f"\n... (截断，共 {len(content)} 字符)"
+
+
 # Section token 预算分配
 BUDGET_PREFIX = 2000
 BUDGET_MEMORY = 800
@@ -68,6 +105,7 @@ class ContextManager:
     def __init__(self, agent, total_budget: int = TOTAL_BUDGET):
         self.agent = agent
         self.budget = TokenBudget(total_limit=total_budget)
+        self._summary_cache: dict[str, str] = {}
 
     def build(self, user_message: str) -> tuple[str, dict]:
         """组装完整 prompt，返回 (prompt_text, metadata)。
@@ -214,8 +252,9 @@ class ContextManager:
         for item in recent:
             role = item.get("role", "unknown")
             content = str(item.get("content", ""))
-            if role == "tool" and len(content) > 500:
-                content = content[:500] + f"\n... (截断，共 {len(content)} 字符)"
+            if role == "tool":
+                tool_name = item.get("tool_name", "")
+                content = _truncate_tool_content(content, tool_name)
             if role == "user" and len(content) > 300:
                 content = content[:300] + "..."
             lines.append(f"**{role}**: {content}")
@@ -229,8 +268,11 @@ class ContextManager:
         for item in history:
             role = item.get("role", "unknown")
             content = str(item.get("content", ""))
-            if len(content) > 500:
-                content = content[:500] + "..."
+            if role == "tool":
+                tool_name = item.get("tool_name", "")
+                content = _truncate_tool_content(content, tool_name)
+            elif len(content) > DEFAULT_TRUNCATION:
+                content = content[:DEFAULT_TRUNCATION] + "..."
             lines.append(f"**{role}**: {content}")
             lines.append("")
         return "\n".join(lines)
@@ -260,15 +302,26 @@ class ContextManager:
         old_history = history[:mid]
         recent_history = history[mid:]
 
-        # 尝试 LLM 摘要
-        try:
-            summary = self._generate_summary(old_history)
+        # 检查摘要缓存
+        import hashlib
+        cache_key = hashlib.md5(
+            "".join(str(h.get("content",""))[:100] for h in old_history[-10:]).encode()
+        ).hexdigest()
+        if cache_key in self._summary_cache:
+            summary = self._summary_cache[cache_key]
+        else:
+            summary = ""
+            try:
+                summary = self._generate_summary(old_history)
+            except Exception:
+                pass
             if summary:
-                return [
-                    {"role": "system", "content": f"[Earlier summary]: {summary}"},
-                ] + recent_history
-        except Exception:
-            pass
+                self._summary_cache[cache_key] = summary
+
+        if summary:
+            return [
+                {"role": "system", "content": f"[Earlier summary]: {summary}"},
+            ] + recent_history
 
         # 降级：保留最近 8 条
         return history[-8:]
