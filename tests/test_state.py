@@ -1,0 +1,88 @@
+"""RepairState 数据模型单测：JSON 往返序列化。"""
+
+
+from src.state import (
+    CandidatePatch,
+    RepairPlan,
+    RepairState,
+    RetrievedContext,
+    SuspectLocation,
+    VerificationResult,
+)
+
+
+class TestSuspectLocation:
+    def test_json_roundtrip(self):
+        s = SuspectLocation(
+            file_path="calc.py", start_line=42, end_line=44,
+            function_name="add", reason="堆栈指向", confidence=0.95,
+        )
+        restored = SuspectLocation.from_dict(s.to_dict())
+        assert restored.file_path == "calc.py"
+        assert restored.confidence == 0.95
+
+
+class TestRepairPlan:
+    def test_json_roundtrip(self):
+        p = RepairPlan(language="python", issue_type="type_error",
+                       suspect_files=["calc.py"], reasoning="TypeError at line 42")
+        restored = RepairPlan.from_dict(p.to_dict())
+        assert restored.issue_type == "type_error"
+
+
+class TestRetrievedContext:
+    def test_json_roundtrip(self):
+        ctx = RetrievedContext(
+            similar_snippets=[{"file": "a.py", "snippet": "code"}],
+            caller_locations=["main.py:10"],
+            related_tests=["test_calc.py::test_add"],
+        )
+        restored = RetrievedContext.from_dict(ctx.to_dict())
+        assert len(restored.related_tests) == 1
+
+
+class TestCandidatePatch:
+    def test_json_roundtrip(self):
+        p = CandidatePatch(
+            file_path="calc.py", diff="-old\n+new", explanation="修复类型转换"
+        )
+        restored = CandidatePatch.from_dict(p.to_dict())
+        assert restored.file_path == "calc.py"
+
+
+class TestVerificationResult:
+    def test_json_roundtrip(self):
+        v = VerificationResult(
+            all_passed=True, total_tests=12, passed=12,
+        )
+        restored = VerificationResult.from_dict(v.to_dict())
+        assert restored.all_passed
+
+
+class TestRepairState:
+    def test_full_roundtrip(self):
+        state = RepairState(issue_input="TypeError at calc.py:42")
+        state.suspect_locations.append(
+            SuspectLocation(file_path="calc.py", start_line=42, end_line=44,
+                            function_name="add", reason="堆栈", confidence=0.95)
+        )
+        state.candidate_patches.append(
+            CandidatePatch(file_path="calc.py", diff="-old\n+new")
+        )
+        state.status = "fixed"
+
+        data = state.to_dict()
+        restored = RepairState.from_dict(data)
+
+        assert restored.issue_input == "TypeError at calc.py:42"
+        assert len(restored.suspect_locations) == 1
+        assert restored.suspect_locations[0].file_path == "calc.py"
+        assert len(restored.candidate_patches) == 1
+        assert restored.status == "fixed"
+
+    def test_empty_state_roundtrip(self):
+        state = RepairState(issue_input="test")
+        restored = RepairState.from_dict(state.to_dict())
+        assert restored.suspect_locations == []
+        assert restored.candidate_patches == []
+        assert restored.status == "pending"
