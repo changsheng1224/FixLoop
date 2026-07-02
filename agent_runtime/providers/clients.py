@@ -69,6 +69,7 @@ class AnthropicCompatibleModelClient:
         self.temperature = temperature
         self.timeout = timeout
         self.supports_prompt_cache = True
+        self._latencies: list[float] = []
 
     def complete(
         self,
@@ -96,6 +97,7 @@ class AnthropicCompatibleModelClient:
         }
         body = json.dumps(payload).encode("utf-8")
 
+        t0 = time.time()
         last_error = None
         for attempt in range(3):
             try:
@@ -110,7 +112,10 @@ class AnthropicCompatibleModelClient:
                 )
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
                     data = json.loads(response.read().decode("utf-8"))
-                return self._extract_text(data)
+                result = self._extract_text(data)
+                self._save_request(prompt, result)
+                self._latencies.append(time.time() - t0)
+                return result
 
             except urllib.error.HTTPError as e:
                 last_error = e
@@ -132,6 +137,38 @@ class AnthropicCompatibleModelClient:
         raise RuntimeError(
             f"API 请求失败，已重试 3 次。最后错误: {last_error}"
         )
+
+    def latency_stats(self) -> dict:
+        """返回响应延迟统计（秒）。"""
+        if not self._latencies:
+            return {"count": 0, "avg": 0, "p50": 0, "p99": 0}
+        sorted_l = sorted(self._latencies)
+        n = len(sorted_l)
+        return {
+            "count": n,
+            "avg": round(sum(sorted_l) / n, 2),
+            "p50": round(sorted_l[n // 2], 2),
+            "p99": round(sorted_l[int(n * 0.99)], 2),
+        }
+
+    def _save_request(self, prompt: str, result: str):
+        """记录最后一次请求到 .agent/last_request.json（调试用）。"""
+        try:
+            from pathlib import Path
+            agent_dir = Path.cwd() / ".agent"
+            agent_dir.mkdir(parents=True, exist_ok=True)
+            path = agent_dir / "last_request.json"
+            path.write_text(
+                json.dumps({
+                    "model": self.model,
+                    "prompt_preview": prompt[:500],
+                    "prompt_length": len(prompt),
+                    "result_preview": result[:300],
+                }, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
 
     def _extract_text(self, data: dict) -> str:
         """从 Anthropic Messages API 响应中提取文本。
