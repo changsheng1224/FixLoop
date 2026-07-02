@@ -26,7 +26,7 @@ def create_localizer(model_client, workspace, cwd: str = "", light_client=None) 
     system_prompt = prompt_file.read_text(encoding="utf-8") if prompt_file.exists() else ""
 
     agent = Agent(
-        config=AgentConfig(provider="deepseek", max_steps=3, max_new_tokens=512, approval="auto"),
+        config=AgentConfig(provider="deepseek", max_steps=6, max_new_tokens=4096, approval="auto"),
         model_client=model_client, workspace=workspace, cwd=root,
         tools=tools, system_prompt=system_prompt,
         light_client=light_client,

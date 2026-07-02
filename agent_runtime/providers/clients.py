@@ -77,7 +77,7 @@ class AnthropicCompatibleModelClient:
         max_new_tokens: int = 512,
         prompt_cache_key: str = "",
     ) -> str:
-        """向模型 API 发送请求，可选透传 prompt cache key。
+        """向模型 API 发送请求（无工具调用的简单模式）。
 
         Args:
             prompt: 完整 prompt 文本。
@@ -85,7 +85,6 @@ class AnthropicCompatibleModelClient:
             prompt_cache_key: 可缓存的 prefix hash。
         """
         content = [{"type": "text", "text": prompt}]
-        # 标记 prefix 为可缓存（Anthropic ephemeral cache）
         if prompt_cache_key and self.supports_prompt_cache:
             content[0]["cache_control"] = {"type": "ephemeral"}
 
@@ -95,10 +94,133 @@ class AnthropicCompatibleModelClient:
             "max_tokens": max_new_tokens,
             "temperature": self.temperature,
         }
-        body = json.dumps(payload).encode("utf-8")
+        return self._call_api(payload, prompt)
 
+    def chat_with_tools(
+        self,
+        system_prompt: str,
+        user_message: str,
+        tools: list[dict],
+        executor,
+        max_turns: int = 6,
+    ) -> str:
+        """使用原生 Anthropic tool_use 协议进行多轮对话。
+
+        Args:
+            system_prompt: 系统提示词。
+            user_message: 用户消息。
+            tools: 工具定义列表 [{"name":"...","description":"...","input_schema":{...}}]。
+            executor: 工具执行回调 fn(name, args) -> str。
+            max_turns: 最大对话轮数。
+
+        Returns:
+            模型的最终文本回复。
+        """
+        messages = []
+        # 系统提示词放在第一条消息中
+        full_text = system_prompt + "\n\n" + user_message if system_prompt else user_message
+        messages.append({
+            "role": "user",
+            "content": [{"type": "text", "text": full_text}],
+        })
+
+        payload_base = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": 4096,
+            "temperature": self.temperature,
+            "tools": tools,
+        }
+
+        for _ in range(max_turns):
+            payload = dict(payload_base)
+            payload["messages"] = list(messages)  # shallow copy
+            body = json.dumps(payload).encode("utf-8")
+            data = None
+
+            for attempt in range(3):
+                try:
+                    request = urllib.request.Request(
+                        f"{self.base_url}/messages",
+                        data=body,
+                        headers={
+                            "Content-Type": "application/json",
+                            "x-api-key": self.api_key,
+                            "anthropic-version": "2023-06-01",
+                        },
+                    )
+                    with urllib.request.urlopen(request, timeout=self.timeout) as resp:
+                        data = json.loads(resp.read().decode("utf-8"))
+                    break
+                except urllib.error.HTTPError as e:
+                    if e.code >= 500 and attempt < 2:
+                        time.sleep((attempt + 1) * 2)
+                        continue
+                    raise RuntimeError(f"API 请求失败 (HTTP {e.code})") from e
+                except (urllib.error.URLError, OSError) as e:
+                    if attempt < 2:
+                        time.sleep((attempt + 1) * 2)
+                        continue
+                    raise RuntimeError(f"API 请求失败") from e
+
+            if data is None:
+                raise RuntimeError("API 请求失败，已重试 3 次")
+
+            # 解析响应中的 content blocks
+            content_blocks = data.get("content", [])
+            if isinstance(content_blocks, str):
+                return content_blocks
+
+            # 收集所有 content blocks
+            text_parts = []
+            tool_uses = []
+
+            for block in content_blocks:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "text":
+                    text_parts.append(block.get("text", ""))
+                elif block.get("type") == "tool_use":
+                    tool_uses.append(block)
+
+            # 将模型的回复加入 messages
+            messages.append({"role": "assistant", "content": content_blocks})
+
+            # 如果有工具调用，执行并继续
+            if tool_uses:
+                tool_results = []
+                for tu in tool_uses:
+                    name = tu.get("name", "")
+                    inp = tu.get("input", {})
+                    tu_id = tu.get("id", "")
+                    try:
+                        result = executor(name, inp)
+                    except Exception as e:
+                        result = f"Error: {e}"
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tu_id,
+                        "content": str(result),
+                    })
+                messages.append({"role": "user", "content": tool_results})
+                continue  # 继续下一轮
+
+            # 没有工具调用 → 返回文本
+            if text_parts:
+                self._save_request(full_text, "".join(text_parts))
+                return "".join(text_parts)
+
+            # 既没有文本也没有工具调用 → 空响应
+            return ""
+
+        return "max_turns exceeded"
+
+    def _call_api(self, payload: dict, prompt_for_log: str = "") -> str:
+        """发送 API 请求并返回文本（单轮，无工具）。"""
+        body = json.dumps(payload).encode("utf-8")
         t0 = time.time()
         last_error = None
+
         for attempt in range(3):
             try:
                 request = urllib.request.Request(
@@ -113,21 +235,18 @@ class AnthropicCompatibleModelClient:
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
                     data = json.loads(response.read().decode("utf-8"))
                 result = self._extract_text(data)
-                self._save_request(prompt, result)
+                self._save_request(prompt_for_log, result)
                 self._latencies.append(time.time() - t0)
                 return result
 
             except urllib.error.HTTPError as e:
                 last_error = e
-                status = e.code
-                # 5xx 服务端错误 → 重试；4xx 客户端错误 → 不重试
-                if status < 500:
+                if e.code < 500:
                     raise RuntimeError(
-                        f"API 请求失败 (HTTP {status}): {e.reason}"
+                        f"API 请求失败 (HTTP {e.code}): {e.reason}"
                     ) from e
                 if attempt < 2:
-                    wait = (attempt + 1) * 2  # 2s, 4s 间隔
-                    time.sleep(wait)
+                    time.sleep((attempt + 1) * 2)
 
             except (urllib.error.URLError, OSError) as e:
                 last_error = e

@@ -7,7 +7,8 @@ from agent_runtime.workspace import WorkspaceContext
 from src.agents.localizer import create_localizer
 from src.agents.patcher import create_patcher
 from src.agents.retriever import create_retriever
-from src.orchestrator import Orchestrator
+from src.orchestrator import Orchestrator, apply_patch_to_text
+from src.state import CandidatePatch, VerificationResult
 
 
 @pytest.fixture
@@ -65,3 +66,36 @@ class TestOrchestrator:
         assert state.status == "patched"
         assert "localizer_ms" in state.node_timings
         assert "patcher_ms" in state.node_timings
+
+
+class TestApplyPatch:
+    def test_apply_diff_preserves_indent(self):
+        text = "def add(a, b):\n    return a + b  # BUG\n"
+        patch = CandidatePatch(
+            file_path="calculator.py",
+            diff="-return a + b\n+return int(a) + int(b)",
+        )
+        result = apply_patch_to_text(text, patch)
+        assert result is not None
+        assert "return int(a) + int(b)" in result
+        assert "    return int(a)" in result
+
+    def test_apply_diff_with_inline_comment(self):
+        text = "def add(a, b):\n    return a + b  # BUG\n"
+        patch = CandidatePatch(
+            file_path="calculator.py",
+            diff="-return a + b  # BUG\n+return int(a) + int(b)",
+        )
+        result = apply_patch_to_text(text, patch)
+        assert result is not None
+        assert "return int(a) + int(b)" in result
+
+    def test_apply_original_lines_by_strip(self):
+        text = "    return a + b\n"
+        patch = CandidatePatch(
+            file_path="x.py",
+            original_lines="return a + b",
+            patched_lines="return int(a) + int(b)",
+        )
+        result = apply_patch_to_text(text, patch)
+        assert result == "    return int(a) + int(b)\n"

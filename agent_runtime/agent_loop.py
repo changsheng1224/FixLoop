@@ -6,6 +6,39 @@
 import time as _time
 
 
+def _build_anthropic_tools(tools_registry: dict) -> list[dict]:
+    """将内部工具注册表转换为 Anthropic tool_use 格式。"""
+    type_map = {"str": "string", "int": "integer", "float": "number", "bool": "boolean"}
+    result = []
+    for name, spec in tools_registry.items():
+        schema = spec.get("schema", {})
+        properties = {}
+        required = []
+        for param, type_str in schema.items():
+            # 解析 "type=default" 格式
+            if "=" in type_str:
+                ptype, _, default = type_str.partition("=")
+            else:
+                ptype, default = type_str, None
+            json_type = type_map.get(ptype, "string")
+            prop = {"type": json_type}
+            if default is not None:
+                prop["default"] = default
+            properties[param] = prop
+            if default is None:
+                required.append(param)
+        result.append({
+            "name": name,
+            "description": spec.get("description", ""),
+            "input_schema": {
+                "type": "object",
+                "properties": properties,
+                "required": required,
+            },
+        })
+    return result
+
+
 class AgentLoop:
     """Agent 控制循环。管理对话回合，统计步数，产出 trace 工件。"""
 
@@ -26,12 +59,73 @@ class AgentLoop:
         self._emit("run_started")
 
         self.agent.record({"role": "user", "content": user_message})
-
-        # 用轻量模型生成一句话任务摘要（如可用）
         self._gen_task_summary(user_message)
 
+        # 如果模型客户端支持原生 tool_use，使用 API 原生协议（免文本解析）
+        if hasattr(self.agent.model_client, "chat_with_tools"):
+            return self._run_with_native_tools(user_message, ts, callback)
+
+        # 降级：传统文本解析模式
+        return self._run_with_text_parsing(user_message, ts, callback)
+
+    def _run_with_native_tools(self, user_message: str, ts, callback=None) -> str:
+        """使用 API 原生 tool_use 协议（Anthropic 兼容）。"""
+        import json as _json
+
+        # 构建 Anthropic 格式的工具定义
+        tools_def = _build_anthropic_tools(self.agent.tools)
+
+        # 系统提示词
+        system_prompt = getattr(self.agent._prefix, "text", "")
+
+        # 工具执行回调
+        def executor(tool_name: str, tool_input: dict) -> str:
+            ts.record_tool(tool_name)
+            ts.node_timings.setdefault("tool_exec_ms", 0)
+            t0 = _time.time()
+            result = self.agent.execute_tool(tool_name, tool_input)
+            result_text = result.content if hasattr(result, 'content') else str(result)
+            te_ms = int((_time.time() - t0) * 1000)
+            ts.node_timings["tool_exec_ms"] += te_ms
+            import sys as _s; _s.stderr.write(
+                f"  [loop] {tool_name} tool={te_ms}ms\n"
+            ); _s.stderr.flush()
+            self.agent.update_memory_after_tool(tool_name, tool_input, result_text)
+            self._emit("tool_executed", {"tool": tool_name})
+            if callback:
+                callback.on_tool_executed(tool_name, result_text)
+            return result_text
+
+        t0 = _time.time()
+        try:
+            answer = self.agent.model_client.chat_with_tools(
+                system_prompt=system_prompt,
+                user_message=user_message,
+                tools=tools_def,
+                executor=executor,
+                max_turns=self.max_steps,
+            )
+        except Exception as e:
+            self.stop_reason = f"error: {e}"
+            return f"<final>API 错误: {e}</final>"
+
+        elapsed_ms = int((_time.time() - t0) * 1000)
+        ts.node_timings["model_call_ms"] = elapsed_ms
+
+        self.agent.record({"role": "assistant", "content": answer})
+        self.stop_reason = "final"
+        ts.finish_success(answer)
+        self._emit("run_finished", {"stop_reason": "final"})
+        self._finalize_run(ts)
+
+        import sys as _s; _s.stderr.write(
+            f"  [loop] final ({elapsed_ms}ms total)\n"
+        ); _s.stderr.flush()
+        return answer
+
+    def _run_with_text_parsing(self, user_message: str, ts, callback=None) -> str:
+        """传统文本解析模式（降级路径）。"""
         while True:
-            # 停机检查
             if ts.tool_steps > self.max_steps:
                 self.stop_reason = f"tool_steps >= {self.max_steps}"
                 ts.stop_step_limit(self.max_steps)
@@ -59,16 +153,14 @@ class AgentLoop:
             ts.node_timings.setdefault("prompt_build_ms", 0)
             ts.node_timings["prompt_build_ms"] += int((_time.time() - t0) * 1000)
 
-            # 2. 调用模型（经 CircuitBreaker 包裹，附 cache key）
+            # 2. 调用模型
             ts.record_attempt()
             t1 = _time.time()
-            cache_key = getattr(self.agent._prefix, "hash", "")
             try:
                 raw = self.agent.circuit_breaker.call(
                     self.agent.model_client.complete,
                     prompt_text,
                     max_new_tokens=self.agent.config.max_new_tokens,
-                    prompt_cache_key=cache_key,
                 )
                 ts.node_timings.setdefault("model_call_ms", 0)
                 ts.node_timings["model_call_ms"] += int((_time.time() - t1) * 1000)
@@ -80,9 +172,12 @@ class AgentLoop:
 
             # 3. 解析输出
             kind, payload = self.agent.parse(raw)
+            t_parse = int((_time.time() - t1) * 1000)
 
-            # 4. 根据解析结果决定下一步
             if kind == "final":
+                import sys as _s; _s.stderr.write(
+                    f"  [loop] final ({t_parse}ms parse)\n"
+                ); _s.stderr.flush()
                 self.agent.record({"role": "assistant", "content": str(payload)})
                 self.stop_reason = "final"
                 ts.finish_success(str(payload))
@@ -91,40 +186,53 @@ class AgentLoop:
                 return str(payload)
 
             elif kind == "tool":
+                if not isinstance(payload, dict) or "name" not in payload:
+                    self.agent.record({"role": "system",
+                                       "content": "工具调用格式错误"})
+                    user_message = "工具调用格式错误，请重试。"
+                    continue
                 tool_name = payload.get("name", "unknown")
                 tool_args = payload.get("args", {})
                 ts.record_tool(tool_name)
-
                 self.agent.record({
                     "role": "assistant",
                     "content": f"调用工具: {tool_name}",
                     "tool_name": tool_name,
                     "tool_args": tool_args,
                 })
-
                 t2 = _time.time()
                 result = self.agent.execute_tool(tool_name, tool_args)
-                result_text = (
-                    result.content if hasattr(result, 'content') else str(result)
-                )
+                result_text = result.content if hasattr(result, 'content') else str(result)
+                te_ms = int((_time.time() - t2) * 1000)
                 ts.node_timings.setdefault("tool_exec_ms", 0)
-                ts.node_timings["tool_exec_ms"] += int((_time.time() - t2) * 1000)
+                ts.node_timings["tool_exec_ms"] += te_ms
+                import sys as _s; _s.stderr.write(
+                    f"  [loop] {tool_name} tool={te_ms}ms\n"
+                ); _s.stderr.flush()
                 self.agent.update_memory_after_tool(tool_name, tool_args, result_text)
                 self.agent.record({"role": "tool", "content": result_text})
                 self._emit("tool_executed", {"tool": tool_name})
-
                 if callback:
                     callback.on_tool_executed(tool_name, result_text)
-
                 user_message = (
                     f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
                 )
 
             elif kind == "retry":
-                # 指数退避：1s→2s→4s→8s（防密集重试浪费配额）
                 self._retry_count += 1
                 delay = min(2 ** (self._retry_count - 1), 8)
-                # 分小段 sleep，使 Ctrl+C 可中断
+                import sys as _s; _s.stderr.write(
+                    f"  [loop] retry#{self._retry_count} backoff={delay}s "
+                    f"raw[:100]={raw.strip()[:100]}\n"
+                ); _s.stderr.flush()
+                try:
+                    from pathlib import Path
+                    dbg = Path(self.agent._cwd) / ".agent" / "debug_retry.txt"
+                    dbg.parent.mkdir(parents=True, exist_ok=True)
+                    with open(dbg, "a", encoding="utf-8") as f:
+                        f.write(f"\n=== retry#{self._retry_count} ===\n{raw}\n")
+                except Exception:
+                    pass
                 for _ in range(int(delay * 10)):
                     _time.sleep(0.1)
                 self.agent.record({"role": "system", "content": str(payload)})

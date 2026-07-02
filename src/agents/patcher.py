@@ -19,7 +19,7 @@ def create_patcher(model_client, workspace, cwd: str = "") -> Agent:
     system_prompt = prompt_file.read_text(encoding="utf-8") if prompt_file.exists() else ""
 
     agent = Agent(
-        config=AgentConfig(provider="deepseek", max_steps=6, max_new_tokens=1024, approval="auto"),
+        config=AgentConfig(provider="deepseek", max_steps=6, max_new_tokens=4096, approval="auto"),
         model_client=model_client, workspace=workspace, cwd=root,
         tools=tools, system_prompt=system_prompt,
     )

@@ -89,10 +89,10 @@ class TestSearch:
         result = tool_search(
             ctx, {"pattern": "TODO", "path": str(temp_workspace), "context_lines": 1}
         )
-        assert "> TODO" in result   # 匹配行有 > 标记
-        assert "line B" in result   # 前一行
-        assert "line D" in result   # 后一行
-        assert "line A" not in result  # 太远
+        assert "TODO fix this" in result
+        assert "line B" in result
+        assert "line D" in result
+        assert "line A" not in result
         assert "line E" not in result
 
     def test_context_lines_zero(self, ctx, temp_workspace):
@@ -104,7 +104,8 @@ class TestSearch:
             ctx, {"pattern": "TODO", "path": str(temp_workspace), "context_lines": 0}
         )
         assert "TODO" in result
-        assert "> " in result   # 匹配行标记
+        assert "b TODO here" in result
+        assert "line A" not in result and "\na\n" not in result
 
 
 class TestToolRegistry:

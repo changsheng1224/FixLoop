@@ -10,6 +10,7 @@ from agent_runtime.workspace import WorkspaceContext
 from src.agents.localizer import create_localizer
 from src.agents.patcher import create_patcher
 from src.agents.retriever import create_retriever
+from src.agents.verifier import create_verifier
 from src.orchestrator import Orchestrator
 
 
@@ -22,6 +23,7 @@ def main() -> int:
     p.add_argument("--repo", default=".", help="仓库路径")
     p.add_argument("--verbose", action="store_true", help="详细输出")
     p.add_argument("--dry-run", action="store_true", help="演习模式")
+    p.add_argument("--skip-verify", action="store_true", help="跳过 Docker 验证")
 
     args = parser.parse_args()
     if args.command != "repair":
@@ -29,6 +31,19 @@ def main() -> int:
         return 1
 
     return _repair(args)
+
+
+def _try_create_verifier(client, ws, repo: str):
+    """尝试创建 Verifier，Docker 不可用时返回 None。"""
+    try:
+        import docker as _docker
+        _docker.from_env().ping()
+    except Exception:
+        return None
+    try:
+        return create_verifier(client, ws, cwd=repo)
+    except Exception:
+        return None
 
 
 def _repair(args) -> int:
@@ -44,13 +59,11 @@ def _repair(args) -> int:
         model=model, base_url=base_url, api_key=api_key,
     )
     ws = WorkspaceContext.build(args.repo)
+    repo = str(Path(args.repo).resolve())
 
-    # Retriever 用本地模型（纯搜索，不需要推理）
-    from agent_runtime.providers.clients import OllamaModelClient
-    light = OllamaModelClient()
-    localizer = create_localizer(client, ws)     # 定位需要 AST 推理 → DeepSeek
-    retriever = create_retriever(light, ws)      # 搜索不需要推理 → Ollama
-    patcher = create_patcher(client, ws)          # 补丁需要推理 → DeepSeek
+    localizer = create_localizer(client, ws, cwd=repo)
+    retriever = create_retriever(client, ws, cwd=repo)
+    patcher = create_patcher(client, ws, cwd=repo)
 
     if args.dry_run:
         localizer.dry_run = True
@@ -59,6 +72,16 @@ def _repair(args) -> int:
         print("⚠ DRY-RUN MODE", file=sys.stderr)
 
     orch = Orchestrator(localizer, retriever, patcher)
+
+    # Verifier: 需要 Docker 环境，检测不可用时自动跳过
+    if not args.skip_verify:
+        verifier = _try_create_verifier(client, ws, args.repo)
+        if verifier:
+            orch.verifier = verifier
+            if args.verbose:
+                print("[Orchestrator] Verifier 已接入 (Docker)", file=sys.stderr)
+        elif args.verbose:
+            print("[Orchestrator] Docker 不可用，跳过验证", file=sys.stderr)
 
     if args.verbose:
         print("[Orchestrator] 开始修复...", file=sys.stderr)
@@ -80,8 +103,10 @@ def _repair(args) -> int:
         n_patches = len(state.candidate_patches)
         print(f"[Patcher] 生成 {n_patches} 个补丁", file=sys.stderr)
         print("--- Timing ---", file=sys.stderr)
-        for agent in ("localizer", "retriever", "patcher"):
+        for agent in ("localizer", "retriever", "patcher", "verifier"):
             total = state.node_timings.get(f"{agent}_ms", 0)
+            if total == 0:
+                continue
             intern = state.node_timings.get(f"{agent}_internal", {})
             pb = intern.get("prompt_build_ms", 0)
             mc = intern.get("model_call_ms", 0)
@@ -92,14 +117,19 @@ def _repair(args) -> int:
             )
 
     # 输出结果
-    if state.status == "patched" and state.candidate_patches:
-        print(f"\n✅ 修复完成! 状态={state.status}")
+    if state.status in ("fixed", "patched") and state.candidate_patches:
+        emoji = "✅" if state.status == "fixed" else "⚠"
+        print(f"\n{emoji} 修复完成! 状态={state.status}")
         for patch in state.candidate_patches:
             print(f"\n--- {patch.file_path} ---")
             if patch.diff:
                 print(patch.diff)
             if patch.explanation:
                 print(f"说明: {patch.explanation}")
+        if state.verification_result:
+            vr = state.verification_result
+            print(f"\n验证: {vr.passed}/{vr.total_tests} 通过" +
+                  (f", {vr.failed} 失败" if vr.failed else ""))
     else:
         print(f"❌ 修复未完成 (status={state.status})")
 
