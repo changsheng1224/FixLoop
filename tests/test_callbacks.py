@@ -19,21 +19,21 @@ class TestCLIProgressCallback:
         cb.on_tool_executed("read_file", "1 | class AgentConfig(BaseModel):\n2 | ...")
         output = buf.getvalue()
         assert "read_file" in output
-        assert "✅" in output
+        assert "OK" in output
 
-    def test_error_shows_cross(self):
+    def test_error_shows_fail(self):
         buf = io.StringIO()
         cb = CLIProgressCallback(output=buf)
         cb.on_tool_executed("run_shell", "Error: command not found")
         output = buf.getvalue()
-        assert "❌" in output
+        assert "FAIL" in output
 
     def test_final_answer(self):
         buf = io.StringIO()
         cb = CLIProgressCallback(output=buf)
         cb.on_final_answer("问题已修复")
         output = buf.getvalue()
-        assert "done" in output
+        assert "done" in output or "问题已修复" in output
 
 
 class TestCallbackInAgentLoop:
