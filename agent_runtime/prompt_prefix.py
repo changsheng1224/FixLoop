@@ -26,19 +26,31 @@ class PromptPrefix:
 
 TOOL_EXAMPLES = [
     {
-        "description": "列出当前目录的文件",
-        "tool": '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
-    },
-    {
-        "description": "读取文件的前 50 行",
+        "description": "读取文件（推荐格式：function_calls）",
         "tool": (
-            '<tool>{"name":"read_file",'
-            '"args":{"path":"src/main.py","start":1,"end":50}}</tool>'
+            "<function_calls>\n"
+            '<invoke name="read_file">\n'
+            '<parameter name="path">src/main.py</parameter>\n'
+            '<parameter name="start">1</parameter>\n'
+            '<parameter name="end">50</parameter>\n'
+            "</invoke>\n"
+            "</function_calls>"
         ),
     },
     {
+        "description": "列出当前目录的文件（JSON格式也可）",
+        "tool": '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
+    },
+    {
         "description": "搜索特定模式",
-        "tool": '<tool>{"name":"search","args":{"pattern":"TODO","path":"src"}}</tool>',
+        "tool": (
+            "<function_calls>\n"
+            '<invoke name="search">\n'
+            '<parameter name="pattern">TODO</parameter>\n'
+            '<parameter name="path">src</parameter>\n'
+            "</invoke>\n"
+            "</function_calls>"
+        ),
     },
     {
         "description": "返回最终答案",
@@ -83,15 +95,25 @@ def _system_persona() -> str:
 
 def _rules(dry_run: bool = False, approval: str = "ask") -> str:
     rules = [
-        "## 规则",
+        "## 核心规则（必须严格遵守）",
         "",
-        "1. 每次只调用一个工具，等待结果后再决定下一步。",
-        "2. 通过工具探索代码库——不要猜测文件内容。",
-        "3. 调用 read_file 时指定合理的行号范围（默认 1-200）。",
-        "4. 工具调用使用 JSON 格式：<tool>{\"name\":\"tool_name\",\"args\":{...}}</tool>",
-        "5. 最终答案使用 XML 格式：<final>你的答案</final>",
-        "6. 答案必须基于实际读取的文件内容，不要捏造。",
-        "7. 如果找不到答案，诚实告知而不是编造。",
+        "**1. 工具调用格式**（任选其一）：",
+        '   格式A (JSON): <tool>{"name":"工具名","args":{"参数名":"值"}}</tool>',
+        '   格式B (function_calls):',
+        '     <function_calls>',
+        '     <invoke name="工具名">',
+        '     <parameter name="参数名">值</parameter>',
+        '     </invoke>',
+        '     </function_calls>',
+        "   推荐使用格式B（function_calls）。",
+        "",
+        "**2. 最终答案格式**：",
+        "   <final>你的答案</final>",
+        "",
+        "**3. 每次只调用一个工具**，等待结果后再决定下一步。",
+        "**4. 通过工具探索代码库**——不要猜测文件内容。",
+        "**5. 答案必须基于实际读取的文件内容**，不要捏造。",
+        "**6. 如果找不到答案，诚实告知而不是编造。",
     ]
     if dry_run:
         rules.append(

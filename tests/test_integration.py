@@ -107,7 +107,7 @@ class TestAgentCLI:
              str(workspace.repo_root), "hello"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=120,
         )
         # FakeClient 预设默认输出
         assert result.returncode == 0

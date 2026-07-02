@@ -24,20 +24,15 @@ class PythonTestRunner:
         Returns:
             VerificationResult 实例。
         """
-        # Step 1: 构建
-        build = self.manager.execute(
-            sandbox,
-            "/entrypoint.sh build pip install -e /code",
-            timeout=300,
+        target = test_path.strip() if test_path else "."
+        if target.startswith("/code/"):
+            target = target[len("/code/"):]
+        pytest_target = f"/code/{target}" if target != "." else "/code"
+        # Step 1: 运行测试（构建已在 sandbox_build 中完成）
+        test_cmd = (
+            f"pytest {pytest_target} --json-report "
+            f"--json-report-file=/code/.report.json -v"
         )
-        if build.exit_code != 0:
-            return VerificationResult(
-                all_passed=False,
-                build_log=build.stdout or build.stderr or "构建失败",
-            )
-
-        # Step 2: 运行测试
-        test_cmd = f"pytest /code/{test_path or 'tests/'} --json-report -v"
         test = self.manager.execute(sandbox, f"/entrypoint.sh test {test_cmd}", timeout=600)
 
         # 尝试解析 JSON 报告
@@ -47,21 +42,29 @@ class PythonTestRunner:
         except Exception:
             pass
 
-        # 降级：从 stdout 中提取基础信息
+        # 降级：无法解析 JSON 时不视为通过
+        logs = [test.stdout[-500:]] if test.stdout else []
+        if test.exit_code == 0:
+            logs = ["pytest 退出码为 0，但未生成可解析的 JSON 报告（可能未收集到测试）"]
         return VerificationResult(
-            all_passed=test.exit_code == 0,
+            all_passed=False,
             total_tests=0,
             passed=0,
-            failed=test.exit_code,
-            failure_logs=[test.stdout[-500:]] if test.exit_code != 0 else [],
+            failed=max(test.exit_code, 1),
+            failure_logs=logs,
         )
 
     def _read_report(self, sandbox) -> dict:
         """读取容器内的 .report.json。"""
-        result = self.manager.execute(
-            sandbox, "cat /code/.report.json 2>/dev/null || echo '{}'", timeout=10,
-        )
-        return json.loads(result.stdout or "{}")
+        result = self.manager.execute(sandbox, "cat /code/.report.json", timeout=10)
+        raw = (result.stdout or "").strip()
+        if not raw or result.exit_code != 0:
+            return {}
+        try:
+            data, _ = json.JSONDecoder().raw_decode(raw)
+            return data if isinstance(data, dict) else {}
+        except json.JSONDecodeError:
+            return {}
 
     def _parse_report(self, data: dict) -> VerificationResult:
         """解析 pytest-json-report 输出。"""
@@ -79,10 +82,12 @@ class PythonTestRunner:
                 failure_logs.append(f"{name}: {msg[:200]}")
 
         return VerificationResult(
-            all_passed=(failed == 0 and error == 0),
+            all_passed=(total > 0 and failed == 0 and error == 0),
             total_tests=total,
             passed=passed,
             failed=failed,
             error=error,
-            failure_logs=failure_logs,
+            failure_logs=failure_logs or (
+                ["未收集到任何测试"] if total == 0 else []
+            ),
         )

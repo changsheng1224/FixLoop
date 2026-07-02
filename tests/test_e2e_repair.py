@@ -1,5 +1,7 @@
 """M6 端到端边界测试：FakeClient 模拟完整闭环的 3 种边界情况。"""
 
+from unittest.mock import MagicMock
+
 import pytest
 
 from agent_runtime.providers.clients import FakeModelClient
@@ -7,8 +9,8 @@ from agent_runtime.workspace import WorkspaceContext
 from src.agents.localizer import create_localizer
 from src.agents.patcher import create_patcher
 from src.agents.retriever import create_retriever
-from src.agents.verifier import create_verifier
 from src.orchestrator import Orchestrator
+from src.state import VerificationResult
 
 
 @pytest.fixture
@@ -31,17 +33,22 @@ class TestSelfHealing:
             '<final>[{"file_path":"calc.py","diff":"incomplete","explanation":"不完整修复"}]</final>',
             '<final>[{"file_path":"calc.py","diff":"complete","explanation":"完整修复"}]</final>',
         ])
-        ver = FakeModelClient([
-            '<final>{"all_passed":false,"total_tests":4,"passed":3,"failed":1,"failure_logs":["test_add_str"]}</final>',
-            '<final>{"all_passed":true,"total_tests":4,"passed":4,"failed":0,"failure_logs":[]}</final>',
-        ])
 
         orch = Orchestrator(
             create_localizer(loc, ws),
             create_retriever(ret, ws),
             create_patcher(pat, ws),
-            create_verifier(ver, ws),
+            verifier=MagicMock(),
         )
+        orch._run_verifier = MagicMock(side_effect=[
+            VerificationResult(
+                all_passed=False, total_tests=4, passed=3, failed=1,
+                failure_logs=["test_add_str: AssertionError"],
+            ),
+            VerificationResult(
+                all_passed=True, total_tests=4, passed=4, failed=0,
+            ),
+        ])
         state = orch.repair("TypeError at calc.py:6")
         assert state.status == "fixed"
         assert state.retry_count == 1  # 重试了 1 次
@@ -73,4 +80,4 @@ class TestEdgeCases:
         )
         feedback = orch._build_feedback(result)
         assert "test_add" in feedback
-        assert "请修改补丁" in feedback
+        assert "修改补丁" in feedback

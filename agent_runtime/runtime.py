@@ -193,6 +193,65 @@ class Agent:
         if final_match:
             return ("final", final_match.group(1).strip())
 
+        # 尝试匹配 JSON 函数调用格式：{"action":"tool_name","arguments":{...}}
+        # DeepSeek 有时会输出这种 OpenAI 风格的 JSON
+        if raw.startswith("{"):
+            try:
+                data = json.loads(raw)
+                if isinstance(data, dict) and any(k in data for k in ("action", "name", "tool", "function")):
+                    tool_name = data.get("action") or data.get("name") or data.get("tool") or data.get("function")
+                    tool_args = data.get("arguments") or data.get("args") or data.get("parameters") or {}
+                    if isinstance(tool_name, str) and tool_name:
+                        return ("tool", {"name": tool_name, "args": tool_args})
+            except json.JSONDecodeError:
+                pass
+
+        # 模型直接输出了 JSON 答案（如 SuspectList），视为 final
+        if (raw.startswith("[") or raw.startswith("{")) and not raw.startswith("<tool"):
+            try:
+                json.loads(raw)  # 验证是合法 JSON
+            except json.JSONDecodeError:
+                pass
+            else:
+                return ("final", raw)
+
+        # 模型用 markdown 代码块包裹 JSON（支持嵌套括号）
+        md_start = re.search(r"```(?:json)?\s*", raw)
+        if md_start:
+            content = raw[md_start.end():]
+            md_end = content.rfind("```")
+            if md_end >= 0:
+                inner = content[:md_end].strip()
+                if (inner.startswith("{") or inner.startswith("[")):
+                    return ("final", inner)
+
+        # 尝试匹配 DeepSeek 原生 <function_calls> 格式
+        # <function_calls>
+        # <invoke name="tool_name">
+        # <parameter name="param1">value1</parameter>
+        # </invoke>
+        # </function_calls>
+        fc_match = re.search(
+            r"<function_calls>\s*(.*?)\s*</function_calls>",
+            raw, re.DOTALL,
+        )
+        if fc_match:
+            inner = fc_match.group(1)
+            invokes = re.findall(
+                r"<invoke\s+name=\"(\w+)\">(.*?)</invoke>",
+                inner, re.DOTALL,
+            )
+            if invokes:
+                name = invokes[0][0]  # 取第一个 invoke（每次只调一个工具）
+                params_str = invokes[0][1]
+                args = {}
+                for param_m in re.finditer(
+                    r'<parameter\s+name="(\w+)">(.*?)</parameter>',
+                    params_str, re.DOTALL,
+                ):
+                    args[param_m.group(1)] = param_m.group(2).strip()
+                return ("tool", {"name": name, "args": args})
+
         # 尝试匹配 JSON 格式 <tool>{...}</tool>（支持嵌套 JSON）
         json_match = _extract_json_between_tags(raw, "<tool>", "</tool>")
         if json_match:
@@ -200,7 +259,10 @@ class Agent:
                 payload = json.loads(json_match)
                 return ("tool", payload)
             except json.JSONDecodeError:
-                return ("retry", "工具调用 JSON 格式无效，请检查后重试。")
+                return ("retry",
+                    "工具调用 JSON 格式无效。<tool> 内必须是合法 JSON：\n"
+                    '  {"name":"工具名","args":{"参数":"值"}}\n'
+                    "请检查引号、括号是否匹配后重试。")
 
         # 尝试匹配 XML 属性格式：<tool name="x" ...>body</tool>
         tool_xml_match = re.search(
@@ -215,10 +277,23 @@ class Agent:
             return ("tool", {"name": name, "attrs": attrs, "body": body})
 
         # 都不匹配
-        notice = (
-            "无法解析模型输出，请使用 <tool>JSON</tool> "
-            f"或 <final>text</final> 格式。\n收到: {raw[:200]}"
-        )
+        # 检测模型是否使用了错误的 XML 格式（如 <read_file>...</read_file>）
+        wrong_xml = re.match(r"<\w+>", raw)
+        if wrong_xml:
+            tag = wrong_xml.group(0).strip("<>")
+            notice = (
+                f"格式错误：你使用了 <{tag}>...</{tag}> 格式，这是不支持的。\n"
+                "唯一正确的工具调用格式是：\n"
+                f'<tool>{{"name":"{tag}","args":{{"path":"文件路径"}}}}</tool>\n'
+                "请用 <tool> 包裹 JSON 的格式重新调用。"
+            )
+        else:
+            notice = (
+                "无法解析你的输出。请严格使用以下格式之一：\n"
+                '  调用工具: <tool>{"name":"工具名","args":{...}}</tool>\n'
+                "  返回答案: <final>你的答案</final>\n"
+                f"收到: {raw[:200]}"
+            )
         return ("retry", notice)
 
     # ---- 内部方法 ----

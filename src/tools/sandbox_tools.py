@@ -1,67 +1,152 @@
 """Sandbox Tool：容器内构建 + 测试（仅 Verifier 可调用）。
 
-每个 Tool 调用创建独立容器，执行完即销毁。
+sandbox_verify 在同一容器内完成 create → build → test → destroy，
+Orchestrator 可直连 harness，避免 Verifier LLM 多轮 tool 调用开销。
 """
 
 import json
 from dataclasses import dataclass
 
+from src.state import VerificationResult
+
 
 @dataclass
 class SandboxBuildArgs:
-    repo_path: str  # 必填
+    repo_path: str
 
 
 @dataclass
 class SandboxTestArgs:
-    repo_path: str  # 必填
+    repo_path: str
     test_path: str = ""
 
 
 def sandbox_build(context, args: dict) -> str:
-    """在 Docker 容器内执行 pip install -e /code。
-
-    Args:
-        context: ToolContext（用于获取 root）。
-        args: 包含 'repo_path' 的字典。
-    """
-    repo = args.get("repo_path", "")
-    if not repo:
-        return "Error: 缺少必填参数 repo_path"
-
-    from src.harness.sandbox_manager import SandboxManager
-
-    mgr = SandboxManager()
-    try:
-        sandbox = mgr.create(repo)
-        result = mgr.execute(sandbox, "/entrypoint.sh build pip install -e /code", timeout=300)
-        mgr.destroy(sandbox)
-        return f"exit_code: {result.exit_code}\n{result.stdout}"
-    except Exception as e:
-        return f"Error: Docker 沙箱构建失败: {e}"
+    """在 Docker 容器内执行 pip install -e /code，缓存容器 ID 供后续 test 复用。"""
+    return _ensure_sandbox(context, args.get("repo_path", ""))["build_result"]
 
 
 def sandbox_test(context, args: dict) -> str:
-    """在 Docker 容器内运行 pytest。
-
-    Args:
-        context: ToolContext。
-        args: 包含 'repo_path' 和可选 'test_path' 的字典。
-    """
+    """在同一容器内运行 pytest，完成后销毁容器。"""
     repo = args.get("repo_path", "")
     test_path = args.get("test_path", "")
     if not repo:
         return "Error: 缺少必填参数 repo_path"
 
-    from src.harness.python_runner import PythonTestRunner
-    from src.harness.sandbox_manager import SandboxManager
+    result, _timings = _run_test_in_sandbox(context, repo, test_path)
+    return json.dumps(result.to_dict(), ensure_ascii=False, indent=2)
 
-    mgr = SandboxManager()
-    try:
+
+def sandbox_verify(context, args: dict) -> str:
+    """单容器完成 build + test，返回 VerificationResult JSON。"""
+    repo = args.get("repo_path", "")
+    test_path = args.get("test_path", "")
+    if not repo:
+        return "Error: 缺少必填参数 repo_path"
+
+    result, timings = _run_test_in_sandbox(context, repo, test_path)
+    payload = result.to_dict()
+    payload["sandbox_timings"] = timings
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def run_sandbox_verification(
+    repo_path: str,
+    test_path: str = "",
+    context=None,
+) -> tuple[VerificationResult, dict]:
+    """Orchestrator 直连入口：不经过 Verifier LLM。"""
+    if context is None:
+        from agent_runtime.tool_context import ToolContext
+
+        context = ToolContext(root=repo_path)
+
+    result, timings = _run_test_in_sandbox(context, repo_path, test_path)
+    return result, timings
+
+
+def _run_test_in_sandbox(context, repo: str, test_path: str) -> tuple[VerificationResult, dict]:
+    """创建容器 → 可选 pip install → pytest → 销毁。"""
+    from src.harness.python_runner import PythonTestRunner
+    from src.harness.sandbox_manager import Sandbox, SandboxManager
+
+    sandbox_id = getattr(context, "_sandbox_id", None)
+    mgr = getattr(context, "_sandbox_mgr", None)
+    timings: dict[str, int | str] = {}
+
+    if sandbox_id is None or mgr is None:
+        mgr = SandboxManager()
         sandbox = mgr.create(repo)
-        runner = PythonTestRunner(mgr)
-        result = runner.run(sandbox, test_path)
-        mgr.destroy(sandbox)
-        return json.dumps(result.to_dict(), ensure_ascii=False, indent=2)
-    except Exception as e:
-        return f"Error: Docker 沙箱测试失败: {e}"
+        context._sandbox_id = sandbox.id
+        context._sandbox_mgr = mgr
+        context._sandbox_repo = repo
+        if sandbox.timings:
+            timings.update(sandbox.timings)
+        build_result, pip_ms = _maybe_pip_install(mgr, sandbox, repo)
+        timings["pip_ms"] = pip_ms
+        timings["build_result"] = build_result
+        context._build_result = build_result
+    else:
+        sandbox = Sandbox(id=sandbox_id, profile="python")
+        timings["build_result"] = getattr(context, "_build_result", "reused")
+
+    runner = PythonTestRunner(mgr)
+    import time
+
+    t0 = time.time()
+    result = runner.run(sandbox, test_path)
+    timings["pytest_ms"] = int((time.time() - t0) * 1000)
+
+    mgr.destroy(sandbox)
+    context._sandbox_id = None
+    context._sandbox_mgr = None
+
+    return result, timings
+
+
+def _ensure_sandbox(context, repo_path: str) -> dict:
+    """确保容器已创建并完成构建（幂等）。"""
+    sandbox_id = getattr(context, "_sandbox_id", None)
+
+    if sandbox_id is None:
+        from src.harness.sandbox_manager import SandboxManager
+
+        mgr = SandboxManager()
+        sandbox = mgr.create(repo_path)
+        context._sandbox_id = sandbox.id
+        context._sandbox_mgr = mgr
+        context._sandbox_repo = repo_path
+
+        build_result, _pip_ms = _maybe_pip_install(mgr, sandbox, repo_path)
+        context._build_result = build_result
+        return {"status": "created", "build_result": build_result}
+
+    return {"status": "reused", "build_result": getattr(context, "_build_result", "")}
+
+
+def _maybe_pip_install(mgr, sandbox, repo_path: str) -> tuple[str, int]:
+    """仅在有声明依赖时 pip install -e /code。"""
+    import time
+    from pathlib import Path
+
+    repo = Path(repo_path)
+    needs_install = False
+    for cfg in ("pyproject.toml", "setup.py", "setup.cfg"):
+        if (repo / cfg).exists():
+            txt = (repo / cfg).read_text(encoding="utf-8", errors="ignore")
+            if "install_requires" in txt or "dependencies" in txt:
+                needs_install = True
+            break
+
+    if not needs_install:
+        return "skipped (no project dependencies detected)", 0
+
+    t0 = time.time()
+    result = mgr.execute(
+        sandbox,
+        "/entrypoint.sh build pip install -e /code 2>&1 | tail -5",
+        timeout=120,
+    )
+    pip_ms = int((time.time() - t0) * 1000)
+    build_result = f"pip install: exit_code={result.exit_code}\n{result.stdout}"
+    return build_result, pip_ms

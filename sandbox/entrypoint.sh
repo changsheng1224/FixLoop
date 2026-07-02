@@ -1,6 +1,7 @@
 #!/bin/bash
 set -e
 
+mkdir -p /code
 cd /code
 
 case "$1" in

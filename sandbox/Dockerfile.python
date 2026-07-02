@@ -4,6 +4,9 @@ RUN apt-get update && apt-get install -y git ripgrep && rm -rf /var/lib/apt/list
 
 RUN pip install pytest pytest-cov pytest-json-report ruff
 
+RUN mkdir -p /code
+WORKDIR /code
+
 COPY sandbox/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
