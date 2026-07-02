@@ -39,7 +39,7 @@ Agent (runtime.py) — 对外唯一接口
 
 | 文件 | 行数 | M | 职责 |
 |------|:--:|:--:|------|
-| `cli.py` | 230 | M1/M4 | argparse → _make_config → _make_agent → ask() |
+| `cli.py` | 310 | M1/B | argparse + 装配管线 + REPL + --profile/--health/--dry-run |
 | `__main__.py` | 7 | M1 | `python -m agent_runtime` 入口 |
 | `__init__.py` | 4 | M1 | 公开 API 导出 |
 
@@ -54,42 +54,41 @@ Agent (runtime.py) — 对外唯一接口
 
 | 文件 | 行数 | M | 职责 |
 |------|:--:|:--:|------|
-| `runtime.py` | 310 | M1/M3/M4/B | Agent 类：构造装配、ask()、parse()、记忆钩子、from_session、dry_run→ctor |
-| `agent_loop.py` | 180 | M1/M3/M4/B | AgentLoop：while 循环、停机条件、trace 发射、retry 指数退避、node_timings |
+| `runtime.py` | 310 | M1/M3/M4 | Agent 类：构造装配、ask()、parse()、记忆钩子、from_session |
+| `agent_loop.py` | 180 | M1/M3/M4/B | AgentLoop：while 循环、停机条件、trace、retry 退避、node_timings |
 
 ### 2.4 模型后端
 
 | 文件 | 行数 | M | 职责 |
 |------|:--:|:--:|------|
-| `providers/clients.py` | 270 | M1/M4 | FakeClient + AnthropicCompatible + Ollama + OpenAICompatible |
-| `providers/circuit_breaker.py` | 83 | M4 | CLOSED/OPEN/HALF_OPEN 三态熔断 + latency_stats（平均/p50/p99） |
+| `providers/clients.py` | 270 | M1/M4/B | Fake/Anthropic/Ollama/OpenAI + 请求重放 + latency_stats |
+| `providers/circuit_breaker.py` | 83 | M4 | 三态熔断（CLOSED/OPEN/HALF_OPEN） |
 
 ### 2.5 工具系统
 
 | 文件 | 行数 | M | 职责 |
 |------|:--:|:--:|------|
-| `tools.py` | 410 | M1/M2/B | 6 工具 + write_file append + search context_lines + fallback |
+| `tools.py` | 410 | M1/M2/B | 6 工具 + write_file append + search context_lines |
 | `schema_utils.py` | 51 | M1 | auto_schema() + auto_validate() — 从 type hints 推导 |
 | `tool_context.py` | 24 | M1 | ToolContext — 路径解析 + 逃逸检测 |
-| `tool_executor.py` | 310 | M2/M4 | ToolExecutor(9闸口) + QuotaEnforcer + 快照对比 |
+| `tool_executor.py` | 310 | M2/M4 | 9 闸口 ToolExecutor + QuotaEnforcer + 快照对比 |
 
 ### 2.6 上下文管理
 
 | 文件 | 行数 | M | 职责 |
 |------|:--:|:--:|------|
-| `prompt_prefix.py` | 48 | M1/M2 | System Prompt — Persona + Rules + Tools + Examples + Workspace |
-| `context_manager.py` | 360 | M2/M3/M4/B | TokenBudget + 5-section 组装 + 历史压缩 + LLM 摘要 + 智能截断 + 摘要缓存 |
+| `prompt_prefix.py` | 53 | M1/M2/B | System Prompt + dry-run/approval 动态规则注入 |
+| `context_manager.py` | 360 | M2/M3/M4/B | TokenBudget + 5-section 组装 + 智能截断 + LLM 摘要 + 缓存 |
 
 ### 2.7 记忆系统
 
 | 文件 | 行数 | M | 职责 |
 |------|:--:|:--:|------|
-| `features/memory/__init__.py` | 15 | M3 | 重导出 |
 | `features/memory/core.py` | 55 | M3 | 初始化 + 规范化 + 常量 |
-| `features/memory/working.py` | 42 | M3 | Working Memory — task_summary / recent_files / file_summaries |
-| `features/memory/episodic.py` | 50 | M3 | Episodic Memory — append_note / retrieval_candidates |
-| `features/memory/durable.py` | 115 | M3 | Durable Memory — Markdown 存储 / promote / reject |
-| `features/memory/semantic.py` | 75 | M4 | Semantic Memory — embedding / cosine similarity |
+| `features/memory/working.py` | 42 | M3 | Working Memory — task_summary/recent_files/file_summaries |
+| `features/memory/episodic.py` | 50 | M3/B | Episodic Memory — append_note/retrieval_candidates（含匹配分数） |
+| `features/memory/durable.py` | 115 | M3/B | Durable Memory — Markdown 存储/检索（含 topic 标注） |
+| `features/memory/semantic.py` | 75 | M4/B | Semantic Memory — embedding/cosine + HF 镜像支持 |
 
 ### 2.8 持久化与恢复
 
@@ -97,7 +96,7 @@ Agent (runtime.py) — 对外唯一接口
 |------|:--:|:--:|------|
 | `task_state.py` | 60 | M3/B | TaskState 状态机 + node_timings 耗时分布 |
 | `session_store.py` | 65 | M3 | JSON 原子写 + latest() |
-| `run_store.py` | 95 | M3 | task_state.json + trace.jsonl + report.json |
+| `run_store.py` | 95 | M3 | task_state.json + trace.jsonl + report.json（含 token_usage） |
 | `checkpoint.py` | 120 | M3 | create_checkpoint + evaluate_resume_state(5 状态) |
 
 ### 2.9 安全与辅助
@@ -105,14 +104,8 @@ Agent (runtime.py) — 对外唯一接口
 | 文件 | 行数 | M | 职责 |
 |------|:--:|:--:|------|
 | `security.py` | 135 | M2/M3 | shell_env + redact_text + redact_artifact + looks_sensitive |
-| `callbacks.py` | 50 | M4/B | ProgressCallback + CLIProgressCallback（ANSI彩色 + 耗时统计） |
+| `callbacks.py` | 50 | M4/B | ProgressCallback + CLIProgressCallback（ANSI 彩色 + 耗时） |
 | `replay.py` | 75 | M4 | ReplayRunner — 从 trace 回放工具执行 |
-
-### 2.10 CLI（入口 + Bonus 增强）
-
-| 文件 | 行数 | M | 职责 |
-|------|:--:|:--:|------|
-| `cli.py` | 310 | M1/B | argparse + 装配 Config/Workspace/Client/Agent + REPL + --profile/--health/请求重放/_save_request |
 
 ---
 
