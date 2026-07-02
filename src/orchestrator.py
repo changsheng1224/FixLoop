@@ -19,6 +19,7 @@ from src.state import (
     RepairState,
     RetrievedContext,
     SuspectLocation,
+    VerificationResult,
 )
 
 
@@ -28,10 +29,11 @@ class Orchestrator:
     不调 LLM，只做调度和状态管理。
     """
 
-    def __init__(self, localizer, retriever, patcher):
+    def __init__(self, localizer, retriever, patcher, verifier=None):
         self.localizer = localizer
         self.retriever = retriever
         self.patcher = patcher
+        self.verifier = verifier
 
     def repair(self, issue: str, max_retries: int = 3) -> RepairState:
         """执行修复流水线。
@@ -63,13 +65,28 @@ class Orchestrator:
         state.retrieved_context = self._run_retriever(state)
         timings["retriever_ms"] = int((time.time() - t0) * 1000)
 
-        # Step 3: 修补
+        # Step 3: 修补 → 验证 → 自愈循环
         while state.retry_count < max_retries:
             t0 = time.time()
             state.candidate_patches = self._run_patcher(state)
             timings["patcher_ms"] = int((time.time() - t0) * 1000)
-            state.status = "patched"
-            break  # M6 加上 Verifier 后会有重试循环
+
+            if self.verifier is None:
+                state.status = "patched"
+                break
+
+            # M6: 调用 Verifier
+            t0 = time.time()
+            state.verification_result = self._run_verifier(state)
+            timings["verifier_ms"] = int((time.time() - t0) * 1000)
+
+            if state.verification_result.all_passed:
+                state.status = "fixed"
+                break
+
+            # 失败 → 构建反馈 → 重试
+            state.feedback = self._build_feedback(state.verification_result)
+            state.retry_count += 1
 
         state.node_timings = timings
         return state
@@ -141,9 +158,25 @@ class Orchestrator:
 
     def _run_patcher(self, state: RepairState) -> list[CandidatePatch]:
         """调 Patcher Agent 生成补丁。"""
-        prompt = self._patcher_prompt(state.suspect_locations, state.retrieved_context)
+        prompt = self._patcher_prompt(
+            state.suspect_locations, state.retrieved_context, state.feedback
+        )
         answer = self.patcher.ask(prompt)
         return self._parse_patches(answer)
+
+    def _run_verifier(self, state: RepairState) -> "VerificationResult":
+        """调 Verifier Agent 在容器内验证。"""
+        prompt = self._verifier_prompt(state.candidate_patches, state.repair_plan)
+        answer = self.verifier.ask(prompt)
+        return self._parse_verification(answer)
+
+    def _build_feedback(self, result: "VerificationResult") -> str:
+        """构建失败反馈文本。"""
+        lines = ["补丁验证失败。以下测试仍失败："]
+        for log in result.failure_logs[:5]:
+            lines.append(f"  - {log[:200]}")
+        lines.append("请修改补丁解决这些问题。")
+        return "\n".join(lines)
 
     # ---- Prompt 构建 ----
 
@@ -167,8 +200,12 @@ class Orchestrator:
         self,
         suspects: list[SuspectLocation],
         context: RetrievedContext | None,
+        feedback: str = "",
     ) -> str:
-        parts = ["基于以下信息生成修复补丁："]
+        parts = []
+        if feedback:
+            parts.append(f"[上一轮验证反馈]\n{feedback}\n")
+        parts.append("基于以下信息生成修复补丁：")
         if suspects:
             parts.append("嫌疑位置:")
             for s in suspects:
@@ -206,6 +243,26 @@ class Orchestrator:
         except (json.JSONDecodeError, KeyError):
             pass
         return RetrievedContext()
+
+    def _verifier_prompt(self, patches: list[CandidatePatch], plan: RepairPlan | None) -> str:
+        parts = ["验证以下补丁："]
+        for p in patches:
+            parts.append(f"  - {p.file_path}: {p.explanation or p.diff[:80]}")
+        repo = plan.suspect_files[0] if plan and plan.suspect_files else "."
+        parts.append(f"请用 sandbox_build({repo!r}) 构建，再用 sandbox_test({repo!r}) 测试。")
+        return "\n".join(parts)
+
+    def _parse_verification(self, answer: str) -> "VerificationResult":
+        import json
+
+        try:
+            json_str = _extract_json_block(answer)
+            data = json.loads(json_str)
+            if isinstance(data, dict):
+                return VerificationResult.from_dict(data)
+        except (json.JSONDecodeError, KeyError):
+            pass
+        return VerificationResult()
 
     def _parse_patches(self, answer: str) -> list[CandidatePatch]:
         import json
