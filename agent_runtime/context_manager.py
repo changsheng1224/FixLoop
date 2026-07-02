@@ -8,6 +8,26 @@
 
 import tiktoken
 
+# 按工具类型的截断上限（字符数）
+TOOL_TRUNCATION = {
+    "list_files": 200,
+    "search": 800,
+    "read_file": 2000,
+    "write_file": 300,
+    "patch_file": 300,
+    "run_shell": 500,
+}
+DEFAULT_TRUNCATION = 500
+
+
+def _truncate_tool_content(content: str, tool_name: str = "") -> str:
+    """按工具类型差异化截断。"""
+    limit = TOOL_TRUNCATION.get(tool_name, DEFAULT_TRUNCATION)
+    if len(content) > limit:
+        return content[:limit] + f"\n... (截断，共 {len(content)} 字符)"
+    return content
+
+
 # Section token 预算分配
 BUDGET_PREFIX = 2000
 BUDGET_MEMORY = 800
@@ -214,8 +234,9 @@ class ContextManager:
         for item in recent:
             role = item.get("role", "unknown")
             content = str(item.get("content", ""))
-            if role == "tool" and len(content) > 500:
-                content = content[:500] + f"\n... (截断，共 {len(content)} 字符)"
+            if role == "tool":
+                tool_name = item.get("tool_name", "")
+                content = _truncate_tool_content(content, tool_name)
             if role == "user" and len(content) > 300:
                 content = content[:300] + "..."
             lines.append(f"**{role}**: {content}")
@@ -229,8 +250,11 @@ class ContextManager:
         for item in history:
             role = item.get("role", "unknown")
             content = str(item.get("content", ""))
-            if len(content) > 500:
-                content = content[:500] + "..."
+            if role == "tool":
+                tool_name = item.get("tool_name", "")
+                content = _truncate_tool_content(content, tool_name)
+            elif len(content) > DEFAULT_TRUNCATION:
+                content = content[:DEFAULT_TRUNCATION] + "..."
             lines.append(f"**{role}**: {content}")
             lines.append("")
         return "\n".join(lines)
