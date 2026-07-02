@@ -105,6 +105,7 @@ class ContextManager:
     def __init__(self, agent, total_budget: int = TOTAL_BUDGET):
         self.agent = agent
         self.budget = TokenBudget(total_limit=total_budget)
+        self._summary_cache: dict[str, str] = {}
 
     def build(self, user_message: str) -> tuple[str, dict]:
         """组装完整 prompt，返回 (prompt_text, metadata)。
@@ -301,15 +302,26 @@ class ContextManager:
         old_history = history[:mid]
         recent_history = history[mid:]
 
-        # 尝试 LLM 摘要
-        try:
-            summary = self._generate_summary(old_history)
+        # 检查摘要缓存
+        import hashlib
+        cache_key = hashlib.md5(
+            "".join(str(h.get("content",""))[:100] for h in old_history[-10:]).encode()
+        ).hexdigest()
+        if cache_key in self._summary_cache:
+            summary = self._summary_cache[cache_key]
+        else:
+            summary = ""
+            try:
+                summary = self._generate_summary(old_history)
+            except Exception:
+                pass
             if summary:
-                return [
-                    {"role": "system", "content": f"[Earlier summary]: {summary}"},
-                ] + recent_history
-        except Exception:
-            pass
+                self._summary_cache[cache_key] = summary
+
+        if summary:
+            return [
+                {"role": "system", "content": f"[Earlier summary]: {summary}"},
+            ] + recent_history
 
         # 降级：保留最近 8 条
         return history[-8:]
