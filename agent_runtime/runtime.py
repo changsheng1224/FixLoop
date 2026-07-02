@@ -223,7 +223,11 @@ class Agent:
 
     def _build_prefix(self):
         """构建 System Prompt 前缀（缓存）。"""
-        return build_prompt_prefix(self.workspace, self.tools)
+        return build_prompt_prefix(
+            self.workspace, self.tools,
+            dry_run=self.dry_run,
+            approval=self.config.approval,
+        )
 
     def _new_session_id(self) -> str:
         """生成新的会话 ID。"""
