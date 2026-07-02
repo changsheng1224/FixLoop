@@ -21,11 +21,28 @@ DEFAULT_TRUNCATION = 500
 
 
 def _truncate_tool_content(content: str, tool_name: str = "") -> str:
-    """按工具类型差异化截断。"""
+    """按工具类型差异化截断，重要行优先保留。"""
     limit = TOOL_TRUNCATION.get(tool_name, DEFAULT_TRUNCATION)
-    if len(content) > limit:
-        return content[:limit] + f"\n... (截断，共 {len(content)} 字符)"
-    return content
+    if len(content) <= limit:
+        return content
+
+    lines = content.splitlines()
+    # 收集重要行（Error、文件路径、行号）
+    important = []
+    other = []
+    for line in lines:
+        if "Error" in line or "error" in line or "Fail" in line or "/" in line:
+            important.append(line)
+        else:
+            other.append(line)
+
+    result = important.copy()
+    for line in other:
+        result.append(line)
+        if sum(len(ln) for ln in result) > limit:
+            break
+
+    return "\n".join(result) + f"\n... (截断，共 {len(content)} 字符)"
 
 
 # Section token 预算分配
