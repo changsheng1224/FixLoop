@@ -110,7 +110,9 @@ class AnthropicCompatibleModelClient:
                 )
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
                     data = json.loads(response.read().decode("utf-8"))
-                return self._extract_text(data)
+                result = self._extract_text(data)
+                self._save_request(prompt, result)
+                return result
 
             except urllib.error.HTTPError as e:
                 last_error = e
@@ -132,6 +134,25 @@ class AnthropicCompatibleModelClient:
         raise RuntimeError(
             f"API 请求失败，已重试 3 次。最后错误: {last_error}"
         )
+
+    def _save_request(self, prompt: str, result: str):
+        """记录最后一次请求到 .agent/last_request.json（调试用）。"""
+        try:
+            from pathlib import Path
+            agent_dir = Path.cwd() / ".agent"
+            agent_dir.mkdir(parents=True, exist_ok=True)
+            path = agent_dir / "last_request.json"
+            path.write_text(
+                json.dumps({
+                    "model": self.model,
+                    "prompt_preview": prompt[:500],
+                    "prompt_length": len(prompt),
+                    "result_preview": result[:300],
+                }, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
 
     def _extract_text(self, data: dict) -> str:
         """从 Anthropic Messages API 响应中提取文本。

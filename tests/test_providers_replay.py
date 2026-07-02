@@ -79,6 +79,24 @@ class TestOpenAICompatibleClient:
         client = OpenAICompatibleModelClient(model="x", base_url="http://x", api_key="x")
         assert client.supports_prompt_cache is False
 
+    def test_save_request_writes_file(self, temp_workspace):
+        """_save_request 写入 .agent/last_request.json。"""
+        import os
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(str(temp_workspace))
+            client = AnthropicCompatibleModelClient(
+                model="test", base_url="http://x", api_key="x"
+            )
+            client._save_request("hello prompt", "hello result")
+            path = temp_workspace / ".agent" / "last_request.json"
+            assert path.exists()
+            data = json.loads(path.read_text())
+            assert data["model"] == "test"
+            assert "hello prompt" in data["prompt_preview"]
+        finally:
+            os.chdir(old_cwd)
+
 
 class TestReplayRunner:
     """Replay 回放测试。"""
