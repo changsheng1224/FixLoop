@@ -143,31 +143,56 @@ class Orchestrator:
         }
         return mapping.get(exc_type, "unknown")
 
+    def _run_agent(self, agent, prompt: str, agent_name: str) -> tuple[str, dict]:
+        """执行 Agent 调用并收集内部耗时。"""
+        t0 = time.time()
+        answer = agent.ask(prompt)
+        elapsed_ms = int((time.time() - t0) * 1000)
+        internal = self._read_agent_timings(agent)
+        return answer, {"total_ms": elapsed_ms, "internal": internal}
+
+    def _read_agent_timings(self, agent) -> dict:
+        """从 Agent 的最新 run 目录读取 node_timings。"""
+        import json as _json
+        from pathlib import Path as _Path
+        try:
+            runs_dir = _Path(agent._cwd) / ".agent" / "runs"
+            if not runs_dir.exists():
+                return {}
+            latest = max(runs_dir.iterdir(), key=lambda p: p.stat().st_mtime)
+            data = _json.loads((latest / "task_state.json").read_text())
+            return data.get("node_timings", {})
+        except Exception:
+            return {}
+
     def _run_localizer(self, state: RepairState) -> list[SuspectLocation]:
-        """调 Localizer Agent 定位嫌疑代码。"""
-        plan = state.repair_plan
-        prompt = self._localizer_prompt(plan)
-        answer = self.localizer.ask(prompt)
+        prompt = self._localizer_prompt(state.repair_plan)
+        answer, timing = self._run_agent(self.localizer, prompt, "localizer")
+        state.node_timings["localizer_ms"] = timing["total_ms"]
+        state.node_timings["localizer_internal"] = timing["internal"]
         return self._parse_suspect_list(answer)
 
     def _run_retriever(self, state: RepairState) -> RetrievedContext:
-        """调 Retriever Agent 搜索上下文。"""
         prompt = self._retriever_prompt(state.suspect_locations)
-        answer = self.retriever.ask(prompt)
+        answer, timing = self._run_agent(self.retriever, prompt, "retriever")
+        state.node_timings["retriever_ms"] = timing["total_ms"]
+        state.node_timings["retriever_internal"] = timing["internal"]
         return self._parse_retrieved_context(answer)
 
     def _run_patcher(self, state: RepairState) -> list[CandidatePatch]:
-        """调 Patcher Agent 生成补丁。"""
         prompt = self._patcher_prompt(
             state.suspect_locations, state.retrieved_context, state.feedback
         )
-        answer = self.patcher.ask(prompt)
+        answer, timing = self._run_agent(self.patcher, prompt, "patcher")
+        state.node_timings["patcher_ms"] = timing["total_ms"]
+        state.node_timings["patcher_internal"] = timing["internal"]
         return self._parse_patches(answer)
 
     def _run_verifier(self, state: RepairState) -> "VerificationResult":
-        """调 Verifier Agent 在容器内验证。"""
         prompt = self._verifier_prompt(state.candidate_patches, state.repair_plan)
-        answer = self.verifier.ask(prompt)
+        answer, timing = self._run_agent(self.verifier, prompt, "verifier")
+        state.node_timings["verifier_ms"] = timing["total_ms"]
+        state.node_timings["verifier_internal"] = timing["internal"]
         return self._parse_verification(answer)
 
     def _build_feedback(self, result: "VerificationResult") -> str:

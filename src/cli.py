@@ -79,8 +79,17 @@ def _repair(args) -> int:
             print(f"[Retriever] 找到 {n_tests} 个相关测试", file=sys.stderr)
         n_patches = len(state.candidate_patches)
         print(f"[Patcher] 生成 {n_patches} 个补丁", file=sys.stderr)
-        for k, v in state.node_timings.items():
-            print(f"  {k}: {v}ms", file=sys.stderr)
+        print("--- Timing ---", file=sys.stderr)
+        for agent in ("localizer", "retriever", "patcher"):
+            total = state.node_timings.get(f"{agent}_ms", 0)
+            intern = state.node_timings.get(f"{agent}_internal", {})
+            pb = intern.get("prompt_build_ms", 0)
+            mc = intern.get("model_call_ms", 0)
+            te = intern.get("tool_exec_ms", 0)
+            print(
+                f"  {agent}: {total}ms (prompt={pb}ms, model={mc}ms, tool={te}ms)",
+                file=sys.stderr,
+            )
 
     # 输出结果
     if state.status == "patched" and state.candidate_patches:
