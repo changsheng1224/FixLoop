@@ -49,19 +49,14 @@ TOOL_EXAMPLES = [
 ]
 
 
-def build_prompt_prefix(workspace, tools_registry: dict) -> PromptPrefix:
-    """构建 System Prompt 前缀。
-
-    Args:
-        workspace: WorkspaceContext 实例，提供工作区快照。
-        tools_registry: build_tool_registry() 返回的工具注册表。
-
-    Returns:
-        PromptPrefix 实例，包含 text、hash、fingerprint 和 tool_signature。
-    """
+def build_prompt_prefix(
+    workspace, tools_registry: dict,
+    dry_run: bool = False, approval: str = "ask",
+) -> PromptPrefix:
+    """构建 System Prompt 前缀。"""
     sections = [
         _system_persona(),
-        _rules(),
+        _rules(dry_run=dry_run, approval=approval),
         _tools_section(tools_registry),
         _examples_section(),
         workspace.text(),
@@ -86,17 +81,29 @@ def _system_persona() -> str:
     )
 
 
-def _rules() -> str:
-    return (
-        "## 规则\n\n"
-        "1. 每次只调用一个工具，等待结果后再决定下一步。\n"
-        "2. 通过工具探索代码库——不要猜测文件内容。\n"
-        "3. 调用 read_file 时指定合理的行号范围（默认 1-200）。\n"
-        "4. 工具调用使用 JSON 格式：<tool>{\"name\":\"tool_name\",\"args\":{...}}</tool>\n"
-        "5. 最终答案使用 XML 格式：<final>你的答案</final>\n"
-        "6. 答案必须基于实际读取的文件内容，不要捏造。\n"
-        "7. 如果找不到答案，诚实告知而不是编造。"
-    )
+def _rules(dry_run: bool = False, approval: str = "ask") -> str:
+    rules = [
+        "## 规则",
+        "",
+        "1. 每次只调用一个工具，等待结果后再决定下一步。",
+        "2. 通过工具探索代码库——不要猜测文件内容。",
+        "3. 调用 read_file 时指定合理的行号范围（默认 1-200）。",
+        "4. 工具调用使用 JSON 格式：<tool>{\"name\":\"tool_name\",\"args\":{...}}</tool>",
+        "5. 最终答案使用 XML 格式：<final>你的答案</final>",
+        "6. 答案必须基于实际读取的文件内容，不要捏造。",
+        "7. 如果找不到答案，诚实告知而不是编造。",
+    ]
+    if dry_run:
+        rules.append(
+            "8. 当前是演习模式（Dry-Run），工具返回 [DRY RUN] 表示不会实际执行。"
+            "你仍应基于 DRY RUN 结果输出完整方案。"
+        )
+    if approval == "auto":
+        rules.append(
+            "9. 你拥有自动审批权限，可以直接修改文件和执行命令。"
+            "谨慎使用这些权限，只做必要的修改。"
+        )
+    return "\n".join(rules)
 
 
 def _tools_section(registry: dict) -> str:
