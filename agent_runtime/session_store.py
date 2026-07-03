@@ -59,7 +59,7 @@ class SessionStore:
             return None
         files = sorted(
             self.sessions_dir.glob("*.json"),
-            key=lambda p: p.stat().st_mtime,
+            key=lambda p: (p.stat().st_mtime_ns, p.name),
             reverse=True,
         )
         if not files:

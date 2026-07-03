@@ -218,6 +218,8 @@ python -m src.eval.regression_check \
 
 GitHub Actions 配置在 [`.github/workflows/`](.github/workflows/)（**默认不自动触发**，仅 `workflow_dispatch` 或本地命令）。启用方法见 [`.github/workflows/README.md`](.github/workflows/README.md)。
 
+M8D4 代码终审见 [`docs/CODE_REVIEW.md`](docs/CODE_REVIEW.md)（覆盖率 80%，475 tests）。
+
 分支与 PR 流程见 [`CLAUDE.md`](CLAUDE.md)。架构与设计决策见 [`ARCHITECTURE.md`](ARCHITECTURE.md)、[`docs/design-decisions.md`](docs/design-decisions.md)。Layer 1 模块导读见 [`LAYER1_GUIDE.md`](LAYER1_GUIDE.md)。
 
 ---

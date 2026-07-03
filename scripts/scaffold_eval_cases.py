@@ -1,4 +1,7 @@
-"""一次性脚本：生成 M7 eval case 目录骨架（M7D1 任务 1）。"""
+"""一次性脚本：生成 M7 eval case 目录骨架（M7D1 任务 1）。
+
+说明：输出文件中的 `# TODO(M7D1)` 为脚手架占位符；正式 Case 已手工填充，脚本仅保留供参考。
+"""
 
 from pathlib import Path
 
