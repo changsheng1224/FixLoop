@@ -4,7 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from src.eval.cli_helpers import print_eval_report, run_eval
+from src.eval.cli_helpers import print_ablation_report, print_eval_report, run_ablation, run_eval
 from src.eval.runner import DEFAULT_CASES_DIR
 from src.repair_factory import load_dotenv, make_orchestrator_factory
 
@@ -37,11 +37,36 @@ def main() -> int:
         help="启用 Docker Verifier（默认仅 pytest 验证）",
     )
 
+    p_ablation = sub.add_parser("ablation", help="运行消融实验")
+    p_ablation.add_argument("--all", action="store_true", help="运行全部 Case")
+    p_ablation.add_argument("--case", action="append", dest="cases", help="指定 case_id")
+    p_ablation.add_argument("--cases-dir", default=str(DEFAULT_CASES_DIR), help="Case 目录")
+    p_ablation.add_argument("--output", default="eval_results", help="报告目录或 .json 路径")
+    p_ablation.add_argument("--verbose", action="store_true", help="打印每个变体摘要")
+    p_ablation.add_argument(
+        "--fake",
+        action="store_true",
+        help="Fake Orchestrator（应用 expected_patch，无需 API）",
+    )
+    p_ablation.add_argument(
+        "--with-verify",
+        action="store_true",
+        help="启用 Docker Verifier（默认仅 pytest 验证）",
+    )
+    p_ablation.add_argument(
+        "--repetitions",
+        type=int,
+        default=3,
+        help="每个变体 × Case 重复次数（默认 3）",
+    )
+
     args = parser.parse_args()
     if args.command == "repair":
         return _repair(args)
     if args.command == "eval":
         return _eval(args)
+    if args.command == "ablation":
+        return _ablation(args)
     parser.print_help()
     return 1
 
@@ -82,6 +107,26 @@ def _eval(args) -> int:
         skip_verify=skip_verify,
     )
     print_eval_report(report, verbose=args.verbose, report_path=report_path)
+    return code
+
+
+def _ablation(args) -> int:
+    if not args.all and not args.cases:
+        print("错误: 请指定 --all 或 --case case_XXX", file=sys.stderr)
+        return 2
+
+    skip_verify = not args.with_verify
+    case_ids = None if args.all else args.cases
+    report, report_path, code = run_ablation(
+        case_ids=case_ids,
+        cases_dir=args.cases_dir,
+        output=args.output,
+        verbose=args.verbose,
+        fake=args.fake,
+        skip_verify=skip_verify,
+        repetitions=args.repetitions,
+    )
+    print_ablation_report(report, verbose=args.verbose, report_path=report_path)
     return code
 
 

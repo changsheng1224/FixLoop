@@ -67,3 +67,62 @@ def run_eval(
 
     exit_code = 0 if report.summary.get("fixed") == report.summary.get("total") else 1
     return report, report_path, exit_code
+
+
+def resolve_ablation_report_path(output: str) -> tuple[Path, Path]:
+    """解析 ablation --output：可为目录或 .json 文件路径。"""
+    out = Path(output)
+    if output.endswith(".json"):
+        return out.parent if str(out.parent) not in ("", ".") else Path("eval_results"), out
+    return out, out / "ablation_report.json"
+
+
+def print_ablation_report(report: dict, verbose: bool, report_path: Path) -> None:
+    if verbose:
+        for variant, summary in report.get("summary_by_variant", {}).items():
+            print(
+                f"[{variant}] fix_rate={summary['fix_rate']} "
+                f"fixed={summary['fixed']}/{summary['total']} "
+                f"avg_retries={summary['avg_retries']} "
+                f"avg_ms={summary['avg_duration_ms']}",
+                file=sys.stderr,
+            )
+
+    print(json.dumps(report.get("summary_by_variant", {}), ensure_ascii=False))
+    print(f"Report: {report_path.resolve()}", file=sys.stderr)
+
+
+def run_ablation(
+    *,
+    case_ids: list[str] | None,
+    cases_dir: str | Path = DEFAULT_CASES_DIR,
+    output: str = "eval_results",
+    verbose: bool = False,
+    fake: bool = False,
+    skip_verify: bool = True,
+    repetitions: int = 3,
+    model_client=None,
+) -> tuple[dict, Path, int]:
+    from src.eval.ablation import AblationRunner
+    from src.eval.variants import build_ablation_variants
+
+    output_dir, report_path = resolve_ablation_report_path(output)
+    variants = build_ablation_variants(
+        fake=fake,
+        skip_verify=skip_verify,
+        model_client=model_client,
+        cases_dir=cases_dir,
+    )
+    runner = AblationRunner(
+        variants=variants,
+        cases_dir=cases_dir,
+        output_dir=output_dir,
+        skip_verify=skip_verify,
+    )
+    ids = runner.list_cases() if case_ids is None else case_ids
+    report = runner.run(ids, repetitions=repetitions, report_path=report_path)
+
+    total = sum(s["total"] for s in report["summary_by_variant"].values())
+    fixed = sum(s["fixed"] for s in report["summary_by_variant"].values())
+    exit_code = 0 if fixed == total else 1
+    return report, report_path, exit_code

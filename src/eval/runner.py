@@ -82,6 +82,7 @@ def extract_agent_timings(node_timings: dict | None) -> dict:
         "retriever_ms",
         "patcher_ms",
         "verifier_ms",
+        "baseline_ms",
     )
     return {k: node_timings[k] for k in keys if k in node_timings}
 
