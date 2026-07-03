@@ -10,7 +10,7 @@
 import re
 import sys as _sys
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 
 import yaml
@@ -23,6 +23,8 @@ from src.state import (
     SuspectLocation,
     VerificationResult,
 )
+
+DEFAULT_REPAIR_TIMEOUT_S = 180
 
 
 class Orchestrator:
@@ -46,17 +48,46 @@ class Orchestrator:
                 or self._repo_root
             )
 
-    def repair(self, issue: str, max_retries: int = 3) -> RepairState:
+    def repair(
+        self,
+        issue: str,
+        max_retries: int = 3,
+        repair_timeout_s: int = DEFAULT_REPAIR_TIMEOUT_S,
+    ) -> RepairState:
         """执行修复流水线。
 
         Args:
             issue: Issue 描述（含堆栈和错误信息）。
             max_retries: 最大重试次数。
+            repair_timeout_s: 全流程超时秒数（≤0 表示不限制）。
 
         Returns:
             RepairState 实例。
         """
         state = RepairState(issue_input=issue, max_retries=max_retries)
+        if repair_timeout_s <= 0:
+            return self._repair_impl(state)
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            fut = pool.submit(self._repair_impl, state)
+            try:
+                return fut.result(timeout=repair_timeout_s)
+            except FuturesTimeoutError:
+                state.status = "failed"
+                state.agent_errors["orchestrator"] = (
+                    f"repair timeout ({repair_timeout_s}s)"
+                )
+                state.node_timings["repair_timeout"] = repair_timeout_s
+                print(
+                    f"[{_ts()}] ⚠ 修复超时 ({repair_timeout_s}s)\n",
+                    end="", file=_sys.stderr, flush=True,
+                )
+                return state
+
+    def _repair_impl(self, state: RepairState) -> RepairState:
+        """修复流水线主体（可被 repair() 超时包装）。"""
+        max_retries = state.max_retries
+        issue = state.issue_input
         timings = {}
 
         t_start = time.time()
@@ -282,10 +313,26 @@ class Orchestrator:
         elapsed_ms = int((time.time() - t0) * 1000)
         return raw, elapsed_ms
 
-    def _run_agent(self, agent, prompt: str, agent_name: str) -> tuple[str, dict]:
+    def _run_agent(
+        self,
+        agent,
+        prompt: str,
+        agent_name: str,
+        state: RepairState | None = None,
+    ) -> tuple[str, dict]:
         """执行 Agent 调用（Verifier 用，保留 Agent loop）。"""
         t0 = time.time()
-        answer = agent.ask(prompt)
+        try:
+            answer = agent.ask(prompt)
+        except Exception as e:
+            if state is not None:
+                state.agent_errors[agent_name] = str(e)
+            print(
+                f"  [{agent_name}] ⚠ Agent 失败: {e}\n",
+                end="", file=_sys.stderr, flush=True,
+            )
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return "", {"total_ms": elapsed_ms, "internal": {}}
         elapsed_ms = int((time.time() - t0) * 1000)
         internal = self._read_agent_timings(agent)
         return answer, {"total_ms": elapsed_ms, "internal": internal}
@@ -313,7 +360,9 @@ class Orchestrator:
 
         def run_localizer():
             prompt = self._localizer_prompt(plan, issue)
-            answer, timing = self._run_agent(self.localizer, prompt, "localizer")
+            answer, timing = self._run_agent(
+                self.localizer, prompt, "localizer", state,
+            )
             suspects = self._parse_suspect_list(answer)
             if not suspects:
                 print(
@@ -324,7 +373,9 @@ class Orchestrator:
 
         def run_retriever():
             prompt = self._retriever_prompt([], plan=plan, issue=issue)
-            answer, timing = self._run_agent(self.retriever, prompt, "retriever")
+            answer, timing = self._run_agent(
+                self.retriever, prompt, "retriever", state,
+            )
             return self._parse_retrieved_context(answer), timing
 
         with ThreadPoolExecutor(max_workers=2) as pool:
@@ -383,9 +434,20 @@ class Orchestrator:
         full_prompt = system_prompt + "\n\n" + prompt if system_prompt else prompt
 
         t0 = time.time()
-        raw = self.patcher.model_client.complete(
-            full_prompt, max_new_tokens=min(self.patcher.config.max_new_tokens or 4096, 2048),
-        )
+        try:
+            raw = self.patcher.model_client.complete(
+                full_prompt,
+                max_new_tokens=min(self.patcher.config.max_new_tokens or 4096, 2048),
+            )
+        except Exception as e:
+            state.agent_errors["patcher"] = str(e)
+            elapsed_ms = int((time.time() - t0) * 1000)
+            state.node_timings["patcher_ms"] = elapsed_ms
+            print(
+                f"  [patcher] ⚠ 模型调用失败: {e}\n",
+                end="", file=_sys.stderr, flush=True,
+            )
+            return []
         elapsed_ms = int((time.time() - t0) * 1000)
         state.node_timings["patcher_ms"] = elapsed_ms
         state.node_timings["patcher_internal"] = {"model_call_ms": elapsed_ms}
@@ -434,7 +496,17 @@ class Orchestrator:
 
         test_path = self._pick_test_path(state)
         t0 = time.time()
-        result, internal = run_sandbox_verification(self._repo_root, test_path=test_path)
+        try:
+            result, internal = run_sandbox_verification(self._repo_root, test_path=test_path)
+        except Exception as e:
+            state.agent_errors["verifier"] = str(e)
+            elapsed_ms = int((time.time() - t0) * 1000)
+            state.node_timings["verifier_ms"] = elapsed_ms
+            print(
+                f"  [verifier] ⚠ 沙箱验证失败: {e}\n",
+                end="", file=_sys.stderr, flush=True,
+            )
+            return VerificationResult(all_passed=False, failure_logs=[str(e)])
         elapsed_ms = int((time.time() - t0) * 1000)
         state.node_timings["verifier_ms"] = elapsed_ms
         state.node_timings["verifier_internal"] = internal

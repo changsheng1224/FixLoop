@@ -5,6 +5,7 @@
 
 import json
 
+from src.harness.sandbox_manager import BUILD_TIMEOUT_S, TEST_TIMEOUT_S
 from src.state import VerificationResult
 
 
@@ -33,7 +34,9 @@ class PythonTestRunner:
             f"pytest {pytest_target} --json-report "
             f"--json-report-file=/code/.report.json -v"
         )
-        test = self.manager.execute(sandbox, f"/entrypoint.sh test {test_cmd}", timeout=600)
+        test = self.manager.execute(
+            sandbox, f"/entrypoint.sh test {test_cmd}", timeout=TEST_TIMEOUT_S,
+        )
 
         # 尝试解析 JSON 报告
         try:
