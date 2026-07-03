@@ -12,6 +12,7 @@
 - [架构概览](#架构概览)
 - [为什么与众不同](#为什么与众不同)
 - [快速开始](#快速开始)
+- [Demo 脚本](#demo-脚本)
 - [使用示例](#使用示例)
 - [评测结果](#评测结果)
 - [项目结构](#项目结构)
@@ -98,6 +99,25 @@ python -m src.cli repair --issue "..." --repo demo/calculator --skip-verify
 bash demo/demo_repair.sh calculator
 # SKIP_VERIFY=1 bash demo/demo_repair.sh   # 无 Docker
 ```
+
+## Demo 脚本
+
+M8 录屏 / 面试演示用三段式脚本（仓库根目录、Git Bash / Linux）：
+
+| 脚本 | 内容 | 前置 |
+|------|------|------|
+| `demo/demo_1_repair.sh` | calculator 完整修复：issue → pytest 红 → repair → diff → 绿 | API Key + pytest verify（或 `SKIP_VERIFY=1`） |
+| `demo/demo_2_self_healing.sh` | case_006 自愈：Verifier 失败 → 回滚 → feedback → 重试 | 同上；需 verify 才展示 retry |
+| `demo/demo_3_ablation.sh` | 3 变体 × 3 Case 消融对比表 | 默认 `--fake` 无需 API；`USE_API=1` 走真实 API |
+
+```bash
+bash demo/demo_1_repair.sh
+bash demo/demo_2_self_healing.sh
+bash demo/demo_3_ablation.sh              # ~10s，fake
+USE_API=1 bash demo/demo_3_ablation.sh    # 真实 API，数分钟
+```
+
+另有聚合脚本 `demo/demo_repair.sh`（calculator / importer / logic_bug）。演示视频 / GIF 可放 GitHub Release 外链。
 
 ## 使用示例
 
