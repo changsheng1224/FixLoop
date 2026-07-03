@@ -1,0 +1,1 @@
+TypeError: can only concatenate str (not 'int') to str at calculator.py:6 in add()
