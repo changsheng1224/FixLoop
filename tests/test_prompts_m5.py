@@ -46,6 +46,11 @@ class TestPatcherPrompt:
         assert "patched_lines" in text
         assert "不要调工具" in text or "不要调任何工具" in text
 
+    def test_type_error_fix_guidance(self):
+        text = _read("patcher.txt")
+        assert "int(a)" in text or "int()" in text
+        assert "str(a)" in text or "str()" in text
+
     def test_forbids_tool_calls(self):
         text = _read("patcher.txt")
         assert "只输出上面的 JSON" in text

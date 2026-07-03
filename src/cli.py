@@ -103,6 +103,9 @@ def _repair(args) -> int:
         n_patches = len(state.candidate_patches)
         print(f"[Patcher] 生成 {n_patches} 个补丁", file=sys.stderr)
         print("--- Timing ---", file=sys.stderr)
+        wall = state.node_timings.get("localize_retrieve_ms")
+        if wall:
+            print(f"  localize+retrieve (parallel wall): {wall}ms", file=sys.stderr)
         for agent in ("localizer", "retriever", "patcher", "verifier"):
             total = state.node_timings.get(f"{agent}_ms", 0)
             if total == 0:

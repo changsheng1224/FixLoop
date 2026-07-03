@@ -48,23 +48,21 @@ class Agent:
         # 缓存 prefix（工具不变时复用，支持自定义 prompt）
         self._prefix = self._build_prefix(system_prompt)
 
-        # M4 模块：配额 + 熔断 + 语义记忆
-        import sys as _sys
-
+        # M4 模块：配额 + 熔断 + 语义记忆（懒加载，避免多 Agent 构造时重复阻塞）
         from agent_runtime.providers.circuit_breaker import CircuitBreaker
         from agent_runtime.tool_executor import QuotaEnforcer
 
-        print("[agent_runtime] 加载语义模型 (~90MB)...",
-              file=_sys.stderr, end="", flush=True)
-        from agent_runtime.features.memory import SemanticMemory
-        self.semantic_memory = SemanticMemory()
-        if self.semantic_memory.available:
-            print(" ✅", file=_sys.stderr)
-        else:
-            print(" ⚠ 不可用（语义检索降级为 keywords 模式）", file=_sys.stderr)
-
+        self._semantic_memory = None
         self.circuit_breaker = CircuitBreaker()
         self.quota = QuotaEnforcer()
+
+    @property
+    def semantic_memory(self):
+        """首次访问时加载语义模型（全局单例，线程安全）。"""
+        if self._semantic_memory is None:
+            from agent_runtime.features.memory import SemanticMemory
+            self._semantic_memory = SemanticMemory()
+        return self._semantic_memory
 
     # ---- 公开方法 ----
 
