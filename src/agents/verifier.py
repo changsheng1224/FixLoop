@@ -3,45 +3,20 @@
 持有 sandbox_build + sandbox_test，其他 Agent 无权触发容器执行。
 """
 
-from pathlib import Path
-
 from agent_runtime.config import AgentConfig
 from agent_runtime.runtime import Agent
 from agent_runtime.tool_context import ToolContext
-from src.tools.sandbox_tools import (
-    sandbox_build,
-    sandbox_test,
-    sandbox_verify,
-)
+from src.prompts.loader import load_system_prompt
+from src.tools.sandbox_tools import build_sandbox_tool_registry
 
 
 def create_verifier(model_client, workspace, cwd: str = "") -> Agent:
     root = cwd or workspace.repo_root
     ctx = ToolContext(root=root)
 
-    tools = {
-        "sandbox_build": {
-            "schema": {"repo_path": "str"},
-            "risky": False,
-            "description": "在 Docker 容器内执行 pip install。参数: repo_path",
-            "run": lambda args: sandbox_build(ctx, args),
-        },
-        "sandbox_test": {
-            "schema": {"repo_path": "str", "test_path": "str="},
-            "risky": False,
-            "description": "在 Docker 容器内运行 pytest。参数: repo_path, test_path",
-            "run": lambda args: sandbox_test(ctx, args),
-        },
-        "sandbox_verify": {
-            "schema": {"repo_path": "str", "test_path": "str="},
-            "risky": False,
-            "description": "单容器 build+test。参数: repo_path, test_path",
-            "run": lambda args: sandbox_verify(ctx, args),
-        },
-    }
+    tools = build_sandbox_tool_registry(ctx)
 
-    prompt_file = Path(__file__).parent.parent / "prompts" / "verifier.txt"
-    system_prompt = prompt_file.read_text(encoding="utf-8") if prompt_file.exists() else ""
+    system_prompt = load_system_prompt("verifier")
 
     agent = Agent(
         config=AgentConfig(provider="deepseek", max_steps=4, max_new_tokens=4096, approval="auto"),

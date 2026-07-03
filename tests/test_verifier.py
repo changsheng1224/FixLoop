@@ -3,13 +3,7 @@
 import pytest
 
 from agent_runtime.providers.clients import FakeModelClient
-from agent_runtime.workspace import WorkspaceContext
 from src.agents.verifier import create_verifier
-
-
-@pytest.fixture
-def workspace(temp_workspace):
-    return WorkspaceContext.build(str(temp_workspace))
 
 
 @pytest.fixture

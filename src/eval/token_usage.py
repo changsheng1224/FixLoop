@@ -130,8 +130,3 @@ def reset_client_session_usage(model_client) -> None:
     reset = getattr(model_client, "reset_session_usage", None)
     if callable(reset):
         reset()
-
-
-def resolve_model_client(*agents) -> object | None:
-    clients = resolve_model_clients(*agents)
-    return clients[0] if clients else None

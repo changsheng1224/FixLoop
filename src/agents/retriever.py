@@ -1,11 +1,10 @@
 """Retriever Agent：代码搜索专家。"""
 
-from pathlib import Path
-
 from agent_runtime.config import AgentConfig
 from agent_runtime.runtime import Agent
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.tools import build_tool_registry
+from src.prompts.loader import load_system_prompt
 from src.tools.registry import build_repair_tools
 
 
@@ -25,8 +24,7 @@ def create_retriever(model_client, workspace, cwd: str = "", light_client=None) 
     for banned in ("write_file", "patch_file", "run_shell", "ast_parse", "stack_parse"):
         tools.pop(banned, None)
 
-    prompt_file = Path(__file__).parent.parent / "prompts" / "retriever.txt"
-    system_prompt = prompt_file.read_text(encoding="utf-8") if prompt_file.exists() else ""
+    system_prompt = load_system_prompt("retriever")
 
     agent = Agent(
         config=AgentConfig(provider="deepseek", max_steps=4, max_new_tokens=2048, approval="auto"),

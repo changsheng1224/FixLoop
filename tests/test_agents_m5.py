@@ -3,16 +3,10 @@
 import pytest
 
 from agent_runtime.providers.clients import FakeModelClient
-from agent_runtime.workspace import WorkspaceContext
 from src.agents.localizer import create_localizer
 from src.agents.patcher import create_patcher
 from src.agents.retriever import create_retriever
 from src.middleware import ToolGateway
-
-
-@pytest.fixture
-def workspace(temp_workspace):
-    return WorkspaceContext.build(str(temp_workspace))
 
 
 @pytest.fixture

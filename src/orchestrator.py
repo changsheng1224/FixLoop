@@ -3,7 +3,7 @@
 工作流：
 1. _parse_issue() → 正则提取语言/异常类型/文件名 → RepairPlan
 2. _match_skill() → 匹配 YAML Skill
-3. _run_localizer() + _run_retriever() → 并行执行
+3. _run_localize_and_retrieve() → Localizer + Retriever 并行
 4. _run_patcher() → 串行执行
 """
 
@@ -369,30 +369,23 @@ class Orchestrator:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
 
-    def _call_model(self, agent, prompt: str) -> tuple[str, int]:
-        """直接调用模型（绕过 Agent loop），返回 (answer, elapsed_ms)。"""
-        # 拼接 system prompt
-        prompt_file = None
-        if agent is self.localizer:
-            prompt_file = Path(__file__).parent / "prompts" / "localizer.txt"
-        elif agent is self.retriever:
-            prompt_file = Path(__file__).parent / "prompts" / "retriever.txt"
-        elif agent is self.patcher:
-            prompt_file = Path(__file__).parent / "prompts" / "patcher.txt"
+    def _complete_with_system_prompt(
+        self,
+        agent,
+        prompt_name: str,
+        user_prompt: str,
+    ) -> tuple[str, int]:
+        """直接调 model_client.complete（绕过 Agent loop）。"""
+        from src.prompts.loader import load_system_prompt
 
-        if prompt_file and prompt_file.exists():
-            system_prompt = prompt_file.read_text(encoding="utf-8")
-        else:
-            system_prompt = ""
-        full_prompt = system_prompt + "\n\n" + prompt if system_prompt else prompt
-
+        system_prompt = load_system_prompt(prompt_name)
+        full_prompt = f"{system_prompt}\n\n{user_prompt}" if system_prompt else user_prompt
         t0 = time.time()
         raw = agent.model_client.complete(
             full_prompt,
             max_new_tokens=agent.config.max_new_tokens or 4096,
         )
-        elapsed_ms = int((time.time() - t0) * 1000)
-        return raw, elapsed_ms
+        return raw, int((time.time() - t0) * 1000)
 
     def _run_agent(
         self,
@@ -507,31 +500,6 @@ class Orchestrator:
 
         return suspects, context, loc_timing, ret_timing
 
-    def _run_localizer(self, state: RepairState) -> list[SuspectLocation]:
-        prompt = self._localizer_prompt(state.repair_plan, state.issue_input)
-        answer, timing = self._run_agent(self.localizer, prompt, "localizer")
-        state.node_timings["localizer_ms"] = timing["total_ms"]
-        state.node_timings["localizer_internal"] = timing["internal"]
-        suspects = self._parse_suspect_list(answer)
-        if not suspects:
-            print(
-                f"  [localizer] ⚠ 0 suspects, raw[:500]={answer.strip()[:500]!r}",
-                file=_sys.stderr,
-                flush=True,
-            )
-        return suspects
-
-    def _run_retriever(self, state: RepairState) -> RetrievedContext:
-        prompt = self._retriever_prompt(
-            state.suspect_locations,
-            plan=state.repair_plan,
-            issue=state.issue_input,
-        )
-        answer, timing = self._run_agent(self.retriever, prompt, "retriever")
-        state.node_timings["retriever_ms"] = timing["total_ms"]
-        state.node_timings["retriever_internal"] = timing["internal"]
-        return self._parse_retrieved_context(answer)
-
     def _run_patcher(self, state: RepairState) -> list[CandidatePatch]:
         """Patcher：直接调模型生成 JSON，Orchestrator 自己应用补丁。
 
@@ -546,17 +514,9 @@ class Orchestrator:
             issue=state.issue_input,
         )
 
-        # 构建完整 prompt：system prompt（patcher.txt）+ user prompt
-        prompt_file = Path(__file__).parent / "prompts" / "patcher.txt"
-        system_prompt = prompt_file.read_text(encoding="utf-8") if prompt_file.exists() else ""
-        full_prompt = system_prompt + "\n\n" + prompt if system_prompt else prompt
-
         t0 = time.time()
         try:
-            raw = self.patcher.model_client.complete(
-                full_prompt,
-                max_new_tokens=self.patcher.config.max_new_tokens or 4096,
-            )
+            raw, _ = self._complete_with_system_prompt(self.patcher, "patcher", prompt)
         except Exception as e:
             state.agent_errors["patcher"] = str(e)
             elapsed_ms = int((time.time() - t0) * 1000)

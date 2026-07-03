@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from agent_runtime.providers.clients import FakeModelClient
+from agent_runtime.workspace import WorkspaceContext
 
 
 @pytest.fixture
@@ -57,6 +58,18 @@ def temp_workspace():
 def fake_client():
     """创建预设输出序列的 FakeClient。"""
     return FakeModelClient
+
+
+@pytest.fixture
+def workspace(temp_workspace):
+    """WorkspaceContext 包装 temp_workspace。"""
+    return WorkspaceContext.build(str(temp_workspace))
+
+
+@pytest.fixture
+def ws(workspace):
+    """与 workspace 相同，兼容旧测试命名。"""
+    return workspace
 
 
 @pytest.fixture

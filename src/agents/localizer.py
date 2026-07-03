@@ -1,11 +1,10 @@
 """Localizer Agent：代码定位专家。"""
 
-from pathlib import Path
-
 from agent_runtime.config import AgentConfig
 from agent_runtime.runtime import Agent
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.tools import build_tool_registry
+from src.prompts.loader import load_system_prompt
 from src.tools.registry import build_repair_tools
 
 
@@ -24,8 +23,7 @@ def create_localizer(model_client, workspace, cwd: str = "", light_client=None) 
     for banned in ("write_file", "patch_file", "run_shell"):
         tools.pop(banned, None)
 
-    prompt_file = Path(__file__).parent.parent / "prompts" / "localizer.txt"
-    system_prompt = prompt_file.read_text(encoding="utf-8") if prompt_file.exists() else ""
+    system_prompt = load_system_prompt("localizer")
 
     agent = Agent(
         config=AgentConfig(provider="deepseek", max_steps=6, max_new_tokens=4096, approval="auto"),

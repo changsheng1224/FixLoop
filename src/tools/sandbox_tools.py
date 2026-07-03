@@ -50,6 +50,30 @@ def sandbox_verify(context, args: dict) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
+def build_sandbox_tool_registry(context) -> dict:
+    """Docker sandbox 三件套工具注册表（Verifier / Baseline 共用）。"""
+    return {
+        "sandbox_build": {
+            "schema": {"repo_path": "str"},
+            "risky": False,
+            "description": "在 Docker 容器内执行 pip install。参数: repo_path",
+            "run": lambda args: sandbox_build(context, args),
+        },
+        "sandbox_test": {
+            "schema": {"repo_path": "str", "test_path": "str="},
+            "risky": False,
+            "description": "在 Docker 容器内运行 pytest。参数: repo_path, test_path",
+            "run": lambda args: sandbox_test(context, args),
+        },
+        "sandbox_verify": {
+            "schema": {"repo_path": "str", "test_path": "str="},
+            "risky": False,
+            "description": "单容器 build+test。参数: repo_path, test_path",
+            "run": lambda args: sandbox_verify(context, args),
+        },
+    }
+
+
 def run_sandbox_verification(
     repo_path: str,
     test_path: str = "",

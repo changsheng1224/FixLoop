@@ -1,11 +1,10 @@
 """Patcher Agent：补丁生成者。"""
 
-from pathlib import Path
-
 from agent_runtime.config import AgentConfig
 from agent_runtime.runtime import Agent
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.tools import build_tool_registry
+from src.prompts.loader import load_system_prompt
 
 
 def create_patcher(model_client, workspace, cwd: str = "") -> Agent:
@@ -15,8 +14,7 @@ def create_patcher(model_client, workspace, cwd: str = "") -> Agent:
     tools = build_tool_registry(ctx)
     tools.pop("run_shell", None)
 
-    prompt_file = Path(__file__).parent.parent / "prompts" / "patcher.txt"
-    system_prompt = prompt_file.read_text(encoding="utf-8") if prompt_file.exists() else ""
+    system_prompt = load_system_prompt("patcher")
 
     agent = Agent(
         config=AgentConfig(provider="deepseek", max_steps=6, max_new_tokens=4096, approval="auto"),

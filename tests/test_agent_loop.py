@@ -8,17 +8,11 @@ import pytest
 from agent_runtime.config import AgentConfig
 from agent_runtime.providers.clients import FakeModelClient
 from agent_runtime.runtime import Agent
-from agent_runtime.workspace import WorkspaceContext
 
 
 @pytest.fixture
 def config():
     return AgentConfig(provider="fake", max_steps=3, max_new_tokens=256)
-
-
-@pytest.fixture
-def workspace(temp_workspace):
-    return WorkspaceContext.build(str(temp_workspace))
 
 
 def _make_agent(outputs: list[str], config, workspace):

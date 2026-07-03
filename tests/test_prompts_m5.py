@@ -9,6 +9,13 @@ def _read(name):
     return (PROMPT_DIR / name).read_text(encoding="utf-8")
 
 
+class TestPromptLoader:
+    def test_load_system_prompt_matches_file(self):
+        from src.prompts.loader import load_system_prompt
+
+        assert load_system_prompt("localizer") == _read("localizer.txt")
+
+
 class TestLocalizerPrompt:
     def test_contains_role(self):
         text = _read("localizer.txt")
