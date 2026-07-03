@@ -56,7 +56,7 @@ def run_eval(
     output: str = "eval_results",
     verbose: bool = False,
     fake: bool = False,
-    skip_verify: bool = True,
+    skip_verify: bool = False,
     model_client=None,
     markdown: str | None = None,
 ) -> tuple[EvalReport, Path, int]:
@@ -118,7 +118,7 @@ def run_ablation(
     output: str = "eval_results",
     verbose: bool = False,
     fake: bool = False,
-    skip_verify: bool = True,
+    skip_verify: bool = False,
     repetitions: int = 3,
     variant_names: list[str] | None = None,
     progress: bool = True,

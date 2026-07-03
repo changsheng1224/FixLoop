@@ -21,7 +21,8 @@ def ws(temp_workspace):
 class TestSelfHealing:
     """自愈循环：Patcher 被调用 2 次。"""
 
-    def test_retry_on_first_failure(self, ws):
+    def test_retry_on_first_failure(self, ws, temp_workspace):
+        (temp_workspace / "calc.py").write_text("return a + b\n", encoding="utf-8")
         loc = FakeModelClient(
             [
                 '<final>[{"file_path":"calc.py","start_line":6,"end_line":6,"function_name":"add","reason":"堆栈指向","confidence":0.95}]</final>',
@@ -32,20 +33,21 @@ class TestSelfHealing:
                 '<final>{"related_tests":["test_calc.py::test_add"]}</final>',
             ]
         )
-        # Patcher: 第 1 次不完整补丁, 第 2 次完整
+        # Patcher: 第 1 次错误补丁, 第 2 次正确补丁（Orchestrator 直接调 complete）
         pat = FakeModelClient(
             [
-                '<final>[{"file_path":"calc.py","diff":"incomplete","explanation":"不完整修复"}]</final>',
-                '<final>[{"file_path":"calc.py","diff":"complete","explanation":"完整修复"}]</final>',
+                '[{"file_path":"calc.py","original_lines":"return a + b","patched_lines":"return str(a) + str(b)","explanation":"不完整修复"}]',
+                '[{"file_path":"calc.py","original_lines":"return a + b","patched_lines":"return int(a) + int(b)","explanation":"完整修复"}]',
             ]
         )
 
         orch = Orchestrator(
-            create_localizer(loc, ws),
-            create_retriever(ret, ws),
-            create_patcher(pat, ws),
+            create_localizer(loc, ws, cwd=str(temp_workspace)),
+            create_retriever(ret, ws, cwd=str(temp_workspace)),
+            create_patcher(pat, ws, cwd=str(temp_workspace)),
             verifier=MagicMock(),
         )
+        orch._repo_root = str(temp_workspace)
         orch._run_verifier = MagicMock(
             side_effect=[
                 VerificationResult(
@@ -69,18 +71,30 @@ class TestSelfHealing:
 
 
 class TestEdgeCases:
-    def test_no_verifier_fallback(self, ws):
-        """无 Verifier 时 status=patched。"""
-        loc = FakeModelClient(["<final>[{}]</final>"])
-        ret = FakeModelClient(["<final>{}</final>"])
-        pat = FakeModelClient(["<final>[{}]</final>"])
+    def test_no_verifier_fallback(self, ws, temp_workspace):
+        """无 Verifier 且补丁成功应用时 status=patched。"""
+        (temp_workspace / "calc.py").write_text("x = 1\n", encoding="utf-8")
+        loc = FakeModelClient(
+            [
+                '<final>[{"file_path":"calc.py","start_line":1,"end_line":1,'
+                '"reason":"堆栈","confidence":0.9}]</final>',
+            ]
+        )
+        ret = FakeModelClient(['<final>{"related_tests":[]}</final>'])
+        pat = FakeModelClient(
+            [
+                '[{"file_path":"calc.py","original_lines":"x = 1",'
+                '"patched_lines":"x = 2","explanation":"fix"}]',
+            ]
+        )
 
         orch = Orchestrator(
-            create_localizer(loc, ws),
-            create_retriever(ret, ws),
-            create_patcher(pat, ws),
+            create_localizer(loc, ws, cwd=str(temp_workspace)),
+            create_retriever(ret, ws, cwd=str(temp_workspace)),
+            create_patcher(pat, ws, cwd=str(temp_workspace)),
             verifier=None,
         )
+        orch._repo_root = str(temp_workspace)
         state = orch.repair("test")
         assert state.status == "patched"
 

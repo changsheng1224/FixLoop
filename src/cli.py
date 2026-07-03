@@ -32,9 +32,14 @@ def main() -> int:
         help="Fake Orchestrator（应用 expected_patch，无需 API）",
     )
     p_eval.add_argument(
+        "--skip-verify",
+        action="store_true",
+        help="禁用 Verifier 重试（默认启用 pytest/Docker 验证）",
+    )
+    p_eval.add_argument(
         "--with-verify",
         action="store_true",
-        help="启用 Docker Verifier（默认仅 pytest 验证）",
+        help="（已默认启用）显式开启 Verifier 重试",
     )
     p_eval.add_argument(
         "--markdown",
@@ -56,9 +61,14 @@ def main() -> int:
         help="Fake Orchestrator（应用 expected_patch，无需 API）",
     )
     p_ablation.add_argument(
+        "--skip-verify",
+        action="store_true",
+        help="禁用 Verifier 重试（默认启用 pytest/Docker 验证）",
+    )
+    p_ablation.add_argument(
         "--with-verify",
         action="store_true",
-        help="启用 Docker Verifier（默认仅 pytest 验证）",
+        help="（已默认启用）显式开启 Verifier 重试",
     )
     p_ablation.add_argument(
         "--repetitions",
@@ -122,7 +132,7 @@ def _eval(args) -> int:
         print("错误: 请指定 --all 或 --case case_XXX", file=sys.stderr)
         return 2
 
-    skip_verify = not args.with_verify
+    skip_verify = args.skip_verify
     case_ids = None if args.all else args.cases
     report, report_path, code = run_eval(
         case_ids=case_ids,
@@ -143,7 +153,7 @@ def _ablation(args) -> int:
         return 2
 
     load_dotenv()
-    skip_verify = not args.with_verify
+    skip_verify = args.skip_verify
     case_ids = None if args.all else args.cases
     report, report_path, code = run_ablation(
         case_ids=case_ids,

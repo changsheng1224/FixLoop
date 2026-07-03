@@ -74,7 +74,8 @@ def make_orchestrator_factory(
             localizer.dry_run = True
             retriever.dry_run = True
             patcher.dry_run = True
-        orch = Orchestrator(localizer, retriever, patcher)
+        use_pytest = not skip_verify
+        orch = Orchestrator(localizer, retriever, patcher, use_pytest_verify=use_pytest)
         if not skip_verify:
             verifier = try_create_verifier(client, ws, repo)
             if verifier:

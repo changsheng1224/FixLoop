@@ -59,7 +59,7 @@ def make_no_retriever_factory(
         if dry_run:
             localizer.dry_run = True
             patcher.dry_run = True
-        orch = NoRetrieverOrchestrator(localizer, None, patcher)
+        orch = NoRetrieverOrchestrator(localizer, None, patcher, use_pytest_verify=not skip_verify)
         if not skip_verify:
             verifier = try_create_verifier(client, ws, repo)
             if verifier:
@@ -72,7 +72,7 @@ def make_no_retriever_factory(
 def build_ablation_variants(
     *,
     fake: bool = False,
-    skip_verify: bool = True,
+    skip_verify: bool = False,
     model_client=None,
     cases_dir: str | Path | None = None,
     variant_names: list[str] | None = None,

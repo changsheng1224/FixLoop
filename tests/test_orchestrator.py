@@ -68,7 +68,9 @@ class TestOrchestrator:
                 patched_lines="x = 2",
             ),
         ]
-        assert orch._apply_patches_on_disk(patches) == 1
+        applied = orch._apply_patches_on_disk(patches)
+        assert len(applied) == 1
+        assert applied[0].file_path == "app.py"
         assert (temp_workspace / "app.py").read_text(encoding="utf-8") == "x = 2\n"
 
     def test_patcher_prompt_discovers_test_app(self, temp_workspace):
@@ -88,6 +90,7 @@ class TestOrchestrator:
         assert "utils.helper" in prompt
 
     def test_full_pipeline_fake(self, temp_workspace):
+        (temp_workspace / "calc.py").write_text("old\n", encoding="utf-8")
         ws = WorkspaceContext.build(str(temp_workspace))
         # 3 个 Agent 都用 FakeClient 预设输出
         loc_client = FakeModelClient(
@@ -195,3 +198,81 @@ class TestApplyPatch:
         )
         result = apply_patch_to_text(text, patch)
         assert result == "    return int(a) + int(b)\n"
+
+    def test_apply_import_module_fallback(self):
+        text = "from utils.helper import greet  # BUG: 模块名为 helpers\n"
+        patch = CandidatePatch(
+            file_path="app.py",
+            diff="-from utils.helpers import greet\n+from utils.helpers import greet",
+        )
+        result = apply_patch_to_text(text, patch)
+        assert result is not None
+        assert "from utils.helpers import greet" in result
+
+    def test_sync_import_symbol_usages(self):
+        from src.orchestrator import _sync_import_symbol_usages
+
+        old = (
+            "from utils.helpers import hello\n\n"
+            "def message():\n"
+            "    return hello()\n"
+        )
+        new = (
+            "from utils.helpers import greet\n\n"
+            "def message():\n"
+            "    return hello()\n"
+        )
+        patch = CandidatePatch(
+            file_path="service.py",
+            diff="-from utils.helpers import hello\n+from utils.helpers import greet",
+        )
+        result = _sync_import_symbol_usages(old, new, patch)
+        assert "return greet()" in result
+
+    def test_parse_issue_composite_and_source_files(self):
+        orch = Orchestrator(None, None, None)
+        issue = (
+            "ModuleNotFoundError + TypeError (composite)\n"
+            'File "gateway.py", line 3\n'
+            "Candidate source files: gateway.py, backend/tasks.py"
+        )
+        plan = orch._parse_issue(issue)
+        assert plan.issue_type == "composite"
+        assert "gateway.py" in plan.suspect_files
+        assert "backend/tasks.py" in plan.suspect_files
+
+    def test_snapshot_restore(self, temp_workspace):
+        orch = Orchestrator(None, None, None)
+        orch._repo_root = str(temp_workspace)
+        (temp_workspace / "a.py").write_text("old\n", encoding="utf-8")
+        snap = orch._snapshot_repo()
+        (temp_workspace / "a.py").write_text("new\n", encoding="utf-8")
+        orch._restore_repo_snapshot(snap)
+        assert (temp_workspace / "a.py").read_text(encoding="utf-8") == "old\n"
+
+    def test_pytest_verify_retries_on_failure(self, temp_workspace):
+        (temp_workspace / "foo.py").write_text("x = 1\n", encoding="utf-8")
+        (temp_workspace / "test_foo.py").write_text(
+            "from foo import x\n\n\ndef test_x():\n    assert x == 2\n",
+            encoding="utf-8",
+        )
+        ws = WorkspaceContext.build(str(temp_workspace))
+        repo = str(temp_workspace.resolve())
+
+        class SeqPatchClient(FakeModelClient):
+            def __init__(self):
+                self._step = 0
+
+            def complete(self, prompt, max_new_tokens=4096):
+                self._step += 1
+                if self._step == 1:
+                    return '[{"file_path":"foo.py","original_lines":"x = 1","patched_lines":"x = 3","explanation":"wrong"}]'
+                return '[{"file_path":"foo.py","original_lines":"x = 1","patched_lines":"x = 2","explanation":"fix"}]'
+
+        pat = create_patcher(SeqPatchClient(), ws, cwd=repo)
+        orch = Orchestrator(None, None, pat, use_pytest_verify=True)
+        orch._repo_root = repo
+        state = orch.repair('File "foo.py", line 1\nassert x == 2')
+        assert state.status == "fixed"
+        assert state.retry_count == 1
+        assert (temp_workspace / "foo.py").read_text(encoding="utf-8") == "x = 2\n"
