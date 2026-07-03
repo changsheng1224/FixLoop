@@ -1,0 +1,7 @@
+TypeError: unsupported operand type(s) for +: 'NoneType' and 'str'
+
+  File "concat.py", line 6, in safe_concat
+    return a + b
+TypeError: unsupported operand type(s) for +: 'NoneType' and 'str'
+
+Failed: test_concat.py::test_safe_concat_none_left

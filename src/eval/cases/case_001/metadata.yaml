@@ -1,0 +1,14 @@
+case_id: case_001
+language: python
+issue_type: type_error
+difficulty: easy
+status: verified
+estimated_duration_s: 25
+description: "二元运算参数类型未转换（str + int）"
+tags:
+  - type_error
+  - coercion
+source_files:
+  - pricing.py
+test_files:
+  - test_pricing.py

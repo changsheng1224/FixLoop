@@ -1,0 +1,8 @@
+KeyError: 'tool' — missing [tool.eval] in pyproject.toml
+
+  File "config_loader.py", line 12, in load_multiplier
+    return int(data["tool"]["eval"]["multiplier"])
+KeyError: 'tool'
+
+Failed: test_config.py::test_multiplier
+Fix: add [tool.eval] multiplier = 2 to pyproject.toml

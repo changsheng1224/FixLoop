@@ -1,0 +1,6 @@
+AssertionError: inclusive_range off-by-one
+
+FAILED test_ranges.py::test_inclusive_range_basic
+assert [1, 2] == [1, 2, 3]
+
+File: ranges.py — closed interval should include end.

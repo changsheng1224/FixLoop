@@ -1,0 +1,10 @@
+--- a/users.py
++++ b/users.py
+@@ -15,4 +15,6 @@
+ 
+ 
+ def display_name(user: User) -> str:
+-    return user.profile.display_name  # BUG: profile 可能为 None
++    if user.profile is None:
++        return user.name
++    return user.profile.display_name

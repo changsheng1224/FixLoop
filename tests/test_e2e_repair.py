@@ -99,3 +99,80 @@ class TestEdgeCases:
         feedback = orch._build_feedback(result)
         assert "test_add" in feedback
         assert "修改补丁" in feedback
+
+    def test_verifier_build_failure_retries(self, ws, temp_workspace):
+        """构建/验证失败时不应标记 fixed，应进入重试。"""
+        (temp_workspace / "calc.py").write_text("x = 1\n")
+        orch = self._orch_with_patches(ws, temp_workspace)
+        orch._run_verifier = MagicMock(
+            return_value=VerificationResult(
+                all_passed=False,
+                total_tests=0,
+                passed=0,
+                failed=0,
+                build_log="pip install: exit_code=1\nERROR: setup failed",
+                failure_logs=["build failed"],
+            )
+        )
+        state = orch.repair("TypeError at calc.py:1", max_retries=1)
+        assert state.status != "fixed"
+        assert state.verification_result is not None
+        assert not state.verification_result.all_passed
+
+    def test_verifier_all_passed_marks_fixed(self, ws, temp_workspace):
+        """全部测试通过时 status=fixed。"""
+        (temp_workspace / "calc.py").write_text("x = 1\n")
+        orch = self._orch_with_patches(ws, temp_workspace)
+        orch._run_verifier = MagicMock(
+            return_value=VerificationResult(
+                all_passed=True,
+                total_tests=4,
+                passed=4,
+                failed=0,
+            )
+        )
+        state = orch.repair("TypeError at calc.py:1")
+        assert state.status == "fixed"
+
+    def test_verifier_exception_recorded(self, ws, temp_workspace, monkeypatch):
+        """Verifier 异常写入 agent_errors，不崩溃。"""
+        (temp_workspace / "calc.py").write_text("x = 1\n")
+        orch = self._orch_with_patches(ws, temp_workspace)
+
+        def _boom(*_a, **_kw):
+            raise RuntimeError("sandbox timeout")
+
+        monkeypatch.setattr(
+            "src.tools.sandbox_tools.run_sandbox_verification",
+            _boom,
+        )
+        state = orch.repair("TypeError at calc.py:1", max_retries=1)
+        assert "verifier" in state.agent_errors
+        assert "sandbox timeout" in state.agent_errors["verifier"]
+        assert state.status != "fixed"
+        assert state.verification_result is not None
+        assert not state.verification_result.all_passed
+
+    @staticmethod
+    def _orch_with_patches(ws, temp_workspace):
+        loc = FakeModelClient(
+            [
+                '<final>[{"file_path":"calc.py","start_line":1,"end_line":1,'
+                '"reason":"堆栈","confidence":0.9}]</final>',
+            ]
+        )
+        ret = FakeModelClient(['<final>{"related_tests":[]}</final>'])
+        pat = FakeModelClient(
+            [
+                '<final>[{"file_path":"calc.py","original_lines":"x = 1",'
+                '"patched_lines":"x = 2","explanation":"fix"}]</final>',
+            ]
+        )
+        orch = Orchestrator(
+            create_localizer(loc, ws),
+            create_retriever(ret, ws),
+            create_patcher(pat, ws),
+            verifier=MagicMock(),
+        )
+        orch._repo_root = str(temp_workspace)
+        return orch

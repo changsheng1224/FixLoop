@@ -1,0 +1,14 @@
+case_id: case_006
+language: python
+issue_type: logic_error
+difficulty: medium
+status: verified
+estimated_duration_s: 35
+description: "off-by-one 边界（循环或切片）"
+tags:
+  - logic_error
+  - off_by_one
+source_files:
+  - ranges.py
+test_files:
+  - test_ranges.py

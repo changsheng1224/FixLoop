@@ -1,0 +1,12 @@
+--- a/service.py
++++ b/service.py
+@@ -1,7 +1,7 @@
+ """服务层（含错误的符号 import）。"""
+ 
+-from utils.helpers import hello  # BUG: 函数名为 greet
++from utils.helpers import greet
+ 
+ 
+ def message() -> str:
+-    return hello()
++    return greet()

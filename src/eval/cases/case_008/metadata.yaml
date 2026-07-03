@@ -1,0 +1,14 @@
+case_id: case_008
+language: python
+issue_type: logic_error
+difficulty: hard
+status: verified
+estimated_duration_s: 60
+description: "多跳调用链（>=3 hop）中的逻辑缺陷"
+tags:
+  - logic_error
+  - multi_hop
+source_files:
+  - transform.py
+test_files:
+  - test_report.py

@@ -1,0 +1,69 @@
+"""eval 子命令共享逻辑（src.cli 与 src.eval.runner 复用）。"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+from src.eval.fake_runner import fake_orchestrator_factory
+from src.eval.models import EvalReport
+from src.eval.runner import DEFAULT_CASES_DIR, EvalRunner
+from src.repair_factory import make_orchestrator_factory
+
+
+def resolve_report_path(output: str) -> tuple[Path, Path]:
+    """解析 --output：可为目录或 .json 文件路径。"""
+    out = Path(output)
+    if output.endswith(".json"):
+        return out.parent if str(out.parent) not in ("", ".") else Path("eval_results"), out
+    return out, out / "eval_report.json"
+
+
+def print_eval_report(report: EvalReport, verbose: bool, report_path: Path) -> None:
+    if verbose:
+        for c in report.cases:
+            mark = "OK" if c.fixed else "FAIL"
+            print(
+                f"[{mark}] {c.case_id} type={c.issue_type} "
+                f"fixed={c.fixed} retries={c.retry_count} "
+                f"lines={c.actual_lines}/{c.minimal_lines} ms={c.duration_ms}",
+                file=sys.stderr,
+            )
+            if c.agent_timings:
+                print(f"       timings: {c.agent_timings}", file=sys.stderr)
+            if c.error:
+                print(f"       error: {c.error}", file=sys.stderr)
+
+    print(json.dumps(report.summary, ensure_ascii=False))
+    print(f"Report: {report_path.resolve()}", file=sys.stderr)
+
+
+def run_eval(
+    *,
+    case_ids: list[str] | None,
+    cases_dir: str | Path = DEFAULT_CASES_DIR,
+    output: str = "eval_results",
+    verbose: bool = False,
+    fake: bool = False,
+    skip_verify: bool = True,
+    model_client=None,
+) -> tuple[EvalReport, Path, int]:
+    output_dir, report_path = resolve_report_path(output)
+
+    if fake:
+        factory = fake_orchestrator_factory(cases_dir)
+    else:
+        factory = make_orchestrator_factory(skip_verify=skip_verify, model_client=model_client)
+
+    runner = EvalRunner(
+        orchestrator_factory=factory,
+        cases_dir=cases_dir,
+        output_dir=output_dir,
+        skip_verify=skip_verify,
+    )
+    ids = runner.list_cases() if case_ids is None else case_ids
+    report = runner.run_all(ids, report_path=report_path)
+
+    exit_code = 0 if report.summary.get("fixed") == report.summary.get("total") else 1
+    return report, report_path, exit_code

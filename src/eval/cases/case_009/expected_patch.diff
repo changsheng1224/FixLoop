@@ -1,0 +1,9 @@
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -9,3 +9,6 @@
+ 
+ [tool.pytest.ini_options]
+ testpaths = ["."]
++
++[tool.eval]
++multiplier = 2

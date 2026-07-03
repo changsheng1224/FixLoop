@@ -1,0 +1,7 @@
+AttributeError: 'NoneType' object has no attribute 'display_name'
+
+  File "users.py", line 18, in display_name
+    return user.profile.display_name
+AttributeError: 'NoneType' object has no attribute 'display_name'
+
+Failed: test_users.py::test_display_name_fallback_to_name

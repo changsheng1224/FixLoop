@@ -1,0 +1,15 @@
+case_id: case_010
+language: python
+issue_type: composite
+difficulty: hard
+status: verified
+estimated_duration_s: 75
+description: "跨两文件：类型错误与导入错误组合"
+tags:
+  - composite
+  - multi_file
+source_files:
+  - gateway.py
+  - backend/tasks.py
+test_files:
+  - test_gateway.py

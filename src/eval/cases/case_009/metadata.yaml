@@ -1,0 +1,14 @@
+case_id: case_009
+language: python
+issue_type: config_error
+difficulty: hard
+status: verified
+estimated_duration_s: 50
+description: "pyproject.toml 依赖声明缺失致构建失败"
+tags:
+  - config_error
+  - pyproject
+source_files:
+  - pyproject.toml
+test_files:
+  - test_config.py

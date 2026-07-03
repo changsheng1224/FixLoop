@@ -1,0 +1,9 @@
+TypeError: unsupported operand type(s) for +: 'str' and 'int'
+
+CI log excerpt:
+  File "pricing.py", line 6, in line_total
+    return unit_price + count
+TypeError: unsupported operand type(s) for +: 'str' and 'int'
+
+Failed: test_pricing.py::test_line_total_str_price
+Repo: eval-case-001
