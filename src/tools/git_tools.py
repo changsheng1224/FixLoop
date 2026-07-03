@@ -56,15 +56,16 @@ def _parse_blame(line: str) -> str:
     """解析 git blame 输出。"""
     import re
 
-    match = re.search(
-        r"([0-9a-f]+)\s+\(([^)]+)\s+(\d{4}-\d{2}-\d{2})", line
-    )
+    match = re.search(r"([0-9a-f]+)\s+\(([^)]+)\s+(\d{4}-\d{2}-\d{2})", line)
     if match:
-        return json.dumps({
-            "commit_hash": match.group(1),
-            "author": match.group(2).strip(),
-            "timestamp": match.group(3),
-        }, ensure_ascii=False)
+        return json.dumps(
+            {
+                "commit_hash": match.group(1),
+                "author": match.group(2).strip(),
+                "timestamp": match.group(3),
+            },
+            ensure_ascii=False,
+        )
     return json.dumps({"raw": line}, ensure_ascii=False)
 
 

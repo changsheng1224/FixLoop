@@ -42,10 +42,12 @@ class TestCallbackInAgentLoop:
     def test_callback_receives_events(self, temp_workspace):
         config = AgentConfig(provider="fake", max_steps=3)
         ws = WorkspaceContext.build(str(temp_workspace))
-        client = FakeModelClient([
-            '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
-            "<final>done</final>",
-        ])
+        client = FakeModelClient(
+            [
+                '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
+                "<final>done</final>",
+            ]
+        )
         agent = Agent(config=config, model_client=client, workspace=ws)
 
         buf = io.StringIO()
@@ -54,6 +56,7 @@ class TestCallbackInAgentLoop:
         # Agent.ask() 需要被扩展支持 callback 参数
         # 这里直接调 AgentLoop
         from agent_runtime.agent_loop import AgentLoop
+
         loop = AgentLoop(agent)
         answer = loop.run("list files", callback=cb)
         assert "done" in answer

@@ -62,8 +62,10 @@ TOOL_EXAMPLES = [
 
 
 def build_prompt_prefix(
-    workspace, tools_registry: dict,
-    dry_run: bool = False, approval: str = "ask",
+    workspace,
+    tools_registry: dict,
+    dry_run: bool = False,
+    approval: str = "ask",
 ) -> PromptPrefix:
     """构建 System Prompt 前缀。"""
     sections = [
@@ -99,12 +101,12 @@ def _rules(dry_run: bool = False, approval: str = "ask") -> str:
         "",
         "**1. 工具调用格式**（任选其一）：",
         '   格式A (JSON): <tool>{"name":"工具名","args":{"参数名":"值"}}</tool>',
-        '   格式B (function_calls):',
-        '     <function_calls>',
+        "   格式B (function_calls):",
+        "     <function_calls>",
         '     <invoke name="工具名">',
         '     <parameter name="参数名">值</parameter>',
-        '     </invoke>',
-        '     </function_calls>',
+        "     </invoke>",
+        "     </function_calls>",
         "   推荐使用格式B（function_calls）。",
         "",
         "**2. 最终答案格式**：",
@@ -122,8 +124,7 @@ def _rules(dry_run: bool = False, approval: str = "ask") -> str:
         )
     if approval == "auto":
         rules.append(
-            "9. 你拥有自动审批权限，可以直接修改文件和执行命令。"
-            "谨慎使用这些权限，只做必要的修改。"
+            "9. 你拥有自动审批权限，可以直接修改文件和执行命令。谨慎使用这些权限，只做必要的修改。"
         )
     return "\n".join(rules)
 

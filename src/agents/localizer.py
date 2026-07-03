@@ -15,10 +15,12 @@ def create_localizer(model_client, workspace, cwd: str = "", light_client=None) 
 
     tools = build_tool_registry(ctx)
     repair_tools = build_repair_tools(ctx)
-    tools.update({
-        "ast_parse": repair_tools["ast_parse"],
-        "stack_parse": repair_tools["stack_parse"],
-    })
+    tools.update(
+        {
+            "ast_parse": repair_tools["ast_parse"],
+            "stack_parse": repair_tools["stack_parse"],
+        }
+    )
     for banned in ("write_file", "patch_file", "run_shell"):
         tools.pop(banned, None)
 
@@ -27,11 +29,15 @@ def create_localizer(model_client, workspace, cwd: str = "", light_client=None) 
 
     agent = Agent(
         config=AgentConfig(provider="deepseek", max_steps=4, max_new_tokens=4096, approval="auto"),
-        model_client=model_client, workspace=workspace, cwd=root,
-        tools=tools, system_prompt=system_prompt,
+        model_client=model_client,
+        workspace=workspace,
+        cwd=root,
+        tools=tools,
+        system_prompt=system_prompt,
         light_client=light_client,
     )
 
     from src.middleware import build_repair_gateway
+
     build_repair_gateway().wrap_agent("localizer", agent)
     return agent

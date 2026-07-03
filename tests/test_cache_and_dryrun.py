@@ -76,4 +76,3 @@ class TestDryRun:
         result = executor.execute("write_file", {"path": "x.txt", "content": "y"})
         # 即使 approval=never，dry_run 也应该成功返回计划
         assert "[DRY RUN]" in result.content
-

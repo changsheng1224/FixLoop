@@ -4,12 +4,17 @@ import re
 from pathlib import Path
 
 DURABLE_TOPICS = [
-    "project-conventions", "key-decisions", "dependency-facts", "user-preferences",
+    "project-conventions",
+    "key-decisions",
+    "dependency-facts",
+    "user-preferences",
 ]
 SAVE_INTENT_WORDS = ["remember", "记住", "保存", "记录", "永记", "don't forget", "备忘", "存下来"]
 PREFIX_MAP = {
-    "Convention:": "project-conventions", "Decision:": "key-decisions",
-    "Dependency:": "dependency-facts", "Preference:": "user-preferences",
+    "Convention:": "project-conventions",
+    "Decision:": "key-decisions",
+    "Dependency:": "dependency-facts",
+    "Preference:": "user-preferences",
 }
 
 
@@ -56,8 +61,12 @@ class DurableMemoryStore:
         t = topic.lower()
         if t in DURABLE_TOPICS:
             return t
-        m = {"preference": "user-preferences", "convention": "project-conventions",
-             "decision": "key-decisions", "dependency": "dependency-facts"}
+        m = {
+            "preference": "user-preferences",
+            "convention": "project-conventions",
+            "decision": "key-decisions",
+            "dependency": "dependency-facts",
+        }
         return m.get(t, "project-conventions")
 
     @staticmethod
@@ -92,9 +101,9 @@ class DurableMemoryStore:
         (self.memory_dir / "MEMORY.md").write_text("\n".join(lines), encoding="utf-8")
 
 
-def promote_durable_memory(user_message: str, final_answer: str,
-                            store: DurableMemoryStore | None = None,
-                            root: str = ".") -> bool:
+def promote_durable_memory(
+    user_message: str, final_answer: str, store: DurableMemoryStore | None = None, root: str = "."
+) -> bool:
     if not _has_save_intent(user_message):
         return False
     promotions = _extract_promotions(final_answer)
@@ -120,7 +129,7 @@ def _extract_promotions(text: str) -> list[tuple[str, str]]:
         line = line.strip()
         for prefix, topic in PREFIX_MAP.items():
             if line.startswith(prefix):
-                body = line[len(prefix):].strip()
+                body = line[len(prefix) :].strip()
                 if body:
                     promotions.append((topic, f"{prefix} {body}"))
                 break

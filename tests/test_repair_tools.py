@@ -12,10 +12,10 @@ from src.tools.stack_parser import stack_parse
 class TestStackParser:
     def test_basic_traceback(self):
         tb = (
-            'Traceback (most recent call last):\n'
+            "Traceback (most recent call last):\n"
             '  File "calc.py", line 42, in add\n'
-            '    return a + b\n'
-            'TypeError: unsupported operand type(s) for +\n'
+            "    return a + b\n"
+            "TypeError: unsupported operand type(s) for +\n"
         )
         result = stack_parse(None, {"traceback": tb})
         data = json.loads(result)
@@ -55,23 +55,27 @@ class TestGitTools:
 class TestFindTest:
     def test_no_test_found(self, temp_workspace):
         ctx = ToolContext(root=str(temp_workspace))
-        result = find_test_for_function(ctx, {
-            "function_name": "unknown_fn",
-            "file_path": "README.md",
-        })
+        result = find_test_for_function(
+            ctx,
+            {
+                "function_name": "unknown_fn",
+                "file_path": "README.md",
+            },
+        )
         assert "未找到" in result
 
     def test_finds_by_filename(self, temp_workspace):
         (temp_workspace / "tests").mkdir(exist_ok=True)
-        (temp_workspace / "tests" / "test_calculator.py").write_text(
-            "def test_add():\n    pass\n"
-        )
+        (temp_workspace / "tests" / "test_calculator.py").write_text("def test_add():\n    pass\n")
         (temp_workspace / "calculator.py").write_text("def add(a,b): return a+b")
         ctx = ToolContext(root=str(temp_workspace))
-        result = find_test_for_function(ctx, {
-            "function_name": "add",
-            "file_path": "calculator.py",
-        })
+        result = find_test_for_function(
+            ctx,
+            {
+                "function_name": "add",
+                "file_path": "calculator.py",
+            },
+        )
         assert "test_calculator" in result
 
 
@@ -80,7 +84,11 @@ class TestRepairRegistry:
         ctx = ToolContext(root=str(temp_workspace))
         registry = build_repair_tools(ctx)
         assert set(registry.keys()) == {
-            "ast_parse", "stack_parse", "git_blame", "git_diff", "find_test",
+            "ast_parse",
+            "stack_parse",
+            "git_blame",
+            "git_diff",
+            "find_test",
         }
 
     def test_tools_runnable(self, temp_workspace):

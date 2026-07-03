@@ -3,7 +3,6 @@
 使用 FakeModelClient 预设输出序列，不调真实 API。
 """
 
-
 import pytest
 
 from agent_runtime.config import AgentConfig

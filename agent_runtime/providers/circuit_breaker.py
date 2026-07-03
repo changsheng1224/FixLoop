@@ -80,4 +80,5 @@ class CircuitBreaker:
 
 class CircuitBreakerOpenError(Exception):
     """熔断器打开时抛出的异常。"""
+
     pass

@@ -36,9 +36,7 @@ class Blackboard:
         self._entries: dict[str, BlackboardEntry] = {}
         self._conflicts: list[dict] = []
 
-    def write(
-        self, key: str, value, source_agent: str, ttl: float | None = None
-    ) -> bool:
+    def write(self, key: str, value, source_agent: str, ttl: float | None = None) -> bool:
         """写入条目。返回 True 表示成功，False 表示冲突。
 
         Args:
@@ -53,15 +51,20 @@ class Blackboard:
         existing = self._entries.get(key)
         if existing and not existing.expired():
             if existing.source_agent != source_agent:
-                self._conflicts.append({
-                    "key": key,
-                    "sources": [existing.source_agent, source_agent],
-                    "values": [existing.value, value],
-                })
+                self._conflicts.append(
+                    {
+                        "key": key,
+                        "sources": [existing.source_agent, source_agent],
+                        "values": [existing.value, value],
+                    }
+                )
                 return False
         # 覆盖或新增
         self._entries[key] = BlackboardEntry(
-            key=key, value=value, source_agent=source_agent, ttl=ttl,
+            key=key,
+            value=value,
+            source_agent=source_agent,
+            ttl=ttl,
         )
         return True
 
@@ -90,9 +93,7 @@ class Blackboard:
     def snapshot(self) -> dict:
         """返回当前板面的不可变副本。"""
         return {
-            "entries": {
-                k: v.value for k, v in self._entries.items() if not v.expired()
-            },
+            "entries": {k: v.value for k, v in self._entries.items() if not v.expired()},
             "conflicts": list(self._conflicts),
         }
 

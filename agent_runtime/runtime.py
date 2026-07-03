@@ -61,6 +61,7 @@ class Agent:
         """首次访问时加载语义模型（全局单例，线程安全）。"""
         if self._semantic_memory is None:
             from agent_runtime.features.memory import SemanticMemory
+
             self._semantic_memory = SemanticMemory()
         return self._semantic_memory
 
@@ -144,6 +145,7 @@ class Agent:
         config = kwargs.pop("config", None)
         if config is None:
             from agent_runtime.config import AgentConfig
+
             config = AgentConfig()
 
         cwd = kwargs.pop("cwd", None) or workspace.repo_root
@@ -161,6 +163,7 @@ class Agent:
         agent.session = session
         # 恢复 memory 状态
         from agent_runtime.features.memory import default_memory_state
+
         agent.session.setdefault("memory", default_memory_state())
         agent.session.setdefault("checkpoints", [])
 
@@ -196,9 +199,17 @@ class Agent:
         if raw.startswith("{"):
             try:
                 data = json.loads(raw)
-                if isinstance(data, dict) and any(k in data for k in ("action", "name", "tool", "function")):
-                    tool_name = data.get("action") or data.get("name") or data.get("tool") or data.get("function")
-                    tool_args = data.get("arguments") or data.get("args") or data.get("parameters") or {}
+                tool_keys = ("action", "name", "tool", "function")
+                if isinstance(data, dict) and any(k in data for k in tool_keys):
+                    tool_name = (
+                        data.get("action")
+                        or data.get("name")
+                        or data.get("tool")
+                        or data.get("function")
+                    )
+                    tool_args = (
+                        data.get("arguments") or data.get("args") or data.get("parameters") or {}
+                    )
                     if isinstance(tool_name, str) and tool_name:
                         return ("tool", {"name": tool_name, "args": tool_args})
             except json.JSONDecodeError:
@@ -216,11 +227,11 @@ class Agent:
         # 模型用 markdown 代码块包裹 JSON（支持嵌套括号）
         md_start = re.search(r"```(?:json)?\s*", raw)
         if md_start:
-            content = raw[md_start.end():]
+            content = raw[md_start.end() :]
             md_end = content.rfind("```")
             if md_end >= 0:
                 inner = content[:md_end].strip()
-                if (inner.startswith("{") or inner.startswith("[")):
+                if inner.startswith("{") or inner.startswith("["):
                     return ("final", inner)
 
         # 尝试匹配 DeepSeek 原生 <function_calls> 格式
@@ -231,13 +242,15 @@ class Agent:
         # </function_calls>
         fc_match = re.search(
             r"<function_calls>\s*(.*?)\s*</function_calls>",
-            raw, re.DOTALL,
+            raw,
+            re.DOTALL,
         )
         if fc_match:
             inner = fc_match.group(1)
             invokes = re.findall(
                 r"<invoke\s+name=\"(\w+)\">(.*?)</invoke>",
-                inner, re.DOTALL,
+                inner,
+                re.DOTALL,
             )
             if invokes:
                 name = invokes[0][0]  # 取第一个 invoke（每次只调一个工具）
@@ -245,7 +258,8 @@ class Agent:
                 args = {}
                 for param_m in re.finditer(
                     r'<parameter\s+name="(\w+)">(.*?)</parameter>',
-                    params_str, re.DOTALL,
+                    params_str,
+                    re.DOTALL,
                 ):
                     args[param_m.group(1)] = param_m.group(2).strip()
                 return ("tool", {"name": name, "args": args})
@@ -257,10 +271,12 @@ class Agent:
                 payload = json.loads(json_match)
                 return ("tool", payload)
             except json.JSONDecodeError:
-                return ("retry",
+                return (
+                    "retry",
                     "工具调用 JSON 格式无效。<tool> 内必须是合法 JSON：\n"
                     '  {"name":"工具名","args":{"参数":"值"}}\n'
-                    "请检查引号、括号是否匹配后重试。")
+                    "请检查引号、括号是否匹配后重试。",
+                )
 
         # 尝试匹配 XML 属性格式：<tool name="x" ...>body</tool>
         tool_xml_match = re.search(
@@ -300,6 +316,7 @@ class Agent:
         """构建 System Prompt 前缀。system_prompt 非空时用它替代默认前缀。"""
         if system_prompt:
             from agent_runtime.prompt_prefix import PromptPrefix
+
             text = system_prompt + "\n\n" + self.workspace.text()
             return PromptPrefix(
                 text=text,
@@ -308,7 +325,8 @@ class Agent:
                 tool_signature="",
             )
         return build_prompt_prefix(
-            self.workspace, self.tools,
+            self.workspace,
+            self.tools,
             dry_run=self.dry_run,
             approval=self.config.approval,
         )
@@ -316,6 +334,7 @@ class Agent:
     def _new_session_id(self) -> str:
         """生成新的会话 ID。"""
         import uuid
+
         return str(uuid.uuid4())[:8]
 
     def _new_session(self) -> dict:
@@ -382,6 +401,7 @@ class Agent:
                     source=pattern,
                     kind="observation",
                 )
+
 
 def _extract_json_between_tags(text: str, open_tag: str, close_tag: str) -> str:
     """从标签之间提取 JSON 文本（正确处理嵌套大括号）。

@@ -14,11 +14,13 @@ class TestEndToEnd:
     def test_full_pipeline(self, temp_workspace):
         config = AgentConfig(provider="fake", max_steps=5, max_new_tokens=256)
         ws = WorkspaceContext.build(str(temp_workspace))
-        client = FakeModelClient([
-            '<tool>{"name":"read_file","args":{"path":"README.md"}}</tool>',
-            '<tool>{"name":"search","args":{"pattern":"Agent","path":"."}}</tool>',
-            "<final>分析完成：项目是一个手写的Agent运行时。</final>",
-        ])
+        client = FakeModelClient(
+            [
+                '<tool>{"name":"read_file","args":{"path":"README.md"}}</tool>',
+                '<tool>{"name":"search","args":{"pattern":"Agent","path":"."}}</tool>',
+                "<final>分析完成：项目是一个手写的Agent运行时。</final>",
+            ]
+        )
         agent = Agent(config=config, model_client=client, workspace=ws)
 
         answer = agent.ask("分析这个项目")
@@ -53,12 +55,14 @@ class TestEndToEnd:
         """多工具调用链 + 记忆累积验证。"""
         config = AgentConfig(provider="fake", max_steps=4, max_new_tokens=256)
         ws = WorkspaceContext.build(str(temp_workspace))
-        client = FakeModelClient([
-            '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
-            '<tool>{"name":"read_file","args":{"path":"CLAUDE.md"}}</tool>',
-            '<tool>{"name":"search","args":{"pattern":"agent","path":"."}}</tool>',
-            "<final>找到相关文件。</final>",
-        ])
+        client = FakeModelClient(
+            [
+                '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
+                '<tool>{"name":"read_file","args":{"path":"CLAUDE.md"}}</tool>',
+                '<tool>{"name":"search","args":{"pattern":"agent","path":"."}}</tool>',
+                "<final>找到相关文件。</final>",
+            ]
+        )
         agent = Agent(config=config, model_client=client, workspace=ws)
         answer = agent.ask("探索项目")
         assert "相关" in answer

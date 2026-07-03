@@ -1,6 +1,5 @@
 """工具执行函数单测：list_files, read_file, search, 路径逃逸检测。"""
 
-
 import pytest
 
 from agent_runtime.tool_context import ToolContext
@@ -51,9 +50,7 @@ class TestReadFile:
 
     def test_line_range(self, ctx, temp_workspace):
         # 创建一个多行文件
-        (temp_workspace / "multiline.py").write_text(
-            "line1\nline2\nline3\nline4\nline5\n"
-        )
+        (temp_workspace / "multiline.py").write_text("line1\nline2\nline3\nline4\nline5\n")
         result = tool_read_file(ctx, {"path": "multiline.py", "start": 2, "end": 3})
         assert "2 | line2" in result
         assert "3 | line3" in result
@@ -83,9 +80,7 @@ class TestSearch:
 
     def test_context_lines_shows_surrounding(self, ctx, temp_workspace):
         """context_lines 显示匹配行前后的上下文。"""
-        (temp_workspace / "data.txt").write_text(
-            "line A\nline B\nTODO fix this\nline D\nline E\n"
-        )
+        (temp_workspace / "data.txt").write_text("line A\nline B\nTODO fix this\nline D\nline E\n")
         result = tool_search(
             ctx, {"pattern": "TODO", "path": str(temp_workspace), "context_lines": 1}
         )
@@ -97,9 +92,7 @@ class TestSearch:
 
     def test_context_lines_zero(self, ctx, temp_workspace):
         """context_lines=0 时只显示匹配行。"""
-        (temp_workspace / "data.txt").write_text(
-            "a\nb TODO here\nc\n"
-        )
+        (temp_workspace / "data.txt").write_text("a\nb TODO here\nc\n")
         result = tool_search(
             ctx, {"pattern": "TODO", "path": str(temp_workspace), "context_lines": 0}
         )

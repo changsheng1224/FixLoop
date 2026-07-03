@@ -71,12 +71,14 @@ def _get_semantic_model():
 
             if not _SEMANTIC_INIT_LOGGED:
                 _SEMANTIC_INIT_LOGGED = True
-                print("[agent_runtime] 加载语义模型 (~90MB)...",
-                      file=_sys.stderr, end="", flush=True)
+                print(
+                    "[agent_runtime] 加载语义模型 (~90MB)...", file=_sys.stderr, end="", flush=True
+                )
 
             _configure_hf_hub(_SEMANTIC_MODEL_ID)
 
             from sentence_transformers import SentenceTransformer
+
             _SEMANTIC_MODEL = SentenceTransformer(_SEMANTIC_MODEL_ID)
 
             if _SEMANTIC_INIT_LOGGED:
@@ -85,6 +87,7 @@ def _get_semantic_model():
         except Exception:
             if _SEMANTIC_INIT_LOGGED:
                 import sys as _sys
+
                 print(" ⚠ 不可用（语义检索降级为 keywords 模式）", file=_sys.stderr)
             return None
 
@@ -115,14 +118,16 @@ class SemanticMemory:
             return []
         try:
             import numpy as np
+
             query_emb = self.model.encode(query)
             scores = []
             for note in self._notes:
                 emb = note.get("embedding")
                 if emb is None:
                     continue
-                sim = float(np.dot(query_emb, emb) /
-                            (np.linalg.norm(query_emb) * np.linalg.norm(emb)))
+                sim = float(
+                    np.dot(query_emb, emb) / (np.linalg.norm(query_emb) * np.linalg.norm(emb))
+                )
                 if sim > 0.3:
                     scores.append((sim, note))
             scores.sort(key=lambda x: x[0], reverse=True)
@@ -133,6 +138,7 @@ class SemanticMemory:
 
 def retrieval_candidates_semantic(state: dict, query: str, limit: int = 3) -> list[dict]:
     from agent_runtime.features.memory.episodic import retrieval_candidates
+
     kw_results = retrieval_candidates(state, query, limit)
     sem = SemanticMemory()
     for note in state.get("episodic_notes", [])[-20:]:

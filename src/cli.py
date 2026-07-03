@@ -37,6 +37,7 @@ def _try_create_verifier(client, ws, repo: str):
     """尝试创建 Verifier，Docker 不可用时返回 None。"""
     try:
         import docker as _docker
+
         _docker.from_env().ping()
     except Exception:
         return None
@@ -56,7 +57,9 @@ def _repair(args) -> int:
     model = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro")
 
     client = AnthropicCompatibleModelClient(
-        model=model, base_url=base_url, api_key=api_key,
+        model=model,
+        base_url=base_url,
+        api_key=api_key,
     )
     ws = WorkspaceContext.build(args.repo)
     repo = str(Path(args.repo).resolve())
@@ -91,8 +94,7 @@ def _repair(args) -> int:
     if args.verbose:
         plan = state.repair_plan
         print(
-            f"[Orchestrator] 识别: {plan.language}, {plan.issue_type}, "
-            f"{plan.suspect_files}",
+            f"[Orchestrator] 识别: {plan.language}, {plan.issue_type}, {plan.suspect_files}",
             file=sys.stderr,
         )
         n_suspects = len(state.suspect_locations)
@@ -131,8 +133,10 @@ def _repair(args) -> int:
                 print(f"说明: {patch.explanation}")
         if state.verification_result:
             vr = state.verification_result
-            print(f"\n验证: {vr.passed}/{vr.total_tests} 通过" +
-                  (f", {vr.failed} 失败" if vr.failed else ""))
+            print(
+                f"\n验证: {vr.passed}/{vr.total_tests} 通过"
+                + (f", {vr.failed} 失败" if vr.failed else "")
+            )
     else:
         print(f"❌ 修复未完成 (status={state.status})")
 

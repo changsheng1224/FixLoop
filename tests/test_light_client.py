@@ -135,9 +135,12 @@ class TestCLILightFlags:
     def test_light_provider_in_help(self):
         import subprocess
         import sys
+
         result = subprocess.run(
             [sys.executable, "-m", "agent_runtime", "--help"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         assert "--light-provider" in result.stdout
         assert "--light-model" in result.stdout
@@ -145,8 +148,11 @@ class TestCLILightFlags:
     def test_light_model_default(self):
         import subprocess
         import sys
+
         result = subprocess.run(
             [sys.executable, "-m", "agent_runtime", "--help"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         assert "qwen3.5:9b" in result.stdout

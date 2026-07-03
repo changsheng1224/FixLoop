@@ -22,9 +22,7 @@ class FakeModelClient:
         self.supports_prompt_cache = False
         self.prompts: list[str] = []
 
-    def complete(
-        self, prompt: str, max_new_tokens: int = 512, prompt_cache_key: str = ""
-    ) -> str:
+    def complete(self, prompt: str, max_new_tokens: int = 512, prompt_cache_key: str = "") -> str:
         """弹出下一个预设输出。
 
         Args:
@@ -40,8 +38,7 @@ class FakeModelClient:
         self.prompts.append(prompt)
         if self._index >= len(self._outputs):
             raise RuntimeError(
-                f"FakeClient 输出序列已耗尽"
-                f"（共 {len(self._outputs)} 个，已用 {self._index} 个）"
+                f"FakeClient 输出序列已耗尽（共 {len(self._outputs)} 个，已用 {self._index} 个）"
             )
         result = self._outputs[self._index]
         self._index += 1
@@ -119,10 +116,12 @@ class AnthropicCompatibleModelClient:
         messages = []
         # 系统提示词放在第一条消息中
         full_text = system_prompt + "\n\n" + user_message if system_prompt else user_message
-        messages.append({
-            "role": "user",
-            "content": [{"type": "text", "text": full_text}],
-        })
+        messages.append(
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": full_text}],
+            }
+        )
 
         payload_base = {
             "model": self.model,
@@ -161,7 +160,7 @@ class AnthropicCompatibleModelClient:
                     if attempt < 2:
                         time.sleep((attempt + 1) * 2)
                         continue
-                    raise RuntimeError(f"API 请求失败") from e
+                    raise RuntimeError("API 请求失败") from e
 
             if data is None:
                 raise RuntimeError("API 请求失败，已重试 3 次")
@@ -197,11 +196,13 @@ class AnthropicCompatibleModelClient:
                         result = executor(name, inp)
                     except Exception as e:
                         result = f"Error: {e}"
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": tu_id,
-                        "content": str(result),
-                    })
+                    tool_results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tu_id,
+                            "content": str(result),
+                        }
+                    )
                 messages.append({"role": "user", "content": tool_results})
                 continue  # 继续下一轮
 
@@ -242,9 +243,7 @@ class AnthropicCompatibleModelClient:
             except urllib.error.HTTPError as e:
                 last_error = e
                 if e.code < 500:
-                    raise RuntimeError(
-                        f"API 请求失败 (HTTP {e.code}): {e.reason}"
-                    ) from e
+                    raise RuntimeError(f"API 请求失败 (HTTP {e.code}): {e.reason}") from e
                 if attempt < 2:
                     time.sleep((attempt + 1) * 2)
 
@@ -253,9 +252,7 @@ class AnthropicCompatibleModelClient:
                 if attempt < 2:
                     time.sleep((attempt + 1) * 2)
 
-        raise RuntimeError(
-            f"API 请求失败，已重试 3 次。最后错误: {last_error}"
-        )
+        raise RuntimeError(f"API 请求失败，已重试 3 次。最后错误: {last_error}")
 
     def latency_stats(self) -> dict:
         """返回响应延迟统计（秒）。"""
@@ -274,16 +271,21 @@ class AnthropicCompatibleModelClient:
         """记录最后一次请求到 .agent/last_request.json（调试用）。"""
         try:
             from pathlib import Path
+
             agent_dir = Path.cwd() / ".agent"
             agent_dir.mkdir(parents=True, exist_ok=True)
             path = agent_dir / "last_request.json"
             path.write_text(
-                json.dumps({
-                    "model": self.model,
-                    "prompt_preview": prompt[:500],
-                    "prompt_length": len(prompt),
-                    "result_preview": result[:300],
-                }, ensure_ascii=False, indent=2),
+                json.dumps(
+                    {
+                        "model": self.model,
+                        "prompt_preview": prompt[:500],
+                        "prompt_length": len(prompt),
+                        "result_preview": result[:300],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
                 encoding="utf-8",
             )
         except Exception:
@@ -302,7 +304,8 @@ class AnthropicCompatibleModelClient:
         content = data.get("content", [])
         if isinstance(content, list):
             parts = [
-                item["text"] for item in content
+                item["text"]
+                for item in content
                 if isinstance(item, dict) and item.get("type") == "text"
             ]
             if parts:
@@ -338,9 +341,7 @@ class OllamaModelClient:
         self.timeout = timeout
         self.supports_prompt_cache = False
 
-    def complete(
-        self, prompt: str, max_new_tokens: int = 512, prompt_cache_key: str = ""
-    ) -> str:
+    def complete(self, prompt: str, max_new_tokens: int = 512, prompt_cache_key: str = "") -> str:
         """调用 Ollama /api/generate 并返回文本。"""
         payload = {
             "model": self.model,
@@ -385,9 +386,7 @@ class OpenAICompatibleModelClient:
         self.timeout = timeout
         self.supports_prompt_cache = False
 
-    def complete(
-        self, prompt: str, max_new_tokens: int = 512, prompt_cache_key: str = ""
-    ) -> str:
+    def complete(self, prompt: str, max_new_tokens: int = 512, prompt_cache_key: str = "") -> str:
         """调用 OpenAI Responses API。"""
         payload = {
             "model": self.model,

@@ -10,7 +10,8 @@
 import re
 import sys as _sys
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from pathlib import Path
 
 import yaml
@@ -74,13 +75,13 @@ class Orchestrator:
                 return fut.result(timeout=repair_timeout_s)
             except FuturesTimeoutError:
                 state.status = "failed"
-                state.agent_errors["orchestrator"] = (
-                    f"repair timeout ({repair_timeout_s}s)"
-                )
+                state.agent_errors["orchestrator"] = f"repair timeout ({repair_timeout_s}s)"
                 state.node_timings["repair_timeout"] = repair_timeout_s
                 print(
                     f"[{_ts()}] ⚠ 修复超时 ({repair_timeout_s}s)\n",
-                    end="", file=_sys.stderr, flush=True,
+                    end="",
+                    file=_sys.stderr,
+                    flush=True,
                 )
                 return state
 
@@ -104,8 +105,9 @@ class Orchestrator:
         print(f"[{_ts()}] parse_issue: {ms}ms\n", end="", file=_sys.stderr, flush=True)
 
         # Step 2+3: Localizer + Retriever 并行（Retriever 用 parse_issue 的粗定位）
-        print(f"[{_ts()}] Localizer + Retriever 并行开始...\n",
-              end="", file=_sys.stderr, flush=True)
+        print(
+            f"[{_ts()}] Localizer + Retriever 并行开始...\n", end="", file=_sys.stderr, flush=True
+        )
         t0 = time.time()
         suspects, context, loc_timing, ret_timing = self._run_localize_and_retrieve(state)
         wall_ms = int((time.time() - t0) * 1000)
@@ -124,20 +126,27 @@ class Orchestrator:
             f"[{_ts()}] Localizer+Retriever 完成: 墙钟{wall_ms}ms "
             f"(L={loc_timing['total_ms']}ms, R={ret_timing['total_ms']}ms), "
             f"{n} suspect, {n_tests} tests\n",
-            end="", file=_sys.stderr, flush=True,
+            end="",
+            file=_sys.stderr,
+            flush=True,
         )
 
         # Step 4: Patcher → Verifier → 自愈
         while state.retry_count < max_retries:
-            print(f"[{_ts()}] Patcher 开始 (retry={state.retry_count})...\n",
-                  end="", file=_sys.stderr, flush=True)
+            print(
+                f"[{_ts()}] Patcher 开始 (retry={state.retry_count})...\n",
+                end="",
+                file=_sys.stderr,
+                flush=True,
+            )
             t0 = time.time()
             state.candidate_patches = self._run_patcher(state)
             ms = int((time.time() - t0) * 1000)
             timings["patcher_ms"] = ms
             n = len(state.candidate_patches)
-            print(f"[{_ts()}] Patcher 完成: {ms}ms, {n}个补丁\n",
-                  end="", file=_sys.stderr, flush=True)
+            print(
+                f"[{_ts()}] Patcher 完成: {ms}ms, {n}个补丁\n", end="", file=_sys.stderr, flush=True
+            )
 
             if self.verifier is None:
                 state.status = "patched"
@@ -166,8 +175,12 @@ class Orchestrator:
 
         state.node_timings = timings
         total_ms = int((time.time() - t_start) * 1000)
-        print(f"[{_ts()}] 总耗时: {total_ms}ms, status={state.status}\n",
-              end="", file=_sys.stderr, flush=True)
+        print(
+            f"[{_ts()}] 总耗时: {total_ms}ms, status={state.status}\n",
+            end="",
+            file=_sys.stderr,
+            flush=True,
+        )
         return state
 
     def _parse_issue(self, issue: str) -> RepairPlan:
@@ -207,7 +220,9 @@ class Orchestrator:
         return 0
 
     def _fallback_suspects_from_plan(
-        self, plan: RepairPlan, issue: str,
+        self,
+        plan: RepairPlan,
+        issue: str,
     ) -> list[SuspectLocation]:
         """Localizer 无输出时，从 RepairPlan 生成粗粒度嫌疑位置。"""
         if not plan.suspect_files:
@@ -221,13 +236,15 @@ class Orchestrator:
                 if import_line:
                     line = import_line
                 reason = "import 语句"
-            suspects.append(SuspectLocation(
-                file_path=file_path,
-                start_line=line,
-                end_line=line,
-                reason=reason,
-                confidence=0.7,
-            ))
+            suspects.append(
+                SuspectLocation(
+                    file_path=file_path,
+                    start_line=line,
+                    end_line=line,
+                    reason=reason,
+                    confidence=0.7,
+                )
+            )
         return suspects
 
     def _find_import_line_number(self, file_path: str) -> int | None:
@@ -292,23 +309,23 @@ class Orchestrator:
         """直接调用模型（绕过 Agent loop），返回 (answer, elapsed_ms)。"""
         # 拼接 system prompt
         prompt_file = None
-        agent_type = ""
         if agent is self.localizer:
             prompt_file = Path(__file__).parent / "prompts" / "localizer.txt"
-            agent_type = "localizer"
         elif agent is self.retriever:
             prompt_file = Path(__file__).parent / "prompts" / "retriever.txt"
-            agent_type = "retriever"
         elif agent is self.patcher:
             prompt_file = Path(__file__).parent / "prompts" / "patcher.txt"
-            agent_type = "patcher"
 
-        system_prompt = prompt_file.read_text(encoding="utf-8") if prompt_file and prompt_file.exists() else ""
+        if prompt_file and prompt_file.exists():
+            system_prompt = prompt_file.read_text(encoding="utf-8")
+        else:
+            system_prompt = ""
         full_prompt = system_prompt + "\n\n" + prompt if system_prompt else prompt
 
         t0 = time.time()
         raw = agent.model_client.complete(
-            full_prompt, max_new_tokens=agent.config.max_new_tokens or 4096,
+            full_prompt,
+            max_new_tokens=agent.config.max_new_tokens or 4096,
         )
         elapsed_ms = int((time.time() - t0) * 1000)
         return raw, elapsed_ms
@@ -329,7 +346,9 @@ class Orchestrator:
                 state.agent_errors[agent_name] = str(e)
             print(
                 f"  [{agent_name}] ⚠ Agent 失败: {e}\n",
-                end="", file=_sys.stderr, flush=True,
+                end="",
+                file=_sys.stderr,
+                flush=True,
             )
             elapsed_ms = int((time.time() - t0) * 1000)
             return "", {"total_ms": elapsed_ms, "internal": {}}
@@ -341,6 +360,7 @@ class Orchestrator:
         """从 Agent 的最新 run 目录读取 node_timings。"""
         import json as _json
         from pathlib import Path as _Path
+
         try:
             runs_dir = _Path(agent.workspace.repo_root) / ".agent" / "runs"
             if not runs_dir.exists():
@@ -352,7 +372,8 @@ class Orchestrator:
             return {}
 
     def _run_localize_and_retrieve(
-        self, state: RepairState,
+        self,
+        state: RepairState,
     ) -> tuple[list[SuspectLocation], RetrievedContext, dict, dict]:
         """并行运行 Localizer 与 Retriever，返回结果与各自耗时。"""
         plan = state.repair_plan
@@ -361,20 +382,27 @@ class Orchestrator:
         def run_localizer():
             prompt = self._localizer_prompt(plan, issue)
             answer, timing = self._run_agent(
-                self.localizer, prompt, "localizer", state,
+                self.localizer,
+                prompt,
+                "localizer",
+                state,
             )
             suspects = self._parse_suspect_list(answer)
             if not suspects:
                 print(
                     f"  [localizer] ⚠ 0 suspects, raw[:500]={answer.strip()[:500]!r}",
-                    file=_sys.stderr, flush=True,
+                    file=_sys.stderr,
+                    flush=True,
                 )
             return suspects, timing
 
         def run_retriever():
             prompt = self._retriever_prompt([], plan=plan, issue=issue)
             answer, timing = self._run_agent(
-                self.retriever, prompt, "retriever", state,
+                self.retriever,
+                prompt,
+                "retriever",
+                state,
             )
             return self._parse_retrieved_context(answer), timing
 
@@ -389,7 +417,9 @@ class Orchestrator:
             if suspects:
                 print(
                     f"  [localizer] 降级: RepairPlan → {len(suspects)} suspect\n",
-                    end="", file=_sys.stderr, flush=True,
+                    end="",
+                    file=_sys.stderr,
+                    flush=True,
                 )
 
         return suspects, context, loc_timing, ret_timing
@@ -401,13 +431,18 @@ class Orchestrator:
         state.node_timings["localizer_internal"] = timing["internal"]
         suspects = self._parse_suspect_list(answer)
         if not suspects:
-            print(f"  [localizer] ⚠ 0 suspects, raw[:500]={answer.strip()[:500]!r}",
-                  file=_sys.stderr, flush=True)
+            print(
+                f"  [localizer] ⚠ 0 suspects, raw[:500]={answer.strip()[:500]!r}",
+                file=_sys.stderr,
+                flush=True,
+            )
         return suspects
 
     def _run_retriever(self, state: RepairState) -> RetrievedContext:
         prompt = self._retriever_prompt(
-            state.suspect_locations, plan=state.repair_plan, issue=state.issue_input,
+            state.suspect_locations,
+            plan=state.repair_plan,
+            issue=state.issue_input,
         )
         answer, timing = self._run_agent(self.retriever, prompt, "retriever")
         state.node_timings["retriever_ms"] = timing["total_ms"]
@@ -445,7 +480,9 @@ class Orchestrator:
             state.node_timings["patcher_ms"] = elapsed_ms
             print(
                 f"  [patcher] ⚠ 模型调用失败: {e}\n",
-                end="", file=_sys.stderr, flush=True,
+                end="",
+                file=_sys.stderr,
+                flush=True,
             )
             return []
         elapsed_ms = int((time.time() - t0) * 1000)
@@ -455,8 +492,11 @@ class Orchestrator:
         # 解析模型输出的 JSON → CandidatePatch 列表
         patches = self._parse_patches(raw)
         if not patches:
-            print(f"  [patcher] ⚠ 0 patches parsed, raw[:300]={raw.strip()[:300]!r}",
-                  file=_sys.stderr, flush=True)
+            print(
+                f"  [patcher] ⚠ 0 patches parsed, raw[:300]={raw.strip()[:300]!r}",
+                file=_sys.stderr,
+                flush=True,
+            )
 
         applied = self._apply_patches_on_disk(patches)
         if patches and not applied:
@@ -472,7 +512,8 @@ class Orchestrator:
             if file_path is None:
                 print(
                     f"  [patcher] ⚠ 拒绝补丁（路径不在 repo 或文件不存在）: {p.file_path!r}",
-                    file=_sys.stderr, flush=True,
+                    file=_sys.stderr,
+                    flush=True,
                 )
                 continue
 
@@ -504,7 +545,9 @@ class Orchestrator:
             state.node_timings["verifier_ms"] = elapsed_ms
             print(
                 f"  [verifier] ⚠ 沙箱验证失败: {e}\n",
-                end="", file=_sys.stderr, flush=True,
+                end="",
+                file=_sys.stderr,
+                flush=True,
             )
             return VerificationResult(all_passed=False, failure_logs=[str(e)])
         elapsed_ms = int((time.time() - t0) * 1000)
@@ -539,6 +582,7 @@ class Orchestrator:
     def _revert_changes(self, state: RepairState):
         """回滚 Patcher 修改的文件（git checkout）。"""
         import subprocess
+
         files = set()
         for p in state.candidate_patches:
             files.add(p.file_path)
@@ -547,7 +591,8 @@ class Orchestrator:
                 subprocess.run(
                     ["git", "checkout", "--", f],
                     cwd=self._repo_root,
-                    capture_output=True, timeout=10,
+                    capture_output=True,
+                    timeout=10,
                 )
             except Exception:
                 pass
@@ -562,8 +607,7 @@ class Orchestrator:
             for log in result.failure_logs[:5]:
                 lines.append(f"  - {log[:300]}")
         lines.append(
-            "请根据失败日志修改补丁。使用 patch_file 直接修改文件，"
-            "然后输出 CandidatePatch JSON。"
+            "请根据失败日志修改补丁。使用 patch_file 直接修改文件，然后输出 CandidatePatch JSON。"
         )
         return "\n".join(lines)
 
@@ -581,7 +625,8 @@ class Orchestrator:
             )
         else:
             parts.append(
-                "请用 stack_parse 解析堆栈，再用 ast_parse 分析文件结构，最后输出 SuspectList JSON。"
+                "请用 stack_parse 解析堆栈，再用 ast_parse 分析文件结构，"
+                "最后输出 SuspectList JSON。"
             )
         return "\n".join(parts)
 
@@ -879,7 +924,7 @@ def _replace_line_by_strip(text: str, old_line: str, new_line: str) -> str | Non
         replacement = new_line.strip()
         if indent and not replacement.startswith((" ", "\t")):
             replacement = indent + replacement
-        ending = file_line[len(content):] if file_line.endswith(("\n", "\r")) else "\n"
+        ending = file_line[len(content) :] if file_line.endswith(("\n", "\r")) else "\n"
         lines[i] = replacement + ending
         return "".join(lines)
     return None
@@ -923,7 +968,7 @@ def _extract_json_block(text: str) -> str:
     # 1. 从 markdown ```json...``` 代码块提取（支持嵌套括号）
     md_start = re.search(r"```(?:json)?\s*", text)
     if md_start:
-        content = text[md_start.end():]
+        content = text[md_start.end() :]
         md_end = content.rfind("```")
         if md_end >= 0:
             inner = content[:md_end].strip()
@@ -947,6 +992,6 @@ def _extract_json_block(text: str) -> str:
                 elif text[i] == end_char:
                     depth -= 1
                     if depth == 0:
-                        return text[last_start:i + 1]
+                        return text[last_start : i + 1]
 
     return text

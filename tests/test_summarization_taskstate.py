@@ -99,10 +99,12 @@ class TestTaskStateIntegration:
         """多步工具调用后 TaskState 状态正确。"""
         config = AgentConfig(provider="fake", max_steps=4, max_new_tokens=256)
         ws = WorkspaceContext.build(str(temp_workspace))
-        client = FakeModelClient([
-            '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
-            "<final>all done</final>",
-        ])
+        client = FakeModelClient(
+            [
+                '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
+                "<final>all done</final>",
+            ]
+        )
         agent = Agent(config=config, model_client=client, workspace=ws)
         answer = agent.ask("list files")
         assert "done" in answer
@@ -111,6 +113,7 @@ class TestTaskStateIntegration:
         runs_dir = temp_workspace / ".agent" / "runs"
         task_state_path = list(runs_dir.iterdir())[0] / "task_state.json"
         import json
+
         data = json.loads(task_state_path.read_text())
         assert data["status"] == "completed"
         assert data["tool_steps"] == 1

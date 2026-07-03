@@ -1,6 +1,5 @@
 """write_file + patch_file 单测。"""
 
-
 import pytest
 
 from agent_runtime.tool_context import ToolContext
@@ -28,9 +27,7 @@ class TestWriteFile:
         assert (temp_workspace / "exist.txt").read_text() == "new"
 
     def test_creates_parent_directories(self, ctx, temp_workspace):
-        result = tool_write_file(
-            ctx, {"path": "sub/deep/nested/file.py", "content": "x=1"}
-        )
+        result = tool_write_file(ctx, {"path": "sub/deep/nested/file.py", "content": "x=1"})
         assert "已写入" in result
         assert (temp_workspace / "sub" / "deep" / "nested" / "file.py").read_text() == "x=1"
 
@@ -40,17 +37,13 @@ class TestWriteFile:
 
     def test_append_to_existing(self, ctx, temp_workspace):
         (temp_workspace / "log.txt").write_text("line1\n")
-        result = tool_write_file(
-            ctx, {"path": "log.txt", "content": "line2\n", "append": True}
-        )
+        result = tool_write_file(ctx, {"path": "log.txt", "content": "line2\n", "append": True})
         assert "已追加到" in result
         assert (temp_workspace / "log.txt").read_text() == "line1\nline2\n"
 
     def test_append_to_new_file(self, ctx, temp_workspace):
         """append 到不存在的文件 → 创建新文件。"""
-        result = tool_write_file(
-            ctx, {"path": "new.txt", "content": "hello", "append": True}
-        )
+        result = tool_write_file(ctx, {"path": "new.txt", "content": "hello", "append": True})
         assert "已写入" in result
         assert (temp_workspace / "new.txt").read_text() == "hello"
 

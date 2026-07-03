@@ -117,12 +117,15 @@ class TestSessionResume:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SessionStore(root=tmpdir)
             # 保存 session
-            store.save({
-                "id": "s1", "history": [
-                    {"role": "user", "content": "hello"},
-                    {"role": "assistant", "content": "hi there"},
-                ],
-            })
+            store.save(
+                {
+                    "id": "s1",
+                    "history": [
+                        {"role": "user", "content": "hello"},
+                        {"role": "assistant", "content": "hi there"},
+                    ],
+                }
+            )
 
             client = FakeModelClient(["<final>ok</final>"])
             agent = Agent.from_session(client, ws, store, "s1", config=config)

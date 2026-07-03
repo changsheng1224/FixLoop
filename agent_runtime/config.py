@@ -20,7 +20,5 @@ class AgentConfig(BaseModel):
     max_new_tokens: int = Field(
         default=2048, ge=1, le=8192, description="每次 LLM 调用的最大输出 token 数"
     )
-    approval: str = Field(
-        default="ask", description="高风险工具审批策略: auto / ask / never"
-    )
+    approval: str = Field(default="ask", description="高风险工具审批策略: auto / ask / never")
     temperature: float = Field(default=0.2, ge=0.0, le=2.0, description="模型温度")

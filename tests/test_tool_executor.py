@@ -69,14 +69,22 @@ class TestToolExecutorGates:
     # Gate 4: duplicate detection
     def test_detects_duplicate_calls(self, executor, agent):
         # 注入历史：连续 2 次相同调用
-        agent.record({
-            "role": "assistant", "content": "calling tool",
-            "tool_name": "list_files", "tool_args": {"path": "."},
-        })
-        agent.record({
-            "role": "assistant", "content": "calling tool",
-            "tool_name": "list_files", "tool_args": {"path": "."},
-        })
+        agent.record(
+            {
+                "role": "assistant",
+                "content": "calling tool",
+                "tool_name": "list_files",
+                "tool_args": {"path": "."},
+            }
+        )
+        agent.record(
+            {
+                "role": "assistant",
+                "content": "calling tool",
+                "tool_name": "list_files",
+                "tool_args": {"path": "."},
+            }
+        )
         result = executor.execute("list_files", {"path": "."})
         assert "rejected" in result.metadata["tool_status"]
         assert result.metadata["tool_error_code"] == "duplicate"
@@ -103,9 +111,7 @@ class TestToolExecutorGates:
     # Gate 6+7+8: snapshot + execute + diff
     def test_writes_get_snapshot_diff(self, agent):
         executor = ToolExecutor(agent=agent, approval_policy="auto")
-        result = executor.execute(
-            "write_file", {"path": "new.txt", "content": "created"}
-        )
+        result = executor.execute("write_file", {"path": "new.txt", "content": "created"})
         assert result.metadata["tool_status"] == "success"
         assert "affected_paths" in result.metadata
         assert "new.txt" in result.metadata["affected_paths"]

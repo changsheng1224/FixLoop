@@ -41,7 +41,9 @@ class TestAnthropicClientErrors:
         server, port = _fake_http_server(status=400, response_body={"error": "bad request"})
         try:
             client = AnthropicCompatibleModelClient(
-                model="test", base_url=f"http://127.0.0.1:{port}", api_key="x",
+                model="test",
+                base_url=f"http://127.0.0.1:{port}",
+                api_key="x",
                 timeout=2,
             )
             with pytest.raises(RuntimeError, match="HTTP 400"):
@@ -59,15 +61,22 @@ class TestOpenAICompatibleClient:
     """OpenAI 客户端 mock 测试。"""
 
     def test_complete_returns_text(self):
-        server, port = _fake_http_server(status=200, response_body={
-            "output": [{
-                "type": "message",
-                "content": [{"type": "output_text", "text": "response from openai"}],
-            }]
-        })
+        server, port = _fake_http_server(
+            status=200,
+            response_body={
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "response from openai"}],
+                    }
+                ]
+            },
+        )
         try:
             client = OpenAICompatibleModelClient(
-                model="gpt-4o", base_url=f"http://127.0.0.1:{port}", api_key="sk-test",
+                model="gpt-4o",
+                base_url=f"http://127.0.0.1:{port}",
+                api_key="sk-test",
                 timeout=2,
             )
             result = client.complete("hello", max_new_tokens=50)
@@ -82,12 +91,11 @@ class TestOpenAICompatibleClient:
     def test_save_request_writes_file(self, temp_workspace):
         """_save_request 写入 .agent/last_request.json。"""
         import os
+
         old_cwd = os.getcwd()
         try:
             os.chdir(str(temp_workspace))
-            client = AnthropicCompatibleModelClient(
-                model="test", base_url="http://x", api_key="x"
-            )
+            client = AnthropicCompatibleModelClient(model="test", base_url="http://x", api_key="x")
             client._save_request("hello prompt", "hello result")
             path = temp_workspace / ".agent" / "last_request.json"
             assert path.exists()

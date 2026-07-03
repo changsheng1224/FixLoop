@@ -43,11 +43,13 @@ def find_test_for_function(context, args: dict) -> str:
     for test_dir in test_dirs:
         test_file = test_dir / f"test_{module_name}.py"
         if test_file.exists():
-            results.append({
-                "test_file": str(test_file.relative_to(project_root)),
-                "confidence": 0.9,
-                "strategy": "filename_match",
-            })
+            results.append(
+                {
+                    "test_file": str(test_file.relative_to(project_root)),
+                    "confidence": 0.9,
+                    "strategy": "filename_match",
+                }
+            )
 
     # 策略 2：搜索测试函数名
     for test_dir in test_dirs:
@@ -57,15 +59,18 @@ def find_test_for_function(context, args: dict) -> str:
             except (UnicodeDecodeError, OSError):
                 continue
             import re
+
             pattern = rf"def test_\w*{re.escape(func_name)}\w*"
             matches = re.findall(pattern, content)
             for m in matches:
-                results.append({
-                    "test_file": str(test_file.relative_to(project_root)),
-                    "test_function": m.replace("def ", ""),
-                    "confidence": 0.7,
-                    "strategy": "function_name_match",
-                })
+                results.append(
+                    {
+                        "test_file": str(test_file.relative_to(project_root)),
+                        "test_function": m.replace("def ", ""),
+                        "confidence": 0.7,
+                        "strategy": "function_name_match",
+                    }
+                )
 
     if not results:
         return "(未找到对应测试)"

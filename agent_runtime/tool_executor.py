@@ -47,8 +47,11 @@ class ToolExecutor:
     """
 
     def __init__(
-        self, agent, approval_policy: str = "ask",
-        dry_run: bool = False, quota: "QuotaEnforcer | None" = None,
+        self,
+        agent,
+        approval_policy: str = "ask",
+        dry_run: bool = False,
+        quota: "QuotaEnforcer | None" = None,
     ):
         self.agent = agent
         self.approval_policy = approval_policy or agent.config.approval
@@ -122,8 +125,7 @@ class ToolExecutor:
             if not self._approve(name, args):
                 return ToolExecutionResult(
                     content=(
-                        f"Error: 工具 '{name}' 调用被拒绝"
-                        f"（approval_policy={self.approval_policy}）"
+                        f"Error: 工具 '{name}' 调用被拒绝（approval_policy={self.approval_policy}）"
                     ),
                     metadata={"tool_status": "rejected", "tool_error_code": "approval_denied"},
                 )
@@ -177,10 +179,7 @@ class ToolExecutor:
         """检查最近 2 次工具调用的 name+args 是否与本次完全相同。"""
         history = self.agent.session.get("history", [])
         # 提取有 tool_name 的记录
-        tool_calls = [
-            h for h in history
-            if h.get("tool_name")
-        ]
+        tool_calls = [h for h in history if h.get("tool_name")]
         recent = tool_calls[-2:]
         if len(recent) < 2:
             return False

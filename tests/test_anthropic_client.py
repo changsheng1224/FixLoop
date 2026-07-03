@@ -46,9 +46,7 @@ def client():
     """创建 AnthropicCompatibleModelClient 实例。"""
     return AnthropicCompatibleModelClient(
         model=os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"),
-        base_url=os.environ.get(
-            "DEEPSEEK_BASE_URL", "https://api.deepseek.com/anthropic/v1"
-        ),
+        base_url=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/anthropic/v1"),
         api_key=API_KEY,
         temperature=0.2,
         timeout=30,
@@ -71,9 +69,7 @@ class TestAnthropicClientIntegration:
     def test_returns_chinese_text(self, client):
         """发送中文 prompt，验证返回中文响应。"""
         # 中文 token 密度低 + thinking tokens，需较大限额
-        result = client.complete(
-            "请用一句话介绍 Python。", max_new_tokens=800
-        )
+        result = client.complete("请用一句话介绍 Python。", max_new_tokens=800)
         assert len(result.strip()) > 0
         # 至少包含一些中文字符
         has_chinese = bool(re.search(r"[一-鿿]", result))
@@ -84,9 +80,7 @@ class TestExtractText:
     """_extract_text 单元测试。"""
 
     def test_anthropic_format(self):
-        client = AnthropicCompatibleModelClient(
-            model="test", base_url="http://x", api_key="x"
-        )
+        client = AnthropicCompatibleModelClient(model="test", base_url="http://x", api_key="x")
         data = {
             "content": [
                 {"type": "text", "text": "Hello "},
@@ -96,14 +90,10 @@ class TestExtractText:
         assert client._extract_text(data) == "Hello World"
 
     def test_openai_format(self):
-        client = AnthropicCompatibleModelClient(
-            model="test", base_url="http://x", api_key="x"
-        )
+        client = AnthropicCompatibleModelClient(model="test", base_url="http://x", api_key="x")
         data = {"choices": [{"message": {"content": "response text"}}]}
         assert client._extract_text(data) == "response text"
 
     def test_empty_response(self):
-        client = AnthropicCompatibleModelClient(
-            model="test", base_url="http://x", api_key="x"
-        )
+        client = AnthropicCompatibleModelClient(model="test", base_url="http://x", api_key="x")
         assert client._extract_text({}) == ""

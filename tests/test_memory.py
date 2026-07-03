@@ -1,6 +1,5 @@
 """三层记忆系统单测：Working Memory + Episodic Memory。"""
 
-
 import pytest
 
 from agent_runtime.features.memory import (
@@ -66,7 +65,7 @@ class TestWorkingMemory:
     def test_remember_file_deduplicates(self, state):
         remember_file(state, "a.py")
         remember_file(state, "b.py")
-        remember_file(state, "a.py")   # 重复 → 移到末尾
+        remember_file(state, "a.py")  # 重复 → 移到末尾
         assert state["working"]["recent_files"] == ["b.py", "a.py"]
 
     def test_remember_file_trim(self, state):
@@ -116,8 +115,9 @@ class TestEpisodicMemory:
         assert state["episodic_notes"][-1]["text"].startswith("note ")
 
     def test_retrieval_by_tag(self, state):
-        append_note(state, "TypeError at calculator.py:42",
-                     tags=["type_error", "python"], source="calc.py")
+        append_note(
+            state, "TypeError at calculator.py:42", tags=["type_error", "python"], source="calc.py"
+        )
         append_note(state, "ImportError: missing module", tags=["import_error"], source="app.py")
         results = retrieval_candidates(state, "type_error")
         assert len(results) == 1

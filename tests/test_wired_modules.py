@@ -52,10 +52,12 @@ class TestProgressCallback:
         """工具执行时 callback 被调用。"""
         config = AgentConfig(provider="fake", max_steps=3, max_new_tokens=2048)
         ws = WorkspaceContext.build(str(temp_workspace))
-        client = FakeModelClient([
-            '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
-            "<final>done</final>",
-        ])
+        client = FakeModelClient(
+            [
+                '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
+                "<final>done</final>",
+            ]
+        )
         agent2 = Agent(config=config, model_client=client, workspace=ws)
 
         buf = io.StringIO()
@@ -90,10 +92,10 @@ class TestDurableRetrieval:
         config = AgentConfig(provider="fake", max_steps=2, max_new_tokens=2048)
         ws = WorkspaceContext.build(str(temp_workspace))
         client = FakeModelClient(["<final>ok</final>"])
-        agent2 = Agent(config=config, model_client=client, workspace=ws,
-                       cwd=str(temp_workspace))
+        agent2 = Agent(config=config, model_client=client, workspace=ws, cwd=str(temp_workspace))
 
         from agent_runtime.context_manager import ContextManager
+
         cm = ContextManager(agent2)
         _, meta = cm.build("what tokenizer do we use?")
 
@@ -110,6 +112,7 @@ class TestCircuitBreakerWired:
         """熔断器 OPEN 时 Agent 优雅终止。"""
         # 直接设置 CB 为 OPEN 状态
         import time
+
         agent.circuit_breaker._state = State.OPEN
         agent.circuit_breaker._opened_at = time.time() + 999999  # 远在未来，不会恢复
 

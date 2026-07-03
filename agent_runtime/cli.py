@@ -16,37 +16,41 @@ def _make_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="agent_runtime", description="手写的 LLM Agent 运行时内核")
     p.add_argument("prompt", nargs="?", default=None, help="用户输入（缺省进入 REPL 模式）")
     p.add_argument("--cwd", default=".", help="工作目录")
-    p.add_argument("--provider", default=cfg.provider,
-                   help=f"模型 Provider（默认 {cfg.provider}）")
+    p.add_argument("--provider", default=cfg.provider, help=f"模型 Provider（默认 {cfg.provider}）")
     p.add_argument("--model", default=None, help=f"模型名称（默认 {cfg.model}）")
-    p.add_argument("--max-steps", type=int, default=cfg.max_steps,
-                   help=f"最大工具步数（默认 {cfg.max_steps}）")
-    p.add_argument("--temperature", type=float, default=cfg.temperature,
-                   help=f"模型温度（默认 {cfg.temperature}）")
+    p.add_argument(
+        "--max-steps", type=int, default=cfg.max_steps, help=f"最大工具步数（默认 {cfg.max_steps}）"
+    )
+    p.add_argument(
+        "--temperature",
+        type=float,
+        default=cfg.temperature,
+        help=f"模型温度（默认 {cfg.temperature}）",
+    )
     p.add_argument("--api-key", default=None, help="API Key（覆盖 .env）")
     p.add_argument("--base-url", default=None, help="API Base URL（覆盖 .env）")
-    p.add_argument("--approval", default=cfg.approval,
-                   choices=["auto", "ask", "never"],
-                   help=f"审批策略（默认 {cfg.approval}）")
-    p.add_argument("--quota-writes", type=int, default=20,
-                   help="每会话最大写入次数（默认 20）")
-    p.add_argument("--quota-shell", type=int, default=10,
-                   help="每会话最大 Shell 调用次数（默认 10）")
-    p.add_argument("--quota-total", type=int, default=50,
-                   help="每会话最大工具调用总数（默认 50）")
-    p.add_argument("--light-provider", default=None,
-                   help="轻量模型 Provider（如 ollama）")
-    p.add_argument("--light-model", default="qwen3.5:9b",
-                   help="轻量模型名称（默认 qwen3.5:9b）")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Dry-run 模式：不实际修改文件")
-    p.add_argument("--profile", default=None,
-                   choices=["dev", "prod", "ci"],
-                   help="预设配置: dev(宽松)/prod(默认)/ci(严格)")
-    p.add_argument("--health", action="store_true",
-                   help="健康检查：检查所有模块状态并退出")
-    p.add_argument("--resume", default=None,
-                   help="恢复会话（latest / session_id）")
+    p.add_argument(
+        "--approval",
+        default=cfg.approval,
+        choices=["auto", "ask", "never"],
+        help=f"审批策略（默认 {cfg.approval}）",
+    )
+    p.add_argument("--quota-writes", type=int, default=20, help="每会话最大写入次数（默认 20）")
+    p.add_argument(
+        "--quota-shell", type=int, default=10, help="每会话最大 Shell 调用次数（默认 10）"
+    )
+    p.add_argument("--quota-total", type=int, default=50, help="每会话最大工具调用总数（默认 50）")
+    p.add_argument("--light-provider", default=None, help="轻量模型 Provider（如 ollama）")
+    p.add_argument("--light-model", default="qwen3.5:9b", help="轻量模型名称（默认 qwen3.5:9b）")
+    p.add_argument("--dry-run", action="store_true", help="Dry-run 模式：不实际修改文件")
+    p.add_argument(
+        "--profile",
+        default=None,
+        choices=["dev", "prod", "ci"],
+        help="预设配置: dev(宽松)/prod(默认)/ci(严格)",
+    )
+    p.add_argument("--health", action="store_true", help="健康检查：检查所有模块状态并退出")
+    p.add_argument("--resume", default=None, help="恢复会话（latest / session_id）")
     return p
 
 
@@ -91,6 +95,7 @@ def main() -> int:
     print(f"[agent_runtime] workspace={agent.workspace.repo_root}", file=sys.stderr)
 
     from agent_runtime.callbacks import CLIProgressCallback
+
     answer = agent.ask(args.prompt, callback=CLIProgressCallback())
     print(answer)
     return 0
@@ -121,9 +126,14 @@ def _build_agent(args, config, workspace, model_client) -> Agent:
                 return agent
 
     # 默认：创建新 Agent
-    agent = Agent(config=config, model_client=model_client, workspace=workspace,
-                  cwd=args.cwd, light_client=_build_light_client(args),
-                  dry_run=args.dry_run)
+    agent = Agent(
+        config=config,
+        model_client=model_client,
+        workspace=workspace,
+        cwd=args.cwd,
+        light_client=_build_light_client(args),
+        dry_run=args.dry_run,
+    )
     # 应用 profile（覆盖配额和审批）
     if args.profile:
         _apply_profile(agent, args.profile)
@@ -172,6 +182,7 @@ def _health_check() -> int:
     # TikToken
     try:
         import tiktoken
+
         tiktoken.get_encoding("cl100k_base")
         result["tiktoken"] = "ok"
     except Exception:
@@ -192,6 +203,7 @@ def _health_check() -> int:
 
     # Semantic model
     from agent_runtime.features.memory.semantic import _get_semantic_model
+
     try:
         model = _get_semantic_model()
         result["semantic_model"] = "ok" if model else "unavailable"
@@ -259,6 +271,7 @@ def _build_light_client(args):
 
     if args.light_provider == "ollama":
         from agent_runtime.providers.clients import OllamaModelClient
+
         host = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
         return OllamaModelClient(model=args.light_model, host=host)
     elif args.light_provider in ("deepseek", "anthropic", "openai"):
@@ -276,7 +289,7 @@ def _repl_mode(args) -> int:
     print(f"workspace={agent.workspace.repo_root}", file=sys.stderr)
     if args.dry_run:
         print("\033[34m⚠ DRY-RUN MODE\033[0m", file=sys.stderr)
-    print('输入 /help 查看命令，/exit 退出', file=sys.stderr)
+    print("输入 /help 查看命令，/exit 退出", file=sys.stderr)
     print("─" * 50, file=sys.stderr)
 
     while True:
@@ -298,6 +311,7 @@ def _repl_mode(args) -> int:
 
         # 发送给 Agent
         from agent_runtime.callbacks import CLIProgressCallback
+
         print("", end="", flush=True)
         answer = agent.ask(user_input, callback=CLIProgressCallback())
         print(answer)
@@ -332,12 +346,10 @@ def _handle_command(cmd: str, agent: Agent) -> str:
         print(f"dry_run: {agent.dry_run}")
         cb = agent.circuit_breaker
         import time
+
         if cb.state == "open":
             remain = cb.recovery_timeout - (time.time() - cb._opened_at)
-            print(
-                f"CB: OPEN (恢复 {remain:.0f}s, "
-                f"失败 {cb._failure_count}/{cb.failure_threshold})"
-            )
+            print(f"CB: OPEN (恢复 {remain:.0f}s, 失败 {cb._failure_count}/{cb.failure_threshold})")
         elif cb.state == "half_open":
             print("CB: HALF_OPEN (探测中)")
         else:

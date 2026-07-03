@@ -30,7 +30,8 @@ def normalize_memory_state(state: dict, workspace_root: str) -> dict:
     working.setdefault("task_summary", "")
     working.setdefault("recent_files", [])
     working["recent_files"] = _filter_existing(
-        working["recent_files"][:MAX_RECENT_FILES], workspace_root)
+        working["recent_files"][:MAX_RECENT_FILES], workspace_root
+    )
     if "episodic_notes" not in state:
         state["episodic_notes"] = []
     state["episodic_notes"] = state["episodic_notes"][:MAX_EPISODIC_NOTES]

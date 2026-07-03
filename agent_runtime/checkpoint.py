@@ -13,7 +13,11 @@ CHECKPOINT_SCHEMA_VERSION = "1.0"
 
 # 组成 runtime 身份的配置字段
 RUNTIME_IDENTITY_KEYS = [
-    "cwd", "provider", "model", "approval", "max_steps",
+    "cwd",
+    "provider",
+    "model",
+    "approval",
+    "max_steps",
 ]
 
 
@@ -107,17 +111,17 @@ def evaluate_resume_state(agent) -> dict:
 
     # 判定状态
     if result["stale_files"] or result["identity_diff"]:
-        result["status"] = (
-            "workspace-mismatch" if result["identity_diff"] else "partial-stale"
-        )
+        result["status"] = "workspace-mismatch" if result["identity_diff"] else "partial-stale"
 
     return result
 
 
 def _resume_result(status: str, checkpoint: dict | None = None) -> dict:
     return {
-        "status": status, "stale_files": [],
-        "identity_diff": [], "last_checkpoint": checkpoint,
+        "status": status,
+        "stale_files": [],
+        "identity_diff": [],
+        "last_checkpoint": checkpoint,
     }
 
 

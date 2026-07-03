@@ -274,24 +274,23 @@ class RepairState:
         return cls(
             issue_input=data.get("issue_input", ""),
             repair_plan=(
-                RepairPlan.from_dict(data["repair_plan"])
-                if data.get("repair_plan") else None
+                RepairPlan.from_dict(data["repair_plan"]) if data.get("repair_plan") else None
             ),
             suspect_locations=[
-                SuspectLocation.from_dict(s)
-                for s in data.get("suspect_locations", [])
+                SuspectLocation.from_dict(s) for s in data.get("suspect_locations", [])
             ],
             retrieved_context=(
                 RetrievedContext.from_dict(data["retrieved_context"])
-                if data.get("retrieved_context") else None
+                if data.get("retrieved_context")
+                else None
             ),
             candidate_patches=[
-                CandidatePatch.from_dict(p)
-                for p in data.get("candidate_patches", [])
+                CandidatePatch.from_dict(p) for p in data.get("candidate_patches", [])
             ],
             verification_result=(
                 VerificationResult.from_dict(data["verification_result"])
-                if data.get("verification_result") else None
+                if data.get("verification_result")
+                else None
             ),
             feedback=data.get("feedback", ""),
             retry_count=data.get("retry_count", 0),

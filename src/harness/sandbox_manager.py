@@ -8,7 +8,8 @@
 import io
 import os
 import tarfile
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,6 +49,7 @@ class SandboxManager:
     def docker(self):
         if self._docker is None:
             import docker
+
             self._docker = docker.from_env()
         return self._docker
 
@@ -131,10 +133,21 @@ class SandboxManager:
             # 只打包 Python 源码和配置（跳过 .git, __pycache__, .agent 等）
             for root, dirs, files in os.walk(src):
                 # 跳过非必要目录
-                dirs[:] = [d for d in dirs if d not in {
-                    ".git", "__pycache__", ".pytest_cache", ".agent",
-                    ".venv", "venv", "node_modules", ".ruff_cache",
-                }]
+                dirs[:] = [
+                    d
+                    for d in dirs
+                    if d
+                    not in {
+                        ".git",
+                        "__pycache__",
+                        ".pytest_cache",
+                        ".agent",
+                        ".venv",
+                        "venv",
+                        "node_modules",
+                        ".ruff_cache",
+                    }
+                ]
                 for name in files:
                     if name.endswith((".pyc", ".pyo")):
                         continue

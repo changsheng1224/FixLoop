@@ -5,7 +5,7 @@
 
 import json
 
-from src.harness.sandbox_manager import BUILD_TIMEOUT_S, TEST_TIMEOUT_S
+from src.harness.sandbox_manager import TEST_TIMEOUT_S
 from src.state import VerificationResult
 
 
@@ -27,15 +27,14 @@ class PythonTestRunner:
         """
         target = test_path.strip() if test_path else "."
         if target.startswith("/code/"):
-            target = target[len("/code/"):]
+            target = target[len("/code/") :]
         pytest_target = f"/code/{target}" if target != "." else "/code"
         # Step 1: 运行测试（构建已在 sandbox_build 中完成）
-        test_cmd = (
-            f"pytest {pytest_target} --json-report "
-            f"--json-report-file=/code/.report.json -v"
-        )
+        test_cmd = f"pytest {pytest_target} --json-report --json-report-file=/code/.report.json -v"
         test = self.manager.execute(
-            sandbox, f"/entrypoint.sh test {test_cmd}", timeout=TEST_TIMEOUT_S,
+            sandbox,
+            f"/entrypoint.sh test {test_cmd}",
+            timeout=TEST_TIMEOUT_S,
         )
 
         # 尝试解析 JSON 报告
@@ -90,7 +89,5 @@ class PythonTestRunner:
             passed=passed,
             failed=failed,
             error=error,
-            failure_logs=failure_logs or (
-                ["未收集到任何测试"] if total == 0 else []
-            ),
+            failure_logs=failure_logs or (["未收集到任何测试"] if total == 0 else []),
         )

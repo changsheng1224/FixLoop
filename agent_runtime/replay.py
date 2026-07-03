@@ -66,10 +66,12 @@ class ReplayRunner:
             # 重新执行工具（需要参数信息）
             # trace 中只记录了 tool name，没有 args
             # 实际使用时需要从 history 重建 args
-            result.diffs.append({
-                "tool": tool_name,
-                "expected": "(trace recorded)",
-                "actual": "(args unavailable from trace alone)",
-            })
+            result.diffs.append(
+                {
+                    "tool": tool_name,
+                    "expected": "(trace recorded)",
+                    "actual": "(args unavailable from trace alone)",
+                }
+            )
 
         return result
