@@ -20,6 +20,8 @@ class CaseResult:
     error: str = ""
     introduced_regression: bool = False
     status: str = ""
+    variant: str = ""
+    run_index: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -36,6 +38,8 @@ class CaseResult:
             "error": self.error,
             "introduced_regression": self.introduced_regression,
             "status": self.status,
+            "variant": self.variant,
+            "run_index": self.run_index,
         }
 
 

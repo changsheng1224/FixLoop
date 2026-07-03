@@ -9,8 +9,11 @@ from agent_runtime.workspace import WorkspaceContext
 
 from src.agents.localizer import create_localizer
 from src.agents.patcher import create_patcher
+from src.eval.baseline import make_single_agent_factory
+from src.eval.fake_runner import fake_orchestrator_factory
+from src.eval.runner import DEFAULT_CASES_DIR
 from src.orchestrator import Orchestrator
-from src.repair_factory import create_model_client, try_create_verifier
+from src.repair_factory import create_model_client, make_orchestrator_factory, try_create_verifier
 from src.state import RepairState, RetrievedContext, SuspectLocation
 
 
@@ -64,3 +67,29 @@ def make_no_retriever_factory(
         return orch
 
     return factory
+
+
+def build_ablation_variants(
+    *,
+    fake: bool = False,
+    skip_verify: bool = True,
+    model_client=None,
+    cases_dir: str | Path | None = None,
+) -> dict[str, Callable[[str], object]]:
+    """构建 full / single / no_retriever 三组消融变体工厂。"""
+    cases_path = Path(cases_dir or DEFAULT_CASES_DIR)
+    if fake:
+        factory = fake_orchestrator_factory(cases_path)
+        return {"full": factory, "single": factory, "no_retriever": factory}
+
+    return {
+        "full": make_orchestrator_factory(
+            skip_verify=skip_verify,
+            model_client=model_client,
+        ),
+        "single": make_single_agent_factory(model_client=model_client),
+        "no_retriever": make_no_retriever_factory(
+            skip_verify=skip_verify,
+            model_client=model_client,
+        ),
+    }
