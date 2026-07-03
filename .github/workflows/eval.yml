@@ -1,8 +1,11 @@
+# FixLoop Eval CI — 默认不自动运行。
+# 启用：取消下方 push 注释，并注释掉 workflow_dispatch。
 name: Eval
 
 on:
-  push:
-    branches: [master]
+  workflow_dispatch:
+  # push:
+  #   branches: [master]
 
 jobs:
   eval:

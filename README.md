@@ -196,7 +196,7 @@ python -m src.eval.regression_check \
   --baseline src/eval/ci_baseline_report.json
 ```
 
-GitHub Actions：`test.yml`（push/PR → pytest + ruff）、`eval.yml`（push master → Docker build + fake eval + regression_check）。
+GitHub Actions 配置在 [`.github/workflows/`](.github/workflows/)（**默认不自动触发**，仅 `workflow_dispatch` 或本地命令）。启用方法见 [`.github/workflows/README.md`](.github/workflows/README.md)。
 
 分支与 PR 流程见 [`CLAUDE.md`](CLAUDE.md)。架构与设计决策见 [`ARCHITECTURE.md`](ARCHITECTURE.md)、[`docs/design-decisions.md`](docs/design-decisions.md)。Layer 1 模块导读见 [`LAYER1_GUIDE.md`](LAYER1_GUIDE.md)。
 
