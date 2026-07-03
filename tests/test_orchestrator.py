@@ -1,7 +1,5 @@
 """Orchestrator 集成测试：FakeClient 模拟完整修复流水线。"""
 
-import pytest
-
 from agent_runtime.providers.clients import FakeModelClient
 from agent_runtime.workspace import WorkspaceContext
 from src.agents.localizer import create_localizer
@@ -9,11 +7,6 @@ from src.agents.patcher import create_patcher
 from src.agents.retriever import create_retriever
 from src.orchestrator import Orchestrator, apply_patch_to_text
 from src.state import CandidatePatch, RepairPlan, SuspectLocation
-
-
-@pytest.fixture
-def workspace(temp_workspace):
-    return WorkspaceContext.build(str(temp_workspace))
 
 
 class TestOrchestrator:

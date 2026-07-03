@@ -12,12 +12,16 @@ from src.eval.runner import DEFAULT_CASES_DIR, EvalRunner
 from src.repair_factory import make_orchestrator_factory
 
 
-def resolve_report_path(output: str) -> tuple[Path, Path]:
+def resolve_json_output_path(output: str, default_filename: str) -> tuple[Path, Path]:
     """解析 --output：可为目录或 .json 文件路径。"""
     out = Path(output)
     if output.endswith(".json"):
         return out.parent if str(out.parent) not in ("", ".") else Path("eval_results"), out
-    return out, out / "eval_report.json"
+    return out, out / default_filename
+
+
+def resolve_report_path(output: str) -> tuple[Path, Path]:
+    return resolve_json_output_path(output, "eval_report.json")
 
 
 def print_eval_report(report: EvalReport, verbose: bool, report_path: Path) -> None:
@@ -88,11 +92,7 @@ def run_eval(
 
 
 def resolve_ablation_report_path(output: str) -> tuple[Path, Path]:
-    """解析 ablation --output：可为目录或 .json 文件路径。"""
-    out = Path(output)
-    if output.endswith(".json"):
-        return out.parent if str(out.parent) not in ("", ".") else Path("eval_results"), out
-    return out, out / "ablation_report.json"
+    return resolve_json_output_path(output, "ablation_report.json")
 
 
 def print_ablation_report(report: dict, verbose: bool, report_path: Path) -> None:

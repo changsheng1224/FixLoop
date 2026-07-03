@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 
 from agent_runtime.providers.clients import AnthropicCompatibleModelClient
 from agent_runtime.workspace import WorkspaceContext
@@ -13,6 +14,8 @@ from src.agents.patcher import create_patcher
 from src.agents.retriever import create_retriever
 from src.agents.verifier import create_verifier
 from src.orchestrator import Orchestrator
+
+O = TypeVar("O", bound=Orchestrator)
 
 
 def load_dotenv() -> None:
@@ -54,6 +57,34 @@ def try_create_verifier(client, ws, repo: str):
         return None
 
 
+def wire_orchestrator(
+    client,
+    repo_path: str,
+    *,
+    orch_class: type[O] = Orchestrator,
+    with_retriever: bool = True,
+    skip_verify: bool = False,
+    dry_run: bool = False,
+) -> O:
+    """装配 Localizer / Retriever / Patcher / 可选 Verifier。"""
+    ws = WorkspaceContext.build(repo_path)
+    repo = str(Path(repo_path).resolve())
+    localizer = create_localizer(client, ws, cwd=repo)
+    retriever = create_retriever(client, ws, cwd=repo) if with_retriever else None
+    patcher = create_patcher(client, ws, cwd=repo)
+    if dry_run:
+        localizer.dry_run = True
+        if retriever is not None:
+            retriever.dry_run = True
+        patcher.dry_run = True
+    orch = orch_class(localizer, retriever, patcher, use_pytest_verify=not skip_verify)
+    if not skip_verify:
+        verifier = try_create_verifier(client, ws, repo)
+        if verifier:
+            orch.verifier = verifier
+    return orch
+
+
 def make_orchestrator_factory(
     *,
     skip_verify: bool = False,
@@ -65,21 +96,11 @@ def make_orchestrator_factory(
     client = create_model_client(model_client)
 
     def factory(repo_path: str) -> Orchestrator:
-        ws = WorkspaceContext.build(repo_path)
-        repo = str(Path(repo_path).resolve())
-        localizer = create_localizer(client, ws, cwd=repo)
-        retriever = create_retriever(client, ws, cwd=repo)
-        patcher = create_patcher(client, ws, cwd=repo)
-        if dry_run:
-            localizer.dry_run = True
-            retriever.dry_run = True
-            patcher.dry_run = True
-        use_pytest = not skip_verify
-        orch = Orchestrator(localizer, retriever, patcher, use_pytest_verify=use_pytest)
-        if not skip_verify:
-            verifier = try_create_verifier(client, ws, repo)
-            if verifier:
-                orch.verifier = verifier
-        return orch
+        return wire_orchestrator(
+            client,
+            repo_path,
+            skip_verify=skip_verify,
+            dry_run=dry_run,
+        )
 
     return factory

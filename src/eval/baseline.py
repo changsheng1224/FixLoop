@@ -19,7 +19,7 @@ from src.orchestrator import Orchestrator
 from src.repair_factory import create_model_client
 from src.state import RepairState
 from src.tools.registry import build_repair_tools
-from src.tools.sandbox_tools import sandbox_build, sandbox_test, sandbox_verify
+from src.tools.sandbox_tools import build_sandbox_tool_registry
 
 BASELINE_SYSTEM_PROMPT = (
     "你是代码修复专家。分析错误、定位代码、生成补丁、在容器内验证修复。你可以使用所有工具。"
@@ -29,28 +29,7 @@ BASELINE_SYSTEM_PROMPT = (
 def _build_baseline_tools(ctx: ToolContext) -> dict:
     tools = build_tool_registry(ctx)
     tools.update(build_repair_tools(ctx))
-    tools.update(
-        {
-            "sandbox_build": {
-                "schema": {"repo_path": "str"},
-                "risky": False,
-                "description": "在 Docker 容器内执行 pip install。参数: repo_path",
-                "run": lambda args: sandbox_build(ctx, args),
-            },
-            "sandbox_test": {
-                "schema": {"repo_path": "str", "test_path": "str="},
-                "risky": False,
-                "description": "在 Docker 容器内运行 pytest。参数: repo_path, test_path",
-                "run": lambda args: sandbox_test(ctx, args),
-            },
-            "sandbox_verify": {
-                "schema": {"repo_path": "str", "test_path": "str="},
-                "risky": False,
-                "description": "单容器 build+test。参数: repo_path, test_path",
-                "run": lambda args: sandbox_verify(ctx, args),
-            },
-        }
-    )
+    tools.update(build_sandbox_tool_registry(ctx))
     return tools
 
 

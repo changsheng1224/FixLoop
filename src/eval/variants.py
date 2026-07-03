@@ -5,15 +5,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from agent_runtime.workspace import WorkspaceContext
-
-from src.agents.localizer import create_localizer
-from src.agents.patcher import create_patcher
 from src.eval.baseline import make_single_agent_factory
 from src.eval.fake_runner import fake_orchestrator_factory
 from src.eval.runner import DEFAULT_CASES_DIR
 from src.orchestrator import Orchestrator
-from src.repair_factory import create_model_client, make_orchestrator_factory, try_create_verifier
+from src.repair_factory import create_model_client, make_orchestrator_factory, wire_orchestrator
 from src.state import RepairState, RetrievedContext, SuspectLocation
 
 
@@ -52,19 +48,14 @@ def make_no_retriever_factory(
     client = create_model_client(model_client)
 
     def factory(repo_path: str) -> NoRetrieverOrchestrator:
-        ws = WorkspaceContext.build(repo_path)
-        repo = str(Path(repo_path).resolve())
-        localizer = create_localizer(client, ws, cwd=repo)
-        patcher = create_patcher(client, ws, cwd=repo)
-        if dry_run:
-            localizer.dry_run = True
-            patcher.dry_run = True
-        orch = NoRetrieverOrchestrator(localizer, None, patcher, use_pytest_verify=not skip_verify)
-        if not skip_verify:
-            verifier = try_create_verifier(client, ws, repo)
-            if verifier:
-                orch.verifier = verifier
-        return orch
+        return wire_orchestrator(
+            client,
+            repo_path,
+            orch_class=NoRetrieverOrchestrator,
+            with_retriever=False,
+            skip_verify=skip_verify,
+            dry_run=dry_run,
+        )
 
     return factory
 

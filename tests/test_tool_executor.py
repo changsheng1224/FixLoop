@@ -6,17 +6,11 @@ from agent_runtime.config import AgentConfig
 from agent_runtime.providers.clients import FakeModelClient
 from agent_runtime.runtime import Agent
 from agent_runtime.tool_executor import ToolExecutionResult, ToolExecutor
-from agent_runtime.workspace import WorkspaceContext
 
 
 @pytest.fixture
 def config():
     return AgentConfig(provider="fake", max_steps=4, approval="auto")
-
-
-@pytest.fixture
-def workspace(temp_workspace):
-    return WorkspaceContext.build(str(temp_workspace))
 
 
 @pytest.fixture
