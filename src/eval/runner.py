@@ -110,7 +110,7 @@ class EvalRunner:
         orchestrator_factory: Callable[[str], object],
         cases_dir: str | Path | None = None,
         output_dir: str | Path | None = None,
-        skip_verify: bool = True,
+        skip_verify: bool = False,
     ):
         self.orchestrator_factory = orchestrator_factory
         self.cases_dir = Path(cases_dir or DEFAULT_CASES_DIR)
@@ -140,6 +140,9 @@ class EvalRunner:
 
         meta = load_case_metadata(case_dir)
         issue = (case_dir / "issue.txt").read_text(encoding="utf-8").strip()
+        source_files = meta.get("source_files") or []
+        if source_files:
+            issue = f"{issue}\n\nCandidate source files: {', '.join(source_files)}"
         minimal_lines = _read_min_lines(case_dir)
 
         with tempfile.TemporaryDirectory(prefix=f"fixloop_eval_{case_id}_") as tmp:

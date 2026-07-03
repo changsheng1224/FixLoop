@@ -114,7 +114,7 @@ class AblationRunner:
         variants: dict[str, Callable[[str], object]],
         cases_dir: str | Path | None = None,
         output_dir: str | Path | None = None,
-        skip_verify: bool = True,
+        skip_verify: bool = False,
     ):
         self.variants = variants
         self.cases_dir = Path(cases_dir or DEFAULT_CASES_DIR)

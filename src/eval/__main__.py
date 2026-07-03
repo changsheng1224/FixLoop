@@ -21,7 +21,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Fake Orchestrator（应用 expected_patch，无需 API）",
     )
-    parser.add_argument("--with-verify", action="store_true", help="启用 Docker Verifier")
+    parser.add_argument(
+        "--skip-verify",
+        action="store_true",
+        help="禁用 Verifier 重试（默认启用 pytest/Docker 验证）",
+    )
+    parser.add_argument("--with-verify", action="store_true", help="（已默认启用）显式开启 Verifier")
     args = parser.parse_args(argv)
 
     if not args.all and not args.cases:
@@ -36,7 +41,7 @@ def main(argv: list[str] | None = None) -> int:
         output=args.output,
         verbose=args.verbose,
         fake=args.fake,
-        skip_verify=not args.with_verify,
+        skip_verify=args.skip_verify,
     )
     print_eval_report(report, verbose=args.verbose, report_path=report_path)
     return code

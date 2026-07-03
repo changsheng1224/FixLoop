@@ -34,11 +34,12 @@ class Orchestrator:
     不调 LLM，只做调度和状态管理。
     """
 
-    def __init__(self, localizer, retriever, patcher, verifier=None):
+    def __init__(self, localizer, retriever, patcher, verifier=None, *, use_pytest_verify: bool = False):
         self.localizer = localizer
         self.retriever = retriever
         self.patcher = patcher
         self.verifier = verifier
+        self.use_pytest_verify = use_pytest_verify
         # 修复目标目录：优先 --repo / Agent cwd，而非 git 顶层仓库
         self._repo_root = str(Path.cwd())
         if localizer is not None:
@@ -135,6 +136,7 @@ class Orchestrator:
 
         # Step 4: Patcher → Verifier → 自愈
         while state.retry_count < max_retries:
+            repo_snapshot = self._snapshot_repo() if self._verification_enabled() else None
             print(
                 f"[{_ts()}] Patcher 开始 (retry={state.retry_count})...\n",
                 end="",
@@ -150,12 +152,18 @@ class Orchestrator:
                 f"[{_ts()}] Patcher 完成: {ms}ms, {n}个补丁\n", end="", file=_sys.stderr, flush=True
             )
 
-            if self.verifier is None:
-                state.status = "patched"
+            if not self._verification_enabled():
+                state.status = "patched" if state.candidate_patches else "failed"
                 break
 
             if not state.candidate_patches:
-                state.feedback = "补丁生成失败（模型返回无法解析的 JSON）。请重新生成。"
+                if state.agent_errors.pop("patcher_apply", None):
+                    state.feedback = (
+                        "补丁 JSON 解析成功但未能写入文件。"
+                        "original_lines 必须与预读代码完全一致；优先使用 diff 字段。"
+                    )
+                else:
+                    state.feedback = "补丁生成失败（模型返回无法解析的 JSON）。请重新生成。"
                 state.retry_count += 1
                 continue
 
@@ -170,10 +178,15 @@ class Orchestrator:
                 state.status = "fixed"
                 break
 
-            # 验证失败 → 回滚被修改的文件 → 反馈给 Patcher
-            self._revert_changes(state)
+            if repo_snapshot is not None:
+                self._restore_repo_snapshot(repo_snapshot)
+            else:
+                self._revert_changes(state)
             state.feedback = self._build_feedback(state.verification_result)
             state.retry_count += 1
+
+        if state.status not in ("fixed", "patched"):
+            state.status = "exhausted" if state.retry_count >= max_retries else "failed"
 
         state.node_timings = timings
         self._attach_token_usage(state)
@@ -190,18 +203,36 @@ class Orchestrator:
         """正则解析 Issue 文本，提取语言/异常类型/文件名。"""
         plan = RepairPlan(language="python")
 
-        # 异常类型
-        exc_match = re.search(r"(\w+(?:Error|Exception|Warning))", issue)
-        if exc_match:
-            exc_type = exc_match.group(1)
-            plan.issue_type = self._classify_error(exc_type)
+        has_import_err = bool(
+            re.search(r"ModuleNotFoundError|ImportError", issue, re.IGNORECASE)
+        )
+        has_type_err = bool(re.search(r"TypeError", issue, re.IGNORECASE))
+        if re.search(r"composite", issue, re.IGNORECASE) or (has_import_err and has_type_err):
+            plan.issue_type = "composite"
+        else:
+            exc_match = re.search(r"(\w+(?:Error|Exception|Warning))", issue)
+            if exc_match:
+                exc_type = exc_match.group(1)
+                plan.issue_type = self._classify_error(exc_type)
+            if re.search(r"pyproject\.toml|\[tool\.", issue, re.IGNORECASE):
+                plan.issue_type = "config_error"
 
-        # 文件名和行号
-        file_match = re.search(r'File\s+"([^"]+)"', issue)
-        if not file_match:
+        for file_match in re.finditer(r'File\s+"([^"]+)"', issue):
+            name = file_match.group(1).replace("\\", "/")
+            if name not in plan.suspect_files:
+                plan.suspect_files.append(name)
+
+        candidate_match = re.search(r"Candidate source files:\s*(.+)", issue, re.IGNORECASE)
+        if candidate_match:
+            for raw in candidate_match.group(1).split(","):
+                name = raw.strip().replace("\\", "/")
+                if name and name not in plan.suspect_files:
+                    plan.suspect_files.append(name)
+
+        if not plan.suspect_files:
             file_match = re.search(r"at (\S+\.py)", issue)
-        if file_match:
-            plan.suspect_files.append(Path(file_match.group(1)).name)
+            if file_match:
+                plan.suspect_files.append(Path(file_match.group(1)).name)
 
         line_no = self._parse_file_line(issue, plan.suspect_files[0] if plan.suspect_files else "")
         if line_no and plan.suspect_files:
@@ -302,11 +333,41 @@ class Orchestrator:
             "TypeError": "type_error",
             "ImportError": "import_error",
             "ModuleNotFoundError": "import_error",
+            "KeyError": "config_error",
             "AttributeError": "attribute_error",
             "ValueError": "value_error",
             "SyntaxError": "syntax_error",
         }
         return mapping.get(exc_type, "unknown")
+
+    def _verification_enabled(self) -> bool:
+        return self.verifier is not None or self.use_pytest_verify
+
+    _SNAPSHOT_SKIP_DIRS = frozenset({".agent", ".pytest_cache", "__pycache__", ".git"})
+
+    def _snapshot_repo(self) -> dict[str, str]:
+        root = Path(self._repo_root)
+        snap: dict[str, str] = {}
+        if not root.is_dir():
+            return snap
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(root).as_posix()
+            if any(part in self._SNAPSHOT_SKIP_DIRS for part in Path(rel).parts):
+                continue
+            try:
+                snap[rel] = path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue
+        return snap
+
+    def _restore_repo_snapshot(self, snapshot: dict[str, str]) -> None:
+        root = Path(self._repo_root)
+        for rel, content in snapshot.items():
+            target = root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
 
     def _call_model(self, agent, prompt: str) -> tuple[str, int]:
         """直接调用模型（绕过 Agent loop），返回 (answer, elapsed_ms)。"""
@@ -494,7 +555,7 @@ class Orchestrator:
         try:
             raw = self.patcher.model_client.complete(
                 full_prompt,
-                max_new_tokens=min(self.patcher.config.max_new_tokens or 4096, 2048),
+                max_new_tokens=self.patcher.config.max_new_tokens or 4096,
             )
         except Exception as e:
             state.agent_errors["patcher"] = str(e)
@@ -520,15 +581,16 @@ class Orchestrator:
                 flush=True,
             )
 
-        applied = self._apply_patches_on_disk(patches)
-        if patches and not applied:
+        applied_patches = self._apply_patches_on_disk(patches)
+        if patches and not applied_patches:
             print("  [patcher] ⚠ 补丁解析成功但未写入任何文件", file=_sys.stderr, flush=True)
+            state.agent_errors["patcher_apply"] = "apply_failed"
 
-        return patches
+        return applied_patches
 
-    def _apply_patches_on_disk(self, patches: list[CandidatePatch]) -> int:
-        """将补丁写入宿主机仓库，返回成功应用的补丁数。"""
-        applied = 0
+    def _apply_patches_on_disk(self, patches: list[CandidatePatch]) -> list[CandidatePatch]:
+        """将补丁写入宿主机仓库，返回成功应用的补丁列表。"""
+        applied: list[CandidatePatch] = []
         for p in patches:
             file_path = self._resolve_repo_file(p.file_path)
             if file_path is None:
@@ -549,12 +611,20 @@ class Orchestrator:
                 )
                 continue
 
+            new_text = _sync_import_symbol_usages(text, new_text, p)
             file_path.write_text(new_text, encoding="utf-8")
-            applied += 1
+            applied.append(p)
         return applied
 
     def _run_verifier(self, state: RepairState) -> "VerificationResult":
-        """直连 Docker harness 验证（与 Patcher 相同，不走 LLM Agent loop）。"""
+        """Docker 沙箱或本地 pytest 验证（不走 LLM Agent loop）。"""
+        if self.verifier is not None:
+            return self._run_docker_verifier(state)
+        if self.use_pytest_verify:
+            return self._run_pytest_verifier(state)
+        return VerificationResult(all_passed=False, failure_logs=["verifier 未配置"])
+
+    def _run_docker_verifier(self, state: RepairState) -> "VerificationResult":
         from src.tools.sandbox_tools import run_sandbox_verification
 
         test_path = self._pick_test_path(state)
@@ -585,6 +655,26 @@ class Orchestrator:
                 flush=True,
             )
         return result
+
+    def _run_pytest_verifier(self, state: RepairState) -> VerificationResult:
+        from src.eval.runner import run_pytest
+
+        t0 = time.time()
+        code, out = run_pytest(Path(self._repo_root))
+        elapsed_ms = int((time.time() - t0) * 1000)
+        state.node_timings["verifier_internal"] = {"pytest_ms": elapsed_ms}
+        passed = code == 0
+        if not passed:
+            print(
+                f"  [verifier] pytest 失败 (exit={code})\n",
+                end="",
+                file=_sys.stderr,
+                flush=True,
+            )
+        return VerificationResult(
+            all_passed=passed,
+            failure_logs=[out[-2000:]] if out and not passed else [],
+        )
 
     def _pick_test_path(self, state: RepairState) -> str:
         """从 Retriever 结果中提取 pytest nodeid，避免跑全量 tests/。"""
@@ -694,10 +784,26 @@ class Orchestrator:
                 "修复提示: 这是类型错误。若测试断言期望数字结果，"
                 "请用 int()/float() 做数值转换，禁止 str() 拼接。"
             )
-        if plan and plan.issue_type == "import_error":
+        if plan and plan.issue_type in ("import_error", "composite"):
             parts.append(
                 "修复提示: import 错误通常修正 import 路径或模块名（如 helper → helpers）。"
                 "只修改下方已提供的源文件，不要引用其他项目文件名。"
+            )
+            if re.search(r"cannot import name", issue, re.IGNORECASE):
+                parts.append(
+                    "修复提示: 除 import 行外，须同步修改本文件内对错误符号名的所有调用。"
+                )
+        if plan and plan.issue_type == "composite":
+            parts.append(
+                "修复提示: 复合错误可能需修改多个文件（import + 类型转换）。"
+                "输出 JSON 数组，每项对应一个 file_path；"
+                f"至少修改 {len(plan.suspect_files or [])} 个相关文件中的每一处错误。"
+            )
+        if plan and plan.issue_type == "config_error":
+            parts.append(
+                "修复提示: 配置错误通常需修改 pyproject.toml。"
+                "使用 diff 字段追加 TOML 段（如 [tool.eval]），"
+                "不要改 unrelated 字段；JSON 中 diff 用 \\n 表示换行，避免 multiline original_lines。"
             )
         if issue and "concatenate str" in issue.lower():
             parts.append(
@@ -722,6 +828,17 @@ class Orchestrator:
                     parts.append(snippet)
                 else:
                     parts.append(f"    ⚠ 文件不存在: {s.file_path}")
+
+        if plan and plan.issue_type == "composite" and plan.suspect_files:
+            seen_paths = {s.file_path for s in effective_suspects if s.file_path}
+            extra = [fp for fp in plan.suspect_files if fp not in seen_paths]
+            if extra:
+                parts.append("其他相关源文件（代码已预读）:")
+                for fp in extra:
+                    snippet = self._read_code_snippet(fp, 1, 80)
+                    if snippet:
+                        parts.append(f"  - {fp}")
+                        parts.append(snippet)
 
         test_blocks = self._read_test_context(context, effective_suspects, plan)
         if test_blocks:
@@ -921,9 +1038,137 @@ def apply_patch_to_text(text: str, patch: CandidatePatch) -> str | None:
             return replaced
 
     if patch.diff:
-        return _apply_unified_diff(text, patch.diff)
+        result = _apply_unified_diff(text, patch.diff)
+        if result is not None:
+            return result
+        return _apply_import_line_fallback(text, patch.diff)
 
     return None
+
+
+def _sync_import_symbol_usages(old_text: str, new_text: str, patch: CandidatePatch) -> str:
+    """import 符号重命名后，同步替换文件内对旧符号的调用。"""
+    rename = _infer_import_symbol_rename(old_text, new_text, patch)
+    if not rename:
+        return new_text
+    old_sym, new_sym = rename
+    return re.sub(rf"\b{re.escape(old_sym)}\s*\(", f"{new_sym}(", new_text)
+
+
+def _infer_import_symbol_rename(
+    old_text: str, new_text: str, patch: CandidatePatch
+) -> tuple[str, str] | None:
+    """从 import 行变更推断符号重命名（hello → greet）。"""
+    candidates: list[tuple[str, str]] = []
+    if patch.original_lines and patch.patched_lines:
+        pair = _extract_import_symbol_pair(patch.original_lines, patch.patched_lines)
+        if pair:
+            candidates.append(pair)
+    minus, plus = _extract_diff_line_pairs(patch.diff or "")
+    if minus and plus:
+        pair = _extract_import_symbol_pair(minus[0], plus[0])
+        if pair:
+            candidates.append(pair)
+    old_lines = old_text.splitlines()
+    new_lines = new_text.splitlines()
+    for old_sym, new_sym in candidates:
+        if old_sym == new_sym:
+            continue
+        for old_line, new_line in zip(old_lines, new_lines):
+            if old_line == new_line:
+                continue
+            if not _is_import_line(old_line) or not _is_import_line(new_line):
+                continue
+            if old_sym in old_line and new_sym in new_line:
+                return old_sym, new_sym
+    return None
+
+
+def _extract_import_symbol_pair(old_line: str, new_line: str) -> tuple[str, str] | None:
+    old_m = re.search(r"import\s+(\w+)\s*(?:#|$)", old_line)
+    new_m = re.search(r"import\s+(\w+)\s*(?:#|$)", new_line)
+    if old_m and new_m and old_m.group(1) != new_m.group(1):
+        return old_m.group(1), new_m.group(1)
+    return None
+
+
+def _is_import_line(line: str) -> bool:
+    stripped = line.strip()
+    return stripped.startswith(("from ", "import "))
+
+
+def _extract_diff_line_pairs(diff: str) -> tuple[list[str], list[str]]:
+    minus: list[str] = []
+    plus: list[str] = []
+    for line in diff.splitlines():
+        if line.startswith("-") and not line.startswith("---"):
+            minus.append(line[1:])
+        elif line.startswith("+") and not line.startswith("+++"):
+            plus.append(line[1:])
+    return minus, plus
+
+
+def _apply_import_line_fallback(text: str, diff: str) -> str | None:
+    """import 行补丁匹配失败时，按 diff 中的模块路径替换对应 import 行。"""
+    minus, plus = _extract_diff_line_pairs(diff)
+    if len(minus) != 1 or len(plus) != 1:
+        return None
+    old_line, new_line = minus[0], plus[0]
+    if not (_is_import_line(old_line) or _is_import_line(plus[0])):
+        return None
+
+    old_key = _line_match_key(old_line)
+    if old_key:
+        replaced = _replace_line_by_strip(text, old_line, new_line)
+        if replaced is not None:
+            return replaced
+
+    old_module = _extract_import_module(old_line)
+    new_module = _extract_import_module(new_line)
+    if not new_module:
+        return None
+
+    lines = text.splitlines(keepends=True)
+    for i, file_line in enumerate(lines):
+        content = file_line.rstrip("\n\r")
+        if not _is_import_line(content):
+            continue
+        file_module = _extract_import_module(content)
+        should_replace = False
+        if old_module and (old_module in content or _import_modules_related(file_module, old_module)):
+            should_replace = True
+        elif file_module and file_module != new_module and _import_modules_related(file_module, new_module):
+            should_replace = True
+        if not should_replace:
+            continue
+        indent = content[: len(content) - len(content.lstrip())]
+        if file_module and file_module != new_module and file_module in content:
+            replacement = content.replace(file_module, new_module, 1)
+        else:
+            replacement = new_line.strip()
+            if indent and not replacement.startswith((" ", "\t")):
+                replacement = indent + replacement
+        ending = file_line[len(content) :] if file_line.endswith(("\n", "\r")) else "\n"
+        lines[i] = replacement + ending
+        return "".join(lines)
+    return None
+
+
+def _import_modules_related(a: str, b: str) -> bool:
+    if not a or not b:
+        return False
+    return a == b or a in b or b in a
+
+
+def _extract_import_module(line: str) -> str:
+    stripped = _line_match_key(line)
+    m = re.match(r"from\s+([\w.]+)\s+import", stripped)
+    if m:
+        return m.group(1)
+    m = re.match(r"import\s+([\w.]+)", stripped)
+    if m:
+        return m.group(1)
+    return ""
 
 
 def _line_match_key(line: str) -> str:

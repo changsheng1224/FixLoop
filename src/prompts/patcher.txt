@@ -28,5 +28,17 @@
 
 导入错误（ImportError / ModuleNotFoundError）修复原则：
 - 修正错误的模块名或 import 路径（如 utils.helper → utils.helpers）
+- 若错误为 cannot import name 'X'，除修正 import 中的符号名外，还须同步修改本文件内所有 X(...) 调用为正确符号
 - file_path 必须是下方已提供的源文件，禁止输出 calculator.py 等其他项目文件名
-- 只改 import 行，不要新建无关文件
+- 同一文件若 import 与调用点都需修改，输出多条 JSON 对象（或一条含多行 diff）
+
+复合错误（import + TypeError，多文件）修复原则：
+- Issue 若提及多个源文件，每个文件输出一条补丁（JSON 数组可含多项）
+- 先修 import 路径，再修被调用函数内的类型错误（如 int(a) + int(b)）
+- 测试 assert 期望数字结果时，必须用数值转换，禁止 str 拼接
+- composite 问题必须一次性输出所有文件的补丁，不要只改其中一个文件
+
+配置错误（KeyError / pyproject.toml）修复原则：
+- 修改 pyproject.toml，追加缺失的 TOML 段（如 [tool.eval] multiplier = 2）
+- 优先使用 diff 字段（单行 -/+），避免 multiline original_lines 导致 JSON 截断
+- 不要修改与 Issue 无关的配置项
