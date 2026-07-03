@@ -59,6 +59,18 @@ def main() -> int:
         default=3,
         help="每个变体 × Case 重复次数（默认 3）",
     )
+    p_ablation.add_argument(
+        "--variant",
+        action="append",
+        dest="variants",
+        choices=["full", "single", "no_retriever"],
+        help="指定变体（可多次指定；默认全部）",
+    )
+    p_ablation.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="不打印逐条运行进度",
+    )
 
     args = parser.parse_args()
     if args.command == "repair":
@@ -115,6 +127,7 @@ def _ablation(args) -> int:
         print("错误: 请指定 --all 或 --case case_XXX", file=sys.stderr)
         return 2
 
+    load_dotenv()
     skip_verify = not args.with_verify
     case_ids = None if args.all else args.cases
     report, report_path, code = run_ablation(
@@ -125,6 +138,8 @@ def _ablation(args) -> int:
         fake=args.fake,
         skip_verify=skip_verify,
         repetitions=args.repetitions,
+        variant_names=args.variants,
+        progress=not args.no_progress,
     )
     print_ablation_report(report, verbose=args.verbose, report_path=report_path)
     return code

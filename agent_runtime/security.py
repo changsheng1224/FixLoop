@@ -116,9 +116,21 @@ def redact_artifact(value, secret_values: list[str] | None = None):
         secret_values = _detect_secret_values()
 
     if isinstance(value, dict):
+        safe_metric_keys = {
+            "token_usage",
+            "total_tokens",
+            "input_tokens",
+            "output_tokens",
+            "estimated_total",
+            "estimated_sections",
+            "run_count",
+            "api",
+        }
         result = {}
         for k, v in value.items():
-            if looks_sensitive_env_name(k):
+            if k in safe_metric_keys:
+                result[k] = redact_artifact(v, secret_values)
+            elif looks_sensitive_env_name(k):
                 result[k] = "<redacted>"
             else:
                 result[k] = redact_artifact(v, secret_values)

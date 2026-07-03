@@ -122,6 +122,8 @@ class TestOrchestrator:
         assert "retriever_ms" in state.node_timings
         assert "localize_retrieve_ms" in state.node_timings
         assert "patcher_ms" in state.node_timings
+        assert state.node_timings.get("total_tokens", 0) > 0
+        assert "token_usage" in state.node_timings
 
     def test_retriever_prompt_from_plan(self):
         orch = Orchestrator(None, None, None)

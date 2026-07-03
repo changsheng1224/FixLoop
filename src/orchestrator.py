@@ -92,6 +92,8 @@ class Orchestrator:
         timings = {}
 
         t_start = time.time()
+        self._repair_started_at = t_start
+        self._reset_token_tracking()
         print(f"[{_ts()}] Orchestrator 开始\n", end="", file=_sys.stderr, flush=True)
 
         # Step 1: 解析 Issue → RepairPlan + 匹配 Skill
@@ -174,6 +176,7 @@ class Orchestrator:
             state.retry_count += 1
 
         state.node_timings = timings
+        self._attach_token_usage(state)
         total_ms = int((time.time() - t_start) * 1000)
         print(
             f"[{_ts()}] 总耗时: {total_ms}ms, status={state.status}\n",
@@ -370,6 +373,25 @@ class Orchestrator:
             return data.get("node_timings", {})
         except Exception:
             return {}
+
+    def _reset_token_tracking(self) -> None:
+        from src.eval.token_usage import reset_clients_session_usage
+
+        reset_clients_session_usage(self.localizer, self.retriever, self.patcher)
+
+    def _attach_token_usage(self, state: RepairState) -> None:
+        from src.eval.token_usage import build_repair_token_usage, resolve_model_clients
+
+        clients = resolve_model_clients(self.localizer, self.retriever, self.patcher)
+        if not clients:
+            return
+        summary = build_repair_token_usage(
+            clients,
+            Path(self._repo_root),
+            since_ts=getattr(self, "_repair_started_at", None),
+        )
+        state.node_timings["total_tokens"] = summary["total_tokens"]
+        state.node_timings["token_usage"] = summary
 
     def _run_localize_and_retrieve(
         self,

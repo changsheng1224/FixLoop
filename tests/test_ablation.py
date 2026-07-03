@@ -45,3 +45,9 @@ class TestAblationRunnerFake:
             data = json.loads(out.read_text(encoding="utf-8"))
             assert "summary_by_variant" in data
             assert data["runs"][0]["variant"] in {"full", "single", "no_retriever"}
+            assert data["meta"]["status"] == "completed"
+            assert data["meta"]["completed_runs"] == 12
+
+            journal = Path(tmp) / "ablation_runs.jsonl"
+            assert journal.is_file()
+            assert len(journal.read_text(encoding="utf-8").strip().splitlines()) == 12

@@ -58,3 +58,19 @@ class TestSingleAgentBaseline:
         state = orch.repair("test issue")
         assert state.status == "failed"
         assert "baseline" in state.agent_errors
+
+    def test_orchestrator_detects_tool_patches(self, temp_workspace, monkeypatch):
+        (temp_workspace / "calc.py").write_text("x = 1\n", encoding="utf-8")
+        ws = WorkspaceContext.build(str(temp_workspace))
+        client = FakeModelClient(["<final>done</final>"])
+        agent = create_single_agent_baseline(client, ws, cwd=str(temp_workspace))
+        orch = SingleAgentOrchestrator(agent, str(temp_workspace))
+
+        def ask_and_patch(prompt):
+            (temp_workspace / "calc.py").write_text("x = 2\n", encoding="utf-8")
+            return "<final>done</final>"
+
+        monkeypatch.setattr(agent, "ask", ask_and_patch)
+        state = orch.repair("fix calc")
+        assert state.status == "patched"
+        assert not state.agent_errors

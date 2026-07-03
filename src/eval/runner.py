@@ -20,6 +20,19 @@ from src.eval.patch_utils import apply_unified_patch
 
 DEFAULT_CASES_DIR = Path(__file__).resolve().parent / "cases"
 
+# Agent 运行时会在 repo 内写入的目录，不计入评测 patch diff
+EVAL_DIFF_SKIP_DIRS = frozenset({".agent", ".pytest_cache", "__pycache__", ".git"})
+
+
+def should_include_in_eval_diff(rel_path: str) -> bool:
+    """评测 diff 只统计项目源码变更，排除 Agent/pytest 运行时产物。"""
+    parts = Path(rel_path).parts
+    if any(part in EVAL_DIFF_SKIP_DIRS for part in parts):
+        return False
+    if parts and parts[0].startswith("."):
+        return False
+    return True
+
 
 def load_case_metadata(case_dir: Path) -> dict:
     meta_path = case_dir / "metadata.yaml"
@@ -47,8 +60,11 @@ def collect_repo_diff(original: Path, modified: Path) -> str:
     all_files = set()
     for root in (original, modified):
         for path in root.rglob("*"):
-            if path.is_file() and "__pycache__" not in path.parts:
-                all_files.add(path.relative_to(root).as_posix())
+            if not path.is_file():
+                continue
+            rel = path.relative_to(root).as_posix()
+            if should_include_in_eval_diff(rel):
+                all_files.add(rel)
     for rel in sorted(all_files):
         o = original / rel
         m = modified / rel
@@ -160,6 +176,17 @@ class EvalRunner:
 
             retry_count = getattr(state, "retry_count", 0) if state else 0
             status = getattr(state, "status", "") if state else ""
+            total_tokens = 0
+            token_usage: dict = {}
+            if state and getattr(state, "node_timings", None):
+                node_timings = state.node_timings
+                token_usage = node_timings.get("token_usage") or {}
+                if isinstance(token_usage, dict):
+                    total_tokens = int(
+                        node_timings.get("total_tokens", 0) or token_usage.get("total_tokens", 0)
+                    )
+                else:
+                    token_usage = {}
             if not error and state and getattr(state, "agent_errors", None):
                 errs = state.agent_errors
                 if errs:
@@ -179,6 +206,8 @@ class EvalRunner:
                 error=error,
                 introduced_regression=introduced_regression,
                 status=status,
+                total_tokens=total_tokens,
+                token_usage=token_usage if isinstance(token_usage, dict) else {},
             )
 
 
@@ -208,6 +237,11 @@ def build_eval_report(results: list[CaseResult]) -> EvalReport:
     ]
     if precisions:
         summary["avg_patch_precision"] = round(sum(precisions) / len(precisions), 4)
+
+    token_totals = [r.total_tokens for r in results if r.total_tokens > 0]
+    if token_totals:
+        summary["total_tokens"] = sum(token_totals)
+        summary["avg_total_tokens"] = round(sum(token_totals) / len(token_totals), 2)
 
     by_type: dict[str, dict] = defaultdict(lambda: {"total": 0, "fixed": 0})
     by_diff: dict[str, dict] = defaultdict(lambda: {"total": 0, "fixed": 0})

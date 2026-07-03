@@ -22,6 +22,8 @@ class CaseResult:
     status: str = ""
     variant: str = ""
     run_index: int = 0
+    total_tokens: int = 0
+    token_usage: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -40,6 +42,8 @@ class CaseResult:
             "status": self.status,
             "variant": self.variant,
             "run_index": self.run_index,
+            "total_tokens": self.total_tokens,
+            "token_usage": self.token_usage,
         }
 
 

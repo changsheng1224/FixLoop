@@ -27,7 +27,8 @@ def print_eval_report(report: EvalReport, verbose: bool, report_path: Path) -> N
             print(
                 f"[{mark}] {c.case_id} type={c.issue_type} "
                 f"fixed={c.fixed} retries={c.retry_count} "
-                f"lines={c.actual_lines}/{c.minimal_lines} ms={c.duration_ms}",
+                f"lines={c.actual_lines}/{c.minimal_lines} ms={c.duration_ms} "
+                f"tokens={c.total_tokens}",
                 file=sys.stderr,
             )
             if c.agent_timings:
@@ -84,7 +85,8 @@ def print_ablation_report(report: dict, verbose: bool, report_path: Path) -> Non
                 f"[{variant}] fix_rate={summary['fix_rate']} "
                 f"fixed={summary['fixed']}/{summary['total']} "
                 f"avg_retries={summary['avg_retries']} "
-                f"avg_ms={summary['avg_duration_ms']}",
+                f"avg_ms={summary['avg_duration_ms']} "
+                f"avg_tokens={summary.get('avg_total_tokens', 0)}",
                 file=sys.stderr,
             )
 
@@ -101,6 +103,8 @@ def run_ablation(
     fake: bool = False,
     skip_verify: bool = True,
     repetitions: int = 3,
+    variant_names: list[str] | None = None,
+    progress: bool = True,
     model_client=None,
 ) -> tuple[dict, Path, int]:
     from src.eval.ablation import AblationRunner
@@ -112,6 +116,7 @@ def run_ablation(
         skip_verify=skip_verify,
         model_client=model_client,
         cases_dir=cases_dir,
+        variant_names=variant_names,
     )
     runner = AblationRunner(
         variants=variants,
@@ -120,7 +125,12 @@ def run_ablation(
         skip_verify=skip_verify,
     )
     ids = runner.list_cases() if case_ids is None else case_ids
-    report = runner.run(ids, repetitions=repetitions, report_path=report_path)
+    report = runner.run(
+        ids,
+        repetitions=repetitions,
+        report_path=report_path,
+        progress=progress,
+    )
 
     total = sum(s["total"] for s in report["summary_by_variant"].values())
     fixed = sum(s["fixed"] for s in report["summary_by_variant"].values())
