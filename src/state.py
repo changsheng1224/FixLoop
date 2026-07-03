@@ -245,6 +245,7 @@ class RepairState:
     max_retries: int = 3
     status: str = "pending"  # pending / localizing / patched / fixed / failed / exhausted
     node_timings: dict = field(default_factory=dict)
+    agent_errors: dict = field(default_factory=dict)
     schema_version: str = "1.0"
 
     def to_dict(self) -> dict:
@@ -264,6 +265,7 @@ class RepairState:
             "max_retries": self.max_retries,
             "status": self.status,
             "node_timings": self.node_timings,
+            "agent_errors": self.agent_errors,
             "schema_version": self.schema_version,
         }
 
@@ -296,5 +298,6 @@ class RepairState:
             max_retries=data.get("max_retries", 3),
             status=data.get("status", "pending"),
             node_timings=data.get("node_timings", {}),
+            agent_errors=data.get("agent_errors", {}),
             schema_version=data.get("schema_version", "1.0"),
         )

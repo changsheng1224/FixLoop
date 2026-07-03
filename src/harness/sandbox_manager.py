@@ -8,8 +8,12 @@
 import io
 import os
 import tarfile
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
 from pathlib import Path
+
+BUILD_TIMEOUT_S = 600
+TEST_TIMEOUT_S = 900
 
 
 @dataclass
@@ -84,7 +88,7 @@ class SandboxManager:
 
         return Sandbox(id=container.id, profile=profile, timings=timings)
 
-    def execute(self, sandbox: Sandbox, command: str, timeout: int = 600) -> ExecResult:
+    def execute(self, sandbox: Sandbox, command: str, timeout: int = BUILD_TIMEOUT_S) -> ExecResult:
         """在容器内执行命令。
 
         Args:
@@ -96,7 +100,16 @@ class SandboxManager:
             ExecResult 实例。
         """
         container = self.docker.containers.get(sandbox.id)
-        exit_code, output = container.exec_run(command)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            fut = pool.submit(container.exec_run, command)
+            try:
+                exit_code, output = fut.result(timeout=timeout)
+            except FuturesTimeoutError:
+                return ExecResult(
+                    exit_code=-1,
+                    stdout="",
+                    stderr=f"timeout after {timeout}s",
+                )
         return ExecResult(
             exit_code=exit_code or 0,
             stdout=output.decode("utf-8", errors="replace") if output else "",

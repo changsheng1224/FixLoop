@@ -73,35 +73,42 @@ def _run_test_in_sandbox(context, repo: str, test_path: str) -> tuple[Verificati
     sandbox_id = getattr(context, "_sandbox_id", None)
     mgr = getattr(context, "_sandbox_mgr", None)
     timings: dict[str, int | str] = {}
+    sandbox = None
+    created_here = False
 
-    if sandbox_id is None or mgr is None:
-        mgr = SandboxManager()
-        sandbox = mgr.create(repo)
-        context._sandbox_id = sandbox.id
-        context._sandbox_mgr = mgr
-        context._sandbox_repo = repo
-        if sandbox.timings:
-            timings.update(sandbox.timings)
-        build_result, pip_ms = _maybe_pip_install(mgr, sandbox, repo)
-        timings["pip_ms"] = pip_ms
-        timings["build_result"] = build_result
-        context._build_result = build_result
-    else:
-        sandbox = Sandbox(id=sandbox_id, profile="python")
-        timings["build_result"] = getattr(context, "_build_result", "reused")
+    try:
+        if sandbox_id is None or mgr is None:
+            mgr = SandboxManager()
+            sandbox = mgr.create(repo)
+            created_here = True
+            context._sandbox_id = sandbox.id
+            context._sandbox_mgr = mgr
+            context._sandbox_repo = repo
+            if sandbox.timings:
+                timings.update(sandbox.timings)
+            build_result, pip_ms = _maybe_pip_install(mgr, sandbox, repo)
+            timings["pip_ms"] = pip_ms
+            timings["build_result"] = build_result
+            context._build_result = build_result
+        else:
+            sandbox = Sandbox(id=sandbox_id, profile="python")
+            timings["build_result"] = getattr(context, "_build_result", "reused")
 
-    runner = PythonTestRunner(mgr)
-    import time
+        runner = PythonTestRunner(mgr)
+        import time
 
-    t0 = time.time()
-    result = runner.run(sandbox, test_path)
-    timings["pytest_ms"] = int((time.time() - t0) * 1000)
-
-    mgr.destroy(sandbox)
-    context._sandbox_id = None
-    context._sandbox_mgr = None
-
-    return result, timings
+        t0 = time.time()
+        result = runner.run(sandbox, test_path)
+        timings["pytest_ms"] = int((time.time() - t0) * 1000)
+        return result, timings
+    finally:
+        if sandbox is not None and mgr is not None and created_here:
+            try:
+                mgr.destroy(sandbox)
+            except Exception:
+                pass
+            context._sandbox_id = None
+            context._sandbox_mgr = None
 
 
 def _ensure_sandbox(context, repo_path: str) -> dict:
@@ -141,11 +148,13 @@ def _maybe_pip_install(mgr, sandbox, repo_path: str) -> tuple[str, int]:
     if not needs_install:
         return "skipped (no project dependencies detected)", 0
 
+    from src.harness.sandbox_manager import BUILD_TIMEOUT_S
+
     t0 = time.time()
     result = mgr.execute(
         sandbox,
         "/entrypoint.sh build pip install -e /code 2>&1 | tail -5",
-        timeout=120,
+        timeout=BUILD_TIMEOUT_S,
     )
     pip_ms = int((time.time() - t0) * 1000)
     build_result = f"pip install: exit_code={result.exit_code}\n{result.stdout}"
