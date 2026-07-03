@@ -1,0 +1,8 @@
+ModuleNotFoundError + TypeError (composite, two files)
+
+  File "gateway.py", line 3, in <module>
+    from backend.service import run_task
+ModuleNotFoundError: No module named 'backend.service'
+
+After import fix, run_task("2", 3) raises TypeError on str + int.
+Failed: test_gateway.py::test_invoke_mixed_types

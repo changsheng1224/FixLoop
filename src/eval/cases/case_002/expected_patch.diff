@@ -1,0 +1,11 @@
+--- a/labels.py
++++ b/labels.py
+@@ -3,7 +3,7 @@
+ 
+ def user_label(user_id):
+     """返回可用于拼接的用户标签片段。"""
+-    return user_id  # BUG: 应返回 str，否则与字符串拼接时 TypeError
++    return str(user_id)
+ 
+ 
+ def greet(user_id):

@@ -1,0 +1,8 @@
+--- a/transform.py
++++ b/transform.py
+@@ -5,4 +5,4 @@
+ 
+ def normalize_score(score: int) -> float:
+     """输入已是 0–100 的百分制分数，返回同尺度浮点值。"""
+-    return clamp(score, 0, 100) / 100  # BUG: 不应再除以 100
++    return float(clamp(score, 0, 100))

@@ -1,0 +1,7 @@
+AssertionError: average_percent scales scores incorrectly
+
+FAILED test_report.py::test_average_percent
+assert 0.85 == 85.0
+
+Call chain: report.average_percent → transform.normalize_score → values.clamp
+Scores are already 0–100; normalize_score should not divide by 100.

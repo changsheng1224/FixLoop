@@ -1,0 +1,18 @@
+--- a/gateway.py
++++ b/gateway.py
+@@ -1,6 +1,6 @@
+ """网关层（含错误的 backend import）。"""
+ 
+-from backend.service import run_task  # BUG: 模块在 backend.tasks
++from backend.tasks import run_task
+ 
+ 
+ def invoke(a, b):
+--- a/backend/tasks.py
++++ b/backend/tasks.py
+@@ -2,4 +2,4 @@
+ 
+ 
+ def run_task(a, b):
+-    return a + b  # BUG: 未处理 str 操作数
++    return int(a) + int(b)

@@ -1,0 +1,14 @@
+case_id: case_005
+language: python
+issue_type: import_error
+difficulty: medium
+status: verified
+estimated_duration_s: 40
+description: "错误 import 名或子模块路径"
+tags:
+  - import_error
+  - wrong_symbol
+source_files:
+  - service.py
+test_files:
+  - test_service.py

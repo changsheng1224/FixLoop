@@ -1,0 +1,14 @@
+case_id: case_003
+language: python
+issue_type: type_error
+difficulty: medium
+status: verified
+estimated_duration_s: 35
+description: "未判空导致对 None 运算或拼接"
+tags:
+  - type_error
+  - none_guard
+source_files:
+  - concat.py
+test_files:
+  - test_concat.py

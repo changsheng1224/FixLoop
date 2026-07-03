@@ -1,0 +1,76 @@
+"""sandbox_tools 单测（Mock SandboxManager）。"""
+
+import json
+from unittest.mock import MagicMock
+
+import pytest
+
+from agent_runtime.tool_context import ToolContext
+from src.harness.sandbox_manager import ExecResult, Sandbox
+from src.state import VerificationResult
+from src.tools.sandbox_tools import (
+    run_sandbox_verification,
+    sandbox_build,
+    sandbox_test,
+    sandbox_verify,
+)
+
+
+class TestSandboxToolsValidation:
+    def test_sandbox_test_missing_repo(self):
+        ctx = ToolContext(root=".")
+        out = sandbox_test(ctx, {})
+        assert "Error" in out
+
+    def test_sandbox_verify_missing_repo(self):
+        ctx = ToolContext(root=".")
+        out = sandbox_verify(ctx, {})
+        assert "Error" in out
+
+
+class TestSandboxToolsMocked:
+    def test_sandbox_test_returns_json(self, monkeypatch):
+        ctx = ToolContext(root=".")
+        vr = VerificationResult(all_passed=True, total_tests=2, passed=2)
+        monkeypatch.setattr(
+            "src.tools.sandbox_tools._run_test_in_sandbox",
+            lambda _ctx, repo, test_path: (vr, {"pytest_ms": 42}),
+        )
+        out = sandbox_test(ctx, {"repo_path": ".", "test_path": ""})
+        data = json.loads(out)
+        assert data["all_passed"] is True
+        assert data["total_tests"] == 2
+
+    def test_sandbox_verify_includes_timings(self, monkeypatch):
+        ctx = ToolContext(root=".")
+        vr = VerificationResult(all_passed=False, total_tests=1, failed=1)
+        monkeypatch.setattr(
+            "src.tools.sandbox_tools._run_test_in_sandbox",
+            lambda _ctx, repo, test_path: (vr, {"pytest_ms": 10, "build_result": "ok"}),
+        )
+        out = sandbox_verify(ctx, {"repo_path": "."})
+        data = json.loads(out)
+        assert data["sandbox_timings"]["pytest_ms"] == 10
+
+    def test_run_sandbox_verification_entry(self, monkeypatch):
+        vr = VerificationResult(all_passed=True, total_tests=1, passed=1)
+        monkeypatch.setattr(
+            "src.tools.sandbox_tools._run_test_in_sandbox",
+            lambda _ctx, repo, test_path: (vr, {}),
+        )
+        result, timings = run_sandbox_verification(".")
+        assert result.all_passed
+        assert isinstance(timings, dict)
+
+    def test_sandbox_build_creates_container(self, monkeypatch, temp_workspace):
+        ctx = ToolContext(root=str(temp_workspace))
+        fake_mgr = MagicMock()
+        fake_mgr.create.return_value = Sandbox(id="sb-1", profile="python")
+        fake_mgr.execute.return_value = ExecResult(0, "installed", "")
+        monkeypatch.setattr(
+            "src.harness.sandbox_manager.SandboxManager",
+            lambda: fake_mgr,
+        )
+        out = sandbox_build(ctx, {"repo_path": str(temp_workspace)})
+        assert "pip install" in out or "skipped" in out
+        fake_mgr.create.assert_called_once()

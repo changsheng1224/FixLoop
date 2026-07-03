@@ -1,0 +1,14 @@
+case_id: case_004
+language: python
+issue_type: import_error
+difficulty: medium
+status: verified
+estimated_duration_s: 40
+description: "模块路径错误或缺少 __init__.py"
+tags:
+  - import_error
+  - package_layout
+source_files:
+  - app.py
+test_files:
+  - test_app.py

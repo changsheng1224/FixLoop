@@ -21,4 +21,6 @@ build/
 Thumbs.db
 .coverage
 htmlcov/
+eval_results/
+.pytest_cache/
 .ruff_cache/

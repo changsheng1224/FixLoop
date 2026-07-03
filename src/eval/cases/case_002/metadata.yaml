@@ -1,0 +1,14 @@
+case_id: case_002
+language: python
+issue_type: type_error
+difficulty: medium
+status: verified
+estimated_duration_s: 35
+description: "返回值类型与调用方期望不符"
+tags:
+  - type_error
+  - return_type
+source_files:
+  - labels.py
+test_files:
+  - test_labels.py

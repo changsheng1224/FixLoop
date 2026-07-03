@@ -1,0 +1,7 @@
+TypeError: can only concatenate str (not "int") to str
+
+  File "labels.py", line 10, in greet
+    return "User:" + user_label(user_id)
+TypeError: can only concatenate str (not "int") to str
+
+Failed: test_labels.py::test_greet_int_id

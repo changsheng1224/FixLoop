@@ -84,3 +84,29 @@ class TestPythonRunner:
         assert result.passed == 2
         assert result.failed == 1
         assert not result.all_passed
+
+    def test_pytest_timeout_not_passed(self):
+        """exec 超时时不应误判为通过。"""
+        mgr = FakeManager(
+            {
+                "pytest": ExecResult(-1, "", "timeout after 900s"),
+            }
+        )
+        runner = PythonTestRunner(mgr)
+        result = runner.run(FakeSandbox())
+        assert not result.all_passed
+        assert result.total_tests == 0
+        assert result.failure_logs
+
+    def test_pytest_exit_zero_without_report_not_passed(self):
+        """pytest 0 退出但无 JSON 报告时 all_passed=False。"""
+        mgr = FakeManager(
+            {
+                "pytest": ExecResult(0, "no tests ran", ""),
+                "cat /code/.report.json": ExecResult(1, "", "No such file"),
+            }
+        )
+        runner = PythonTestRunner(mgr)
+        result = runner.run(FakeSandbox())
+        assert not result.all_passed
+        assert result.total_tests == 0
