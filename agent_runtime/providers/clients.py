@@ -21,6 +21,20 @@ class FakeModelClient:
         self._index = 0
         self.supports_prompt_cache = False
         self.prompts: list[str] = []
+        self.last_usage: dict = {}
+        self.session_usage: dict = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
+
+    def reset_session_usage(self) -> None:
+        self.last_usage = {}
+        self.session_usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
+
+    def _record_usage(self, prompt: str, result: str) -> None:
+        inp = max(1, len(prompt) // 4)
+        out = max(1, len(result) // 4)
+        self.last_usage = {"input_tokens": inp, "output_tokens": out}
+        self.session_usage["input_tokens"] += inp
+        self.session_usage["output_tokens"] += out
+        self.session_usage["calls"] += 1
 
     def complete(self, prompt: str, max_new_tokens: int = 512, prompt_cache_key: str = "") -> str:
         """弹出下一个预设输出。
@@ -42,6 +56,7 @@ class FakeModelClient:
             )
         result = self._outputs[self._index]
         self._index += 1
+        self._record_usage(prompt, result)
         return result
 
 
@@ -67,6 +82,22 @@ class AnthropicCompatibleModelClient:
         self.timeout = timeout
         self.supports_prompt_cache = True
         self._latencies: list[float] = []
+        self.last_usage: dict = {}
+        self.session_usage: dict = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
+
+    def reset_session_usage(self) -> None:
+        self.last_usage = {}
+        self.session_usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
+
+    def _record_usage(self, usage: dict | None) -> None:
+        if not usage:
+            return
+        inp = int(usage.get("input_tokens", 0) or 0)
+        out = int(usage.get("output_tokens", 0) or 0)
+        self.last_usage = {"input_tokens": inp, "output_tokens": out}
+        self.session_usage["input_tokens"] += inp
+        self.session_usage["output_tokens"] += out
+        self.session_usage["calls"] += 1
 
     def complete(
         self,
@@ -165,6 +196,8 @@ class AnthropicCompatibleModelClient:
             if data is None:
                 raise RuntimeError("API 请求失败，已重试 3 次")
 
+            self._record_usage(data.get("usage"))
+
             # 解析响应中的 content blocks
             content_blocks = data.get("content", [])
             if isinstance(content_blocks, str):
@@ -235,6 +268,7 @@ class AnthropicCompatibleModelClient:
                 )
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
                     data = json.loads(response.read().decode("utf-8"))
+                self._record_usage(data.get("usage"))
                 result = self._extract_text(data)
                 self._save_request(prompt_for_log, result)
                 self._latencies.append(time.time() - t0)

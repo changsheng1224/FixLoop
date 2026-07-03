@@ -12,6 +12,8 @@ from agent_runtime.tool_context import ToolContext
 from agent_runtime.tools import build_tool_registry
 from agent_runtime.workspace import WorkspaceContext
 
+from src.eval.runner import should_include_in_eval_diff
+from src.eval.token_usage import build_token_usage_summary, reset_client_session_usage
 from src.middleware import ToolGateway
 from src.orchestrator import Orchestrator
 from src.repair_factory import create_model_client
@@ -83,6 +85,24 @@ def create_single_agent_baseline(model_client, workspace, cwd: str = "") -> Agen
     return agent
 
 
+def _snapshot_source_tree(repo: Path) -> dict[str, str]:
+    """读取 repo 内参与评测 diff 的源码快照。"""
+    snapshot: dict[str, str] = {}
+    if not repo.is_dir():
+        return snapshot
+    for path in repo.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(repo).as_posix()
+        if should_include_in_eval_diff(rel):
+            snapshot[rel] = path.read_text(encoding="utf-8")
+    return snapshot
+
+
+def _repo_sources_changed(repo: Path, before: dict[str, str]) -> bool:
+    return _snapshot_source_tree(repo) != before
+
+
 class SingleAgentOrchestrator:
     """简化编排器：Issue → Single-Agent ask() → 解析并应用补丁。"""
 
@@ -103,6 +123,10 @@ class SingleAgentOrchestrator:
     ) -> RepairState:
         state = RepairState(issue_input=issue, max_retries=max_retries)
         t0 = time.time()
+        repo = Path(self._repo_root)
+        before = _snapshot_source_tree(repo)
+        reset_client_session_usage(self.agent.model_client)
+        repair_started_at = time.time()
         try:
             prompt = f"请修复以下 issue，可使用全部工具完成定位、修补与验证：\n\n{issue}"
             answer = self.agent.ask(prompt)
@@ -114,15 +138,26 @@ class SingleAgentOrchestrator:
                 applied = helper._apply_patches_on_disk(patches)
                 if applied:
                     state.status = "patched"
+                elif _repo_sources_changed(repo, before):
+                    state.status = "patched"
                 else:
                     state.status = "failed"
                     state.agent_errors["baseline"] = "patches parsed but not applied"
+            elif _repo_sources_changed(repo, before):
+                state.status = "patched"
             else:
                 state.status = "failed"
                 state.agent_errors["baseline"] = "no patches in agent output"
         except Exception as exc:
             state.status = "failed"
             state.agent_errors["baseline"] = str(exc)
+        token_summary = build_token_usage_summary(
+            self.agent.model_client,
+            repo,
+            since_ts=repair_started_at,
+        )
+        state.node_timings["total_tokens"] = token_summary["total_tokens"]
+        state.node_timings["token_usage"] = token_summary
         state.node_timings["baseline_ms"] = int((time.time() - t0) * 1000)
         return state
 

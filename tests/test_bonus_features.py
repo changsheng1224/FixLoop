@@ -66,6 +66,7 @@ class TestTokenTracking:
         assert len(report_files) >= 1
         data = json.loads(report_files[0].read_text())
         assert "token_usage" in data
+        assert isinstance(data["token_usage"], dict)
 
 
 class TestSummaryCache:

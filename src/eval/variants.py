@@ -75,21 +75,30 @@ def build_ablation_variants(
     skip_verify: bool = True,
     model_client=None,
     cases_dir: str | Path | None = None,
+    variant_names: list[str] | None = None,
 ) -> dict[str, Callable[[str], object]]:
     """构建 full / single / no_retriever 三组消融变体工厂。"""
     cases_path = Path(cases_dir or DEFAULT_CASES_DIR)
     if fake:
         factory = fake_orchestrator_factory(cases_path)
-        return {"full": factory, "single": factory, "no_retriever": factory}
+        all_variants = {"full": factory, "single": factory, "no_retriever": factory}
+    else:
+        all_variants = {
+            "full": make_orchestrator_factory(
+                skip_verify=skip_verify,
+                model_client=model_client,
+            ),
+            "single": make_single_agent_factory(model_client=model_client),
+            "no_retriever": make_no_retriever_factory(
+                skip_verify=skip_verify,
+                model_client=model_client,
+            ),
+        }
 
-    return {
-        "full": make_orchestrator_factory(
-            skip_verify=skip_verify,
-            model_client=model_client,
-        ),
-        "single": make_single_agent_factory(model_client=model_client),
-        "no_retriever": make_no_retriever_factory(
-            skip_verify=skip_verify,
-            model_client=model_client,
-        ),
-    }
+    if not variant_names:
+        return all_variants
+
+    unknown = sorted(set(variant_names) - set(all_variants))
+    if unknown:
+        raise ValueError(f"unknown variant(s): {', '.join(unknown)}")
+    return {name: all_variants[name] for name in variant_names}

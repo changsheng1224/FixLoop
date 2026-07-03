@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from src.eval.fake_runner import fake_orchestrator_factory
-from src.eval.runner import DEFAULT_CASES_DIR, EvalRunner, build_eval_report
+from src.eval.runner import DEFAULT_CASES_DIR, EvalRunner, build_eval_report, collect_repo_diff
 from src.eval.models import CaseResult
 
 CASES_DIR = Path(__file__).resolve().parents[1] / "src" / "eval" / "cases"
@@ -37,6 +37,28 @@ class TestBuildEvalReport:
         assert report.summary["fix_rate"] == 0.5
         assert report.summary["first_attempt_rate"] == 0.5
         assert report.by_type["type_error"]["fixed"] == 1
+
+
+class TestCollectRepoDiff:
+    def test_skips_agent_and_pytest_artifacts(self, tmp_path):
+        original = tmp_path / "orig"
+        modified = tmp_path / "mod"
+        for repo in (original, modified):
+            repo.mkdir()
+            (repo / "app.py").write_text("a = 1\n", encoding="utf-8")
+        (modified / "app.py").write_text("a = 2\n", encoding="utf-8")
+        agent_dir = modified / ".agent" / "runs" / "x"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "report.json").write_text("{}", encoding="utf-8")
+        cache_dir = modified / ".pytest_cache" / "v"
+        cache_dir.mkdir(parents=True)
+        (cache_dir / "cache").write_text("x", encoding="utf-8")
+
+        diff = collect_repo_diff(original, modified)
+        assert "app.py" in diff
+        assert ".agent" not in diff
+        assert ".pytest_cache" not in diff
+        assert diff.count("\n+") == 1 or "a = 2" in diff
 
 
 class TestEvalRunnerFake:

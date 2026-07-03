@@ -27,7 +27,8 @@ def print_eval_report(report: EvalReport, verbose: bool, report_path: Path) -> N
             print(
                 f"[{mark}] {c.case_id} type={c.issue_type} "
                 f"fixed={c.fixed} retries={c.retry_count} "
-                f"lines={c.actual_lines}/{c.minimal_lines} ms={c.duration_ms}",
+                f"lines={c.actual_lines}/{c.minimal_lines} ms={c.duration_ms} "
+                f"tokens={c.total_tokens}",
                 file=sys.stderr,
             )
             if c.agent_timings:
@@ -39,6 +40,15 @@ def print_eval_report(report: EvalReport, verbose: bool, report_path: Path) -> N
     print(f"Report: {report_path.resolve()}", file=sys.stderr)
 
 
+def resolve_markdown_path(output_dir: Path, markdown: str | None) -> Path | None:
+    if markdown is None:
+        return None
+    candidate = Path(markdown)
+    if candidate.suffix == ".md" and str(candidate.parent) not in ("", "."):
+        return candidate
+    return output_dir / markdown
+
+
 def run_eval(
     *,
     case_ids: list[str] | None,
@@ -48,6 +58,7 @@ def run_eval(
     fake: bool = False,
     skip_verify: bool = True,
     model_client=None,
+    markdown: str | None = None,
 ) -> tuple[EvalReport, Path, int]:
     output_dir, report_path = resolve_report_path(output)
 
@@ -64,6 +75,13 @@ def run_eval(
     )
     ids = runner.list_cases() if case_ids is None else case_ids
     report = runner.run_all(ids, report_path=report_path)
+
+    if markdown is not None:
+        from src.eval.metrics import write_metrics_markdown
+
+        md_path = resolve_markdown_path(output_dir, markdown)
+        write_metrics_markdown(report.cases, md_path)
+        print(f"Markdown: {md_path.resolve()}", file=sys.stderr)
 
     exit_code = 0 if report.summary.get("fixed") == report.summary.get("total") else 1
     return report, report_path, exit_code
@@ -84,7 +102,8 @@ def print_ablation_report(report: dict, verbose: bool, report_path: Path) -> Non
                 f"[{variant}] fix_rate={summary['fix_rate']} "
                 f"fixed={summary['fixed']}/{summary['total']} "
                 f"avg_retries={summary['avg_retries']} "
-                f"avg_ms={summary['avg_duration_ms']}",
+                f"avg_ms={summary['avg_duration_ms']} "
+                f"avg_tokens={summary.get('avg_total_tokens', 0)}",
                 file=sys.stderr,
             )
 
@@ -101,7 +120,10 @@ def run_ablation(
     fake: bool = False,
     skip_verify: bool = True,
     repetitions: int = 3,
+    variant_names: list[str] | None = None,
+    progress: bool = True,
     model_client=None,
+    markdown: str | None = None,
 ) -> tuple[dict, Path, int]:
     from src.eval.ablation import AblationRunner
     from src.eval.variants import build_ablation_variants
@@ -112,6 +134,7 @@ def run_ablation(
         skip_verify=skip_verify,
         model_client=model_client,
         cases_dir=cases_dir,
+        variant_names=variant_names,
     )
     runner = AblationRunner(
         variants=variants,
@@ -120,7 +143,19 @@ def run_ablation(
         skip_verify=skip_verify,
     )
     ids = runner.list_cases() if case_ids is None else case_ids
-    report = runner.run(ids, repetitions=repetitions, report_path=report_path)
+    report = runner.run(
+        ids,
+        repetitions=repetitions,
+        report_path=report_path,
+        progress=progress,
+    )
+
+    if markdown is not None:
+        from src.eval.metrics import write_metrics_markdown_from_report
+
+        md_path = resolve_markdown_path(output_dir, markdown)
+        write_metrics_markdown_from_report(report_path, md_path)
+        print(f"Markdown: {md_path.resolve()}", file=sys.stderr)
 
     total = sum(s["total"] for s in report["summary_by_variant"].values())
     fixed = sum(s["fixed"] for s in report["summary_by_variant"].values())

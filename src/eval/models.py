@@ -22,6 +22,8 @@ class CaseResult:
     status: str = ""
     variant: str = ""
     run_index: int = 0
+    total_tokens: int = 0
+    token_usage: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -40,6 +42,8 @@ class CaseResult:
             "status": self.status,
             "variant": self.variant,
             "run_index": self.run_index,
+            "total_tokens": self.total_tokens,
+            "token_usage": self.token_usage,
         }
 
 
@@ -49,11 +53,15 @@ class EvalReport:
     summary: dict = field(default_factory=dict)
     by_type: dict = field(default_factory=dict)
     by_difficulty: dict = field(default_factory=dict)
+    by_variant: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "summary": self.summary,
             "by_type": self.by_type,
             "by_difficulty": self.by_difficulty,
             "cases": [c.to_dict() for c in self.cases],
         }
+        if self.by_variant:
+            data["by_variant"] = self.by_variant
+        return data
