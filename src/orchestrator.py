@@ -154,16 +154,82 @@ class Orchestrator:
         if not file_match:
             file_match = re.search(r"at (\S+\.py)", issue)
         if file_match:
-            plan.suspect_files.append(file_match.group(1))
+            plan.suspect_files.append(Path(file_match.group(1)).name)
 
-        # 行号
-        line_match = re.search(r"line (\d+)", issue)
-        if line_match and plan.suspect_files:
-            plan.reasoning = f"{plan.suspect_files[0]}:{line_match.group(1)}"
+        line_no = self._parse_file_line(issue, plan.suspect_files[0] if plan.suspect_files else "")
+        if line_no and plan.suspect_files:
+            plan.reasoning = f"{plan.suspect_files[0]}:{line_no}"
         else:
             plan.reasoning = issue[:200]
 
         return plan
+
+    def _parse_file_line(self, issue: str, file_path: str) -> int:
+        """从 issue 文本提取行号（支持 file.py:42 或 line 42）。"""
+        if file_path:
+            m = re.search(rf"{re.escape(file_path)}:(\d+)", issue)
+            if m:
+                return int(m.group(1))
+        m = re.search(r"line (\d+)", issue, re.IGNORECASE)
+        if m:
+            return int(m.group(1))
+        return 0
+
+    def _fallback_suspects_from_plan(
+        self, plan: RepairPlan, issue: str,
+    ) -> list[SuspectLocation]:
+        """Localizer 无输出时，从 RepairPlan 生成粗粒度嫌疑位置。"""
+        if not plan.suspect_files:
+            return []
+        suspects: list[SuspectLocation] = []
+        for file_path in plan.suspect_files:
+            line = self._parse_file_line(issue, file_path) or 1
+            reason = "RepairPlan 降级定位"
+            if plan.issue_type == "import_error":
+                import_line = self._find_import_line_number(file_path)
+                if import_line:
+                    line = import_line
+                reason = "import 语句"
+            suspects.append(SuspectLocation(
+                file_path=file_path,
+                start_line=line,
+                end_line=line,
+                reason=reason,
+                confidence=0.7,
+            ))
+        return suspects
+
+    def _find_import_line_number(self, file_path: str) -> int | None:
+        """定位文件中第一条 import/from 语句行号。"""
+        path = Path(self._repo_root) / file_path
+        if not path.is_file():
+            return None
+        for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            stripped = line.strip()
+            if stripped.startswith(("from ", "import ")):
+                return i
+        return None
+
+    def _resolve_repo_file(self, file_path: str) -> Path | None:
+        """解析并校验路径在 --repo 内且文件存在。"""
+        if not file_path:
+            return None
+        path = Path(file_path)
+        root = Path(self._repo_root).resolve()
+        if path.is_absolute():
+            try:
+                path.resolve().relative_to(root)
+            except ValueError:
+                return None
+        else:
+            path = (root / path).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError:
+            return None
+        if not path.is_file():
+            return None
+        return path
 
     def _match_skill(self, issue: str) -> dict | None:
         """从 YAML Skill 文件中匹配 Issue 对应的修复策略。"""
@@ -267,6 +333,14 @@ class Orchestrator:
             suspects, loc_timing = fut_loc.result()
             context, ret_timing = fut_ret.result()
 
+        if not suspects:
+            suspects = self._fallback_suspects_from_plan(plan, issue)
+            if suspects:
+                print(
+                    f"  [localizer] 降级: RepairPlan → {len(suspects)} suspect\n",
+                    end="", file=_sys.stderr, flush=True,
+                )
+
         return suspects, context, loc_timing, ret_timing
 
     def _run_localizer(self, state: RepairState) -> list[SuspectLocation]:
@@ -332,13 +406,12 @@ class Orchestrator:
         """将补丁写入宿主机仓库，返回成功应用的补丁数。"""
         applied = 0
         for p in patches:
-            if not p.file_path:
-                continue
-            file_path = Path(p.file_path)
-            if not file_path.is_absolute():
-                file_path = Path(self._repo_root) / file_path
-            if not file_path.is_file():
-                print(f"  [patcher] ⚠ 文件不存在: {file_path}", file=_sys.stderr, flush=True)
+            file_path = self._resolve_repo_file(p.file_path)
+            if file_path is None:
+                print(
+                    f"  [patcher] ⚠ 拒绝补丁（路径不在 repo 或文件不存在）: {p.file_path!r}",
+                    file=_sys.stderr, flush=True,
+                )
                 continue
 
             text = file_path.read_text(encoding="utf-8")
@@ -428,7 +501,16 @@ class Orchestrator:
         parts = [f"定位以下问题：\n{issue or plan.reasoning}"]
         if plan.suspect_files:
             parts.append(f"嫌疑文件: {', '.join(plan.suspect_files)}")
-        parts.append("请用 stack_parse 解析堆栈，再用 ast_parse 分析文件结构，最后输出 SuspectList JSON。")
+        if plan.issue_type == "import_error":
+            parts.append(
+                "这是 import 错误（ModuleNotFoundError/ImportError）。"
+                "优先 read_file 读取嫌疑文件的 import 行；无完整 traceback 时可跳过 stack_parse。"
+                "最后输出 SuspectList JSON，指向错误的 import 语句行。"
+            )
+        else:
+            parts.append(
+                "请用 stack_parse 解析堆栈，再用 ast_parse 分析文件结构，最后输出 SuspectList JSON。"
+            )
         return "\n".join(parts)
 
     def _retriever_prompt(
@@ -473,14 +555,26 @@ class Orchestrator:
                 "修复提示: 这是类型错误。若测试断言期望数字结果，"
                 "请用 int()/float() 做数值转换，禁止 str() 拼接。"
             )
+        if plan and plan.issue_type == "import_error":
+            parts.append(
+                "修复提示: import 错误通常修正 import 路径或模块名（如 helper → helpers）。"
+                "只修改下方已提供的源文件，不要引用其他项目文件名。"
+            )
         if issue and "concatenate str" in issue.lower():
             parts.append(
                 "Issue 表明 str 与 int 不能直接相加；修复后混合类型输入应得到数字运算结果。"
             )
 
-        if suspects:
+        effective_suspects = suspects or (
+            self._fallback_suspects_from_plan(plan, issue) if plan else []
+        )
+
+        if plan and plan.suspect_files:
+            parts.append(f"只允许修改以下文件: {', '.join(plan.suspect_files)}")
+
+        if effective_suspects:
             parts.append("嫌疑位置（代码已预读，无需再调用 read_file）:")
-            for s in suspects:
+            for s in effective_suspects:
                 if not s.file_path:
                     continue
                 parts.append(f"  - {s.file_path}:{s.start_line} ({s.reason})")
@@ -490,7 +584,7 @@ class Orchestrator:
                 else:
                     parts.append(f"    ⚠ 文件不存在: {s.file_path}")
 
-        test_blocks = self._read_test_context(context, suspects)
+        test_blocks = self._read_test_context(context, effective_suspects, plan)
         if test_blocks:
             parts.append("相关测试文件（补丁必须通过这些 assert）:")
             parts.extend(test_blocks)
@@ -519,6 +613,7 @@ class Orchestrator:
         self,
         context: RetrievedContext | None,
         suspects: list[SuspectLocation],
+        plan: RepairPlan | None = None,
     ) -> list[str]:
         """预读相关测试文件全文（同文件内所有用例一并提供）。"""
         test_paths: list[Path] = []
@@ -530,11 +625,12 @@ class Orchestrator:
                     test_paths.append(path)
 
         for s in suspects:
-            if not s.function_name:
-                continue
-            guessed = self._guess_test_file(s.file_path, s.function_name)
+            guessed = self._guess_test_file(s.file_path, s.function_name or "")
             if guessed and guessed not in test_paths:
                 test_paths.append(guessed)
+
+        if not test_paths:
+            test_paths = self._discover_repo_test_files()
 
         blocks: list[str] = []
         for path in test_paths:
@@ -566,15 +662,29 @@ class Orchestrator:
     def _guess_test_file(self, source_file: str, function_name: str) -> Path | None:
         """按约定猜测 test_<module>.py。"""
         stem = Path(source_file).stem
-        names = [f"test_{stem}.py", f"{stem}_test.py"]
+        names = [f"test_{stem}.py", f"{stem}_test.py", "test_app.py"]
         for name in names:
             for base in (Path(self._repo_root), Path(self._repo_root) / "tests"):
                 path = base / name
-                if path.is_file():
-                    text = path.read_text(encoding="utf-8")
-                    if function_name in text:
-                        return path
+                if not path.is_file():
+                    continue
+                if not function_name:
+                    return path
+                text = path.read_text(encoding="utf-8")
+                if function_name in text:
+                    return path
         return None
+
+    def _discover_repo_test_files(self) -> list[Path]:
+        """扫描 repo 根目录下的 test_*.py。"""
+        root = Path(self._repo_root)
+        found: list[Path] = []
+        for pattern in ("test_*.py",):
+            found.extend(root.glob(pattern))
+            tests_dir = root / "tests"
+            if tests_dir.is_dir():
+                found.extend(tests_dir.glob(pattern))
+        return sorted({p.resolve() for p in found})
 
     # ---- 解析 Agent 输出 ----
 

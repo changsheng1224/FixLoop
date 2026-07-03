@@ -38,6 +38,55 @@ class TestOrchestrator:
             'ModuleNotFoundError: No module named "utils" at main.py:3'
         )
         assert plan.issue_type == "import_error"
+        assert plan.reasoning == "main.py:3"
+
+    def test_fallback_suspects_import_line(self, temp_workspace):
+        (temp_workspace / "app.py").write_text(
+            "from utils.helper import greet\n\ndef main():\n    return greet()\n",
+            encoding="utf-8",
+        )
+        orch = Orchestrator(None, None, None)
+        orch._repo_root = str(temp_workspace)
+        plan = RepairPlan(
+            issue_type="import_error",
+            suspect_files=["app.py"],
+            reasoning="app.py:3",
+        )
+        suspects = orch._fallback_suspects_from_plan(
+            plan, 'ModuleNotFoundError at app.py:3',
+        )
+        assert len(suspects) == 1
+        assert suspects[0].start_line == 1
+        assert suspects[0].file_path == "app.py"
+
+    def test_patcher_rejects_outside_repo(self, temp_workspace):
+        (temp_workspace / "app.py").write_text("x = 1\n", encoding="utf-8")
+        orch = Orchestrator(None, None, None)
+        orch._repo_root = str(temp_workspace)
+        patches = [
+            CandidatePatch(file_path="calculator.py", diff="-x\n+y"),
+            CandidatePatch(
+                file_path="app.py",
+                original_lines="x = 1",
+                patched_lines="x = 2",
+            ),
+        ]
+        assert orch._apply_patches_on_disk(patches) == 1
+        assert (temp_workspace / "app.py").read_text(encoding="utf-8") == "x = 2\n"
+
+    def test_patcher_prompt_discovers_test_app(self, temp_workspace):
+        (temp_workspace / "app.py").write_text(
+            "from utils.helper import greet\n", encoding="utf-8",
+        )
+        (temp_workspace / "test_app.py").write_text(
+            "def test_main():\n    from app import main\n", encoding="utf-8",
+        )
+        orch = Orchestrator(None, None, None)
+        orch._repo_root = str(temp_workspace)
+        plan = RepairPlan(issue_type="import_error", suspect_files=["app.py"])
+        prompt = orch._patcher_prompt([], None, plan=plan, issue="ModuleNotFoundError at app.py:1")
+        assert "test_app.py" in prompt
+        assert "utils.helper" in prompt
 
     def test_full_pipeline_fake(self, temp_workspace):
         ws = WorkspaceContext.build(str(temp_workspace))
