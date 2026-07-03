@@ -185,12 +185,18 @@ FixLoop/
 # 全量测试
 pytest tests/ -v
 
-# Lint
-ruff check .
+# Lint（与 CI test.yml 一致）
+ruff check agent_runtime src tests
+ruff format --check agent_runtime src tests
 
-# 相关模块（改动 orchestrator / eval 后）
-pytest tests/test_orchestrator.py tests/test_eval_runner.py tests/test_ablation.py -v
+# CI 评测门禁（本地）
+python -m src.eval.runner --ci
+python -m src.eval.regression_check \
+  --current eval_results/ci/eval_report.json \
+  --baseline src/eval/ci_baseline_report.json
 ```
+
+GitHub Actions：`test.yml`（push/PR → pytest + ruff）、`eval.yml`（push master → Docker build + fake eval + regression_check）。
 
 分支与 PR 流程见 [`CLAUDE.md`](CLAUDE.md)。架构与设计决策见 [`ARCHITECTURE.md`](ARCHITECTURE.md)、[`docs/design-decisions.md`](docs/design-decisions.md)。Layer 1 模块导读见 [`LAYER1_GUIDE.md`](LAYER1_GUIDE.md)。
 

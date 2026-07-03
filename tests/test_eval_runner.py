@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 from src.eval.fake_runner import fake_orchestrator_factory
-from src.eval.runner import DEFAULT_CASES_DIR, EvalRunner, build_eval_report, collect_repo_diff
 from src.eval.models import CaseResult
+from src.eval.runner import EvalRunner, build_eval_report, collect_repo_diff
 
 CASES_DIR = Path(__file__).resolve().parents[1] / "src" / "eval" / "cases"
 
@@ -99,3 +99,18 @@ class TestEvalRunnerFake:
         )
         result = runner.run_case(case_id)
         assert result.fixed, f"{case_id} should fix with expected patch: {result.error}"
+
+
+class TestRunnerCli:
+    def test_ci_flag_runs_fake_eval(self, tmp_path, monkeypatch):
+        from src.eval import __main__ as runner_main
+
+        out = tmp_path / "ci"
+        monkeypatch.chdir(tmp_path)
+        code = runner_main.main(["--ci", "--output", str(out)])
+        assert code == 0
+        report_path = out / "eval_report.json"
+        assert report_path.is_file()
+        data = json.loads(report_path.read_text(encoding="utf-8"))
+        assert data["summary"]["total"] == 10
+        assert data["summary"]["fix_rate"] == 1.0

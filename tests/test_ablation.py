@@ -14,9 +14,30 @@ CASES_DIR = Path(__file__).resolve().parents[1] / "src" / "eval" / "cases"
 class TestBuildAblationReport:
     def test_summary_by_variant(self):
         results = [
-            CaseResult(case_id="case_001", fixed=True, retry_count=0, duration_ms=100, variant="full", run_index=0),
-            CaseResult(case_id="case_002", fixed=False, retry_count=1, duration_ms=200, variant="full", run_index=0),
-            CaseResult(case_id="case_001", fixed=True, retry_count=0, duration_ms=150, variant="single", run_index=0),
+            CaseResult(
+                case_id="case_001",
+                fixed=True,
+                retry_count=0,
+                duration_ms=100,
+                variant="full",
+                run_index=0,
+            ),
+            CaseResult(
+                case_id="case_002",
+                fixed=False,
+                retry_count=1,
+                duration_ms=200,
+                variant="full",
+                run_index=0,
+            ),
+            CaseResult(
+                case_id="case_001",
+                fixed=True,
+                retry_count=0,
+                duration_ms=150,
+                variant="single",
+                run_index=0,
+            ),
         ]
         report = build_ablation_report(results)
         assert report["summary_by_variant"]["full"]["total"] == 2

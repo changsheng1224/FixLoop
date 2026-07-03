@@ -3,8 +3,6 @@
 import json
 from unittest.mock import MagicMock
 
-import pytest
-
 from agent_runtime.tool_context import ToolContext
 from src.harness.sandbox_manager import ExecResult, Sandbox
 from src.state import VerificationResult

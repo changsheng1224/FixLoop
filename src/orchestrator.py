@@ -34,7 +34,15 @@ class Orchestrator:
     不调 LLM，只做调度和状态管理。
     """
 
-    def __init__(self, localizer, retriever, patcher, verifier=None, *, use_pytest_verify: bool = False):
+    def __init__(
+        self,
+        localizer,
+        retriever,
+        patcher,
+        verifier=None,
+        *,
+        use_pytest_verify: bool = False,
+    ):
         self.localizer = localizer
         self.retriever = retriever
         self.patcher = patcher
@@ -203,9 +211,7 @@ class Orchestrator:
         """正则解析 Issue 文本，提取语言/异常类型/文件名。"""
         plan = RepairPlan(language="python")
 
-        has_import_err = bool(
-            re.search(r"ModuleNotFoundError|ImportError", issue, re.IGNORECASE)
-        )
+        has_import_err = bool(re.search(r"ModuleNotFoundError|ImportError", issue, re.IGNORECASE))
         has_type_err = bool(re.search(r"TypeError", issue, re.IGNORECASE))
         if re.search(r"composite", issue, re.IGNORECASE) or (has_import_err and has_type_err):
             plan.issue_type = "composite"
@@ -750,9 +756,7 @@ class Orchestrator:
                 "只修改下方已提供的源文件，不要引用其他项目文件名。"
             )
             if re.search(r"cannot import name", issue, re.IGNORECASE):
-                parts.append(
-                    "修复提示: 除 import 行外，须同步修改本文件内对错误符号名的所有调用。"
-                )
+                parts.append("修复提示: 除 import 行外，须同步修改本文件内对错误符号名的所有调用。")
         if plan and plan.issue_type == "composite":
             parts.append(
                 "修复提示: 复合错误可能需修改多个文件（import + 类型转换）。"
@@ -763,7 +767,8 @@ class Orchestrator:
             parts.append(
                 "修复提示: 配置错误通常需修改 pyproject.toml。"
                 "使用 diff 字段追加 TOML 段（如 [tool.eval]），"
-                "不要改 unrelated 字段；JSON 中 diff 用 \\n 表示换行，避免 multiline original_lines。"
+                "不要改 unrelated 字段；JSON 中 diff 用 \\n 表示换行，"
+                "避免 multiline original_lines。"
             )
         if issue and "concatenate str" in issue.lower():
             parts.append(
@@ -1095,9 +1100,15 @@ def _apply_import_line_fallback(text: str, diff: str) -> str | None:
             continue
         file_module = _extract_import_module(content)
         should_replace = False
-        if old_module and (old_module in content or _import_modules_related(file_module, old_module)):
+        if old_module and (
+            old_module in content or _import_modules_related(file_module, old_module)
+        ):
             should_replace = True
-        elif file_module and file_module != new_module and _import_modules_related(file_module, new_module):
+        elif (
+            file_module
+            and file_module != new_module
+            and _import_modules_related(file_module, new_module)
+        ):
             should_replace = True
         if not should_replace:
             continue

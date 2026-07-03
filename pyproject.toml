@@ -29,13 +29,16 @@ build-backend = "setuptools.build_meta"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+exclude = ["scripts", "src/eval/cases", "demo"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/test_light_client.py" = ["N802"]
-"tests/test_providers_replay.py" = ["N802"]
+"tests/**" = ["E501"]
+"tests/test_light_client.py" = ["N802", "E501"]
+"tests/test_providers_replay.py" = ["N802", "E501"]
+"src/repair_factory.py" = ["E741"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

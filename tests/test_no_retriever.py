@@ -2,7 +2,6 @@
 
 from agent_runtime.providers.clients import FakeModelClient
 from agent_runtime.workspace import WorkspaceContext
-
 from src.agents.localizer import create_localizer
 from src.agents.patcher import create_patcher
 from src.eval.variants import NoRetrieverOrchestrator, make_no_retriever_factory
