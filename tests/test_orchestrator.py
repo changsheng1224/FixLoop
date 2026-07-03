@@ -8,7 +8,7 @@ from src.agents.localizer import create_localizer
 from src.agents.patcher import create_patcher
 from src.agents.retriever import create_retriever
 from src.orchestrator import Orchestrator, apply_patch_to_text
-from src.state import CandidatePatch, VerificationResult
+from src.state import CandidatePatch, RepairPlan, SuspectLocation, VerificationResult
 
 
 @pytest.fixture
@@ -65,7 +65,41 @@ class TestOrchestrator:
         assert len(state.candidate_patches) == 1
         assert state.status == "patched"
         assert "localizer_ms" in state.node_timings
+        assert "retriever_ms" in state.node_timings
+        assert "localize_retrieve_ms" in state.node_timings
         assert "patcher_ms" in state.node_timings
+
+    def test_retriever_prompt_from_plan(self):
+        orch = Orchestrator(None, None, None)
+        plan = RepairPlan(language="python", suspect_files=["calculator.py"])
+        prompt = orch._retriever_prompt([], plan=plan, issue="TypeError at calculator.py:6")
+        assert "calculator.py" in prompt
+        assert "find_test" in prompt.lower() or "find_test" in prompt
+
+    def test_patcher_prompt_includes_test_file(self, temp_workspace):
+        repo = temp_workspace
+        (repo / "calculator.py").write_text(
+            "def add(a, b):\n    return a + b\n", encoding="utf-8",
+        )
+        (repo / "test_calculator.py").write_text(
+            'def test_add_str():\n    assert add("3", 2) == 5\n',
+            encoding="utf-8",
+        )
+        orch = Orchestrator(None, None, None)
+        orch._repo_root = str(repo)
+        suspects = [
+            SuspectLocation(
+                file_path="calculator.py", start_line=2, end_line=2,
+                function_name="add", reason="堆栈指向",
+            ),
+        ]
+        plan = RepairPlan(issue_type="type_error")
+        prompt = orch._patcher_prompt(
+            suspects, None, plan=plan,
+            issue="TypeError: concatenate str",
+        )
+        assert 'assert add("3", 2) == 5' in prompt
+        assert "int()" in prompt or "数值转换" in prompt
 
 
 class TestApplyPatch:

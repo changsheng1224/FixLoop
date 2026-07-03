@@ -1,5 +1,6 @@
 """Semantic Memory 单测：语义检索 + 降级。"""
 
+import os
 
 from agent_runtime.features.memory import (
     SemanticMemory,
@@ -8,6 +9,64 @@ from agent_runtime.features.memory import (
     retrieval_candidates,
     retrieval_candidates_semantic,
 )
+
+
+class TestOfflineMode:
+    """HF Hub 离线模式配置。"""
+
+    def test_model_cached_locally_detects_snapshot(self, tmp_path, monkeypatch):
+        from agent_runtime.features.memory import semantic
+
+        monkeypatch.setattr(semantic, "_hf_cache_dir", lambda: tmp_path)
+        snap = (
+            tmp_path
+            / "models--sentence-transformers--all-MiniLM-L6-v2"
+            / "snapshots"
+            / "abc123"
+        )
+        snap.mkdir(parents=True)
+        (snap / "config.json").write_text("{}", encoding="utf-8")
+        assert semantic._model_cached_locally(semantic._SEMANTIC_MODEL_ID) is True
+
+    def test_model_cached_locally_missing(self, tmp_path, monkeypatch):
+        from agent_runtime.features.memory import semantic
+
+        monkeypatch.setattr(semantic, "_hf_cache_dir", lambda: tmp_path)
+        assert semantic._model_cached_locally(semantic._SEMANTIC_MODEL_ID) is False
+
+    def test_auto_offline_when_cache_exists(self, tmp_path, monkeypatch):
+        from agent_runtime.features.memory import semantic
+
+        monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+        monkeypatch.setattr(semantic, "_hf_cache_dir", lambda: tmp_path)
+        snap = (
+            tmp_path
+            / "models--sentence-transformers--all-MiniLM-L6-v2"
+            / "snapshots"
+            / "abc123"
+        )
+        snap.mkdir(parents=True)
+        (snap / "config.json").write_text("{}", encoding="utf-8")
+
+        semantic._configure_hf_hub(semantic._SEMANTIC_MODEL_ID)
+        assert os.environ.get("HF_HUB_OFFLINE") == "1"
+
+    def test_respect_explicit_hf_hub_offline_false(self, tmp_path, monkeypatch):
+        from agent_runtime.features.memory import semantic
+
+        monkeypatch.setenv("HF_HUB_OFFLINE", "0")
+        monkeypatch.setattr(semantic, "_hf_cache_dir", lambda: tmp_path)
+        snap = (
+            tmp_path
+            / "models--sentence-transformers--all-MiniLM-L6-v2"
+            / "snapshots"
+            / "abc123"
+        )
+        snap.mkdir(parents=True)
+        (snap / "config.json").write_text("{}", encoding="utf-8")
+
+        semantic._configure_hf_hub(semantic._SEMANTIC_MODEL_ID)
+        assert os.environ.get("HF_HUB_OFFLINE") == "0"
 
 
 class TestSemanticMemory:

@@ -10,6 +10,7 @@
 import re
 import sys as _sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import yaml
@@ -71,23 +72,29 @@ class Orchestrator:
         timings["parse_issue_ms"] = ms
         print(f"[{_ts()}] parse_issue: {ms}ms\n", end="", file=_sys.stderr, flush=True)
 
-        # Step 2: Localizer
-        print(f"[{_ts()}] Localizer 开始...\n", end="", file=_sys.stderr, flush=True)
-        t0 = time.time()
-        state.suspect_locations = self._run_localizer(state)
-        ms = int((time.time() - t0) * 1000)
-        timings["localizer_ms"] = ms
-        n = len(state.suspect_locations)
-        print(f"[{_ts()}] Localizer 完成: {ms}ms, {n} suspect\n",
+        # Step 2+3: Localizer + Retriever 并行（Retriever 用 parse_issue 的粗定位）
+        print(f"[{_ts()}] Localizer + Retriever 并行开始...\n",
               end="", file=_sys.stderr, flush=True)
-
-        # Step 3: Retriever
-        print(f"[{_ts()}] Retriever 开始...\n", end="", file=_sys.stderr, flush=True)
         t0 = time.time()
-        state.retrieved_context = self._run_retriever(state)
-        ms = int((time.time() - t0) * 1000)
-        timings["retriever_ms"] = ms
-        print(f"[{_ts()}] Retriever 完成: {ms}ms\n", end="", file=_sys.stderr, flush=True)
+        suspects, context, loc_timing, ret_timing = self._run_localize_and_retrieve(state)
+        wall_ms = int((time.time() - t0) * 1000)
+        timings["localize_retrieve_ms"] = wall_ms
+        timings["localizer_ms"] = loc_timing["total_ms"]
+        timings["retriever_ms"] = ret_timing["total_ms"]
+        state.suspect_locations = suspects
+        state.retrieved_context = context
+        state.node_timings["localizer_ms"] = loc_timing["total_ms"]
+        state.node_timings["localizer_internal"] = loc_timing["internal"]
+        state.node_timings["retriever_ms"] = ret_timing["total_ms"]
+        state.node_timings["retriever_internal"] = ret_timing["internal"]
+        n = len(suspects)
+        n_tests = len(context.related_tests) if context else 0
+        print(
+            f"[{_ts()}] Localizer+Retriever 完成: 墙钟{wall_ms}ms "
+            f"(L={loc_timing['total_ms']}ms, R={ret_timing['total_ms']}ms), "
+            f"{n} suspect, {n_tests} tests\n",
+            end="", file=_sys.stderr, flush=True,
+        )
 
         # Step 4: Patcher → Verifier → 自愈
         while state.retry_count < max_retries:
@@ -231,6 +238,37 @@ class Orchestrator:
         except Exception:
             return {}
 
+    def _run_localize_and_retrieve(
+        self, state: RepairState,
+    ) -> tuple[list[SuspectLocation], RetrievedContext, dict, dict]:
+        """并行运行 Localizer 与 Retriever，返回结果与各自耗时。"""
+        plan = state.repair_plan
+        issue = state.issue_input
+
+        def run_localizer():
+            prompt = self._localizer_prompt(plan, issue)
+            answer, timing = self._run_agent(self.localizer, prompt, "localizer")
+            suspects = self._parse_suspect_list(answer)
+            if not suspects:
+                print(
+                    f"  [localizer] ⚠ 0 suspects, raw[:500]={answer.strip()[:500]!r}",
+                    file=_sys.stderr, flush=True,
+                )
+            return suspects, timing
+
+        def run_retriever():
+            prompt = self._retriever_prompt([], plan=plan, issue=issue)
+            answer, timing = self._run_agent(self.retriever, prompt, "retriever")
+            return self._parse_retrieved_context(answer), timing
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            fut_loc = pool.submit(run_localizer)
+            fut_ret = pool.submit(run_retriever)
+            suspects, loc_timing = fut_loc.result()
+            context, ret_timing = fut_ret.result()
+
+        return suspects, context, loc_timing, ret_timing
+
     def _run_localizer(self, state: RepairState) -> list[SuspectLocation]:
         prompt = self._localizer_prompt(state.repair_plan, state.issue_input)
         answer, timing = self._run_agent(self.localizer, prompt, "localizer")
@@ -243,7 +281,9 @@ class Orchestrator:
         return suspects
 
     def _run_retriever(self, state: RepairState) -> RetrievedContext:
-        prompt = self._retriever_prompt(state.suspect_locations)
+        prompt = self._retriever_prompt(
+            state.suspect_locations, plan=state.repair_plan, issue=state.issue_input,
+        )
         answer, timing = self._run_agent(self.retriever, prompt, "retriever")
         state.node_timings["retriever_ms"] = timing["total_ms"]
         state.node_timings["retriever_internal"] = timing["internal"]
@@ -256,7 +296,11 @@ class Orchestrator:
         1 次 API 调用 → 解析 JSON → 直接 patch 文件。
         """
         prompt = self._patcher_prompt(
-            state.suspect_locations, state.retrieved_context, state.feedback
+            state.suspect_locations,
+            state.retrieved_context,
+            state.feedback,
+            plan=state.repair_plan,
+            issue=state.issue_input,
         )
 
         # 构建完整 prompt：system prompt（patcher.txt）+ user prompt
@@ -266,7 +310,7 @@ class Orchestrator:
 
         t0 = time.time()
         raw = self.patcher.model_client.complete(
-            full_prompt, max_new_tokens=self.patcher.config.max_new_tokens or 4096,
+            full_prompt, max_new_tokens=min(self.patcher.config.max_new_tokens or 4096, 2048),
         )
         elapsed_ms = int((time.time() - t0) * 1000)
         state.node_timings["patcher_ms"] = elapsed_ms
@@ -387,62 +431,150 @@ class Orchestrator:
         parts.append("请用 stack_parse 解析堆栈，再用 ast_parse 分析文件结构，最后输出 SuspectList JSON。")
         return "\n".join(parts)
 
-    def _retriever_prompt(self, suspects: list[SuspectLocation]) -> str:
-        if not suspects:
-            return "搜索与该 Issue 相关的代码上下文。请用 search 和 find_test 搜索后输出 RetrievedContext JSON。"
-        parts = ["根据以下嫌疑位置搜索相关代码："]
-        for s in suspects:
-            parts.append(f"  - {s.file_path}:{s.start_line} {s.function_name or ''}")
-        parts.append("请用 search/find_test/git_blame 搜索，输出 RetrievedContext JSON。")
-        return "\n".join(parts)
+    def _retriever_prompt(
+        self,
+        suspects: list[SuspectLocation],
+        plan: RepairPlan | None = None,
+        issue: str = "",
+    ) -> str:
+        if suspects:
+            parts = ["根据以下嫌疑位置搜索相关代码："]
+            for s in suspects:
+                parts.append(f"  - {s.file_path}:{s.start_line} {s.function_name or ''}")
+            parts.append("请用 find_test 和 search 收集上下文，输出 RetrievedContext JSON。")
+            return "\n".join(parts)
+
+        if plan and plan.suspect_files:
+            parts = [f"根据 Issue 和嫌疑文件搜索相关代码：\n{issue or plan.reasoning}"]
+            parts.append(f"嫌疑文件: {', '.join(plan.suspect_files)}")
+            parts.append("请用 find_test 和 search 收集上下文，输出 RetrievedContext JSON。")
+            return "\n".join(parts)
+
+        return (
+            "搜索与该 Issue 相关的代码上下文。"
+            "请用 search 和 find_test 搜索后输出 RetrievedContext JSON。"
+        )
 
     def _patcher_prompt(
         self,
         suspects: list[SuspectLocation],
         context: RetrievedContext | None,
         feedback: str = "",
+        plan: RepairPlan | None = None,
+        issue: str = "",
     ) -> str:
         parts = []
         if feedback:
             parts.append(f"[上一轮验证反馈]\n{feedback}\n")
         parts.append("基于以下信息生成修复补丁：")
+
+        if plan and plan.issue_type == "type_error":
+            parts.append(
+                "修复提示: 这是类型错误。若测试断言期望数字结果，"
+                "请用 int()/float() 做数值转换，禁止 str() 拼接。"
+            )
+        if issue and "concatenate str" in issue.lower():
+            parts.append(
+                "Issue 表明 str 与 int 不能直接相加；修复后混合类型输入应得到数字运算结果。"
+            )
+
         if suspects:
             parts.append("嫌疑位置（代码已预读，无需再调用 read_file）:")
             for s in suspects:
                 if not s.file_path:
                     continue
                 parts.append(f"  - {s.file_path}:{s.start_line} ({s.reason})")
-                # 预读嫌疑文件的实际代码，防止模型幻觉
-                file_path = Path(s.file_path)
-                if not file_path.is_absolute():
-                    file_path = Path(self._repo_root) / file_path
-                if file_path.is_file():
-                    lines = file_path.read_text(encoding="utf-8").split("\n")
-                    ctx_start = max(0, s.start_line - 3)
-                    ctx_end = min(len(lines), s.end_line + 3)
-                    parts.append(f"    ```python")
-                    for i in range(ctx_start, ctx_end):
-                        marker = ">>>" if s.start_line - 1 <= i < s.end_line else "   "
-                        parts.append(f"    {marker} {lines[i]}")
-                    parts.append("    ```")
+                snippet = self._read_code_snippet(s.file_path, s.start_line, s.end_line)
+                if snippet:
+                    parts.append(snippet)
                 else:
-                    parts.append(f"    ⚠ 文件不存在: {file_path}")
-        if context and context.related_tests:
-            test_names = []
-            for t in context.related_tests:
-                if isinstance(t, str):
-                    test_names.append(t)
-                elif isinstance(t, dict):
-                    test_names.append(t.get("name", t.get("path", str(t))))
-                else:
-                    test_names.append(str(t))
-            if test_names:
-                parts.append(f"相关测试: {', '.join(test_names)}")
-        parts.append(
-            "请用 read_file 确认上下文后，用 patch_file 生成最小化 diff。"
-            "输出 CandidatePatch JSON 列表。"
-        )
+                    parts.append(f"    ⚠ 文件不存在: {s.file_path}")
+
+        test_blocks = self._read_test_context(context, suspects)
+        if test_blocks:
+            parts.append("相关测试文件（补丁必须通过这些 assert）:")
+            parts.extend(test_blocks)
+
+        parts.append("直接输出 CandidatePatch JSON 列表，不要调用任何工具。")
         return "\n".join(parts)
+
+    def _read_code_snippet(self, file_path: str, start_line: int, end_line: int) -> str:
+        """预读嫌疑文件上下文。"""
+        path = Path(file_path)
+        if not path.is_absolute():
+            path = Path(self._repo_root) / path
+        if not path.is_file():
+            return ""
+        lines = path.read_text(encoding="utf-8").split("\n")
+        ctx_start = max(0, start_line - 3)
+        ctx_end = min(len(lines), end_line + 3)
+        block = ["    ```python"]
+        for i in range(ctx_start, ctx_end):
+            marker = ">>>" if start_line - 1 <= i < end_line else "   "
+            block.append(f"    {marker} {lines[i]}")
+        block.append("    ```")
+        return "\n".join(block)
+
+    def _read_test_context(
+        self,
+        context: RetrievedContext | None,
+        suspects: list[SuspectLocation],
+    ) -> list[str]:
+        """预读相关测试文件全文（同文件内所有用例一并提供）。"""
+        test_paths: list[Path] = []
+
+        if context and context.related_tests:
+            for item in context.related_tests:
+                path = self._resolve_test_path(str(item))
+                if path and path not in test_paths:
+                    test_paths.append(path)
+
+        for s in suspects:
+            if not s.function_name:
+                continue
+            guessed = self._guess_test_file(s.file_path, s.function_name)
+            if guessed and guessed not in test_paths:
+                test_paths.append(guessed)
+
+        blocks: list[str] = []
+        for path in test_paths:
+            try:
+                content = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            rel = path.name
+            blocks.append(f"  {rel}:")
+            blocks.append("  ```python")
+            blocks.append(content.rstrip())
+            blocks.append("  ```")
+        return blocks
+
+    def _resolve_test_path(self, ref: str) -> Path | None:
+        """从 pytest nodeid 或路径解析测试文件。"""
+        file_part = ref.split("::", 1)[0].strip()
+        if not file_part:
+            return None
+        candidates = [
+            Path(self._repo_root) / file_part,
+            Path(self._repo_root) / "tests" / file_part,
+        ]
+        for path in candidates:
+            if path.is_file():
+                return path
+        return None
+
+    def _guess_test_file(self, source_file: str, function_name: str) -> Path | None:
+        """按约定猜测 test_<module>.py。"""
+        stem = Path(source_file).stem
+        names = [f"test_{stem}.py", f"{stem}_test.py"]
+        for name in names:
+            for base in (Path(self._repo_root), Path(self._repo_root) / "tests"):
+                path = base / name
+                if path.is_file():
+                    text = path.read_text(encoding="utf-8")
+                    if function_name in text:
+                        return path
+        return None
 
     # ---- 解析 Agent 输出 ----
 

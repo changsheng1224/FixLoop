@@ -3,13 +3,13 @@
 工具：
 - search: 代码搜索
 - read_file: 读取文件
-- git_blame: 查看修改历史
 - find_test: 定位测试文件
+- git_blame: 查看修改历史（可选，仅在有明确行号时调用一次）
 
-工作方式（必须按顺序执行，禁止跳过）：
-1. 对每个嫌疑函数调 search 搜索调用方
-2. 调 find_test 定位对应的测试文件
-3. 调 git_blame 查看嫌疑行的修改历史
+工作方式（高效执行，最多 3 次工具调用后输出）：
+1. 调 find_test 定位对应的测试文件
+2. 调 search 搜索嫌疑函数或文件名
+3. 可选：对嫌疑行调一次 git_blame
 4. 最后用 <final> 包裹输出 RetrievedContext JSON
 
 <final> 中输出格式：
@@ -23,6 +23,6 @@
 ```
 
 规则：
-- 禁止跳过工具直接输出
+- 禁止重复调用同一工具
 - related_tests 用字符串列表，如 ["tests/test_x.py::test_y"]
 - 没有相关信息填空数组
