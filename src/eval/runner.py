@@ -9,7 +9,6 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
 
@@ -212,58 +211,9 @@ class EvalRunner:
 
 
 def build_eval_report(results: list[CaseResult]) -> EvalReport:
-    total = len(results)
-    fixed_n = sum(1 for r in results if r.fixed)
-    retries = [r.retry_count for r in results]
-    durations = [r.duration_ms for r in results if r.duration_ms >= 0]
+    from src.eval.metrics import compute_metrics
 
-    summary = {
-        "total": total,
-        "fixed": fixed_n,
-        "fix_rate": round(fixed_n / total, 4) if total else 0.0,
-        "first_attempt_rate": round(
-            sum(1 for r in results if r.fixed and r.retry_count == 0) / total, 4
-        )
-        if total
-        else 0.0,
-        "avg_retries": round(sum(retries) / total, 2) if total else 0.0,
-        "avg_duration_ms": int(sum(durations) / len(durations)) if durations else 0,
-        "regression_count": sum(1 for r in results if r.introduced_regression),
-    }
-    precisions = [
-        r.minimal_lines / max(r.actual_lines, 1)
-        for r in results
-        if r.fixed and r.minimal_lines > 0
-    ]
-    if precisions:
-        summary["avg_patch_precision"] = round(sum(precisions) / len(precisions), 4)
-
-    token_totals = [r.total_tokens for r in results if r.total_tokens > 0]
-    if token_totals:
-        summary["total_tokens"] = sum(token_totals)
-        summary["avg_total_tokens"] = round(sum(token_totals) / len(token_totals), 2)
-
-    by_type: dict[str, dict] = defaultdict(lambda: {"total": 0, "fixed": 0})
-    by_diff: dict[str, dict] = defaultdict(lambda: {"total": 0, "fixed": 0})
-    for r in results:
-        t = r.issue_type or "unknown"
-        by_type[t]["total"] += 1
-        by_type[t]["fixed"] += int(r.fixed)
-        d = r.difficulty or "unknown"
-        by_diff[d]["total"] += 1
-        by_diff[d]["fixed"] += int(r.fixed)
-
-    for bucket in by_type.values():
-        bucket["fix_rate"] = round(bucket["fixed"] / bucket["total"], 4) if bucket["total"] else 0.0
-    for bucket in by_diff.values():
-        bucket["fix_rate"] = round(bucket["fixed"] / bucket["total"], 4) if bucket["total"] else 0.0
-
-    return EvalReport(
-        cases=results,
-        summary=summary,
-        by_type=dict(by_type),
-        by_difficulty=dict(by_diff),
-    )
+    return compute_metrics(results)
 
 
 def _read_min_lines(case_dir: Path) -> int:

@@ -36,6 +36,13 @@ def main() -> int:
         action="store_true",
         help="启用 Docker Verifier（默认仅 pytest 验证）",
     )
+    p_eval.add_argument(
+        "--markdown",
+        nargs="?",
+        const="report.md",
+        metavar="PATH",
+        help="生成 Markdown 指标报告（默认 output/report.md）",
+    )
 
     p_ablation = sub.add_parser("ablation", help="运行消融实验")
     p_ablation.add_argument("--all", action="store_true", help="运行全部 Case")
@@ -70,6 +77,13 @@ def main() -> int:
         "--no-progress",
         action="store_true",
         help="不打印逐条运行进度",
+    )
+    p_ablation.add_argument(
+        "--markdown",
+        nargs="?",
+        const="report.md",
+        metavar="PATH",
+        help="生成 Markdown 指标报告（默认 output/report.md）",
     )
 
     args = parser.parse_args()
@@ -117,6 +131,7 @@ def _eval(args) -> int:
         verbose=args.verbose,
         fake=args.fake,
         skip_verify=skip_verify,
+        markdown=getattr(args, "markdown", None),
     )
     print_eval_report(report, verbose=args.verbose, report_path=report_path)
     return code
@@ -140,6 +155,7 @@ def _ablation(args) -> int:
         repetitions=args.repetitions,
         variant_names=args.variants,
         progress=not args.no_progress,
+        markdown=getattr(args, "markdown", None),
     )
     print_ablation_report(report, verbose=args.verbose, report_path=report_path)
     return code
