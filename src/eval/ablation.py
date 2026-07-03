@@ -147,7 +147,8 @@ class AblationRunner:
 
         if progress:
             print(
-                f"Ablation 开始: {len(self.variants)} 变体 × {len(ids)} Case × {repetitions} 次 = {total_runs} 次",
+                f"Ablation 开始: {len(self.variants)} 变体 × {len(ids)} Case "
+                f"× {repetitions} 次 = {total_runs} 次",
                 file=sys.stderr,
                 flush=True,
             )

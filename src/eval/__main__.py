@@ -26,13 +26,29 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="禁用 Verifier 重试（默认启用 pytest/Docker 验证）",
     )
-    parser.add_argument("--with-verify", action="store_true", help="（已默认启用）显式开启 Verifier")
+    parser.add_argument(
+        "--with-verify",
+        action="store_true",
+        help="（已默认启用）显式开启 Verifier",
+    )
+    parser.add_argument(
+        "--ci",
+        action="store_true",
+        help="CI 模式：--all --fake --skip-verify，输出到 eval_results/ci",
+    )
     args = parser.parse_args(argv)
 
-    if not args.all and not args.cases:
-        parser.error("请指定 --all 或 --case case_XXX")
+    if args.ci:
+        args.all = True
+        args.fake = True
+        args.skip_verify = True
+        if args.output == "eval_results":
+            args.output = "eval_results/ci"
 
-    if not args.fake:
+    if not args.all and not args.cases:
+        parser.error("请指定 --all、--case case_XXX 或 --ci")
+
+    if not args.fake and not args.ci:
         print("提示: 未指定 --fake 时将调用真实 API（费用较高）", file=sys.stderr)
 
     report, report_path, code = run_eval(

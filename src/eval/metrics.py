@@ -8,6 +8,7 @@ from pathlib import Path
 
 from src.eval.models import CaseResult, EvalReport
 
+
 def _summary_metrics(results: list[CaseResult]) -> dict:
     total = len(results)
     if total == 0:
@@ -292,9 +293,7 @@ def format_run_notes(
                 parts.append(f"{variant} ~{avg_s:.1f}s")
             lines.append(f"- **变体耗时**: {', '.join(parts)}")
 
-        inflated = any(
-            r.actual_lines > max(r.minimal_lines * 10, 10) for r in results
-        )
+        inflated = any(r.actual_lines > max(r.minimal_lines * 10, 10) for r in results)
         if inflated:
             lines.append(
                 "- **patch_precision 说明**: 本 JSON 的 actual_lines 含 `.agent` 噪声，"

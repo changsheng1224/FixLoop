@@ -1,0 +1,18 @@
+{
+  "summary": {
+    "total": 10,
+    "fixed": 10,
+    "fix_rate": 1.0,
+    "first_attempt_rate": 1.0,
+    "avg_retries": 0.0,
+    "patch_precision": 0.9333,
+    "avg_duration_ms": 1,
+    "avg_duration_s": 0.0,
+    "regression_count": 0,
+    "regression_rate": 0.0
+  },
+  "meta": {
+    "description": "CI baseline: fake eval --all --skip-verify on 10 cases",
+    "updated": "2026-07-04"
+  }
+}

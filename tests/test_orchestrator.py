@@ -205,16 +205,8 @@ class TestApplyPatch:
     def test_sync_import_symbol_usages(self):
         from src.orchestrator import _sync_import_symbol_usages
 
-        old = (
-            "from utils.helpers import hello\n\n"
-            "def message():\n"
-            "    return hello()\n"
-        )
-        new = (
-            "from utils.helpers import greet\n\n"
-            "def message():\n"
-            "    return hello()\n"
-        )
+        old = "from utils.helpers import hello\n\ndef message():\n    return hello()\n"
+        new = "from utils.helpers import greet\n\ndef message():\n    return hello()\n"
         patch = CandidatePatch(
             file_path="service.py",
             diff="-from utils.helpers import hello\n+from utils.helpers import greet",

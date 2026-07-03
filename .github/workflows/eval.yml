@@ -1,0 +1,42 @@
+# FixLoop Eval CI — 默认不自动运行。
+# 启用：取消下方 push 注释，并注释掉 workflow_dispatch。
+name: Eval
+
+on:
+  workflow_dispatch:
+  # push:
+  #   branches: [master]
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Build sandbox image
+        run: docker build -t repair-agent/python-repair:latest -f sandbox/Dockerfile.python sandbox/
+
+      - name: Run CI eval (fake, no API)
+        run: python -m src.eval.runner --ci --verbose
+
+      - name: Regression check
+        run: |
+          python -m src.eval.regression_check \
+            --current eval_results/ci/eval_report.json \
+            --baseline src/eval/ci_baseline_report.json \
+            --markdown eval_results/ci/regression_check.md
+
+      - name: Upload eval artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-ci-reports
+          path: eval_results/ci/

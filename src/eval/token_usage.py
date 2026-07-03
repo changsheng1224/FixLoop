@@ -20,7 +20,7 @@ def _empty_usage() -> dict:
 
 def _merge_sections(target: dict, source: dict) -> None:
     for key, value in source.items():
-        if isinstance(value, (int, float)):
+        if isinstance(value, int | float):
             target[key] = target.get(key, 0) + int(value)
 
 
@@ -94,7 +94,11 @@ def reset_clients_session_usage(*agents) -> None:
         reset_client_session_usage(client)
 
 
-def build_repair_token_usage(model_clients: list, repo: Path, since_ts: float | None = None) -> dict:
+def build_repair_token_usage(
+    model_clients: list,
+    repo: Path,
+    since_ts: float | None = None,
+) -> dict:
     """合并多个 Agent 共享/独立 client 的 API 用量与 run 报告。"""
     reports = collect_repo_token_reports(repo, since_ts=since_ts)
     input_tokens = 0

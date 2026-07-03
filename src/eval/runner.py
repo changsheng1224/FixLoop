@@ -84,7 +84,9 @@ def collect_repo_diff(original: Path, modified: Path) -> str:
 
 
 def count_changed_lines(patch_text: str) -> int:
-    return sum(1 for line in patch_text.splitlines() if line.startswith("+") and not line.startswith("+++"))
+    return sum(
+        1 for line in patch_text.splitlines() if line.startswith("+") and not line.startswith("+++")
+    )
 
 
 def extract_agent_timings(node_timings: dict | None) -> dict:
@@ -124,7 +126,11 @@ class EvalRunner:
             if p.is_dir() and re.match(r"case_\d{3}$", p.name)
         )
 
-    def run_all(self, case_ids: list[str] | None = None, report_path: Path | None = None) -> EvalReport:
+    def run_all(
+        self,
+        case_ids: list[str] | None = None,
+        report_path: Path | None = None,
+    ) -> EvalReport:
         ids = case_ids or self.list_cases()
         results = [self.run_case(case_id) for case_id in ids]
         report = build_eval_report(results)

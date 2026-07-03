@@ -72,7 +72,9 @@ class TestEvalCaseHealth:
                 capture_output=True,
                 text=True,
             )
-            assert proc.returncode == 0, f"{case_id} patch did not fix:\n{proc.stdout}\n{proc.stderr}"
+            assert proc.returncode == 0, (
+                f"{case_id} patch did not fix:\n{proc.stdout}\n{proc.stderr}"
+            )
 
     @pytest.mark.parametrize("case_id", READY_CASES)
     def test_min_lines_is_positive_int(self, case_id):

@@ -2,8 +2,6 @@
 
 import sys
 
-import pytest
-
 from agent_runtime.providers.clients import FakeModelClient
 
 

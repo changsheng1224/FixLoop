@@ -115,7 +115,8 @@ class RegressionChecker:
                     message=(
                         f"Fix Rate regression: {baseline.get('fix_rate', 0):.1%} → "
                         f"{current.get('fix_rate', 0):.1%} "
-                        f"(-{fix_drop_pp:.1f}pp, exceeds {self.fix_rate_drop_threshold_pp:g}pp threshold)"
+                        f"(-{fix_drop_pp:.1f}pp, exceeds "
+                        f"{self.fix_rate_drop_threshold_pp:g}pp threshold)"
                     ),
                 )
             )
@@ -168,7 +169,8 @@ class RegressionChecker:
                     "",
                     "| metric | baseline | current |",
                     "| --- | --- | --- |",
-                    f"| fix_rate | {baseline.get('fix_rate', 0):.2%} | {current.get('fix_rate', 0):.2%} |",
+                    f"| fix_rate | {baseline.get('fix_rate', 0):.2%} | "
+                    f"{current.get('fix_rate', 0):.2%} |",
                     f"| regression_rate | {baseline.get('regression_rate', 0):.2%} | "
                     f"{current.get('regression_rate', 0):.2%} |",
                 ]
@@ -210,7 +212,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--baseline",
-        default="eval_results/baseline_report.json",
+        default="src/eval/ci_baseline_report.json",
         help="基线报告 JSON",
     )
     parser.add_argument(
