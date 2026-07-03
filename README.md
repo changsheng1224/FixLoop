@@ -192,7 +192,7 @@ ruff check .
 pytest tests/test_orchestrator.py tests/test_eval_runner.py tests/test_ablation.py -v
 ```
 
-分支与 PR 流程见 [`CLAUDE.md`](CLAUDE.md)。Layer 1 详细指南见 [`LAYER1_GUIDE.md`](LAYER1_GUIDE.md)。
+分支与 PR 流程见 [`CLAUDE.md`](CLAUDE.md)。架构与设计决策见 [`ARCHITECTURE.md`](ARCHITECTURE.md)、[`docs/design-decisions.md`](docs/design-decisions.md)。Layer 1 模块导读见 [`LAYER1_GUIDE.md`](LAYER1_GUIDE.md)。
 
 ---
 
