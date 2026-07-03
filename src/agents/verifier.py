@@ -45,11 +45,15 @@ def create_verifier(model_client, workspace, cwd: str = "") -> Agent:
 
     agent = Agent(
         config=AgentConfig(provider="deepseek", max_steps=4, max_new_tokens=4096, approval="auto"),
-        model_client=model_client, workspace=workspace, cwd=root,
-        tools=tools, system_prompt=system_prompt,
+        model_client=model_client,
+        workspace=workspace,
+        cwd=root,
+        tools=tools,
+        system_prompt=system_prompt,
     )
 
     from src.middleware import build_repair_gateway
+
     gw = build_repair_gateway()
     gw.grant("verifier", "sandbox_build")
     gw.grant("verifier", "sandbox_test")

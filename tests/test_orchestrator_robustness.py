@@ -19,15 +19,18 @@ class TestOrchestratorRobustness:
     def test_localizer_failure_uses_plan_fallback(self, temp_workspace):
         """Localizer 抛错时，从 RepairPlan 降级生成 suspect。"""
         (temp_workspace / "calc.py").write_text(
-            "def add(a, b):\n    return a + b\n", encoding="utf-8",
+            "def add(a, b):\n    return a + b\n",
+            encoding="utf-8",
         )
         ws = WorkspaceContext.build(str(temp_workspace))
         loc = create_localizer(FakeModelClient([]), ws)
         ret = create_retriever(
-            FakeModelClient(['<final>{"related_tests":[]}</final>']), ws,
+            FakeModelClient(['<final>{"related_tests":[]}</final>']),
+            ws,
         )
         pat = create_patcher(
-            FakeModelClient(['<final>[]</final>']), ws,
+            FakeModelClient(["<final>[]</final>"]),
+            ws,
         )
         orch = Orchestrator(loc, ret, pat)
         state = orch.repair("TypeError at calc.py:42")
@@ -39,22 +42,27 @@ class TestOrchestratorRobustness:
     def test_retriever_failure_still_patches(self, temp_workspace):
         """Retriever 失败时流水线仍可生成补丁。"""
         (temp_workspace / "calc.py").write_text(
-            "def add(a, b):\n    return a + b\n", encoding="utf-8",
+            "def add(a, b):\n    return a + b\n",
+            encoding="utf-8",
         )
         ws = WorkspaceContext.build(str(temp_workspace))
         loc = create_localizer(
-            FakeModelClient([
-                '<final>[{"file_path":"calc.py","start_line":1,"end_line":1,'
-                '"reason":"堆栈","confidence":0.9}]</final>',
-            ]),
+            FakeModelClient(
+                [
+                    '<final>[{"file_path":"calc.py","start_line":1,"end_line":1,'
+                    '"reason":"堆栈","confidence":0.9}]</final>',
+                ]
+            ),
             ws,
         )
         ret = create_retriever(FakeModelClient([]), ws)
         pat = create_patcher(
-            FakeModelClient([
-                '<final>[{"file_path":"calc.py","original_lines":"return a + b",'
-                '"patched_lines":"return int(a) + int(b)","explanation":"fix"}]</final>',
-            ]),
+            FakeModelClient(
+                [
+                    '<final>[{"file_path":"calc.py","original_lines":"return a + b",'
+                    '"patched_lines":"return int(a) + int(b)","explanation":"fix"}]</final>',
+                ]
+            ),
             ws,
         )
         orch = Orchestrator(loc, ret, pat)

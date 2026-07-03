@@ -25,10 +25,12 @@ class TestIntegrationFullPipeline:
         """模拟：Agent 先 read_file 再返回总结。"""
         agent = Agent(
             config=config,
-            model_client=FakeModelClient([
-                '<tool>{"name":"read_file","args":{"path":"README.md"}}</tool>',
-                "<final>README.md 描述了项目用途和安装方法。</final>",
-            ]),
+            model_client=FakeModelClient(
+                [
+                    '<tool>{"name":"read_file","args":{"path":"README.md"}}</tool>',
+                    "<final>README.md 描述了项目用途和安装方法。</final>",
+                ]
+            ),
             workspace=workspace,
         )
         answer = agent.ask("read README.md")
@@ -41,11 +43,13 @@ class TestIntegrationFullPipeline:
         """模拟：list_files → search → final。"""
         agent = Agent(
             config=config,
-            model_client=FakeModelClient([
-                '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
-                '<tool>{"name":"search","args":{"pattern":"TODO","path":"."}}</tool>',
-                "<final>发现 2 个文件，搜索到 0 个 TODO。</final>",
-            ]),
+            model_client=FakeModelClient(
+                [
+                    '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
+                    '<tool>{"name":"search","args":{"pattern":"TODO","path":"."}}</tool>',
+                    "<final>发现 2 个文件，搜索到 0 个 TODO。</final>",
+                ]
+            ),
             workspace=workspace,
         )
         answer = agent.ask("列出文件并搜索 TODO")
@@ -55,11 +59,13 @@ class TestIntegrationFullPipeline:
         """模拟：格式错误 → retry → 正确调用 → final。"""
         agent = Agent(
             config=config,
-            model_client=FakeModelClient([
-                "this is not a valid tool or final format",
-                '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
-                "<final>经过 retry 后成功完成任务。</final>",
-            ]),
+            model_client=FakeModelClient(
+                [
+                    "this is not a valid tool or final format",
+                    '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
+                    "<final>经过 retry 后成功完成任务。</final>",
+                ]
+            ),
             workspace=workspace,
         )
         answer = agent.ask("测试 retry")
@@ -70,11 +76,13 @@ class TestIntegrationFullPipeline:
         config.max_steps = 2
         agent = Agent(
             config=config,
-            model_client=FakeModelClient([
-                '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
-                '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
-                '<tool>{"name":"list_files","args":{"path":"."}}</tool>',  # 第 3 次，超标
-            ]),
+            model_client=FakeModelClient(
+                [
+                    '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
+                    '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
+                    '<tool>{"name":"list_files","args":{"path":"."}}</tool>',  # 第 3 次，超标
+                ]
+            ),
             workspace=workspace,
         )
         answer = agent.ask("无限循环")
@@ -84,10 +92,12 @@ class TestIntegrationFullPipeline:
         """模拟：调用未注册工具 → Error → 调整策略 → final。"""
         agent = Agent(
             config=config,
-            model_client=FakeModelClient([
-                '<tool>{"name":"delete_everything","args":{}}</tool>',
-                "<final>该工具不可用，改用其他方式完成了任务。</final>",
-            ]),
+            model_client=FakeModelClient(
+                [
+                    '<tool>{"name":"delete_everything","args":{}}</tool>',
+                    "<final>该工具不可用，改用其他方式完成了任务。</final>",
+                ]
+            ),
             workspace=workspace,
         )
         answer = agent.ask("删除所有文件")
@@ -103,8 +113,16 @@ class TestAgentCLI:
         import sys
 
         result = subprocess.run(
-            [sys.executable, "-m", "agent_runtime", "--provider", "fake", "--cwd",
-             str(workspace.repo_root), "hello"],
+            [
+                sys.executable,
+                "-m",
+                "agent_runtime",
+                "--provider",
+                "fake",
+                "--cwd",
+                str(workspace.repo_root),
+                "hello",
+            ],
             capture_output=True,
             text=True,
             timeout=120,

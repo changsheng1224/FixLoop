@@ -55,22 +55,29 @@ class TestPatchApplier:
 
 class TestPythonRunner:
     def test_parse_json_report(self):
-        mgr = FakeManager({
-            "pip install": ExecResult(0, "installed", ""),
-            "pytest": ExecResult(0, "tests ran", ""),
-            "cat /code/.report.json": ExecResult(
-                0,
-                json.dumps({
-                    "summary": {"total": 3, "passed": 2, "failed": 1, "error": 0},
-                    "tests": [
-                        {"nodeid": "test_add", "outcome": "passed"},
-                        {"nodeid": "test_sub", "outcome": "failed",
-                         "call": {"longrepr": "AssertionError: 3!=5"}},
-                    ],
-                }),
-                "",
-            ),
-        })
+        mgr = FakeManager(
+            {
+                "pip install": ExecResult(0, "installed", ""),
+                "pytest": ExecResult(0, "tests ran", ""),
+                "cat /code/.report.json": ExecResult(
+                    0,
+                    json.dumps(
+                        {
+                            "summary": {"total": 3, "passed": 2, "failed": 1, "error": 0},
+                            "tests": [
+                                {"nodeid": "test_add", "outcome": "passed"},
+                                {
+                                    "nodeid": "test_sub",
+                                    "outcome": "failed",
+                                    "call": {"longrepr": "AssertionError: 3!=5"},
+                                },
+                            ],
+                        }
+                    ),
+                    "",
+                ),
+            }
+        )
         runner = PythonTestRunner(mgr)
         result = runner.run(FakeSandbox())
         assert result.total_tests == 3

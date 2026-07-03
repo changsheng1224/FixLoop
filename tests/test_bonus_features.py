@@ -78,6 +78,7 @@ class TestSummaryCache:
             workspace=WorkspaceContext.build(str(temp_workspace)),
         )
         from agent_runtime.context_manager import ContextManager
+
         cm = ContextManager(agent)
         assert cm._summary_cache == {}
 
@@ -97,11 +98,13 @@ class TestRetryBackoff:
     def test_retry_count_increments(self, temp_workspace):
         agent = Agent(
             config=AgentConfig(provider="fake", max_steps=3, max_new_tokens=512),
-            model_client=FakeModelClient([
-                "garbage",  # retry 1
-                "garbage",  # retry 2
-                "<final>finally ok</final>",
-            ]),
+            model_client=FakeModelClient(
+                [
+                    "garbage",  # retry 1
+                    "garbage",  # retry 2
+                    "<final>finally ok</final>",
+                ]
+            ),
             workspace=WorkspaceContext.build(str(temp_workspace)),
         )
         answer = agent.ask("test")
@@ -117,6 +120,7 @@ class TestRetrievalScore:
     def test_score_included_in_results(self):
         from agent_runtime.features.memory import append_note, default_memory_state
         from agent_runtime.features.memory.episodic import retrieval_candidates
+
         state = default_memory_state()
         append_note(state, "TypeError at line 42", tags=["error"])
         results = retrieval_candidates(state, "TypeError")
@@ -130,6 +134,7 @@ class TestTopicLabel:
 
     def test_topic_in_retrieval_result(self, temp_workspace):
         from agent_runtime.features.memory.durable import DurableMemoryStore
+
         store = DurableMemoryStore(root=str(temp_workspace))
         store.promote([("key-decisions", "Decision: use pytest")])
         results = store.retrieval("pytest")
@@ -143,6 +148,7 @@ class TestProfile:
 
     def test_ci_profile_sets_quota_zero(self, temp_workspace):
         from agent_runtime.cli import _apply_profile
+
         agent = Agent(
             config=AgentConfig(provider="fake", max_steps=2),
             model_client=FakeModelClient(["<final>ok</final>"]),
@@ -155,6 +161,7 @@ class TestProfile:
 
     def test_dev_profile_sets_auto_approval(self, temp_workspace):
         from agent_runtime.cli import _apply_profile
+
         agent = Agent(
             config=AgentConfig(provider="fake", max_steps=2),
             model_client=FakeModelClient(["<final>ok</final>"]),
@@ -171,9 +178,12 @@ class TestHealthCheck:
     def test_health_output_is_json(self):
         import subprocess
         import sys
+
         result = subprocess.run(
             [sys.executable, "-m", "agent_runtime", "--health"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         data = json.loads(result.stdout)
         assert "status" in data

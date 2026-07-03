@@ -18,12 +18,7 @@ class TestOfflineMode:
         from agent_runtime.features.memory import semantic
 
         monkeypatch.setattr(semantic, "_hf_cache_dir", lambda: tmp_path)
-        snap = (
-            tmp_path
-            / "models--sentence-transformers--all-MiniLM-L6-v2"
-            / "snapshots"
-            / "abc123"
-        )
+        snap = tmp_path / "models--sentence-transformers--all-MiniLM-L6-v2" / "snapshots" / "abc123"
         snap.mkdir(parents=True)
         (snap / "config.json").write_text("{}", encoding="utf-8")
         assert semantic._model_cached_locally(semantic._SEMANTIC_MODEL_ID) is True
@@ -39,12 +34,7 @@ class TestOfflineMode:
 
         monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
         monkeypatch.setattr(semantic, "_hf_cache_dir", lambda: tmp_path)
-        snap = (
-            tmp_path
-            / "models--sentence-transformers--all-MiniLM-L6-v2"
-            / "snapshots"
-            / "abc123"
-        )
+        snap = tmp_path / "models--sentence-transformers--all-MiniLM-L6-v2" / "snapshots" / "abc123"
         snap.mkdir(parents=True)
         (snap / "config.json").write_text("{}", encoding="utf-8")
 
@@ -56,12 +46,7 @@ class TestOfflineMode:
 
         monkeypatch.setenv("HF_HUB_OFFLINE", "0")
         monkeypatch.setattr(semantic, "_hf_cache_dir", lambda: tmp_path)
-        snap = (
-            tmp_path
-            / "models--sentence-transformers--all-MiniLM-L6-v2"
-            / "snapshots"
-            / "abc123"
-        )
+        snap = tmp_path / "models--sentence-transformers--all-MiniLM-L6-v2" / "snapshots" / "abc123"
         snap.mkdir(parents=True)
         (snap / "config.json").write_text("{}", encoding="utf-8")
 

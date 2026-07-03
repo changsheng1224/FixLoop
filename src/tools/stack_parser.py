@@ -47,11 +47,13 @@ def stack_parse(context, args: dict) -> str:
     # 提取调用栈帧
     frame_pattern = r'File\s+"([^"]+)",\s*line\s+(\d+),\s*in\s+(\w+)'
     for m in re.finditer(frame_pattern, traceback_text):
-        result["frames"].append({
-            "file": m.group(1),
-            "line": int(m.group(2)),
-            "function": m.group(3),
-        })
+        result["frames"].append(
+            {
+                "file": m.group(1),
+                "line": int(m.group(2)),
+                "function": m.group(3),
+            }
+        )
 
     # 链式异常检测
     result["is_chained"] = "During handling of the above exception" in traceback_text

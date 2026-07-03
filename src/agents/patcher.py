@@ -20,10 +20,14 @@ def create_patcher(model_client, workspace, cwd: str = "") -> Agent:
 
     agent = Agent(
         config=AgentConfig(provider="deepseek", max_steps=6, max_new_tokens=4096, approval="auto"),
-        model_client=model_client, workspace=workspace, cwd=root,
-        tools=tools, system_prompt=system_prompt,
+        model_client=model_client,
+        workspace=workspace,
+        cwd=root,
+        tools=tools,
+        system_prompt=system_prompt,
     )
 
     from src.middleware import build_repair_gateway
+
     build_repair_gateway().wrap_agent("patcher", agent)
     return agent

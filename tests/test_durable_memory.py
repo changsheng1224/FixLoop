@@ -32,10 +32,12 @@ class TestDurableMemoryStore:
         assert "pytest" in content
 
     def test_promote_multiple_topics(self, store):
-        store.promote([
-            ("user-preferences", "Preference: default timeout is 30s"),
-            ("key-decisions", "Decision: use urllib instead of requests"),
-        ])
+        store.promote(
+            [
+                ("user-preferences", "Preference: default timeout is 30s"),
+                ("key-decisions", "Decision: use urllib instead of requests"),
+            ]
+        )
         assert (store.topics_dir / "user-preferences.md").exists()
         assert (store.topics_dir / "key-decisions.md").exists()
 

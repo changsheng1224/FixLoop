@@ -36,6 +36,7 @@ class CLIProgressCallback:
 
     def on_tool_executed(self, name: str, result_preview: str):
         import time
+
         if self._t0 is None:
             self._t0 = time.time()
         elapsed = time.time() - self._t0

@@ -24,7 +24,7 @@ class TestMemoryHooks:
         agent_with_memory.update_memory_after_tool(
             "read_file",
             {"path": "config.py"},
-            "1 | from pydantic import BaseModel\n2 | \n3 | class AgentConfig..."
+            "1 | from pydantic import BaseModel\n2 | \n3 | class AgentConfig...",
         )
         mem = agent_with_memory.session["memory"]
         assert "config.py" in mem["working"]["recent_files"]
@@ -33,9 +33,7 @@ class TestMemoryHooks:
 
     def test_write_file_adds_and_invalidates(self, agent_with_memory):
         # 先建立摘要
-        agent_with_memory.update_memory_after_tool(
-            "read_file", {"path": "a.py"}, "old content"
-        )
+        agent_with_memory.update_memory_after_tool("read_file", {"path": "a.py"}, "old content")
         mem = agent_with_memory.session["memory"]
         assert "a.py" in mem["file_summaries"]
 
@@ -49,9 +47,7 @@ class TestMemoryHooks:
 
     def test_shell_error_appends_note(self, agent_with_memory):
         agent_with_memory.update_memory_after_tool(
-            "run_shell",
-            {"command": "pytest tests/"},
-            "exit_code: 1\nstderr:\n1 failed"
+            "run_shell", {"command": "pytest tests/"}, "exit_code: 1\nstderr:\n1 failed"
         )
         notes = agent_with_memory.session["memory"]["episodic_notes"]
         assert len(notes) == 1
@@ -60,9 +56,7 @@ class TestMemoryHooks:
 
     def test_shell_success_appends_observation(self, agent_with_memory):
         agent_with_memory.update_memory_after_tool(
-            "run_shell",
-            {"command": "echo done"},
-            "exit_code: 0\nstdout:\ndone"
+            "run_shell", {"command": "echo done"}, "exit_code: 0\nstdout:\ndone"
         )
         notes = agent_with_memory.session["memory"]["episodic_notes"]
         assert len(notes) == 1
@@ -70,9 +64,7 @@ class TestMemoryHooks:
 
     def test_search_appends_note(self, agent_with_memory):
         agent_with_memory.update_memory_after_tool(
-            "search",
-            {"pattern": "Agent"},
-            "agent_runtime/runtime.py:16: class Agent:"
+            "search", {"pattern": "Agent"}, "agent_runtime/runtime.py:16: class Agent:"
         )
         notes = agent_with_memory.session["memory"]["episodic_notes"]
         assert len(notes) == 1
@@ -86,15 +78,9 @@ class TestMemoryFullPipeline:
         """模拟：read_file → write_file → 验证 memory。"""
         agent = agent_with_memory
         # 手动调用钩子模拟工具执行后
-        agent.update_memory_after_tool(
-            "read_file", {"path": "a.py"}, "content of a.py"
-        )
-        agent.update_memory_after_tool(
-            "read_file", {"path": "b.py"}, "content of b.py"
-        )
-        agent.update_memory_after_tool(
-            "write_file", {"path": "c.py"}, "已写入 c.py（5 字符）"
-        )
+        agent.update_memory_after_tool("read_file", {"path": "a.py"}, "content of a.py")
+        agent.update_memory_after_tool("read_file", {"path": "b.py"}, "content of b.py")
+        agent.update_memory_after_tool("write_file", {"path": "c.py"}, "已写入 c.py（5 字符）")
 
         mem = agent.session["memory"]
         assert len(mem["working"]["recent_files"]) == 3

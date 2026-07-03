@@ -5,8 +5,13 @@ import time
 from agent_runtime.features.memory.core import MAX_EPISODIC_NOTES
 
 
-def append_note(state: dict, text: str, tags: list[str] | None = None,
-                source: str = "", kind: str = "observation"):
+def append_note(
+    state: dict,
+    text: str,
+    tags: list[str] | None = None,
+    source: str = "",
+    kind: str = "observation",
+):
     if tags is None:
         tags = []
     notes = state["episodic_notes"]
@@ -15,8 +20,12 @@ def append_note(state: dict, text: str, tags: list[str] | None = None,
     note_index = state["next_note_index"]
     state["next_note_index"] = note_index + 1
     note = {
-        "text": text[:300], "tags": tags[:5], "source": source,
-        "created_at": time.time(), "note_index": note_index, "kind": kind,
+        "text": text[:300],
+        "tags": tags[:5],
+        "source": source,
+        "created_at": time.time(),
+        "note_index": note_index,
+        "kind": kind,
     }
     notes.append(note)
     if len(notes) > MAX_EPISODIC_NOTES:

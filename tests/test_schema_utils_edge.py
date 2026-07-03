@@ -55,6 +55,7 @@ class TestAutoValidateEdge:
 
     def test_type_to_str_unknown(self):
         from agent_runtime.schema_utils import _type_to_str
+
         assert _type_to_str(bytes) == "str"  # 未知类型默认 str
 
 
@@ -76,8 +77,14 @@ class TestToolEdge:
 
     def test_auto_schema_all_args(self):
         """确认所有工具参数 dataclass 能正常生成 schema。"""
-        for cls in [ListFilesArgs, ReadFileArgs, SearchArgs,
-                     WriteFileArgs, PatchFileArgs, RunShellArgs]:
+        for cls in [
+            ListFilesArgs,
+            ReadFileArgs,
+            SearchArgs,
+            WriteFileArgs,
+            PatchFileArgs,
+            RunShellArgs,
+        ]:
             s = auto_schema(cls)
             assert isinstance(s, dict)
             assert len(s) > 0

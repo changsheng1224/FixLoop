@@ -72,31 +72,33 @@ class TestToolGatewayWired:
         """Localizer 可以调 ast_parse。"""
         client = FakeModelClient(["<final>ok</final>"])
         agent = create_localizer(client, workspace)
-        result = agent.execute_tool(
-            "search", {"pattern": "test", "path": str(workspace.repo_root)}
-        )
+        result = agent.execute_tool("search", {"pattern": "test", "path": str(workspace.repo_root)})
         assert "permission_denied" not in str(result.metadata.get("tool_error_code", ""))
 
 
 class TestToolGatewayIntegration:
     def test_localizer_cannot_write(self, client, workspace):
-        gw = ToolGateway({
-            "write_file": {"patcher"},
-            "patch_file": {"patcher"},
-            "ast_parse": {"localizer"},
-            "stack_parse": {"localizer"},
-            "*": {"*"},
-        })
+        gw = ToolGateway(
+            {
+                "write_file": {"patcher"},
+                "patch_file": {"patcher"},
+                "ast_parse": {"localizer"},
+                "stack_parse": {"localizer"},
+                "*": {"*"},
+            }
+        )
         assert gw.can_call("localizer", "ast_parse") is True
         assert gw.can_call("localizer", "write_file") is False
 
     def test_patcher_cannot_ast_parse(self, client, workspace):
-        gw = ToolGateway({
-            "write_file": {"patcher"},
-            "patch_file": {"patcher"},
-            "ast_parse": {"localizer"},
-            "stack_parse": {"localizer"},
-            "*": {"*"},
-        })
+        gw = ToolGateway(
+            {
+                "write_file": {"patcher"},
+                "patch_file": {"patcher"},
+                "ast_parse": {"localizer"},
+                "stack_parse": {"localizer"},
+                "*": {"*"},
+            }
+        )
         assert gw.can_call("patcher", "write_file") is True
         assert gw.can_call("patcher", "ast_parse") is False

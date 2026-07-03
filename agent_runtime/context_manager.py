@@ -115,9 +115,7 @@ class ContextManager:
         metadata = {"sections": {}, "cuts": []}
 
         # Prompt Cache key = prefix hash
-        metadata["prompt_cache_key"] = getattr(
-            self.agent._prefix, "hash", ""
-        )
+        metadata["prompt_cache_key"] = getattr(self.agent._prefix, "hash", "")
 
         # 收集各 section 源文本
         prefix_text = self._get_prefix()
@@ -199,6 +197,7 @@ class ContextManager:
             DurableMemoryStore,
             retrieval_candidates_semantic,
         )
+
         parts = []
 
         # Episodic 检索
@@ -304,8 +303,9 @@ class ContextManager:
 
         # 检查摘要缓存
         import hashlib
+
         cache_key = hashlib.md5(
-            "".join(str(h.get("content",""))[:100] for h in old_history[-10:]).encode()
+            "".join(str(h.get("content", ""))[:100] for h in old_history[-10:]).encode()
         ).hexdigest()
         if cache_key in self._summary_cache:
             summary = self._summary_cache[cache_key]

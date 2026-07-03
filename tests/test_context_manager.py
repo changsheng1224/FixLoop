@@ -94,10 +94,7 @@ class TestContextManagerBuild:
         # 构造 30 轮历史
         for i in range(30):
             agent.record({"role": "user", "content": f"question {i}"})
-            agent.record({
-                "role": "tool",
-                "content": f"result of question {i}: " + "x" * 200
-            })
+            agent.record({"role": "tool", "content": f"result of question {i}: " + "x" * 200})
         cm = ContextManager(agent)
         prompt, meta = cm.build("new question")
         # 最近 KEEP_RECENT_HISTORY 条保留
@@ -126,10 +123,7 @@ class TestHistoryCompression:
 
     def test_compressed_entries_truncated(self, agent):
         for i in range(20):
-            agent.record({
-                "role": "tool",
-                "content": "very long result " * 100
-            })
+            agent.record({"role": "tool", "content": "very long result " * 100})
         cm = ContextManager(agent)
         history_text = cm._get_compressed_history()
         # 旧工具结果被压缩

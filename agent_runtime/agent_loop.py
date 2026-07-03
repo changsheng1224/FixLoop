@@ -3,7 +3,14 @@
 停机后产出 task_state.json + trace.jsonl + report.json（含 node_timings 耗时分布）。
 """
 
+import sys as _sys
 import time as _time
+
+
+def _log_loop(msg: str) -> None:
+    """向 stderr 输出 loop 阶段日志（供 --verbose 观测）。"""
+    _sys.stderr.write(msg)
+    _sys.stderr.flush()
 
 
 def _build_anthropic_tools(tools_registry: dict) -> list[dict]:
@@ -27,15 +34,17 @@ def _build_anthropic_tools(tools_registry: dict) -> list[dict]:
             properties[param] = prop
             if default is None:
                 required.append(param)
-        result.append({
-            "name": name,
-            "description": spec.get("description", ""),
-            "input_schema": {
-                "type": "object",
-                "properties": properties,
-                "required": required,
-            },
-        })
+        result.append(
+            {
+                "name": name,
+                "description": spec.get("description", ""),
+                "input_schema": {
+                    "type": "object",
+                    "properties": properties,
+                    "required": required,
+                },
+            }
+        )
     return result
 
 
@@ -70,8 +79,6 @@ class AgentLoop:
 
     def _run_with_native_tools(self, user_message: str, ts, callback=None) -> str:
         """使用 API 原生 tool_use 协议（Anthropic 兼容）。"""
-        import json as _json
-
         # 构建 Anthropic 格式的工具定义
         tools_def = _build_anthropic_tools(self.agent.tools)
 
@@ -84,12 +91,10 @@ class AgentLoop:
             ts.node_timings.setdefault("tool_exec_ms", 0)
             t0 = _time.time()
             result = self.agent.execute_tool(tool_name, tool_input)
-            result_text = result.content if hasattr(result, 'content') else str(result)
+            result_text = result.content if hasattr(result, "content") else str(result)
             te_ms = int((_time.time() - t0) * 1000)
             ts.node_timings["tool_exec_ms"] += te_ms
-            import sys as _s; _s.stderr.write(
-                f"  [loop] {tool_name} tool={te_ms}ms\n"
-            ); _s.stderr.flush()
+            _log_loop(f"  [loop] {tool_name} tool={te_ms}ms\n")
             self.agent.update_memory_after_tool(tool_name, tool_input, result_text)
             self._emit("tool_executed", {"tool": tool_name})
             if callback:
@@ -118,9 +123,7 @@ class AgentLoop:
         self._emit("run_finished", {"stop_reason": "final"})
         self._finalize_run(ts)
 
-        import sys as _s; _s.stderr.write(
-            f"  [loop] final ({elapsed_ms}ms total)\n"
-        ); _s.stderr.flush()
+        _log_loop(f"  [loop] final ({elapsed_ms}ms total)\n")
         return answer
 
     def _run_with_text_parsing(self, user_message: str, ts, callback=None) -> str:
@@ -132,8 +135,7 @@ class AgentLoop:
                 self._emit("run_finished", {"stop_reason": self.stop_reason})
                 self._finalize_run(ts)
                 return (
-                    "<final>已达到最大工具调用步数限制"
-                    f"({self.max_steps})，当前任务未完成。</final>"
+                    f"<final>已达到最大工具调用步数限制({self.max_steps})，当前任务未完成。</final>"
                 )
 
             if ts.attempts >= self.max_steps * 3 + 4:
@@ -175,9 +177,7 @@ class AgentLoop:
             t_parse = int((_time.time() - t1) * 1000)
 
             if kind == "final":
-                import sys as _s; _s.stderr.write(
-                    f"  [loop] final ({t_parse}ms parse)\n"
-                ); _s.stderr.flush()
+                _log_loop(f"  [loop] final ({t_parse}ms parse)\n")
                 self.agent.record({"role": "assistant", "content": str(payload)})
                 self.stop_reason = "final"
                 ts.finish_success(str(payload))
@@ -187,46 +187,44 @@ class AgentLoop:
 
             elif kind == "tool":
                 if not isinstance(payload, dict) or "name" not in payload:
-                    self.agent.record({"role": "system",
-                                       "content": "工具调用格式错误"})
+                    self.agent.record({"role": "system", "content": "工具调用格式错误"})
                     user_message = "工具调用格式错误，请重试。"
                     continue
                 tool_name = payload.get("name", "unknown")
                 tool_args = payload.get("args", {})
                 ts.record_tool(tool_name)
-                self.agent.record({
-                    "role": "assistant",
-                    "content": f"调用工具: {tool_name}",
-                    "tool_name": tool_name,
-                    "tool_args": tool_args,
-                })
+                self.agent.record(
+                    {
+                        "role": "assistant",
+                        "content": f"调用工具: {tool_name}",
+                        "tool_name": tool_name,
+                        "tool_args": tool_args,
+                    }
+                )
                 t2 = _time.time()
                 result = self.agent.execute_tool(tool_name, tool_args)
-                result_text = result.content if hasattr(result, 'content') else str(result)
+                result_text = result.content if hasattr(result, "content") else str(result)
                 te_ms = int((_time.time() - t2) * 1000)
                 ts.node_timings.setdefault("tool_exec_ms", 0)
                 ts.node_timings["tool_exec_ms"] += te_ms
-                import sys as _s; _s.stderr.write(
-                    f"  [loop] {tool_name} tool={te_ms}ms\n"
-                ); _s.stderr.flush()
+                _log_loop(f"  [loop] {tool_name} tool={te_ms}ms\n")
                 self.agent.update_memory_after_tool(tool_name, tool_args, result_text)
                 self.agent.record({"role": "tool", "content": result_text})
                 self._emit("tool_executed", {"tool": tool_name})
                 if callback:
                     callback.on_tool_executed(tool_name, result_text)
-                user_message = (
-                    f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
-                )
+                user_message = f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
 
             elif kind == "retry":
                 self._retry_count += 1
                 delay = min(2 ** (self._retry_count - 1), 8)
-                import sys as _s; _s.stderr.write(
+                _log_loop(
                     f"  [loop] retry#{self._retry_count} backoff={delay}s "
                     f"raw[:100]={raw.strip()[:100]}\n"
-                ); _s.stderr.flush()
+                )
                 try:
                     from pathlib import Path
+
                     dbg = Path(self.agent._cwd) / ".agent" / "debug_retry.txt"
                     dbg.parent.mkdir(parents=True, exist_ok=True)
                     with open(dbg, "a", encoding="utf-8") as f:
@@ -262,6 +260,7 @@ class AgentLoop:
         """获取缓存的 RunStore 实例。"""
         if self._store is None:
             from agent_runtime.run_store import RunStore
+
             self._store = RunStore(root=self.agent._cwd)
         return self._store
 
@@ -284,19 +283,24 @@ class AgentLoop:
             cp = create_checkpoint(self.agent, ts, ts.user_request, trigger="ask_end")
             ts.checkpoint_id = cp.get("run_id", "") if cp else ""
             store.write_task_state(ts)
-            store.write_report(ts, {
-                "run_id": ts.run_id,
-                "tool_steps": ts.tool_steps,
-                "attempts": ts.attempts,
-                "stop_reason": ts.stop_reason,
-                "status": ts.status,
-                "prompt_cache_key": getattr(self.agent._prefix, "hash", ""),
-                "node_timings": ts.node_timings,
-                "token_usage": self._last_token_meta.get("sections", {}),
-                "total_tokens": self._last_token_meta.get("total_tokens", 0),
-            })
+            store.write_report(
+                ts,
+                {
+                    "run_id": ts.run_id,
+                    "tool_steps": ts.tool_steps,
+                    "attempts": ts.attempts,
+                    "stop_reason": ts.stop_reason,
+                    "status": ts.status,
+                    "prompt_cache_key": getattr(self.agent._prefix, "hash", ""),
+                    "node_timings": ts.node_timings,
+                    "token_usage": self._last_token_meta.get("sections", {}),
+                    "total_tokens": self._last_token_meta.get("total_tokens", 0),
+                },
+            )
             promote_durable_memory(
-                ts.user_request, ts.final_answer, root=self.agent._cwd,
+                ts.user_request,
+                ts.final_answer,
+                root=self.agent._cwd,
             )
             # 自动保存会话（支持 --resume）
             SessionStore(root=self.agent._cwd).save(self.agent.session)

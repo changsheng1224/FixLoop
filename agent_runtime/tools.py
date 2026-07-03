@@ -251,7 +251,7 @@ def _search_python(pattern: str, target: Path, context_lines: int = 0) -> str:
                     if key not in seen:
                         seen.add(key)
                         prefix = ">" if j == i else " "
-                        matches.append(f"{rel}:{j}:{prefix} {lines_list[j-1].strip()[:200]}")
+                        matches.append(f"{rel}:{j}:{prefix} {lines_list[j - 1].strip()[:200]}")
                         if len(matches) >= 50:
                             break
                 if len(matches) >= 50:
@@ -430,9 +430,7 @@ def build_tool_registry(context) -> dict:
     registry["patch_file"] = {
         "schema": auto_schema(PatchFileArgs),
         "risky": True,
-        "description": (
-            "精确文本替换：old_text 必须恰好出现 1 次。参数: path, old_text, new_text"
-        ),
+        "description": ("精确文本替换：old_text 必须恰好出现 1 次。参数: path, old_text, new_text"),
         "run": lambda args: tool_patch_file(context, args),
     }
 
@@ -450,4 +448,3 @@ def build_tool_registry(context) -> dict:
 def legal_tool_names(registry: dict) -> set[str]:
     """返回注册表中所有可调用工具名的集合。"""
     return set(registry.keys())
-

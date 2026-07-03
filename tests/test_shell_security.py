@@ -1,6 +1,5 @@
 """run_shell + security 单测。"""
 
-
 import pytest
 
 from agent_runtime.security import (

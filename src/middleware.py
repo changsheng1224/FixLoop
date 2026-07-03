@@ -54,17 +54,17 @@ class ToolGateway:
 # ---- 共享权限表 ----
 
 REPAIR_PERMISSION_TABLE = {
-    "ast_parse":   {"localizer"},
+    "ast_parse": {"localizer"},
     "stack_parse": {"localizer"},
-    "write_file":  {"patcher"},
-    "patch_file":  {"patcher"},
-    "git_blame":   {"localizer", "retriever", "patcher"},
-    "git_diff":    {"localizer", "retriever", "patcher"},
-    "find_test":   {"retriever", "patcher"},
-    "search":      {"*"},
-    "read_file":   {"*"},
-    "list_files":  {"*"},
-    "*":           {"*"},  # 其余工具所有 Agent 可用
+    "write_file": {"patcher"},
+    "patch_file": {"patcher"},
+    "git_blame": {"localizer", "retriever", "patcher"},
+    "git_diff": {"localizer", "retriever", "patcher"},
+    "find_test": {"retriever", "patcher"},
+    "search": {"*"},
+    "read_file": {"*"},
+    "list_files": {"*"},
+    "*": {"*"},  # 其余工具所有 Agent 可用
 }
 
 

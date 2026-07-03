@@ -8,7 +8,7 @@ from src.agents.localizer import create_localizer
 from src.agents.patcher import create_patcher
 from src.agents.retriever import create_retriever
 from src.orchestrator import Orchestrator, apply_patch_to_text
-from src.state import CandidatePatch, RepairPlan, SuspectLocation, VerificationResult
+from src.state import CandidatePatch, RepairPlan, SuspectLocation
 
 
 @pytest.fixture
@@ -26,17 +26,13 @@ class TestOrchestrator:
             create_retriever(ret, WorkspaceContext.build(".")),
             create_patcher(pat, WorkspaceContext.build(".")),
         )
-        plan = orch._parse_issue(
-            'TypeError: unsupported operand at calculator.py:42'
-        )
+        plan = orch._parse_issue("TypeError: unsupported operand at calculator.py:42")
         assert plan.issue_type == "type_error"
         assert "calculator.py" in plan.suspect_files
 
     def test_parse_import_error(self):
         orch = Orchestrator(None, None, None)
-        plan = orch._parse_issue(
-            'ModuleNotFoundError: No module named "utils" at main.py:3'
-        )
+        plan = orch._parse_issue('ModuleNotFoundError: No module named "utils" at main.py:3')
         assert plan.issue_type == "import_error"
         assert plan.reasoning == "main.py:3"
 
@@ -53,7 +49,8 @@ class TestOrchestrator:
             reasoning="app.py:3",
         )
         suspects = orch._fallback_suspects_from_plan(
-            plan, 'ModuleNotFoundError at app.py:3',
+            plan,
+            "ModuleNotFoundError at app.py:3",
         )
         assert len(suspects) == 1
         assert suspects[0].start_line == 1
@@ -76,10 +73,12 @@ class TestOrchestrator:
 
     def test_patcher_prompt_discovers_test_app(self, temp_workspace):
         (temp_workspace / "app.py").write_text(
-            "from utils.helper import greet\n", encoding="utf-8",
+            "from utils.helper import greet\n",
+            encoding="utf-8",
         )
         (temp_workspace / "test_app.py").write_text(
-            "def test_main():\n    from app import main\n", encoding="utf-8",
+            "def test_main():\n    from app import main\n",
+            encoding="utf-8",
         )
         orch = Orchestrator(None, None, None)
         orch._repo_root = str(temp_workspace)
@@ -91,15 +90,21 @@ class TestOrchestrator:
     def test_full_pipeline_fake(self, temp_workspace):
         ws = WorkspaceContext.build(str(temp_workspace))
         # 3 个 Agent 都用 FakeClient 预设输出
-        loc_client = FakeModelClient([
-            '<final>[{"file_path":"calc.py","start_line":42,"end_line":44,"function_name":"add","reason":"堆栈指向","confidence":0.95}]</final>',
-        ])
-        ret_client = FakeModelClient([
-            '<final>{"related_tests":["test_calc.py::test_add"]}</final>',
-        ])
-        pat_client = FakeModelClient([
-            '<final>[{"file_path":"calc.py","diff":"-old\\n+new","explanation":"修复类型转换"}]</final>',
-        ])
+        loc_client = FakeModelClient(
+            [
+                '<final>[{"file_path":"calc.py","start_line":42,"end_line":44,"function_name":"add","reason":"堆栈指向","confidence":0.95}]</final>',
+            ]
+        )
+        ret_client = FakeModelClient(
+            [
+                '<final>{"related_tests":["test_calc.py::test_add"]}</final>',
+            ]
+        )
+        pat_client = FakeModelClient(
+            [
+                '<final>[{"file_path":"calc.py","diff":"-old\\n+new","explanation":"修复类型转换"}]</final>',
+            ]
+        )
 
         orch = Orchestrator(
             create_localizer(loc_client, ws),
@@ -128,7 +133,8 @@ class TestOrchestrator:
     def test_patcher_prompt_includes_test_file(self, temp_workspace):
         repo = temp_workspace
         (repo / "calculator.py").write_text(
-            "def add(a, b):\n    return a + b\n", encoding="utf-8",
+            "def add(a, b):\n    return a + b\n",
+            encoding="utf-8",
         )
         (repo / "test_calculator.py").write_text(
             'def test_add_str():\n    assert add("3", 2) == 5\n',
@@ -138,13 +144,18 @@ class TestOrchestrator:
         orch._repo_root = str(repo)
         suspects = [
             SuspectLocation(
-                file_path="calculator.py", start_line=2, end_line=2,
-                function_name="add", reason="堆栈指向",
+                file_path="calculator.py",
+                start_line=2,
+                end_line=2,
+                function_name="add",
+                reason="堆栈指向",
             ),
         ]
         plan = RepairPlan(issue_type="type_error")
         prompt = orch._patcher_prompt(
-            suspects, None, plan=plan,
+            suspects,
+            None,
+            plan=plan,
             issue="TypeError: concatenate str",
         )
         assert 'assert add("3", 2) == 5' in prompt

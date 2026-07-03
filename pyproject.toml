@@ -18,6 +18,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "pytest-cov>=4.0",
     "ruff>=0.5",
 ]
 
@@ -31,6 +32,10 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/test_light_client.py" = ["N802"]
+"tests/test_providers_replay.py" = ["N802"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
