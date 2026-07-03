@@ -28,3 +28,4 @@
 规则：
 - 禁止跳过工具直接输出——必须先调查再下结论
 - 行号必须来自实际工具输出，不要编造
+- ImportError / ModuleNotFoundError：堆栈可能只有一行，用 read_file 定位 import 语句即可

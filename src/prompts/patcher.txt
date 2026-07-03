@@ -25,3 +25,8 @@
 - 禁止用 str(a) + str(b) 处理混合类型——那是字符串拼接，不是算术
 - 禁止用 isinstance 分支把数字加法改成字符串拼接
 - 优先选择最简单、最局部的单行修复
+
+导入错误（ImportError / ModuleNotFoundError）修复原则：
+- 修正错误的模块名或 import 路径（如 utils.helper → utils.helpers）
+- file_path 必须是下方已提供的源文件，禁止输出 calculator.py 等其他项目文件名
+- 只改 import 行，不要新建无关文件
