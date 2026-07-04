@@ -20,10 +20,9 @@ Git 追踪 `.py` 文件：**164** 个（含 `src/eval/cases/` 内 Case demo 源�
 
 | 指标 | 数值 |
 |------|------|
-| pytest 用例数 | **475** |
-| 本次全量运行（2026-07-04） | **474 passed, 1 failed** |
-| 失败用例 | `tests/test_orchestrator.py::TestApplyPatch::test_pytest_verify_retries_on_failure` |
-| 失败性质 | **偶发**（单独重跑 **PASS**；M8D4 终审 475/475 全绿） |
+| pytest 用例数 | **476** |
+| M8D5 全量验收（2026-07-04） | **476 passed** |
+| 历史偶发失败 | `test_pytest_verify_retries_on_failure`（已通过 snapshot 回滚清 `__pycache__` 修复） |
 | Ruff lint | **0 warning**（`agent_runtime src tests`） |
 
 ## 3. 覆盖率（M8D4 终审，2026-07-04）
