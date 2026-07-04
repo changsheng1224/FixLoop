@@ -4,9 +4,10 @@ import argparse
 import sys
 from pathlib import Path
 
+from agent_runtime.bootstrap import load_dotenv
 from src.eval.cli_helpers import print_ablation_report, print_eval_report, run_ablation, run_eval
 from src.eval.runner import DEFAULT_CASES_DIR
-from src.repair_factory import load_dotenv, make_orchestrator_factory
+from src.repair_factory import make_orchestrator_factory
 
 
 def main() -> int:

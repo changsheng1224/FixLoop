@@ -9,7 +9,6 @@ from pathlib import Path
 from agent_runtime.config import AgentConfig
 from agent_runtime.runtime import Agent
 from agent_runtime.tool_context import ToolContext
-from agent_runtime.tools import build_tool_registry
 from agent_runtime.workspace import WorkspaceContext
 from src.eval.runner import should_include_in_eval_diff
 from src.eval.token_usage import build_token_usage_summary, reset_client_session_usage
@@ -17,8 +16,7 @@ from src.middleware import ToolGateway
 from src.orchestrator import Orchestrator
 from src.repair_factory import create_model_client
 from src.state import RepairState
-from src.tools.registry import build_repair_tools
-from src.tools.sandbox_tools import build_sandbox_tool_registry
+from src.tools.composite import build_repair_agent_tools
 
 BASELINE_SYSTEM_PROMPT = (
     "你是代码修复专家。分析错误、定位代码、生成补丁、在容器内验证修复。你可以使用所有工具。"
@@ -26,10 +24,7 @@ BASELINE_SYSTEM_PROMPT = (
 
 
 def _build_baseline_tools(ctx: ToolContext) -> dict:
-    tools = build_tool_registry(ctx)
-    tools.update(build_repair_tools(ctx))
-    tools.update(build_sandbox_tool_registry(ctx))
-    return tools
+    return build_repair_agent_tools(ctx, "baseline")
 
 
 def _build_baseline_gateway(tool_names: list[str]) -> ToolGateway:

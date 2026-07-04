@@ -5,6 +5,8 @@ import os
 import sys
 from pathlib import Path
 
+from agent_runtime.bootstrap import create_model_client
+from agent_runtime.bootstrap import load_dotenv as _load_dotenv
 from agent_runtime.config import AgentConfig
 from agent_runtime.runtime import Agent
 from agent_runtime.workspace import WorkspaceContext
@@ -222,44 +224,14 @@ def _health_check() -> int:
     return 0
 
 
-def _load_dotenv():
-    """从项目根目录的 .env 加载环境变量（不覆盖已有）。"""
-    env_path = Path.cwd() / ".env"
-    if not env_path.exists():
-        return
-    with open(env_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, val = line.partition("=")
-            key = key.strip()
-            val = val.strip()
-            if key and key not in os.environ:
-                os.environ[key] = val
-
-
 def _build_model_client(args, config: AgentConfig):
     """根据 Provider 创建模型客户端。"""
     if args.provider == "fake":
-        from agent_runtime.providers.clients import FakeModelClient
-
-        return FakeModelClient(
-            ["<final>FakeClient 未预设输出，请指定 --provider 为真实 Provider。</final>"]
-        )
-
-    # 默认：Anthropic Compatible
-    from agent_runtime.providers.clients import AnthropicCompatibleModelClient
-
-    api_key = args.api_key or os.environ.get("DEEPSEEK_API_KEY", "")
-    base_url = args.base_url or os.environ.get(
-        "DEEPSEEK_BASE_URL", "https://api.deepseek.com/anthropic/v1"
-    )
-
-    return AnthropicCompatibleModelClient(
+        return create_model_client(provider="fake")
+    return create_model_client(
         model=config.model,
-        base_url=base_url,
-        api_key=api_key,
+        base_url=args.base_url,
+        api_key=args.api_key,
         temperature=config.temperature,
     )
 

@@ -21,10 +21,13 @@ class TestCliRepair:
                 '"patched_lines":"x = 2","explanation":"fix"}]</final>',
             ]
         )
-        monkeypatch.setattr(
-            "src.repair_factory.AnthropicCompatibleModelClient",
-            lambda **kwargs: shared,
-        )
+        def _fake_create(model_client=None, **kwargs):
+            if model_client is not None:
+                return model_client
+            return shared
+
+        monkeypatch.setattr("agent_runtime.bootstrap.create_model_client", _fake_create)
+        monkeypatch.setattr("src.repair_factory.create_model_client", _fake_create)
         monkeypatch.setattr(
             sys,
             "argv",

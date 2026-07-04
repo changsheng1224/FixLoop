@@ -392,16 +392,10 @@ class Orchestrator:
         prompt_name: str,
         user_prompt: str,
     ) -> tuple[str, int]:
-        """直接调 model_client.complete（绕过 Agent loop）。"""
-        from src.prompts.loader import load_system_prompt
-
-        system_prompt = load_system_prompt(prompt_name)
-        full_prompt = f"{system_prompt}\n\n{user_prompt}" if system_prompt else user_prompt
+        """经 Agent.complete_once 做单次 completion（不走 Agent loop）。"""
+        del prompt_name
         t0 = time.time()
-        raw = agent.model_client.complete(
-            full_prompt,
-            max_new_tokens=agent.config.max_new_tokens or 4096,
-        )
+        raw = agent.complete_once(user_prompt)
         return raw, int((time.time() - t0) * 1000)
 
     def _run_agent(

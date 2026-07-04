@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
 
-from agent_runtime.providers.clients import AnthropicCompatibleModelClient
+from agent_runtime.bootstrap import create_model_client, load_dotenv
 from agent_runtime.workspace import WorkspaceContext
 from src.agents.localizer import create_localizer
 from src.agents.patcher import create_patcher
@@ -17,33 +16,13 @@ from src.orchestrator import Orchestrator
 
 O = TypeVar("O", bound=Orchestrator)
 
-
-def load_dotenv() -> None:
-    """从 cwd/.env 加载 KEY=VAL 到 os.environ（不覆盖已有变量）。"""
-    env_path = Path.cwd() / ".env"
-    if not env_path.exists():
-        return
-    with open(env_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, val = line.partition("=")
-            key, val = key.strip(), val.strip()
-            if key and key not in os.environ:
-                os.environ[key] = val
-
-
-def create_model_client(model_client=None):
-    """返回传入 client 或从环境变量构造 AnthropicCompatibleModelClient。"""
-    if model_client is not None:
-        return model_client
-    load_dotenv()
-    return AnthropicCompatibleModelClient(
-        model=os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"),
-        base_url=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/anthropic/v1"),
-        api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
-    )
+__all__ = [
+    "create_model_client",
+    "load_dotenv",
+    "make_orchestrator_factory",
+    "try_create_verifier",
+    "wire_orchestrator",
+]
 
 
 def try_create_verifier(client, ws, repo: str):
