@@ -8,7 +8,6 @@
 """
 
 import re
-import shutil
 import sys as _sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -24,6 +23,7 @@ from src.repair.output_parsers import (
 )
 from src.repair.patch_applier import PatchApplier, apply_patch_to_text, parse_patches
 from src.repair.pipeline import RepairPipelineMixin
+from src.repair.repo_snapshot import restore_repo_snapshot, snapshot_repo
 from src.repair.verify import DockerVerifyStrategy, PytestVerifyStrategy, record_verify_timings
 from src.state import (
     CandidatePatch,
@@ -232,41 +232,11 @@ class Orchestrator(RepairPipelineMixin):
     def _verification_enabled(self) -> bool:
         return self.verifier is not None or self.use_pytest_verify
 
-    _SNAPSHOT_SKIP_DIRS = frozenset({".agent", ".pytest_cache", "__pycache__", ".git"})
-
     def _snapshot_repo(self) -> dict[str, str]:
-        root = Path(self._repo_root)
-        snap: dict[str, str] = {}
-        if not root.is_dir():
-            return snap
-        for path in root.rglob("*"):
-            if not path.is_file():
-                continue
-            rel = path.relative_to(root).as_posix()
-            if any(part in self._SNAPSHOT_SKIP_DIRS for part in Path(rel).parts):
-                continue
-            try:
-                snap[rel] = path.read_text(encoding="utf-8")
-            except (UnicodeDecodeError, OSError):
-                continue
-        return snap
+        return snapshot_repo(self._repo_root)
 
     def _restore_repo_snapshot(self, snapshot: dict[str, str]) -> None:
-        root = Path(self._repo_root)
-        for rel, content in snapshot.items():
-            target = root / rel
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
-        self._clear_repo_pycache()
-
-    def _clear_repo_pycache(self) -> None:
-        """回滚后删除 __pycache__，避免子进程 pytest import 读到过期 .pyc。"""
-        root = Path(self._repo_root)
-        if not root.is_dir():
-            return
-        for cache_dir in sorted(root.rglob("__pycache__"), reverse=True):
-            if cache_dir.is_dir():
-                shutil.rmtree(cache_dir, ignore_errors=True)
+        restore_repo_snapshot(self._repo_root, snapshot)
 
     def _complete_with_system_prompt(
         self,

@@ -12,6 +12,7 @@ from src.agents.factory import create_baseline_agent
 from src.eval.runner import should_include_in_eval_diff
 from src.eval.token_usage import build_token_usage_summary, reset_client_session_usage
 from src.repair.patch_applier import PatchApplier, parse_patches
+from src.repair.repo_snapshot import repo_changed, snapshot_repo
 from src.repair_factory import create_model_client
 from src.state import RepairState
 
@@ -23,20 +24,11 @@ def create_single_agent_baseline(model_client, workspace, cwd: str = "") -> Agen
 
 def _snapshot_source_tree(repo: Path) -> dict[str, str]:
     """读取 repo 内参与评测 diff 的源码快照。"""
-    snapshot: dict[str, str] = {}
-    if not repo.is_dir():
-        return snapshot
-    for path in repo.rglob("*"):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(repo).as_posix()
-        if should_include_in_eval_diff(rel):
-            snapshot[rel] = path.read_text(encoding="utf-8")
-    return snapshot
+    return snapshot_repo(repo, include=should_include_in_eval_diff)
 
 
 def _repo_sources_changed(repo: Path, before: dict[str, str]) -> bool:
-    return _snapshot_source_tree(repo) != before
+    return repo_changed(repo, before, include=should_include_in_eval_diff)
 
 
 class SingleAgentOrchestrator:
@@ -58,7 +50,6 @@ class SingleAgentOrchestrator:
         repair_timeout_s: int = 180,
     ) -> RepairState:
         """Single-Agent ReAct 修复：ask → 解析补丁 → 写盘 → 记录 token 用量。"""
-        del repair_timeout_s
         state = RepairState(issue_input=issue, max_retries=max_retries)
         t0 = time.time()
         repo = Path(self._repo_root)
