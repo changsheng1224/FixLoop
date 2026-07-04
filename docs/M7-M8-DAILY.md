@@ -172,23 +172,24 @@
 | 时间 | 任务 | 产出 |
 |------|------|------|
 | 09:00-10:30 | ⚡ 简历 Bullet 终稿：从 20 点中精选 5-6 点，按"总→分→分→分→收"排列，每点控制在 2 行内。根据投递方向微调（AI 方向突出多 Agent 分工；基础架构方向突出 Docker Harness + 零依赖；安全方向突出 7 道闸口 + 容器隔离）。中英文各一版 | 简历 Bullet 终稿 |
-| 10:30-11:30 | ⚡ GitHub 仓库设置：① About 描述："从零构建的 Multi-Agent 代码修复系统 | 手写 Agent 运行时 | 真 Multi-Agent 分工 + Docker Harness + 消融实验" ② Topics：`python` `multi-agent` `agent-runtime` `docker` `sandbox` `from-scratch` `code-repair` `evaluation` ③ 设为 public ④ Pin 到个人主页 | GitHub 展示页就绪 |
-| 11:30-12:00 | 🔧 用 incognito 浏览器打开自己的 GitHub，确认 README 渲染正确、架构图对齐、Demo 链接可访问 | 公开页面验证 |
+| 10:30-11:30 | ~~⚡ GitHub 仓库设置（About / Topics / Pin）~~ | ~~GitHub 展示页就绪~~ **（M8D5 范围外）** |
+| 11:30-12:00 | 🔧 用 incognito 浏览器打开自己的 GitHub，确认 README 渲染正确、架构图对齐 | 公开页面验证 |
 | 14:00-15:00 | ⚡ M1-M8 最终验收清单：逐项检查 Day 5/10/15/20/25/30/35 的验收标准和里程碑。跑最后一次 `pytest tests/ -v` 确认全绿。统计最终数据：总行数、测试数、覆盖率、10 Case Fix Rate | 全部验收项通过 |
-| 15:00-16:00 | ⚡ 项目总结文档 `PROJECT_SUMMARY.md`：① 项目概述 ② 技术栈 ③ 最终指标 ④ 个人收获 ⑤ 已知限制和未来方向。这份文档面试官可能会问"你从这个项目中学到了什么" | 总结文档就绪 |
+| 15:00-16:00 | ~~⚡ 项目总结文档 `PROJECT_SUMMARY.md`~~ | ~~总结文档就绪~~ **（M8D5 范围外；见 `docs/FINAL_STATS.md`）** |
 | 16:00-17:00 | ⚡ 最终 git tag `v1.0.0` + push。写 Release Notes（基于 CHANGELOG 格式）：新功能、已知限制、运行说明。项目正式发布 | 项目发布 |
 | 17:00-17:30 | 🎉 项目完成 | |
 
 **Day 40 验收（M8 里程碑 / 项目完成）：**
 - [ ] README 完整，生人 10 分钟可上手
 - [ ] ARCHITECTURE.md + 10 条 ADR 完整
-- [ ] 3 个 Demo 脚本 + 视频/GIF 可观看
+- [ ] 3 个 Demo 脚本可独立运行
 - [ ] CI/CD 绿灯（test + eval 两个 workflow）
 - [ ] 代码质量零 warning，覆盖率 > 70%
 - [ ] 简历 Bullet 中英文终稿
-- [ ] GitHub 仓库公开，About/Topics/Release 就绪
 - [ ] `pytest tests/ -v` 全绿（100+ tests）
 - [ ] 最终代码量约 3800 行（Layer 1 1900 + M5 600 + M6 500 + M7 400 + M8 400）
+
+> **M8D5 范围外（不纳入验收）：** Demo 视频/GIF；GitHub About / Topics / Release 页面配置；`PROJECT_SUMMARY.md`（由 `docs/FINAL_STATS.md` + `docs/RESUME_BULLETS.md` 替代）。
 
 ---
 
@@ -229,7 +230,8 @@ demo/
 eval_results/
 └── final_report.md          # M7 Day35
 
-PROJECT_SUMMARY.md           # M8 Day40
+docs/FINAL_STATS.md            # M8 Day40（最终数据统计，替代 PROJECT_SUMMARY）
+docs/RESUME_BULLETS.md         # M8 Day40
 ARCHITECTURE.md              # M8 Day37
 
 tests/

@@ -235,6 +235,18 @@ class TestApplyPatch:
         orch._restore_repo_snapshot(snap)
         assert (temp_workspace / "a.py").read_text(encoding="utf-8") == "old\n"
 
+    def test_restore_clears_pycache(self, temp_workspace):
+        orch = Orchestrator(None, None, None)
+        orch._repo_root = str(temp_workspace)
+        (temp_workspace / "a.py").write_text("old\n", encoding="utf-8")
+        cache_dir = temp_workspace / "__pycache__"
+        cache_dir.mkdir()
+        (cache_dir / "a.cpython-313.pyc").write_bytes(b"stale")
+        snap = orch._snapshot_repo()
+        (temp_workspace / "a.py").write_text("new\n", encoding="utf-8")
+        orch._restore_repo_snapshot(snap)
+        assert not cache_dir.exists()
+
     def test_pytest_verify_retries_on_failure(self, temp_workspace):
         (temp_workspace / "foo.py").write_text("x = 1\n", encoding="utf-8")
         (temp_workspace / "test_foo.py").write_text(

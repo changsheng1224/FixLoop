@@ -8,6 +8,7 @@
 """
 
 import re
+import shutil
 import sys as _sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -374,6 +375,16 @@ class Orchestrator:
             target = root / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
+        self._clear_repo_pycache()
+
+    def _clear_repo_pycache(self) -> None:
+        """回滚后删除 __pycache__，避免子进程 pytest import 读到过期 .pyc。"""
+        root = Path(self._repo_root)
+        if not root.is_dir():
+            return
+        for cache_dir in sorted(root.rglob("__pycache__"), reverse=True):
+            if cache_dir.is_dir():
+                shutil.rmtree(cache_dir, ignore_errors=True)
 
     def _complete_with_system_prompt(
         self,
