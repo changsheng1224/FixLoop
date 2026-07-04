@@ -3,27 +3,15 @@
 from agent_runtime.config import AgentConfig
 from agent_runtime.runtime import Agent
 from agent_runtime.tool_context import ToolContext
-from agent_runtime.tools import build_tool_registry
 from src.prompts.loader import load_system_prompt
-from src.tools.registry import build_repair_tools
+from src.tools.composite import build_repair_agent_tools
 
 
 def create_localizer(model_client, workspace, cwd: str = "", light_client=None) -> Agent:
     """创建 Localizer Agent（ast/stack 定位，无写权限）。"""
     root = cwd or workspace.repo_root
     ctx = ToolContext(root=root)
-
-    tools = build_tool_registry(ctx)
-    repair_tools = build_repair_tools(ctx)
-    tools.update(
-        {
-            "ast_parse": repair_tools["ast_parse"],
-            "stack_parse": repair_tools["stack_parse"],
-        }
-    )
-    for banned in ("write_file", "patch_file", "run_shell"):
-        tools.pop(banned, None)
-
+    tools = build_repair_agent_tools(ctx, "localizer")
     system_prompt = load_system_prompt("localizer")
 
     agent = Agent(

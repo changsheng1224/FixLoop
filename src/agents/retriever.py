@@ -3,28 +3,15 @@
 from agent_runtime.config import AgentConfig
 from agent_runtime.runtime import Agent
 from agent_runtime.tool_context import ToolContext
-from agent_runtime.tools import build_tool_registry
 from src.prompts.loader import load_system_prompt
-from src.tools.registry import build_repair_tools
+from src.tools.composite import build_repair_agent_tools
 
 
 def create_retriever(model_client, workspace, cwd: str = "", light_client=None) -> Agent:
     """创建 Retriever Agent（git/find_test 检索，无写权限）。"""
     root = cwd or workspace.repo_root
     ctx = ToolContext(root=root)
-
-    tools = build_tool_registry(ctx)
-    repair_tools = build_repair_tools(ctx)
-    tools.update(
-        {
-            "git_blame": repair_tools["git_blame"],
-            "git_diff": repair_tools["git_diff"],
-            "find_test": repair_tools["find_test"],
-        }
-    )
-    for banned in ("write_file", "patch_file", "run_shell", "ast_parse", "stack_parse"):
-        tools.pop(banned, None)
-
+    tools = build_repair_agent_tools(ctx, "retriever")
     system_prompt = load_system_prompt("retriever")
 
     agent = Agent(

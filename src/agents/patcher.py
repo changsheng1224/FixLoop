@@ -3,18 +3,15 @@
 from agent_runtime.config import AgentConfig
 from agent_runtime.runtime import Agent
 from agent_runtime.tool_context import ToolContext
-from agent_runtime.tools import build_tool_registry
 from src.prompts.loader import load_system_prompt
+from src.tools.composite import build_repair_agent_tools
 
 
 def create_patcher(model_client, workspace, cwd: str = "") -> Agent:
     """创建 Patcher Agent（read/search + write/patch）。"""
     root = cwd or workspace.repo_root
     ctx = ToolContext(root=root)
-
-    tools = build_tool_registry(ctx)
-    tools.pop("run_shell", None)
-
+    tools = build_repair_agent_tools(ctx, "patcher")
     system_prompt = load_system_prompt("patcher")
 
     agent = Agent(

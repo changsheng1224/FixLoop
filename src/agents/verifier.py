@@ -7,16 +7,14 @@ from agent_runtime.config import AgentConfig
 from agent_runtime.runtime import Agent
 from agent_runtime.tool_context import ToolContext
 from src.prompts.loader import load_system_prompt
-from src.tools.sandbox_tools import build_sandbox_tool_registry
+from src.tools.composite import build_repair_agent_tools
 
 
 def create_verifier(model_client, workspace, cwd: str = "") -> Agent:
     """创建 Verifier Agent（sandbox_build/test，容器内验证）。"""
     root = cwd or workspace.repo_root
     ctx = ToolContext(root=root)
-
-    tools = build_sandbox_tool_registry(ctx)
-
+    tools = build_repair_agent_tools(ctx, "verifier")
     system_prompt = load_system_prompt("verifier")
 
     agent = Agent(
