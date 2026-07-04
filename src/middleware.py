@@ -44,16 +44,6 @@ class ToolGateway:
         if tool_name in self._table and agent_name in self._table[tool_name]:
             self._table[tool_name].discard(agent_name)
 
-    def wrap_agent(self, agent_name: str, agent):
-        """包裹 Agent 的 execute_tool，注入权限检查。"""
-        original = agent.execute_tool
-        gw = self
-
-        def guarded(name, args):
-            return gw.dispatch(agent_name, name, lambda: original(name, args))
-
-        agent.execute_tool = guarded
-
 
 # ---- 共享权限表 ----
 

@@ -29,6 +29,8 @@ class Agent:
         dry_run: bool = False,
         tools: dict | None = None,
         system_prompt: str = "",
+        agent_name: str = "",
+        tool_policy=None,
     ):
         self.config = config
         self.model_client = model_client
@@ -37,6 +39,8 @@ class Agent:
         self.workspace = workspace
         self._cwd = cwd or workspace.repo_root or str(Path.cwd())
         self._system_prompt = system_prompt
+        self._agent_name = agent_name
+        self._tool_policy = tool_policy
 
         # 构建工具上下文和注册表（允许外部注入）
         self.tool_context = ToolContext(root=self._cwd)
@@ -122,6 +126,8 @@ class Agent:
                 approval_policy=self.config.approval,
                 dry_run=self.dry_run,
                 quota=self.quota,
+                agent_name=self._agent_name,
+                tool_policy=self._tool_policy,
             )
         return self._tool_executor.execute(name, args)
 

@@ -52,15 +52,19 @@ class ToolExecutor:
         approval_policy: str = "ask",
         dry_run: bool = False,
         quota: "QuotaEnforcer | None" = None,
+        agent_name: str = "",
+        tool_policy=None,
     ):
         self.agent = agent
         self.approval_policy = approval_policy or agent.config.approval
         self.dry_run = dry_run
         self._quota = quota
+        self._agent_name = agent_name
+        self._tool_policy = tool_policy
         self._high_risk_tools = self._collect_high_risk()
 
     def execute(self, name: str, args: dict) -> ToolExecutionResult:
-        """按序执行 7 道闸口，返回结构化结果。
+        """按序执行闸口，返回结构化结果。
 
         Args:
             name: 工具名称。
@@ -69,6 +73,15 @@ class ToolExecutor:
         Returns:
             ToolExecutionResult 实例。
         """
+        if self._tool_policy is not None and not self._tool_policy(self._agent_name, name):
+            return ToolExecutionResult(
+                content=f"Error: 工具 '{name}' 对 '{self._agent_name}' 不可用。",
+                metadata={
+                    "tool_status": "rejected",
+                    "tool_error_code": "permission_denied",
+                },
+            )
+
         # ---- Gate 1: allowed_tools 白名单 ----
         allowed = self.agent._tool_names
         if name not in allowed:

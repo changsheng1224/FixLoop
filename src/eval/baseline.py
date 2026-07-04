@@ -6,74 +6,29 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from agent_runtime.config import AgentConfig
 from agent_runtime.runtime import Agent
-from agent_runtime.tool_context import ToolContext
 from agent_runtime.workspace import WorkspaceContext
+from src.agents.factory import create_baseline_agent
 from src.eval.runner import should_include_in_eval_diff
 from src.eval.token_usage import build_token_usage_summary, reset_client_session_usage
-from src.middleware import ToolGateway
-from src.orchestrator import Orchestrator
+from src.repair.patch_applier import PatchApplier, parse_patches
+from src.repair.repo_snapshot import repo_changed, snapshot_repo
 from src.repair_factory import create_model_client
 from src.state import RepairState
-from src.tools.composite import build_repair_agent_tools
-
-BASELINE_SYSTEM_PROMPT = (
-    "你是代码修复专家。分析错误、定位代码、生成补丁、在容器内验证修复。你可以使用所有工具。"
-)
-
-
-def _build_baseline_tools(ctx: ToolContext) -> dict:
-    return build_repair_agent_tools(ctx, "baseline")
-
-
-def _build_baseline_gateway(tool_names: list[str]) -> ToolGateway:
-    table = {name: {"baseline"} for name in tool_names}
-    table["*"] = {"baseline"}
-    return ToolGateway(table)
 
 
 def create_single_agent_baseline(model_client, workspace, cwd: str = "") -> Agent:
     """创建持有全部 Tool 的 Single-Agent Baseline。"""
-    root = cwd or workspace.repo_root
-    ctx = ToolContext(root=root)
-    tools = _build_baseline_tools(ctx)
-
-    agent = Agent(
-        config=AgentConfig(
-            provider="deepseek",
-            max_steps=12,
-            max_new_tokens=4096,
-            approval="auto",
-        ),
-        model_client=model_client,
-        workspace=workspace,
-        cwd=root,
-        tools=tools,
-        system_prompt=BASELINE_SYSTEM_PROMPT,
-    )
-
-    gw = _build_baseline_gateway(list(tools.keys()))
-    gw.wrap_agent("baseline", agent)
-    return agent
+    return create_baseline_agent(model_client, workspace, cwd=cwd)
 
 
 def _snapshot_source_tree(repo: Path) -> dict[str, str]:
     """读取 repo 内参与评测 diff 的源码快照。"""
-    snapshot: dict[str, str] = {}
-    if not repo.is_dir():
-        return snapshot
-    for path in repo.rglob("*"):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(repo).as_posix()
-        if should_include_in_eval_diff(rel):
-            snapshot[rel] = path.read_text(encoding="utf-8")
-    return snapshot
+    return snapshot_repo(repo, include=should_include_in_eval_diff)
 
 
 def _repo_sources_changed(repo: Path, before: dict[str, str]) -> bool:
-    return _snapshot_source_tree(repo) != before
+    return repo_changed(repo, before, include=should_include_in_eval_diff)
 
 
 class SingleAgentOrchestrator:
@@ -104,12 +59,11 @@ class SingleAgentOrchestrator:
         try:
             prompt = f"请修复以下 issue，可使用全部工具完成定位、修补与验证：\n\n{issue}"
             answer = self.agent.ask(prompt)
-            helper = Orchestrator(None, None, None)
-            helper._repo_root = self._repo_root
-            patches = helper._parse_patches(answer)
+            applier = PatchApplier(self._repo_root)
+            patches = parse_patches(answer)
             state.candidate_patches = patches
             if patches:
-                applied = helper._apply_patches_on_disk(patches)
+                applied = applier.apply_patches(patches)
                 if applied:
                     state.status = "patched"
                 elif _repo_sources_changed(repo, before):
