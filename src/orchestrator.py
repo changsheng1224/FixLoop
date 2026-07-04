@@ -17,14 +17,12 @@ from pathlib import Path
 
 import yaml
 
-from src.repair.patch_applier import (
-    PatchApplier,
-    apply_patch_to_text,
-    extract_json_block,
-    parse_patches,
+from src.repair.output_parsers import (
+    parse_retrieved_context,
+    parse_suspect_list,
+    parse_verification,
 )
-
-__all__ = ["Orchestrator", "apply_patch_to_text"]
+from src.repair.patch_applier import PatchApplier, apply_patch_to_text, parse_patches
 from src.repair.verify import DockerVerifyStrategy, PytestVerifyStrategy, record_verify_timings
 from src.state import (
     CandidatePatch,
@@ -34,6 +32,8 @@ from src.state import (
     SuspectLocation,
     VerificationResult,
 )
+
+__all__ = ["Orchestrator", "apply_patch_to_text"]
 
 DEFAULT_REPAIR_TIMEOUT_S = 180
 
@@ -846,39 +846,10 @@ class Orchestrator:
     # ---- 解析 Agent 输出 ----
 
     def _parse_suspect_list(self, answer: str) -> list[SuspectLocation]:
-        import json
-
-        try:
-            json_str = extract_json_block(answer)
-            data = json.loads(json_str)
-            if isinstance(data, list):
-                return [SuspectLocation.from_dict(item) for item in data]
-        except (json.JSONDecodeError, KeyError):
-            pass
-        return []
+        return parse_suspect_list(answer)
 
     def _parse_retrieved_context(self, answer: str) -> RetrievedContext:
-        import json
-
-        try:
-            json_str = extract_json_block(answer)
-            data = json.loads(json_str)
-            if isinstance(data, dict):
-                # 规范化 related_tests：模型可能返回 dict 列表，转为 str 列表
-                if "related_tests" in data:
-                    normalized = []
-                    for t in data["related_tests"]:
-                        if isinstance(t, str):
-                            normalized.append(t)
-                        elif isinstance(t, dict):
-                            normalized.append(t.get("name", t.get("path", json.dumps(t))))
-                        else:
-                            normalized.append(str(t))
-                    data["related_tests"] = normalized
-                return RetrievedContext.from_dict(data)
-        except (json.JSONDecodeError, KeyError):
-            pass
-        return RetrievedContext()
+        return parse_retrieved_context(answer)
 
     def _verifier_prompt(self, patches: list[CandidatePatch], plan: RepairPlan | None) -> str:
         parts = ["验证以下补丁："]
@@ -889,16 +860,7 @@ class Orchestrator:
         return "\n".join(parts)
 
     def _parse_verification(self, answer: str) -> "VerificationResult":
-        import json
-
-        try:
-            json_str = extract_json_block(answer)
-            data = json.loads(json_str)
-            if isinstance(data, dict):
-                return VerificationResult.from_dict(data)
-        except (json.JSONDecodeError, KeyError):
-            pass
-        return VerificationResult()
+        return parse_verification(answer)
 
     def _parse_patches(self, answer: str) -> list[CandidatePatch]:
         return parse_patches(answer)
