@@ -23,6 +23,7 @@ from src.repair.output_parsers import (
     parse_verification,
 )
 from src.repair.patch_applier import PatchApplier, apply_patch_to_text, parse_patches
+from src.repair.pipeline import RepairPipelineMixin
 from src.repair.verify import DockerVerifyStrategy, PytestVerifyStrategy, record_verify_timings
 from src.state import (
     CandidatePatch,
@@ -38,7 +39,7 @@ __all__ = ["Orchestrator", "apply_patch_to_text"]
 DEFAULT_REPAIR_TIMEOUT_S = 180
 
 
-class Orchestrator:
+class Orchestrator(RepairPipelineMixin):
     """纯 Python 修复编排器。
 
     不调 LLM，只做调度和状态管理。
@@ -103,119 +104,6 @@ class Orchestrator:
                     flush=True,
                 )
                 return state
-
-    def _repair_impl(self, state: RepairState) -> RepairState:
-        """修复流水线主体（可被 repair() 超时包装）。"""
-        max_retries = state.max_retries
-        issue = state.issue_input
-        timings = {}
-
-        t_start = time.time()
-        self._repair_started_at = t_start
-        self._reset_token_tracking()
-        print(f"[{_ts()}] Orchestrator 开始\n", end="", file=_sys.stderr, flush=True)
-
-        # Step 1: 解析 Issue → RepairPlan + 匹配 Skill
-        t0 = time.time()
-        state.repair_plan = self._parse_issue(issue)
-        skill = self._match_skill(issue)
-        if skill and state.repair_plan:
-            state.repair_plan.estimated_impact = skill.get("suggested_tools", [])
-        ms = int((time.time() - t0) * 1000)
-        timings["parse_issue_ms"] = ms
-        print(f"[{_ts()}] parse_issue: {ms}ms\n", end="", file=_sys.stderr, flush=True)
-
-        # Step 2+3: Localizer + Retriever 并行（Retriever 用 parse_issue 的粗定位）
-        print(
-            f"[{_ts()}] Localizer + Retriever 并行开始...\n", end="", file=_sys.stderr, flush=True
-        )
-        t0 = time.time()
-        suspects, context, loc_timing, ret_timing = self._run_localize_and_retrieve(state)
-        wall_ms = int((time.time() - t0) * 1000)
-        timings["localize_retrieve_ms"] = wall_ms
-        timings["localizer_ms"] = loc_timing["total_ms"]
-        timings["retriever_ms"] = ret_timing["total_ms"]
-        state.suspect_locations = suspects
-        state.retrieved_context = context
-        state.node_timings["localizer_ms"] = loc_timing["total_ms"]
-        state.node_timings["localizer_internal"] = loc_timing["internal"]
-        state.node_timings["retriever_ms"] = ret_timing["total_ms"]
-        state.node_timings["retriever_internal"] = ret_timing["internal"]
-        n = len(suspects)
-        n_tests = len(context.related_tests) if context else 0
-        print(
-            f"[{_ts()}] Localizer+Retriever 完成: 墙钟{wall_ms}ms "
-            f"(L={loc_timing['total_ms']}ms, R={ret_timing['total_ms']}ms), "
-            f"{n} suspect, {n_tests} tests\n",
-            end="",
-            file=_sys.stderr,
-            flush=True,
-        )
-
-        # Step 4: Patcher → Verifier → 自愈
-        while state.retry_count < max_retries:
-            repo_snapshot = self._snapshot_repo() if self._verification_enabled() else None
-            print(
-                f"[{_ts()}] Patcher 开始 (retry={state.retry_count})...\n",
-                end="",
-                file=_sys.stderr,
-                flush=True,
-            )
-            t0 = time.time()
-            state.candidate_patches = self._run_patcher(state)
-            ms = int((time.time() - t0) * 1000)
-            timings["patcher_ms"] = ms
-            n = len(state.candidate_patches)
-            print(
-                f"[{_ts()}] Patcher 完成: {ms}ms, {n}个补丁\n", end="", file=_sys.stderr, flush=True
-            )
-
-            if not self._verification_enabled():
-                state.status = "patched" if state.candidate_patches else "failed"
-                break
-
-            if not state.candidate_patches:
-                if state.agent_errors.pop("patcher_apply", None):
-                    state.feedback = (
-                        "补丁 JSON 解析成功但未能写入文件。"
-                        "original_lines 必须与预读代码完全一致；优先使用 diff 字段。"
-                    )
-                else:
-                    state.feedback = "补丁生成失败（模型返回无法解析的 JSON）。请重新生成。"
-                state.retry_count += 1
-                continue
-
-            print(f"[{_ts()}] Verifier 开始...\n", end="", file=_sys.stderr, flush=True)
-            t0 = time.time()
-            state.verification_result = self._run_verifier(state)
-            ms = int((time.time() - t0) * 1000)
-            timings["verifier_ms"] = ms
-            print(f"[{_ts()}] Verifier 完成: {ms}ms\n", end="", file=_sys.stderr, flush=True)
-
-            if state.verification_result.all_passed:
-                state.status = "fixed"
-                break
-
-            if repo_snapshot is not None:
-                self._restore_repo_snapshot(repo_snapshot)
-            else:
-                self._revert_changes(state)
-            state.feedback = self._build_feedback(state.verification_result)
-            state.retry_count += 1
-
-        if state.status not in ("fixed", "patched"):
-            state.status = "exhausted" if state.retry_count >= max_retries else "failed"
-
-        state.node_timings = timings
-        self._attach_token_usage(state)
-        total_ms = int((time.time() - t_start) * 1000)
-        print(
-            f"[{_ts()}] 总耗时: {total_ms}ms, status={state.status}\n",
-            end="",
-            file=_sys.stderr,
-            flush=True,
-        )
-        return state
 
     def _parse_issue(self, issue: str) -> RepairPlan:
         """正则解析 Issue 文本，提取语言/异常类型/文件名。"""
@@ -451,59 +339,6 @@ class Orchestrator:
         )
         state.node_timings["total_tokens"] = summary["total_tokens"]
         state.node_timings["token_usage"] = summary
-
-    def _run_localize_and_retrieve(
-        self,
-        state: RepairState,
-    ) -> tuple[list[SuspectLocation], RetrievedContext, dict, dict]:
-        """并行运行 Localizer 与 Retriever，返回结果与各自耗时。"""
-        plan = state.repair_plan
-        issue = state.issue_input
-
-        def run_localizer():
-            prompt = self._localizer_prompt(plan, issue)
-            answer, timing = self._run_agent(
-                self.localizer,
-                prompt,
-                "localizer",
-                state,
-            )
-            suspects = self._parse_suspect_list(answer)
-            if not suspects:
-                print(
-                    f"  [localizer] ⚠ 0 suspects, raw[:500]={answer.strip()[:500]!r}",
-                    file=_sys.stderr,
-                    flush=True,
-                )
-            return suspects, timing
-
-        def run_retriever():
-            prompt = self._retriever_prompt([], plan=plan, issue=issue)
-            answer, timing = self._run_agent(
-                self.retriever,
-                prompt,
-                "retriever",
-                state,
-            )
-            return self._parse_retrieved_context(answer), timing
-
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            fut_loc = pool.submit(run_localizer)
-            fut_ret = pool.submit(run_retriever)
-            suspects, loc_timing = fut_loc.result()
-            context, ret_timing = fut_ret.result()
-
-        if not suspects:
-            suspects = self._fallback_suspects_from_plan(plan, issue)
-            if suspects:
-                print(
-                    f"  [localizer] 降级: RepairPlan → {len(suspects)} suspect\n",
-                    end="",
-                    file=_sys.stderr,
-                    flush=True,
-                )
-
-        return suspects, context, loc_timing, ret_timing
 
     def _run_patcher(self, state: RepairState) -> list[CandidatePatch]:
         """Patcher：直接调模型生成 JSON，Orchestrator 自己应用补丁。
