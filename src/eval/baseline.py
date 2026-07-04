@@ -13,7 +13,7 @@ from agent_runtime.workspace import WorkspaceContext
 from src.eval.runner import should_include_in_eval_diff
 from src.eval.token_usage import build_token_usage_summary, reset_client_session_usage
 from src.middleware import ToolGateway
-from src.orchestrator import Orchestrator
+from src.repair.patch_applier import PatchApplier, parse_patches
 from src.repair_factory import create_model_client
 from src.state import RepairState
 from src.tools.composite import build_repair_agent_tools
@@ -39,7 +39,8 @@ def create_single_agent_baseline(model_client, workspace, cwd: str = "") -> Agen
     ctx = ToolContext(root=root)
     tools = _build_baseline_tools(ctx)
 
-    agent = Agent(
+    gw = _build_baseline_gateway(list(tools.keys()))
+    return Agent(
         config=AgentConfig(
             provider="deepseek",
             max_steps=12,
@@ -51,11 +52,9 @@ def create_single_agent_baseline(model_client, workspace, cwd: str = "") -> Agen
         cwd=root,
         tools=tools,
         system_prompt=BASELINE_SYSTEM_PROMPT,
+        agent_name="baseline",
+        tool_policy=gw.can_call,
     )
-
-    gw = _build_baseline_gateway(list(tools.keys()))
-    gw.wrap_agent("baseline", agent)
-    return agent
 
 
 def _snapshot_source_tree(repo: Path) -> dict[str, str]:
@@ -104,12 +103,11 @@ class SingleAgentOrchestrator:
         try:
             prompt = f"请修复以下 issue，可使用全部工具完成定位、修补与验证：\n\n{issue}"
             answer = self.agent.ask(prompt)
-            helper = Orchestrator(None, None, None)
-            helper._repo_root = self._repo_root
-            patches = helper._parse_patches(answer)
+            applier = PatchApplier(self._repo_root)
+            patches = parse_patches(answer)
             state.candidate_patches = patches
             if patches:
-                applied = helper._apply_patches_on_disk(patches)
+                applied = applier.apply_patches(patches)
                 if applied:
                     state.status = "patched"
                 elif _repo_sources_changed(repo, before):

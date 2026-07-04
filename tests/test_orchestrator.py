@@ -203,7 +203,7 @@ class TestApplyPatch:
         assert "from utils.helpers import greet" in result
 
     def test_sync_import_symbol_usages(self):
-        from src.orchestrator import _sync_import_symbol_usages
+        from src.repair.patch_applier import _sync_import_symbol_usages
 
         old = "from utils.helpers import hello\n\ndef message():\n    return hello()\n"
         new = "from utils.helpers import greet\n\ndef message():\n    return hello()\n"
