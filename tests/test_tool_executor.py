@@ -44,7 +44,7 @@ class TestToolExecutionResult:
 
 
 class TestToolExecutorGates:
-    """7 道闸口逐道测试。"""
+    """闸口逐道测试。"""
 
     # Gate 1: allowed_tools
     def test_rejects_non_allowed_tool(self, executor):
@@ -116,6 +116,28 @@ class TestToolExecutorGates:
         assert result.metadata["tool_status"] == "success"
         # 只读工具不做快照
         assert "affected_paths" not in result.metadata
+
+
+class TestToolPolicy:
+    def test_tool_policy_denied(self, agent):
+        executor = ToolExecutor(
+            agent=agent,
+            approval_policy="auto",
+            agent_name="localizer",
+            tool_policy=lambda role, tool: tool != "write_file",
+        )
+        result = executor.execute("write_file", {"path": "x.py", "content": "y"})
+        assert result.metadata["tool_error_code"] == "permission_denied"
+
+    def test_tool_policy_allows(self, agent):
+        executor = ToolExecutor(
+            agent=agent,
+            approval_policy="auto",
+            agent_name="localizer",
+            tool_policy=lambda role, tool: True,
+        )
+        result = executor.execute("list_files", {"path": "."})
+        assert result.metadata["tool_status"] == "success"
 
 
 class TestApproval:

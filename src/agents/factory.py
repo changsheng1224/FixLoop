@@ -34,7 +34,13 @@ def create_repair_agent(
     tools = build_repair_agent_tools(ctx, role)
     defaults = _AGENT_DEFAULTS[role]
 
-    agent = Agent(
+    gw = build_repair_gateway()
+    if role == "verifier":
+        gw.grant("verifier", "sandbox_build")
+        gw.grant("verifier", "sandbox_test")
+        gw.grant("verifier", "sandbox_verify")
+
+    return Agent(
         config=AgentConfig(provider="deepseek", approval="auto", **defaults),
         model_client=model_client,
         workspace=workspace,
@@ -42,15 +48,9 @@ def create_repair_agent(
         tools=tools,
         system_prompt=load_system_prompt(role),
         light_client=light_client if role in ("localizer", "retriever") else None,
+        agent_name=role,
+        tool_policy=gw.can_call,
     )
-
-    gw = build_repair_gateway()
-    if role == "verifier":
-        gw.grant("verifier", "sandbox_build")
-        gw.grant("verifier", "sandbox_test")
-        gw.grant("verifier", "sandbox_verify")
-    gw.wrap_agent(role, agent)
-    return agent
 
 
 def create_localizer(model_client, workspace, cwd: str = "", light_client=None) -> Agent:
