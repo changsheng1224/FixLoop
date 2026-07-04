@@ -6,55 +6,19 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from agent_runtime.config import AgentConfig
 from agent_runtime.runtime import Agent
-from agent_runtime.tool_context import ToolContext
 from agent_runtime.workspace import WorkspaceContext
+from src.agents.factory import create_baseline_agent
 from src.eval.runner import should_include_in_eval_diff
 from src.eval.token_usage import build_token_usage_summary, reset_client_session_usage
-from src.middleware import ToolGateway
 from src.repair.patch_applier import PatchApplier, parse_patches
 from src.repair_factory import create_model_client
 from src.state import RepairState
-from src.tools.composite import build_repair_agent_tools
-
-BASELINE_SYSTEM_PROMPT = (
-    "你是代码修复专家。分析错误、定位代码、生成补丁、在容器内验证修复。你可以使用所有工具。"
-)
-
-
-def _build_baseline_tools(ctx: ToolContext) -> dict:
-    return build_repair_agent_tools(ctx, "baseline")
-
-
-def _build_baseline_gateway(tool_names: list[str]) -> ToolGateway:
-    table = {name: {"baseline"} for name in tool_names}
-    table["*"] = {"baseline"}
-    return ToolGateway(table)
 
 
 def create_single_agent_baseline(model_client, workspace, cwd: str = "") -> Agent:
     """创建持有全部 Tool 的 Single-Agent Baseline。"""
-    root = cwd or workspace.repo_root
-    ctx = ToolContext(root=root)
-    tools = _build_baseline_tools(ctx)
-
-    gw = _build_baseline_gateway(list(tools.keys()))
-    return Agent(
-        config=AgentConfig(
-            provider="deepseek",
-            max_steps=12,
-            max_new_tokens=4096,
-            approval="auto",
-        ),
-        model_client=model_client,
-        workspace=workspace,
-        cwd=root,
-        tools=tools,
-        system_prompt=BASELINE_SYSTEM_PROMPT,
-        agent_name="baseline",
-        tool_policy=gw.can_call,
-    )
+    return create_baseline_agent(model_client, workspace, cwd=cwd)
 
 
 def _snapshot_source_tree(repo: Path) -> dict[str, str]:
@@ -94,6 +58,7 @@ class SingleAgentOrchestrator:
         repair_timeout_s: int = 180,
     ) -> RepairState:
         """Single-Agent ReAct 修复：ask → 解析补丁 → 写盘 → 记录 token 用量。"""
+        del repair_timeout_s
         state = RepairState(issue_input=issue, max_retries=max_retries)
         t0 = time.time()
         repo = Path(self._repo_root)
