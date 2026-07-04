@@ -173,7 +173,7 @@
 |------|------|------|
 | 09:00-10:30 | ⚡ 简历 Bullet 终稿：从 20 点中精选 5-6 点，按"总→分→分→分→收"排列，每点控制在 2 行内。根据投递方向微调（AI 方向突出多 Agent 分工；基础架构方向突出 Docker Harness + 零依赖；安全方向突出 7 道闸口 + 容器隔离）。中英文各一版 | 简历 Bullet 终稿 |
 | 10:30-11:30 | ~~⚡ GitHub 仓库设置（About / Topics / Pin）~~ | ~~GitHub 展示页就绪~~ **（M8D5 范围外）** |
-| 11:30-12:00 | 🔧 用 incognito 浏览器打开自己的 GitHub，确认 README 渲染正确、架构图对齐 | 公开页面验证 |
+| 11:30-12:00 | ~~🔧 无痕浏览器公开页面验证~~ | ~~公开页面验证~~ **（M8D5 范围外）** |
 | 14:00-15:00 | ⚡ M1-M8 最终验收清单：逐项检查 Day 5/10/15/20/25/30/35 的验收标准和里程碑。跑最后一次 `pytest tests/ -v` 确认全绿。统计最终数据：总行数、测试数、覆盖率、10 Case Fix Rate | 全部验收项通过 |
 | 15:00-16:00 | ~~⚡ 项目总结文档 `PROJECT_SUMMARY.md`~~ | ~~总结文档就绪~~ **（M8D5 范围外；见 `docs/FINAL_STATS.md`）** |
 | 16:00-17:00 | ⚡ 最终 git tag `v1.0.0` + push。写 Release Notes（基于 CHANGELOG 格式）：新功能、已知限制、运行说明。项目正式发布 | 项目发布 |
@@ -189,7 +189,7 @@
 - [ ] `pytest tests/ -v` 全绿（100+ tests）
 - [ ] 最终代码量约 3800 行（Layer 1 1900 + M5 600 + M6 500 + M7 400 + M8 400）
 
-> **M8D5 范围外（不纳入验收）：** Demo 视频/GIF；GitHub About / Topics / Release 页面配置；`PROJECT_SUMMARY.md`（由 `docs/FINAL_STATS.md` + `docs/RESUME_BULLETS.md` 替代）。
+> **M8D5 范围外（不纳入验收）：** Demo 视频/GIF；GitHub About / Topics / Release 页面配置；无痕浏览器公开页面验证；`PROJECT_SUMMARY.md`（由 `docs/FINAL_STATS.md` + `docs/RESUME_BULLETS.md` 替代）。
 
 ---
 
