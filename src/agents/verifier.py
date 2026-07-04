@@ -11,6 +11,7 @@ from src.tools.sandbox_tools import build_sandbox_tool_registry
 
 
 def create_verifier(model_client, workspace, cwd: str = "") -> Agent:
+    """创建 Verifier Agent（sandbox_build/test，容器内验证）。"""
     root = cwd or workspace.repo_root
     ctx = ToolContext(root=root)
 

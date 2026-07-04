@@ -30,6 +30,7 @@ class SuspectLocation:
     schema_version: str = "1.0"
 
     def to_dict(self) -> dict:
+        """序列化为 JSON 可写 dict。"""
         return {
             "file_path": self.file_path,
             "start_line": self.start_line,
@@ -43,6 +44,7 @@ class SuspectLocation:
 
     @classmethod
     def from_dict(cls, data: dict) -> "SuspectLocation":
+        """从 dict 反序列化。"""
         return cls(
             file_path=data.get("file_path", ""),
             start_line=data.get("start_line", 0),
@@ -75,6 +77,7 @@ class RepairPlan:
     schema_version: str = "1.0"
 
     def to_dict(self) -> dict:
+        """序列化为 JSON 可写 dict。"""
         return {
             "language": self.language,
             "issue_type": self.issue_type,
@@ -86,6 +89,7 @@ class RepairPlan:
 
     @classmethod
     def from_dict(cls, data: dict) -> "RepairPlan":
+        """从 dict 反序列化。"""
         return cls(
             language=data.get("language", "python"),
             issue_type=data.get("issue_type", ""),
@@ -114,6 +118,7 @@ class RetrievedContext:
     schema_version: str = "1.0"
 
     def to_dict(self) -> dict:
+        """序列化为 JSON 可写 dict。"""
         return {
             "similar_snippets": self.similar_snippets,
             "caller_locations": self.caller_locations,
@@ -124,6 +129,7 @@ class RetrievedContext:
 
     @classmethod
     def from_dict(cls, data: dict) -> "RetrievedContext":
+        """从 dict 反序列化。"""
         return cls(
             similar_snippets=data.get("similar_snippets", []),
             caller_locations=data.get("caller_locations", []),
@@ -153,6 +159,7 @@ class CandidatePatch:
     schema_version: str = "1.0"
 
     def to_dict(self) -> dict:
+        """序列化为 JSON 可写 dict。"""
         return {
             "file_path": self.file_path,
             "original_lines": self.original_lines,
@@ -164,6 +171,7 @@ class CandidatePatch:
 
     @classmethod
     def from_dict(cls, data: dict) -> "CandidatePatch":
+        """从 dict 反序列化。"""
         return cls(
             file_path=data.get("file_path", ""),
             original_lines=data.get("original_lines", ""),
@@ -200,6 +208,7 @@ class VerificationResult:
     schema_version: str = "1.0"
 
     def to_dict(self) -> dict:
+        """序列化为 JSON 可写 dict。"""
         return {
             "all_passed": self.all_passed,
             "total_tests": self.total_tests,
@@ -214,6 +223,7 @@ class VerificationResult:
 
     @classmethod
     def from_dict(cls, data: dict) -> "VerificationResult":
+        """从 dict 反序列化。"""
         return cls(
             all_passed=data.get("all_passed", False),
             total_tests=data.get("total_tests", 0),
@@ -249,6 +259,7 @@ class RepairState:
     schema_version: str = "1.0"
 
     def to_dict(self) -> dict:
+        """序列化为 JSON 可写 dict。"""
         return {
             "issue_input": self.issue_input,
             "repair_plan": self.repair_plan.to_dict() if self.repair_plan else None,
@@ -271,6 +282,7 @@ class RepairState:
 
     @classmethod
     def from_dict(cls, data: dict) -> "RepairState":
+        """从 dict 反序列化。"""
         return cls(
             issue_input=data.get("issue_input", ""),
             repair_plan=(

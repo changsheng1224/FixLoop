@@ -9,6 +9,7 @@ from src.tools.registry import build_repair_tools
 
 
 def create_localizer(model_client, workspace, cwd: str = "", light_client=None) -> Agent:
+    """创建 Localizer Agent（ast/stack 定位，无写权限）。"""
     root = cwd or workspace.repo_root
     ctx = ToolContext(root=root)
 

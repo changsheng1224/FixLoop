@@ -19,6 +19,8 @@ TEST_TIMEOUT_S = 900
 
 @dataclass
 class ExecResult:
+    """容器内命令执行结果。"""
+
     exit_code: int
     stdout: str
     stderr: str
@@ -26,6 +28,8 @@ class ExecResult:
 
 @dataclass
 class Sandbox:
+    """活跃容器句柄（含可选耗时统计）。"""
+
     id: str
     profile: str
     timings: dict | None = None
@@ -47,6 +51,7 @@ class SandboxManager:
 
     @property
     def docker(self):
+        """懒加载 docker-py 客户端（首次调用时 ping）。"""
         if self._docker is None:
             import docker
 

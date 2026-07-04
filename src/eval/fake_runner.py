@@ -17,6 +17,7 @@ class FakePatchOrchestrator:
         self._case_id: str | None = None
 
     def repair(self, issue: str, max_retries: int = 3, repair_timeout_s: int = 180) -> RepairState:
+        """应用 expected_patch.diff（需事先设置 _case_id）。"""
         state = RepairState(issue_input=issue, max_retries=max_retries)
         case_id = self._case_id
         if not case_id:
@@ -36,6 +37,7 @@ class FakePatchOrchestrator:
 
 
 def fake_orchestrator_factory(cases_dir: str | Path):
+    """返回 FakePatchOrchestrator 工厂，供 --fake eval 使用。"""
     cases_path = Path(cases_dir)
 
     def factory(repo_path: str) -> FakePatchOrchestrator:

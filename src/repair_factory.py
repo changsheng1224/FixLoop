@@ -19,6 +19,7 @@ O = TypeVar("O", bound=Orchestrator)
 
 
 def load_dotenv() -> None:
+    """从 cwd/.env 加载 KEY=VAL 到 os.environ（不覆盖已有变量）。"""
     env_path = Path.cwd() / ".env"
     if not env_path.exists():
         return
@@ -34,6 +35,7 @@ def load_dotenv() -> None:
 
 
 def create_model_client(model_client=None):
+    """返回传入 client 或从环境变量构造 AnthropicCompatibleModelClient。"""
     if model_client is not None:
         return model_client
     load_dotenv()
@@ -45,6 +47,7 @@ def create_model_client(model_client=None):
 
 
 def try_create_verifier(client, ws, repo: str):
+    """Docker 可用时创建 Verifier Agent，否则返回 None。"""
     try:
         import docker as _docker
 

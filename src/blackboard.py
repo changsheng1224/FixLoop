@@ -18,6 +18,7 @@ class BlackboardEntry:
     ttl: float | None = None  # None = 永不过期
 
     def expired(self) -> bool:
+        """条目是否已超过 TTL。"""
         if self.ttl is None:
             return False
         return time.time() - self.created_at > self.ttl
@@ -103,4 +104,5 @@ class Blackboard:
 
     @property
     def conflicts(self) -> list[dict]:
+        """当前未仲裁的写入冲突列表。"""
         return list(self._conflicts)

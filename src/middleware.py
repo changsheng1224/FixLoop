@@ -13,12 +13,14 @@ class ToolGateway:
             self._table[tool] = agents if isinstance(agents, set) else set(agents)
 
     def can_call(self, agent_name: str, tool_name: str) -> bool:
+        """检查 agent 是否被授权调用 tool。"""
         allowed = self._table.get(tool_name)
         if allowed is None:
             return False
         return "*" in allowed or agent_name in allowed
 
     def dispatch(self, agent_name: str, tool_name: str, execute_fn):
+        """有权限则执行 execute_fn，否则返回 permission_denied 工具结果。"""
         if not self.can_call(agent_name, tool_name):
             from agent_runtime.tool_executor import ToolExecutionResult
 
@@ -32,11 +34,13 @@ class ToolGateway:
         return execute_fn()
 
     def grant(self, agent_name: str, tool_name: str):
+        """为 agent 追加 tool 调用权限。"""
         if tool_name not in self._table:
             self._table[tool_name] = set()
         self._table[tool_name].add(agent_name)
 
     def revoke(self, agent_name: str, tool_name: str):
+        """撤销 agent 对 tool 的调用权限。"""
         if tool_name in self._table and agent_name in self._table[tool_name]:
             self._table[tool_name].discard(agent_name)
 
@@ -69,4 +73,5 @@ REPAIR_PERMISSION_TABLE = {
 
 
 def build_repair_gateway() -> ToolGateway:
+    """返回 Layer 2 修复流水线默认 ToolGateway。"""
     return ToolGateway(REPAIR_PERMISSION_TABLE)

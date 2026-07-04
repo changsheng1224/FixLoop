@@ -12,6 +12,7 @@ def append_note(
     source: str = "",
     kind: str = "observation",
 ):
+    """向 episodic_notes 追加一条工具执行笔记（去重 + 上限裁剪）。"""
     if tags is None:
         tags = []
     notes = state["episodic_notes"]
@@ -33,6 +34,7 @@ def append_note(
 
 
 def retrieval_candidates(state: dict, query: str, limit: int = 3) -> list[dict]:
+    """按关键词/tag 对 episodic notes 打分排序，返回 top-k。"""
     query_lower = query.lower()
     query_tokens = set(query_lower.split())
     notes = state.get("episodic_notes", [])

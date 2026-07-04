@@ -16,6 +16,7 @@ class SessionStore:
         self.sessions_dir = self.root / ".agent" / "sessions"
 
     def ensure_dir(self):
+        """创建 .agent/sessions/ 目录（若不存在）。"""
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
 
     def save(self, session: dict):

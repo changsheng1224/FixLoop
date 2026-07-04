@@ -93,15 +93,19 @@ def _get_semantic_model():
 
 
 class SemanticMemory:
+    """基于 SentenceTransformer embedding 的 episodic 语义检索。"""
+
     def __init__(self):
         self.model = _get_semantic_model()
         self._notes: list[dict] = []
 
     @property
     def available(self) -> bool:
+        """语义模型是否已成功加载。"""
         return self.model is not None
 
     def add(self, note: dict):
+        """为 note 计算 embedding 并缓存。"""
         if not self.available:
             return
         text = note.get("text", "")
@@ -114,6 +118,7 @@ class SemanticMemory:
             pass
 
     def search(self, query: str, top_k: int = 3) -> list[dict]:
+        """按 cosine 相似度检索 top_k notes（sim > 0.3）。"""
         if not self.available or not self._notes:
             return []
         try:
@@ -137,6 +142,7 @@ class SemanticMemory:
 
 
 def retrieval_candidates_semantic(state: dict, query: str, limit: int = 3) -> list[dict]:
+    """合并 keyword 与 semantic 检索结果并去重。"""
     from agent_runtime.features.memory.episodic import retrieval_candidates
 
     kw_results = retrieval_candidates(state, query, limit)
