@@ -99,6 +99,7 @@ class SingleAgentOrchestrator:
         max_retries: int = 3,
         repair_timeout_s: int = 180,
     ) -> RepairState:
+        """Single-Agent ReAct 修复：ask → 解析补丁 → 写盘 → 记录 token 用量。"""
         state = RepairState(issue_input=issue, max_retries=max_retries)
         t0 = time.time()
         repo = Path(self._repo_root)

@@ -8,6 +8,7 @@ from src.prompts.loader import load_system_prompt
 
 
 def create_patcher(model_client, workspace, cwd: str = "") -> Agent:
+    """创建 Patcher Agent（read/search + write/patch）。"""
     root = cwd or workspace.repo_root
     ctx = ToolContext(root=root)
 

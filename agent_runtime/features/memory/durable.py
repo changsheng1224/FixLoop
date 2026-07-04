@@ -19,14 +19,18 @@ PREFIX_MAP = {
 
 
 class DurableMemoryStore:
+    """跨会话 Markdown 持久记忆（.agent/memory/topics/）。"""
+
     def __init__(self, root: str):
         self.memory_dir = Path(root) / ".agent" / "memory"
         self.topics_dir = self.memory_dir / "topics"
 
     def ensure_dirs(self):
+        """创建 memory/topics 目录。"""
         self.topics_dir.mkdir(parents=True, exist_ok=True)
 
     def promote(self, promotions: list[tuple[str, str]]):
+        """将 (topic, text) 条目 upsert 到对应 topic 文件并更新索引。"""
         if not promotions:
             return
         self.ensure_dirs()
@@ -104,6 +108,7 @@ class DurableMemoryStore:
 def promote_durable_memory(
     user_message: str, final_answer: str, store: DurableMemoryStore | None = None, root: str = "."
 ) -> bool:
+    """检测用户保存意图并从回答中提取 Convention/Decision 等条目写入 durable。"""
     if not _has_save_intent(user_message):
         return False
     promotions = _extract_promotions(final_answer)
@@ -137,6 +142,7 @@ def _extract_promotions(text: str) -> list[tuple[str, str]]:
 
 
 def reject_durable_reason(text: str) -> str:
+    """校验 durable 条目；返回空串表示通过，否则为拒绝原因。"""
     text = text.strip()
     if not text:
         return "空内容"

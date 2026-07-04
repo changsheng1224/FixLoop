@@ -7,11 +7,13 @@ from agent_runtime.features.memory.core import MAX_RECENT_FILES
 
 
 def set_task_summary(state: dict, user_message: str):
+    """将用户请求截断写入 working.task_summary。"""
     summary = user_message.strip().replace("\n", " ")[:300]
     state["working"]["task_summary"] = summary
 
 
 def remember_file(state: dict, path: str):
+    """将 path 加入 recent_files LRU 列表。"""
     files = state["working"]["recent_files"]
     if path in files:
         files.remove(path)
@@ -20,6 +22,7 @@ def remember_file(state: dict, path: str):
 
 
 def set_file_summary(state: dict, path: str, summary: str):
+    """缓存文件摘要及 freshness hash。"""
     state["file_summaries"][path] = {
         "summary": summary[:180],
         "created_at": time.time(),
@@ -28,6 +31,7 @@ def set_file_summary(state: dict, path: str, summary: str):
 
 
 def invalidate_file_summary(state: dict, path: str):
+    """文件变更后清除过期摘要。"""
     state["file_summaries"].pop(path, None)
 
 

@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 
 @dataclass
 class CaseResult:
+    """单个评测 Case 的运行结果。"""
+
     case_id: str
     issue_type: str = ""
     difficulty: str = ""
@@ -26,6 +28,7 @@ class CaseResult:
     token_usage: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
+        """序列化为 JSON 可写 dict。"""
         return {
             "case_id": self.case_id,
             "issue_type": self.issue_type,
@@ -49,6 +52,8 @@ class CaseResult:
 
 @dataclass
 class EvalReport:
+    """整次评测的聚合报告。"""
+
     cases: list[CaseResult] = field(default_factory=list)
     summary: dict = field(default_factory=dict)
     by_type: dict = field(default_factory=dict)
@@ -56,6 +61,7 @@ class EvalReport:
     by_variant: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
+        """序列化为 JSON 可写 dict（含 summary 与 cases 列表）。"""
         data = {
             "summary": self.summary,
             "by_type": self.by_type,

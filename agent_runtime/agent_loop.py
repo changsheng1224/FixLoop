@@ -61,6 +61,15 @@ class AgentLoop:
         self._retry_count = 0  # 最近一次 prompt 的 token 元数据
 
     def run(self, user_message: str, callback=None) -> str:
+        """执行一次 Agent 任务：ReAct 循环直至 final answer 或 max_steps。
+
+        Args:
+            user_message: 用户输入。
+            callback: 可选 ProgressCallback，用于 CLI 进度输出。
+
+        Returns:
+            模型最终回答文本。
+        """
         from agent_runtime.task_state import TaskState
 
         ts = TaskState.create(user_request=user_message)

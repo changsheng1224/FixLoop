@@ -122,6 +122,7 @@ class AblationRunner:
         self.skip_verify = skip_verify
 
     def list_cases(self) -> list[str]:
+        """委托 EvalRunner 列出可用 Case id。"""
         probe = EvalRunner(
             orchestrator_factory=next(iter(self.variants.values())),
             cases_dir=self.cases_dir,
@@ -136,6 +137,7 @@ class AblationRunner:
         *,
         progress: bool = True,
     ) -> dict:
+        """运行 变体 × Case × 重复 消融实验，增量写入 ablation_report.json。"""
         ids = case_ids or self.list_cases()
         all_results: list[CaseResult] = []
         out = report_path or (self.output_dir / "ablation_report.json")

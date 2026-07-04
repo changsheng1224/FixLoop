@@ -9,6 +9,7 @@ from src.tools.registry import build_repair_tools
 
 
 def create_retriever(model_client, workspace, cwd: str = "", light_client=None) -> Agent:
+    """创建 Retriever Agent（git/find_test 检索，无写权限）。"""
     root = cwd or workspace.repo_root
     ctx = ToolContext(root=root)
 

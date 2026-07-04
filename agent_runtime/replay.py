@@ -19,6 +19,7 @@ class ReplayResult:
 
     @property
     def all_match(self) -> bool:
+        """回放结果与 trace 是否完全一致（无 diff 且无 error）。"""
         return len(self.diffs) == 0 and len(self.errors) == 0
 
 

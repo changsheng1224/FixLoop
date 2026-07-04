@@ -32,9 +32,11 @@ class CLIProgressCallback:
         self._t0 = None
 
     def on_step_start(self, step: int, max_steps: int):
+        """记录当前步数（工具输出前缀用）。"""
         self._step = step
 
     def on_tool_executed(self, name: str, result_preview: str):
+        """向 stderr 打印彩色工具执行行。"""
         import time
 
         if self._t0 is None:
@@ -58,5 +60,6 @@ class CLIProgressCallback:
         )
 
     def on_final_answer(self, text: str):
+        """向 stderr 打印最终回答摘要。"""
         preview = text[:100].replace("\n", " ")
         print(f"  {_GREEN}[done]{_RESET} → {preview}...", file=self._output)

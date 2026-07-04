@@ -14,6 +14,8 @@ BACKUP_RETENTION = 3
 
 
 class PatchApplier:
+    """在 Sandbox 内逐个应用 CandidatePatch，失败时文件级回滚。"""
+
     def __init__(self, sandbox_manager):
         self.manager = sandbox_manager
 

@@ -25,6 +25,7 @@ class FakeModelClient:
         self.session_usage: dict = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
 
     def reset_session_usage(self) -> None:
+        """清零本次 session 的 token 与 API 调用计数。"""
         self.last_usage = {}
         self.session_usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
 
@@ -86,6 +87,7 @@ class AnthropicCompatibleModelClient:
         self.session_usage: dict = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
 
     def reset_session_usage(self) -> None:
+        """清零本次 session 的 token 与 API 调用计数。"""
         self.last_usage = {}
         self.session_usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
 

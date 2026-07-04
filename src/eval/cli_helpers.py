@@ -21,10 +21,12 @@ def resolve_json_output_path(output: str, default_filename: str) -> tuple[Path, 
 
 
 def resolve_report_path(output: str) -> tuple[Path, Path]:
+    """解析 eval --output，返回 (output_dir, eval_report.json 路径)。"""
     return resolve_json_output_path(output, "eval_report.json")
 
 
 def print_eval_report(report: EvalReport, verbose: bool, report_path: Path) -> None:
+    """打印 summary JSON；verbose 时逐 Case 详情写 stderr。"""
     if verbose:
         for c in report.cases:
             mark = "OK" if c.fixed else "FAIL"
@@ -45,6 +47,7 @@ def print_eval_report(report: EvalReport, verbose: bool, report_path: Path) -> N
 
 
 def resolve_markdown_path(output_dir: Path, markdown: str | None) -> Path | None:
+    """将 --markdown 参数解析为 .md 输出路径。"""
     if markdown is None:
         return None
     candidate = Path(markdown)
@@ -64,6 +67,7 @@ def run_eval(
     model_client=None,
     markdown: str | None = None,
 ) -> tuple[EvalReport, Path, int]:
+    """执行 eval 子命令：跑 Case、写报告，返回 (report, path, exit_code)。"""
     output_dir, report_path = resolve_report_path(output)
 
     if fake:
@@ -92,10 +96,12 @@ def run_eval(
 
 
 def resolve_ablation_report_path(output: str) -> tuple[Path, Path]:
+    """解析 ablation --output，返回 (output_dir, ablation_report.json 路径)。"""
     return resolve_json_output_path(output, "ablation_report.json")
 
 
 def print_ablation_report(report: dict, verbose: bool, report_path: Path) -> None:
+    """打印 summary_by_variant JSON；verbose 时逐变体写 stderr。"""
     if verbose:
         for variant, summary in report.get("summary_by_variant", {}).items():
             print(
@@ -125,6 +131,7 @@ def run_ablation(
     model_client=None,
     markdown: str | None = None,
 ) -> tuple[dict, Path, int]:
+    """执行 ablation 子命令，返回 (report, path, exit_code)。"""
     from src.eval.ablation import AblationRunner
     from src.eval.variants import build_ablation_variants
 

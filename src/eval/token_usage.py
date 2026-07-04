@@ -59,6 +59,7 @@ def collect_repo_token_reports(repo: Path, since_ts: float | None = None) -> dic
 
 
 def get_client_session_usage(model_client) -> dict:
+    """读取 model_client.session_usage 并归一化为 token 统计 dict。"""
     usage = getattr(model_client, "session_usage", None) or {}
     inp = int(usage.get("input_tokens", 0) or 0)
     out = int(usage.get("output_tokens", 0) or 0)
@@ -71,6 +72,7 @@ def get_client_session_usage(model_client) -> dict:
 
 
 def resolve_model_clients(*agents) -> list:
+    """从 Agent 列表去重收集 model_client 实例。"""
     clients = []
     seen: set[int] = set()
     for agent in agents:
@@ -85,11 +87,13 @@ def resolve_model_clients(*agents) -> list:
 
 
 def resolve_model_client(*agents):
+    """返回第一个 Agent 绑定的 model_client，无则 None。"""
     clients = resolve_model_clients(*agents)
     return clients[0] if clients else None
 
 
 def reset_clients_session_usage(*agents) -> None:
+    """重置所有 Agent 关联 client 的 session 用量计数。"""
     for client in resolve_model_clients(*agents):
         reset_client_session_usage(client)
 
@@ -131,6 +135,7 @@ def build_token_usage_summary(model_client, repo: Path, since_ts: float | None =
 
 
 def reset_client_session_usage(model_client) -> None:
+    """调用 client.reset_session_usage()（若存在）。"""
     reset = getattr(model_client, "reset_session_usage", None)
     if callable(reset):
         reset()

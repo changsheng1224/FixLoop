@@ -34,6 +34,7 @@ def should_include_in_eval_diff(rel_path: str) -> bool:
 
 
 def load_case_metadata(case_dir: Path) -> dict:
+    """读取 Case 目录下的 metadata.yaml，缺失时返回空 dict。"""
     meta_path = case_dir / "metadata.yaml"
     if not meta_path.is_file():
         return {}
@@ -41,6 +42,7 @@ def load_case_metadata(case_dir: Path) -> dict:
 
 
 def run_pytest(repo: Path) -> tuple[int, str]:
+    """在 repo 根目录运行 pytest -q，返回 (exit_code, combined_output)。"""
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", "-q"],
         cwd=repo,
@@ -84,12 +86,14 @@ def collect_repo_diff(original: Path, modified: Path) -> str:
 
 
 def count_changed_lines(patch_text: str) -> int:
+    """统计 unified diff 中新增行数（不含 +++ 头）。"""
     return sum(
         1 for line in patch_text.splitlines() if line.startswith("+") and not line.startswith("+++")
     )
 
 
 def extract_agent_timings(node_timings: dict | None) -> dict:
+    """从 RepairState.node_timings 提取评测关心的耗时字段。"""
     if not node_timings:
         return {}
     keys = (
@@ -120,6 +124,7 @@ class EvalRunner:
         self.skip_verify = skip_verify
 
     def list_cases(self) -> list[str]:
+        """列出 cases_dir 下 case_NNN 目录名。"""
         return sorted(
             p.name
             for p in self.cases_dir.iterdir()
@@ -131,6 +136,7 @@ class EvalRunner:
         case_ids: list[str] | None = None,
         report_path: Path | None = None,
     ) -> EvalReport:
+        """运行多个 Case，写入 eval_report.json 并返回聚合报告。"""
         ids = case_ids or self.list_cases()
         results = [self.run_case(case_id) for case_id in ids]
         report = build_eval_report(results)
@@ -140,6 +146,7 @@ class EvalRunner:
         return report
 
     def run_case(self, case_id: str) -> CaseResult:
+        """运行单个 Case：复制 repo → repair → pytest → 记录 diff 与指标。"""
         case_dir = self.cases_dir / case_id
         if not case_dir.is_dir():
             return CaseResult(case_id=case_id, error=f"unknown case: {case_id}")
@@ -220,6 +227,7 @@ class EvalRunner:
 
 
 def build_eval_report(results: list[CaseResult]) -> EvalReport:
+    """将 CaseResult 列表聚合为 EvalReport（含 summary / by_type 等）。"""
     from src.eval.metrics import compute_metrics
 
     return compute_metrics(results)

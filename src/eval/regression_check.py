@@ -33,6 +33,7 @@ class RegressionDetected:
 
     @property
     def detected(self) -> bool:
+        """是否存在任一指标回归。"""
         return bool(self.issues)
 
 
@@ -46,6 +47,7 @@ class RegressionCheckResult:
     baseline_summary: dict = field(default_factory=dict)
 
     def to_detected(self) -> RegressionDetected | None:
+        """通过时返回 None，失败时转为 RegressionDetected。"""
         if self.passed:
             return None
         return RegressionDetected(
@@ -201,6 +203,7 @@ class RegressionChecker:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI 入口：对比 current 与 baseline 评测报告，超阈值 exit 1。"""
     parser = argparse.ArgumentParser(
         prog="src.eval.regression_check",
         description="对比评测报告与基线，fix_rate 下降 >5pp 或 regression_rate 上升 >3pp 则失败",

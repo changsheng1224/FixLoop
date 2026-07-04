@@ -11,6 +11,8 @@ from enum import Enum
 
 
 class State(Enum):
+    """熔断器三态：CLOSED / OPEN / HALF_OPEN。"""
+
     CLOSED = "closed"
     OPEN = "open"
     HALF_OPEN = "half_open"
@@ -33,6 +35,7 @@ class CircuitBreaker:
 
     @property
     def state(self) -> str:
+        """当前状态字符串（closed / open / half_open）。"""
         return self._state.value
 
     def call(self, fn, *args, **kwargs):
