@@ -134,3 +134,19 @@ class TestAgentSession:
         agent = _make_agent(outputs, config, workspace)
         answer = agent.ask("调未知工具")
         assert "处理" in answer
+
+
+class TestCompleteOnce:
+    def test_uses_system_prompt_without_agent_loop(self, config, workspace):
+        client = FakeModelClient(["<final>[]</final>"])
+        agent = Agent(
+            config=config,
+            model_client=client,
+            workspace=workspace,
+            system_prompt="You are patcher",
+        )
+        result = agent.complete_once("fix the bug")
+        assert result == "<final>[]</final>"
+        assert len(client.prompts) == 1
+        assert "You are patcher" in client.prompts[0]
+        assert "fix the bug" in client.prompts[0]

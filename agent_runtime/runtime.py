@@ -36,6 +36,7 @@ class Agent:
         self.dry_run = dry_run
         self.workspace = workspace
         self._cwd = cwd or workspace.repo_root or str(Path.cwd())
+        self._system_prompt = system_prompt
 
         # 构建工具上下文和注册表（允许外部注入）
         self.tool_context = ToolContext(root=self._cwd)
@@ -81,6 +82,15 @@ class Agent:
 
         loop = AgentLoop(agent=self)
         return loop.run(user_message, callback=callback)
+
+    def complete_once(self, user_message: str) -> str:
+        """单次 LLM completion，不进入 AgentLoop（使用构造时的 system_prompt）。"""
+        prefix = self._system_prompt
+        full_prompt = f"{prefix}\n\n{user_message}" if prefix else user_message
+        return self.model_client.complete(
+            full_prompt,
+            max_new_tokens=self.config.max_new_tokens or 4096,
+        )
 
     def prompt(self, user_message: str) -> str:
         """组装完整 prompt 文本（经 ContextManager token 预算控制）。"""
