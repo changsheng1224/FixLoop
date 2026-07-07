@@ -6,6 +6,8 @@
 import sys as _sys
 import time as _time
 
+from agent_runtime.compression_pipeline import truncate_tool_result_for_agent
+
 
 def _log_loop(msg: str) -> None:
     """向 stderr 输出 loop 阶段日志（供 --verbose 观测）。"""
@@ -107,6 +109,7 @@ class AgentLoop:
             t0 = _time.time()
             result = self.agent.execute_tool(tool_name, tool_input)
             result_text = result.content if hasattr(result, "content") else str(result)
+            result_text = truncate_tool_result_for_agent(self.agent, tool_name, result_text)
             te_ms = int((_time.time() - t0) * 1000)
             ts.node_timings["tool_exec_ms"] += te_ms
             _log_loop(f"  [loop] {tool_name} tool={te_ms}ms\n")
@@ -225,12 +228,15 @@ class AgentLoop:
                 t2 = _time.time()
                 result = self.agent.execute_tool(tool_name, tool_args)
                 result_text = result.content if hasattr(result, "content") else str(result)
+                result_text = truncate_tool_result_for_agent(self.agent, tool_name, result_text)
                 te_ms = int((_time.time() - t2) * 1000)
                 ts.node_timings.setdefault("tool_exec_ms", 0)
                 ts.node_timings["tool_exec_ms"] += te_ms
                 _log_loop(f"  [loop] {tool_name} tool={te_ms}ms\n")
                 self.agent.update_memory_after_tool(tool_name, tool_args, result_text)
-                self.agent.record({"role": "tool", "content": result_text})
+                self.agent.record(
+                    {"role": "tool", "content": result_text, "tool_name": tool_name}
+                )
                 self._emit("tool_executed", {"tool": tool_name})
                 if callback:
                     callback.on_tool_executed(tool_name, result_text)

@@ -66,8 +66,15 @@ def build_prompt_prefix(
     tools_registry: dict,
     dry_run: bool = False,
     approval: str = "ask",
+    *,
+    tool_names: set[str] | None = None,
 ) -> PromptPrefix:
-    """构建 System Prompt 前缀。"""
+    """构建 System Prompt 前缀。
+
+    L0：tool_names 非空时 prefix 仅注入启用工具签名。
+    """
+    if tool_names is not None:
+        tools_registry = {k: v for k, v in tools_registry.items() if k in tool_names}
     sections = [
         _system_persona(),
         _rules(dry_run=dry_run, approval=approval),

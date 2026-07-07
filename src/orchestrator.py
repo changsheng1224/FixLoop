@@ -393,7 +393,7 @@ class Orchestrator(RepairPipelineMixin):
                 extra={
                     "tool_steps": 0,
                     "node_timings": {"model_call_ms": elapsed_ms},
-                    "prompt_budget": getattr(self.patcher.config, "prompt_budget", 6000),
+                    "prompt_budget": getattr(self.patcher.config, "prompt_budget", None),
                     "budget_cuts": getattr(self.patcher, "_last_budget_meta", {}).get("cuts", []),
                 },
             )

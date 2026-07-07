@@ -8,26 +8,36 @@
 
 from __future__ import annotations
 
+from agent_runtime.compression_pipeline import (
+    DEFAULT_TOOL_TRUNCATION,
+    L5_TRIGGER_RATIO,
+    apply_l1_to_request_text,
+    l5_auto_compact,
+    make_summarizer,
+    run_compression_pipeline,
+    truncate_tool_content as _truncate_tool_content,
+)
+from agent_runtime.tier_policy import TierPolicy, filter_relevant_results
 from agent_runtime.tokenizers import resolve_token_counter
 
-# Section token 预算分配
+# Section token 预算分配（以 REF_TOTAL_BUDGET 为参考布局，随 prompt_budget 等比缩放）
+REF_TOTAL_BUDGET = 6000
+TOTAL_BUDGET = 100_000
 BUDGET_PREFIX = 2000
 BUDGET_MEMORY = 800
 BUDGET_RELEVANT = 600
 BUDGET_HISTORY = 2600
-TOTAL_BUDGET = 6000
 KEEP_RECENT_HISTORY = 6  # 最近 N 条历史完整保留
 
-# 按工具类型的 L1 截断上限（tokens）
-TOOL_TRUNCATION_TOKENS = {
-    "list_files": 60,
-    "search": 230,
-    "read_file": 570,
-    "write_file": 90,
-    "patch_file": 90,
-    "run_shell": 145,
-}
-DEFAULT_TOOL_TRUNCATION = 150
+
+def scaled_section_budget(section_limit: int, total_limit: int) -> int:
+    """将参考布局下的 section 预算缩放到实际 total_limit。"""
+    return max(1, int(section_limit * total_limit / REF_TOTAL_BUDGET))
+
+
+def history_window_budget(total_limit: int) -> int:
+    """history section 预算 = 压缩管线 window（L2–L5 百分比阈值基准）。"""
+    return scaled_section_budget(BUDGET_HISTORY, total_limit)
 
 
 class TokenBudget:
@@ -56,51 +66,6 @@ class TokenBudget:
     def remaining(self, used: int) -> int:
         """返回剩余 token 预算。"""
         return max(0, self.total_limit - used)
-
-
-def _truncate_tool_content(
-    content: str,
-    tool_name: str = "",
-    *,
-    budget: TokenBudget | None = None,
-) -> str:
-    """按工具类型差异化截断，重要行优先保留（token 级）。"""
-    budget = budget or TokenBudget()
-    limit = TOOL_TRUNCATION_TOKENS.get(tool_name, DEFAULT_TOOL_TRUNCATION)
-    total_tokens = budget.count(content)
-    if total_tokens <= limit:
-        return content
-
-    suffix = f"\n... (截断，共 {total_tokens} tokens)"
-    suffix_tokens = budget.count(suffix)
-    body_limit = max(16, limit - suffix_tokens)
-
-    lines = content.splitlines()
-    important = []
-    other = []
-    for line in lines:
-        if "Error" in line or "error" in line or "Fail" in line or "/" in line:
-            important.append(line)
-        else:
-            other.append(line)
-
-    result_lines: list[str] = []
-    for line in important + other:
-        candidate = "\n".join(result_lines + [line]) if result_lines else line
-        if budget.count(candidate) <= body_limit:
-            result_lines.append(line)
-            continue
-        if not result_lines:
-            body = budget.fit(line, body_limit)
-            return body + suffix
-        break
-
-    body = "\n".join(result_lines)
-    if not body:
-        body = budget.fit(content, body_limit)
-    elif budget.count(body) > body_limit:
-        body = budget.fit(body, body_limit)
-    return body + suffix
 
 
 def fit_prompt_to_budget(
@@ -149,7 +114,7 @@ class ContextManager:
     1. prefix       (~2000 tokens) — System Prompt + 工具列表 + Workspace
     2. memory       (~800 tokens)  — 工作记忆
     3. relevant     (~600 tokens)  — 相关记忆条目
-    4. history      (~2600 tokens) — 对话/工具调用历史
+    4. history      — 对话/工具调用历史（预算随 prompt_budget 缩放）
     5. request      (不限制)       — 当前用户输入
     """
 
@@ -162,6 +127,7 @@ class ContextManager:
         provider = getattr(getattr(agent, "config", None), "provider", "deepseek")
         self.budget = TokenBudget(model=model, total_limit=limit, provider=provider)
         self._summary_cache: dict[str, str] = {}
+        self.tier_policy = TierPolicy.from_agent(agent)
 
     def build(self, user_message: str) -> tuple[str, dict]:
         """组装完整 prompt，返回 (prompt_text, metadata)。
@@ -177,7 +143,7 @@ class ContextManager:
         prefix_text = self._get_prefix()
         memory_text = self._get_memory()
         relevant_text = self._get_relevant(user_message)
-        history_text = self._get_compressed_history()
+        history_text = self._get_compressed_history(metadata)
 
         # 逐 section 填充，超限时按优先级裁剪
         used = 0
@@ -200,11 +166,13 @@ class ContextManager:
             if text:
                 result_parts.append(text)
 
-        # 按优先级添加
-        add_section("prefix", prefix_text, BUDGET_PREFIX)
-        add_section("memory", memory_text, BUDGET_MEMORY)
-        add_section("relevant", relevant_text, BUDGET_RELEVANT)
-        add_section("history", history_text, BUDGET_HISTORY)
+        # 按优先级添加（section 预算随 total_limit 等比缩放）
+        total = self.budget.total_limit
+        add_section("prefix", prefix_text, scaled_section_budget(BUDGET_PREFIX, total))
+        add_section("memory", memory_text, scaled_section_budget(BUDGET_MEMORY, total))
+        add_section("relevant", relevant_text, scaled_section_budget(BUDGET_RELEVANT, total))
+        add_section("history", history_text, history_window_budget(total))
+        user_message = apply_l1_to_request_text(user_message, self.budget)
         request_tokens = self.budget.count(user_message)
         used += request_tokens
         metadata["sections"]["request"] = request_tokens
@@ -264,9 +232,10 @@ class ContextManager:
 
         parts = []
 
-        # Episodic 检索
+        # Episodic 检索（L0：低分条目不注入）
         mem = self.agent.session.get("memory", {})
         results = retrieval_candidates_semantic(mem, query, limit=2)
+        results = filter_relevant_results(results, self.tier_policy)
         if results:
             lines = ["相关记忆:"]
             for r in results:
@@ -287,24 +256,37 @@ class ContextManager:
 
         return "\n".join(parts) if parts else ""
 
-    def _get_compressed_history(self) -> str:
-        """获取压缩后的对话历史。优先 LLM 摘要，降级为规则压缩。"""
+    def _get_compressed_history(self, metadata: dict | None = None) -> str:
+        """获取压缩后的对话历史（L0–L5 管线，L5 在 L1–L4 之后）。"""
         history = self.agent.session.get("history", [])
         if not history:
             return ""
 
-        # 先尝试 LLM 摘要（超 2600 tokens 时触发）
-        summarized = self._maybe_summarize_history(history)
-        if summarized is not history:  # 返回了新列表（触发了摘要）
-            return self._format_compressed_result(summarized)
+        meta = metadata if metadata is not None else {}
 
-        # 降级：规则压缩
-        recent = history[-KEEP_RECENT_HISTORY:]
-        old = history[:-KEEP_RECENT_HISTORY]
+        projected = run_compression_pipeline(
+            history,
+            self.budget,
+            metadata=meta,
+            summarizer=make_summarizer(self.agent),
+            summary_cache=self._summary_cache,
+            history_window=history_window_budget(self.budget.total_limit),
+            tier_policy=self.tier_policy,
+        )
+
+        pipe = meta.get("compression_pipeline", {})
+        if pipe.get("l5_triggered"):
+            return self._format_compressed_result(projected, apply_l1=False)
+
+        recent = projected[-KEEP_RECENT_HISTORY:]
+        old = projected[:-KEEP_RECENT_HISTORY]
 
         lines = ["## 对话历史", ""]
 
-        if old:
+        if old and not any(
+            pipe.get(k)
+            for k in ("l2_triggered", "l3_triggered", "l4_triggered")
+        ):
             compressed = self._compress_old_entries(old)
             if compressed:
                 lines.append("### 早期摘要")
@@ -315,9 +297,6 @@ class ContextManager:
         for item in recent:
             role = item.get("role", "unknown")
             content = str(item.get("content", ""))
-            if role == "tool":
-                tool_name = item.get("tool_name", "")
-                content = _truncate_tool_content(content, tool_name, budget=self.budget)
             if role == "user" and len(content) > 300:
                 content = content[:300] + "..."
             lines.append(f"**{role}**: {content}")
@@ -325,13 +304,13 @@ class ContextManager:
 
         return "\n".join(lines)
 
-    def _format_compressed_result(self, history: list) -> str:
-        """将 _maybe_summarize_history 的输出格式化为 prompt 文本。"""
+    def _format_compressed_result(self, history: list, *, apply_l1: bool = False) -> str:
+        """将 history 列表格式化为 prompt 文本。"""
         lines = ["## 对话历史", ""]
         for item in history:
             role = item.get("role", "unknown")
             content = str(item.get("content", ""))
-            if role == "tool":
+            if apply_l1 and role == "tool":
                 tool_name = item.get("tool_name", "")
                 content = _truncate_tool_content(content, tool_name, budget=self.budget)
             elif self.budget.count(content) > DEFAULT_TOOL_TRUNCATION:
@@ -340,85 +319,26 @@ class ContextManager:
             lines.append("")
         return "\n".join(lines)
 
-    def _maybe_summarize_history(self, history: list, trigger_tokens: int = 2600) -> list:
-        """当 history token 数超阈值时，用 LLM 压缩前一半为摘要。
+    def _maybe_summarize_history(self, history: list, trigger_tokens: int | None = None) -> list:
+        """当 history token 数超阈值时，用 LLM 压缩前一半为摘要（L5 薄封装）。
 
         成功：返回 [{"role":"system","content":"[Earlier summary]: ..."}, *recent]
         失败：退化为简单裁剪（保留最近 8 条）
-
-        Args:
-            history: 原始 history 列表。
-            trigger_tokens: 触发摘要的 token 阈值。
-
-        Returns:
-            压缩后的 history 列表。
         """
-        # 序列化并计数
-        raw_text = self._format_history_text(history)
-        token_count = self.budget.count(raw_text)
-
-        if token_count <= trigger_tokens:
-            return history
-
-        # 取前一半作为"旧历史"
-        mid = len(history) // 2
-        old_history = history[:mid]
-        recent_history = history[mid:]
-
-        # 检查摘要缓存
-        import hashlib
-
-        cache_key = hashlib.md5(
-            "".join(str(h.get("content", ""))[:100] for h in old_history[-10:]).encode()
-        ).hexdigest()
-        if cache_key in self._summary_cache:
-            summary = self._summary_cache[cache_key]
-        else:
-            summary = ""
-            try:
-                summary = self._generate_summary(old_history)
-            except Exception:
-                pass
-            if summary:
-                self._summary_cache[cache_key] = summary
-
-        if summary:
-            return [
-                {"role": "system", "content": f"[Earlier summary]: {summary}"},
-            ] + recent_history
-
-        # 降级：保留最近 8 条
-        return history[-8:]
-
-    def _format_history_text(self, history: list) -> str:
-        """将 history 列表格式化为纯文本（用于计数）。"""
-        lines = []
-        for item in history:
-            role = item.get("role", "unknown")
-            content = str(item.get("content", ""))[:200]
-            lines.append(f"{role}: {content}")
-        return "\n".join(lines)
-
-    def _generate_summary(self, old_history: list) -> str:
-        """用模型生成旧历史的摘要（最多 200 tokens）。"""
-        prompt_lines = [
-            "Summarize the following conversation in 1-2 sentences.",
-            "Focus on: files read, tools used, errors encountered, decisions made.",
-            "",
-        ]
-        # 只取关键信息
-        for item in old_history[-20:]:
-            role = item.get("role", "unknown")
-            content = str(item.get("content", ""))[:150]
-            prompt_lines.append(f"{role}: {content}")
-
-        summary_prompt = "\n".join(prompt_lines)
-
-        # 优先用轻量模型（本地 Ollama），更快且不消耗 API 配额
-        client = self.agent.light_client or self.agent.model_client
-        # 高配额兼容 thinking 模型（thinking ~2000 tokens）
-        raw = client.complete(summary_prompt, max_new_tokens=2048)
-        return raw.strip()[:300] if raw else ""
+        if trigger_tokens is None:
+            trigger_tokens = int(
+                L5_TRIGGER_RATIO * history_window_budget(self.budget.total_limit)
+            )
+        meta: dict = {}
+        return l5_auto_compact(
+            history,
+            self.budget,
+            meta,
+            summarizer=make_summarizer(self.agent),
+            summary_cache=self._summary_cache,
+            trigger_tokens=trigger_tokens,
+            history_window=history_window_budget(self.budget.total_limit),
+        )
 
     def _compress_old_entries(self, entries: list) -> str:
         """压缩旧历史条目。
