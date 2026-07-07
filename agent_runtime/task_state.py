@@ -28,20 +28,27 @@ class TaskState:
     node_timings: dict = field(default_factory=dict)  # 如 {"prompt_build_ms": 5, ...}
 
     @classmethod
-    def create(cls, task_id: str = "", user_request: str = "") -> "TaskState":
+    def create(
+        cls,
+        task_id: str = "",
+        user_request: str = "",
+        run_id: str | None = None,
+    ) -> "TaskState":
         """创建新的 TaskState。
 
         Args:
             task_id: 任务标识符（可选，不传自动生成）。
             user_request: 用户输入。
+            run_id: 共享 run 目录 ID（多 Agent repair 时由 Orchestrator 注入）。
 
         Returns:
             初始状态为 "running" 的 TaskState 实例。
         """
         ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        rid = run_id or ts
         return cls(
-            run_id=ts,
-            task_id=task_id or ts,
+            run_id=rid,
+            task_id=task_id or rid,
             user_request=user_request,
         )
 

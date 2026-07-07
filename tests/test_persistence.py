@@ -122,6 +122,14 @@ class TestRunStore:
         assert record["event"] == "tool_executed"
         assert record["payload"]["tool"] == "read_file"
 
+    def test_append_trace_event(self, store):
+        store.append_trace_event("repair-test-001", "repair_started", {"agent": "orchestrator"})
+        trace_path = store.runs_dir / "repair-test-001" / "trace.jsonl"
+        assert trace_path.exists()
+        record = json.loads(trace_path.read_text().strip())
+        assert record["event"] == "repair_started"
+        assert record["payload"]["agent"] == "orchestrator"
+
     def test_write_report(self, store, task_state):
         report = {"total_tokens": 500, "tool_steps": 2}
         store.write_report(task_state, report)

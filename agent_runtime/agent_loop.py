@@ -72,7 +72,11 @@ class AgentLoop:
         """
         from agent_runtime.task_state import TaskState
 
-        ts = TaskState.create(user_request=user_message)
+        shared = getattr(self.agent, "shared_run_id", None)
+        ts = TaskState.create(user_request=user_message, run_id=shared)
+        agent_name = getattr(self.agent, "_agent_name", "") or "agent"
+        if shared:
+            ts.task_id = f"{shared}-{agent_name}"
         self._task_state = ts
         self._emit("run_started")
 
@@ -88,6 +92,8 @@ class AgentLoop:
 
     def _run_with_native_tools(self, user_message: str, ts, callback=None) -> str:
         """使用 API 原生 tool_use 协议（Anthropic 兼容）。"""
+        user_message, budget_meta = self.agent.fit_user_message(user_message)
+        self._last_budget_meta = budget_meta
         # 构建 Anthropic 格式的工具定义
         tools_def = _build_anthropic_tools(self.agent.tools)
 
@@ -112,13 +118,19 @@ class AgentLoop:
 
         t0 = _time.time()
         try:
-            answer = self.agent.model_client.chat_with_tools(
+            result = self.agent.model_client.chat_with_tools(
                 system_prompt=system_prompt,
                 user_message=user_message,
                 tools=tools_def,
                 executor=executor,
                 max_turns=self.max_steps,
             )
+            if isinstance(result, tuple):
+                answer, call_usage = result
+            else:
+                answer = result
+                call_usage = getattr(self.agent.model_client, "last_call_usage", {}) or {}
+            self._apply_call_usage_meta(call_usage)
         except Exception as e:
             self.stop_reason = f"error: {e}"
             return f"<final>API 错误: {e}</final>"
@@ -245,6 +257,38 @@ class AgentLoop:
                 self.agent.record({"role": "system", "content": str(payload)})
                 user_message = str(payload)
 
+    def _merge_budget_meta(self, meta: dict) -> None:
+        """将 TokenBudget 裁剪信息并入 token 元数据。"""
+        budget_meta = getattr(self, "_last_budget_meta", None) or {}
+        if not budget_meta:
+            return
+        sections = dict(meta.get("sections") or {})
+        for key, value in budget_meta.get("sections", {}).items():
+            sections[f"budget_{key}"] = value
+        meta["sections"] = sections
+        meta["budget"] = budget_meta.get("budget", meta.get("budget"))
+        meta["prompt_budget"] = budget_meta.get("prompt_budget")
+        cuts = list(meta.get("cuts") or [])
+        cuts.extend(budget_meta.get("cuts") or [])
+        if cuts:
+            meta["cuts"] = cuts
+        if not meta.get("total_tokens"):
+            meta["total_tokens"] = budget_meta.get("total_tokens", 0)
+
+    def _apply_call_usage_meta(self, call_usage: dict) -> None:
+        """将 chat_with_tools 返回的 API usage 写入 _last_token_meta。"""
+        inp = int(call_usage.get("input_tokens", 0) or 0)
+        out = int(call_usage.get("output_tokens", 0) or 0)
+        self._last_token_meta = {
+            "total_tokens": inp + out,
+            "input_tokens": inp,
+            "output_tokens": out,
+            "api_calls": int(call_usage.get("calls", 0) or 0),
+            "sections": {"api_input": inp, "api_output": out},
+            "source": "api_usage",
+        }
+        self._merge_budget_meta(self._last_token_meta)
+
     def _gen_task_summary(self, user_message: str):
         """用轻量模型生成一句话任务摘要。"""
         from agent_runtime.features.memory import set_task_summary
@@ -276,8 +320,15 @@ class AgentLoop:
     def _emit(self, event: str, payload: dict | None = None):
         """发送 trace 事件到 RunStore。"""
         try:
-            if self._task_state:
-                self._get_store().append_trace(self._task_state, event, payload)
+            payload = dict(payload or {})
+            agent_name = getattr(self.agent, "_agent_name", "") or "agent"
+            payload.setdefault("agent", agent_name)
+            store = self._get_store()
+            shared = getattr(self.agent, "shared_run_id", None)
+            if shared:
+                store.append_trace_event(shared, event, payload)
+            elif self._task_state:
+                store.append_trace(self._task_state, event, payload)
         except Exception:
             pass
 
@@ -289,29 +340,39 @@ class AgentLoop:
 
         try:
             store = self._get_store()
-            cp = create_checkpoint(self.agent, ts, ts.user_request, trigger="ask_end")
-            ts.checkpoint_id = cp.get("run_id", "") if cp else ""
-            store.write_task_state(ts)
-            store.write_report(
-                ts,
-                {
-                    "run_id": ts.run_id,
-                    "tool_steps": ts.tool_steps,
-                    "attempts": ts.attempts,
-                    "stop_reason": ts.stop_reason,
-                    "status": ts.status,
-                    "prompt_cache_key": getattr(self.agent._prefix, "hash", ""),
-                    "node_timings": ts.node_timings,
-                    "token_usage": self._last_token_meta.get("sections", {}),
-                    "total_tokens": self._last_token_meta.get("total_tokens", 0),
-                },
-            )
+            shared = getattr(self.agent, "shared_run_id", None)
+            agent_name = getattr(self.agent, "_agent_name", "") or "agent"
+            report_body = {
+                "run_id": ts.run_id,
+                "agent": agent_name,
+                "tool_steps": ts.tool_steps,
+                "attempts": ts.attempts,
+                "stop_reason": ts.stop_reason,
+                "status": ts.status,
+                "prompt_cache_key": getattr(self.agent._prefix, "hash", ""),
+                "node_timings": ts.node_timings,
+                "token_usage": self._last_token_meta.get("sections", {}),
+                "total_tokens": self._last_token_meta.get("total_tokens", 0),
+                "input_tokens": self._last_token_meta.get("input_tokens", 0),
+                "output_tokens": self._last_token_meta.get("output_tokens", 0),
+                "api_calls": self._last_token_meta.get("api_calls", 0),
+                "prompt_budget": self._last_token_meta.get("prompt_budget")
+                or getattr(self.agent.config, "prompt_budget", 0),
+                "budget_cuts": self._last_token_meta.get("cuts", []),
+            }
+            if shared:
+                store.write_task_state_named(shared, f"task_state.{agent_name}.json", ts)
+                store.write_agent_report(shared, agent_name, report_body)
+            else:
+                cp = create_checkpoint(self.agent, ts, ts.user_request, trigger="ask_end")
+                ts.checkpoint_id = cp.get("run_id", "") if cp else ""
+                store.write_task_state(ts)
+                store.write_report(ts, report_body)
             promote_durable_memory(
                 ts.user_request,
                 ts.final_answer,
                 root=self.agent._cwd,
             )
-            # 自动保存会话（支持 --resume）
             SessionStore(root=self.agent._cwd).save(self.agent.session)
         except Exception:
             pass

@@ -22,11 +22,13 @@ class FakeModelClient:
         self.supports_prompt_cache = False
         self.prompts: list[str] = []
         self.last_usage: dict = {}
+        self.last_call_usage: dict = {}
         self.session_usage: dict = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
 
     def reset_session_usage(self) -> None:
         """清零本次 session 的 token 与 API 调用计数。"""
         self.last_usage = {}
+        self.last_call_usage = {}
         self.session_usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
 
     def _record_usage(self, prompt: str, result: str) -> None:
@@ -61,6 +63,58 @@ class FakeModelClient:
         return result
 
 
+class FakeNativeToolClient(FakeModelClient):
+    """带 chat_with_tools 的 FakeClient，用于测试原生 tool API 路径。"""
+
+    def chat_with_tools(
+        self,
+        system_prompt: str,
+        user_message: str,
+        tools: list[dict],
+        executor,
+        max_turns: int = 6,
+    ) -> tuple[str, dict]:
+        """模拟原生 tool 多轮对话（测试用）。"""
+        import json
+        import re
+
+        call_usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
+        user_msg = user_message
+
+        for _ in range(max_turns):
+            full = f"{system_prompt}\n\n{user_msg}" if system_prompt else user_msg
+            raw = self.complete(full)
+            usage = dict(self.last_usage)
+            call_usage["input_tokens"] += int(usage.get("input_tokens", 0) or 0)
+            call_usage["output_tokens"] += int(usage.get("output_tokens", 0) or 0)
+            call_usage["calls"] += 1
+
+            final_match = re.search(r"<final>(.*?)</final>", raw, re.DOTALL)
+            if final_match:
+                answer = final_match.group(1).strip()
+                self.last_call_usage = dict(call_usage)
+                return answer, call_usage
+
+            tool_match = re.search(r"<tool>(.*?)</tool>", raw, re.DOTALL)
+            if tool_match:
+                try:
+                    payload = json.loads(tool_match.group(1))
+                except json.JSONDecodeError:
+                    self.last_call_usage = dict(call_usage)
+                    return raw.strip(), call_usage
+                name = payload.get("name", "")
+                args = payload.get("args", {})
+                result = executor(name, args)
+                user_msg = f"工具 {name} 执行完成。\n结果:\n{result}"
+                continue
+
+            self.last_call_usage = dict(call_usage)
+            return raw.strip(), call_usage
+
+        self.last_call_usage = dict(call_usage)
+        return "max_turns exceeded", call_usage
+
+
 class AnthropicCompatibleModelClient:
     """Anthropic Messages API 兼容客户端。
 
@@ -84,11 +138,13 @@ class AnthropicCompatibleModelClient:
         self.supports_prompt_cache = True
         self._latencies: list[float] = []
         self.last_usage: dict = {}
+        self.last_call_usage: dict = {}
         self.session_usage: dict = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
 
     def reset_session_usage(self) -> None:
         """清零本次 session 的 token 与 API 调用计数。"""
         self.last_usage = {}
+        self.last_call_usage = {}
         self.session_usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
 
     def _record_usage(self, usage: dict | None) -> None:
@@ -133,7 +189,7 @@ class AnthropicCompatibleModelClient:
         tools: list[dict],
         executor,
         max_turns: int = 6,
-    ) -> str:
+    ) -> tuple[str, dict]:
         """使用原生 Anthropic tool_use 协议进行多轮对话。
 
         Args:
@@ -144,9 +200,10 @@ class AnthropicCompatibleModelClient:
             max_turns: 最大对话轮数。
 
         Returns:
-            模型的最终文本回复。
+            (最终文本回复, 本次 call 累计 usage dict)。
         """
         messages = []
+        call_usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
         # 系统提示词放在第一条消息中
         full_text = system_prompt + "\n\n" + user_message if system_prompt else user_message
         messages.append(
@@ -198,7 +255,11 @@ class AnthropicCompatibleModelClient:
             if data is None:
                 raise RuntimeError("API 请求失败，已重试 3 次")
 
-            self._record_usage(data.get("usage"))
+            turn_usage = data.get("usage") or {}
+            self._record_usage(turn_usage)
+            call_usage["input_tokens"] += int(turn_usage.get("input_tokens", 0) or 0)
+            call_usage["output_tokens"] += int(turn_usage.get("output_tokens", 0) or 0)
+            call_usage["calls"] += 1
 
             # 解析响应中的 content blocks
             content_blocks = data.get("content", [])
@@ -243,13 +304,17 @@ class AnthropicCompatibleModelClient:
 
             # 没有工具调用 → 返回文本
             if text_parts:
-                self._save_request(full_text, "".join(text_parts))
-                return "".join(text_parts)
+                answer = "".join(text_parts)
+                self._save_request(full_text, answer)
+                self.last_call_usage = dict(call_usage)
+                return answer, call_usage
 
             # 既没有文本也没有工具调用 → 空响应
-            return ""
+            self.last_call_usage = dict(call_usage)
+            return "", call_usage
 
-        return "max_turns exceeded"
+        self.last_call_usage = dict(call_usage)
+        return "max_turns exceeded", call_usage
 
     def _call_api(self, payload: dict, prompt_for_log: str = "") -> str:
         """发送 API 请求并返回文本（单轮，无工具）。"""

@@ -7,6 +7,7 @@ from agent_runtime.context_manager import (
     KEEP_RECENT_HISTORY,
     ContextManager,
     TokenBudget,
+    fit_prompt_to_budget,
 )
 from agent_runtime.providers.clients import FakeModelClient
 from agent_runtime.runtime import Agent
@@ -15,7 +16,7 @@ from agent_runtime.workspace import WorkspaceContext
 
 @pytest.fixture
 def budget():
-    return TokenBudget(model="gpt-4", total_limit=6000)
+    return TokenBudget(model="gpt-4", provider="openai", total_limit=6000)
 
 
 @pytest.fixture
@@ -56,6 +57,21 @@ class TestTokenBudget:
         text = "hello"
         truncated = budget.fit(text, 100)
         assert truncated == text
+
+
+class TestFitPromptToBudget:
+    def test_fits_long_user_under_total(self):
+        system = "system prompt " * 50
+        user = "user content " * 5000
+        _, fitted_user, meta = fit_prompt_to_budget(system, user, total_limit=6000)
+        assert meta["total_tokens"] <= 6000
+        assert len(fitted_user) < len(user)
+
+    def test_agent_fit_user_message_uses_config_budget(self, agent):
+        agent.config.prompt_budget = 800
+        fitted, meta = agent.fit_user_message("word " * 5000)
+        assert meta["total_tokens"] <= 800
+        assert len(fitted) < len("word " * 5000)
 
 
 class TestContextManagerBuild:
