@@ -118,6 +118,9 @@ def redact_artifact(value, secret_values: list[str] | None = None):
     if isinstance(value, dict):
         safe_metric_keys = {
             "token_usage",
+            "token_usage_by_agent",
+            "tool_usage_by_agent",
+            "total_tool_steps",
             "total_tokens",
             "input_tokens",
             "output_tokens",
@@ -125,6 +128,8 @@ def redact_artifact(value, secret_values: list[str] | None = None):
             "estimated_sections",
             "run_count",
             "api",
+            "api_calls",
+            "tool_steps",
         }
         result = {}
         for k, v in value.items():

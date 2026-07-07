@@ -202,6 +202,26 @@ def _print_repair_result(state, verbose: bool) -> None:
                 f"tool={intern.get('tool_exec_ms', 0)}ms)",
                 file=sys.stderr,
             )
+        by_agent = state.node_timings.get("token_usage_by_agent") or {}
+        tool_by_agent = state.node_timings.get("tool_usage_by_agent") or {}
+        if by_agent:
+            print("--- Token & tool usage (by agent) ---", file=sys.stderr)
+            for agent, usage in sorted(by_agent.items()):
+                tools = tool_by_agent.get(agent, usage.get("tool_steps", 0))
+                print(
+                    f"  {agent}: {usage.get('total_tokens', 0)} tokens "
+                    f"(in={usage.get('input_tokens', 0)}, out={usage.get('output_tokens', 0)}), "
+                    f"tools={tools}",
+                    file=sys.stderr,
+                )
+            total = state.node_timings.get("total_tokens", 0)
+            if total:
+                print(f"  total: {total} tokens", file=sys.stderr)
+            total_tools = state.node_timings.get("total_tool_steps")
+            if total_tools is not None:
+                print(f"  total: {total_tools} tool calls", file=sys.stderr)
+        if state.repair_run_id:
+            print(f"--- Trace: .agent/runs/{state.repair_run_id}/trace.jsonl ---", file=sys.stderr)
 
     if state.status in ("fixed", "patched") and state.candidate_patches:
         emoji = "✅" if state.status == "fixed" else "⚠"

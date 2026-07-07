@@ -101,6 +101,7 @@ class RepairPipelineMixin:
         t_start = time.time()
         self._repair_started_at = t_start
         self._reset_token_tracking()
+        self._begin_repair_trace(state)
         print(f"[{_ts()}] Orchestrator 开始\n", end="", file=_sys.stderr, flush=True)
 
         t0 = time.time()
@@ -191,8 +192,11 @@ class RepairPipelineMixin:
         if state.status not in ("fixed", "patched"):
             state.status = "exhausted" if state.retry_count >= max_retries else "failed"
 
-        state.node_timings = timings
+        merged = dict(state.node_timings)
+        merged.update(timings)
+        state.node_timings = merged
         self._attach_token_usage(state)
+        self._end_repair_trace(state)
         total_ms = int((time.time() - t_start) * 1000)
         print(
             f"[{_ts()}] 总耗时: {total_ms}ms, status={state.status}\n",

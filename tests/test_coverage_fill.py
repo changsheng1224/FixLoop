@@ -4,6 +4,7 @@ from agent_runtime.config import AgentConfig
 from agent_runtime.context_manager import (
     ContextManager,
     TokenBudget,
+    TOOL_TRUNCATION_TOKENS,
     _truncate_tool_content,
 )
 from agent_runtime.features.memory.semantic import SemanticMemory
@@ -65,13 +66,16 @@ class TestContextManagerEdge:
 
     def test_truncate_preserves_important_lines(self):
         content = "line1\nError: failed\nline2\n/path/to/file.py:42\nerror: not found\nz" * 5
-        result = _truncate_tool_content(content, "read_file")
+        budget = TokenBudget()
+        result = _truncate_tool_content(content, "read_file", budget=budget)
         assert "Error" in result
         assert ".py" in result
+        assert budget.count(result) <= TOOL_TRUNCATION_TOKENS["read_file"] + 5
 
     def test_truncate_short_content_unchanged(self):
         text = "short result"
-        result = _truncate_tool_content(text, "read_file")
+        budget = TokenBudget()
+        result = _truncate_tool_content(text, "read_file", budget=budget)
         assert result == text
 
     def test_empty_history_no_error(self, temp_workspace):

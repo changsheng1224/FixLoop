@@ -1,49 +1,14 @@
 """上下文预算管理：Token 级精确计数 + Prompt 组装 + 历史压缩。
 
-使用 tiktoken 替代字符数估算，中文场景误差从 3-5 倍降低到 < 5%。
+按 model/provider 选择 tokenizer（DeepSeek HF / OpenAI tiktoken），中文计数更准确。
 
 裁剪优先级：relevant_note → history → memory → prefix。
 用户请求永不裁剪。
 """
 
-import tiktoken
+from __future__ import annotations
 
-# 按工具类型的截断上限（字符数）
-TOOL_TRUNCATION = {
-    "list_files": 200,
-    "search": 800,
-    "read_file": 2000,
-    "write_file": 300,
-    "patch_file": 300,
-    "run_shell": 500,
-}
-DEFAULT_TRUNCATION = 500
-
-
-def _truncate_tool_content(content: str, tool_name: str = "") -> str:
-    """按工具类型差异化截断，重要行优先保留。"""
-    limit = TOOL_TRUNCATION.get(tool_name, DEFAULT_TRUNCATION)
-    if len(content) <= limit:
-        return content
-
-    lines = content.splitlines()
-    # 收集重要行（Error、文件路径、行号）
-    important = []
-    other = []
-    for line in lines:
-        if "Error" in line or "error" in line or "Fail" in line or "/" in line:
-            important.append(line)
-        else:
-            other.append(line)
-
-    result = important.copy()
-    for line in other:
-        result.append(line)
-        if sum(len(ln) for ln in result) > limit:
-            break
-
-    return "\n".join(result) + f"\n... (截断，共 {len(content)} 字符)"
-
+from agent_runtime.tokenizers import resolve_token_counter
 
 # Section token 预算分配
 BUDGET_PREFIX = 2000
@@ -53,42 +18,128 @@ BUDGET_HISTORY = 2600
 TOTAL_BUDGET = 6000
 KEEP_RECENT_HISTORY = 6  # 最近 N 条历史完整保留
 
+# 按工具类型的 L1 截断上限（tokens）
+TOOL_TRUNCATION_TOKENS = {
+    "list_files": 60,
+    "search": 230,
+    "read_file": 570,
+    "write_file": 90,
+    "patch_file": 90,
+    "run_shell": 145,
+}
+DEFAULT_TOOL_TRUNCATION = 150
+
 
 class TokenBudget:
-    """Token 精确计数器。
+    """Token 精确计数器（多 backend：DeepSeek HF / OpenAI tiktoken）。"""
 
-    封装 tiktoken 编码器，提供 count / fit / remaining。
-    """
-
-    def __init__(self, model: str = "gpt-4", total_limit: int = TOTAL_BUDGET):
+    def __init__(
+        self,
+        model: str = "deepseek-v4-pro",
+        total_limit: int = TOTAL_BUDGET,
+        provider: str = "deepseek",
+    ):
         self.total_limit = total_limit
-        try:
-            self.encoder = tiktoken.encoding_for_model(model)
-        except KeyError:
-            self.encoder = tiktoken.get_encoding("cl100k_base")
+        self.model = model
+        self.provider = provider
+        self._counter = resolve_token_counter(model, provider)
+        self.backend = self._counter.backend
 
     def count(self, text: str) -> int:
-        """返回文本的精确 token 数。"""
-        return len(self.encoder.encode(text))
+        """返回文本的 token 数。"""
+        return self._counter.count(text)
 
     def fit(self, text: str, limit: int) -> str:
-        """将文本截断到指定 token 限制以内。
-
-        Args:
-            text: 原始文本。
-            limit: token 上限。
-
-        Returns:
-            截断后的文本（token 数 <= limit）。
-        """
-        tokens = self.encoder.encode(text)
-        if len(tokens) <= limit:
-            return text
-        return self.encoder.decode(tokens[:limit])
+        """将文本截断到指定 token 限制以内。"""
+        return self._counter.fit(text, limit)
 
     def remaining(self, used: int) -> int:
         """返回剩余 token 预算。"""
         return max(0, self.total_limit - used)
+
+
+def _truncate_tool_content(
+    content: str,
+    tool_name: str = "",
+    *,
+    budget: TokenBudget | None = None,
+) -> str:
+    """按工具类型差异化截断，重要行优先保留（token 级）。"""
+    budget = budget or TokenBudget()
+    limit = TOOL_TRUNCATION_TOKENS.get(tool_name, DEFAULT_TOOL_TRUNCATION)
+    total_tokens = budget.count(content)
+    if total_tokens <= limit:
+        return content
+
+    suffix = f"\n... (截断，共 {total_tokens} tokens)"
+    suffix_tokens = budget.count(suffix)
+    body_limit = max(16, limit - suffix_tokens)
+
+    lines = content.splitlines()
+    important = []
+    other = []
+    for line in lines:
+        if "Error" in line or "error" in line or "Fail" in line or "/" in line:
+            important.append(line)
+        else:
+            other.append(line)
+
+    result_lines: list[str] = []
+    for line in important + other:
+        candidate = "\n".join(result_lines + [line]) if result_lines else line
+        if budget.count(candidate) <= body_limit:
+            result_lines.append(line)
+            continue
+        if not result_lines:
+            body = budget.fit(line, body_limit)
+            return body + suffix
+        break
+
+    body = "\n".join(result_lines)
+    if not body:
+        body = budget.fit(content, body_limit)
+    elif budget.count(body) > body_limit:
+        body = budget.fit(body, body_limit)
+    return body + suffix
+
+
+def fit_prompt_to_budget(
+    system_text: str,
+    user_text: str,
+    *,
+    model: str = "deepseek-v4-pro",
+    provider: str = "deepseek",
+    total_limit: int = TOTAL_BUDGET,
+) -> tuple[str, str, dict]:
+    """将 system + user 对 fit 到统一 token 预算内。"""
+    budget = TokenBudget(model=model, total_limit=total_limit, provider=provider)
+    metadata: dict = {
+        "sections": {},
+        "cuts": [],
+        "budget": total_limit,
+        "tokenizer_backend": budget.backend,
+    }
+
+    system_text = system_text or ""
+    user_text = user_text or ""
+
+    sys_tokens = budget.count(system_text)
+    if sys_tokens >= total_limit:
+        sys_cap = max(256, total_limit // 2)
+        system_text = budget.fit(system_text, sys_cap)
+        sys_tokens = budget.count(system_text)
+        metadata["cuts"].append(f"裁剪 system 到 {sys_tokens} tokens")
+    metadata["sections"]["system"] = sys_tokens
+
+    remaining = budget.remaining(sys_tokens)
+    user_tokens = budget.count(user_text)
+    if user_tokens > remaining:
+        user_text = budget.fit(user_text, remaining)
+        user_tokens = budget.count(user_text)
+        metadata["cuts"].append(f"裁剪 user 到 {user_tokens} tokens（剩余预算 {remaining}）")
+    metadata["sections"]["user"] = user_tokens
+    metadata["total_tokens"] = sys_tokens + user_tokens
+    return system_text, user_text, metadata
 
 
 class ContextManager:
@@ -102,9 +153,14 @@ class ContextManager:
     5. request      (不限制)       — 当前用户输入
     """
 
-    def __init__(self, agent, total_budget: int = TOTAL_BUDGET):
+    def __init__(self, agent, total_budget: int | None = None):
         self.agent = agent
-        self.budget = TokenBudget(total_limit=total_budget)
+        limit = total_budget
+        if limit is None:
+            limit = getattr(getattr(agent, "config", None), "prompt_budget", TOTAL_BUDGET)
+        model = getattr(getattr(agent, "config", None), "model", "deepseek-v4-pro")
+        provider = getattr(getattr(agent, "config", None), "provider", "deepseek")
+        self.budget = TokenBudget(model=model, total_limit=limit, provider=provider)
         self._summary_cache: dict[str, str] = {}
 
     def build(self, user_message: str) -> tuple[str, dict]:
@@ -149,14 +205,22 @@ class ContextManager:
         add_section("memory", memory_text, BUDGET_MEMORY)
         add_section("relevant", relevant_text, BUDGET_RELEVANT)
         add_section("history", history_text, BUDGET_HISTORY)
-        # request 永不裁剪
         request_tokens = self.budget.count(user_message)
         used += request_tokens
         metadata["sections"]["request"] = request_tokens
+        if used > self.budget.total_limit:
+            allowed_request = max(256, self.budget.total_limit - (used - request_tokens))
+            if request_tokens > allowed_request:
+                user_message = self.budget.fit(user_message, allowed_request)
+                request_tokens = self.budget.count(user_message)
+                used = used - metadata["sections"]["request"] + request_tokens
+                metadata["sections"]["request"] = request_tokens
+                metadata["cuts"].append(f"裁剪 request 到 {request_tokens} tokens")
         result_parts.append(f"\n## 当前任务\n\n{user_message}")
 
         metadata["total_tokens"] = used
         metadata["budget"] = self.budget.total_limit
+        metadata["tokenizer_backend"] = self.budget.backend
         return "\n".join(result_parts), metadata
 
     # ---- Section 收集 ----
@@ -253,7 +317,7 @@ class ContextManager:
             content = str(item.get("content", ""))
             if role == "tool":
                 tool_name = item.get("tool_name", "")
-                content = _truncate_tool_content(content, tool_name)
+                content = _truncate_tool_content(content, tool_name, budget=self.budget)
             if role == "user" and len(content) > 300:
                 content = content[:300] + "..."
             lines.append(f"**{role}**: {content}")
@@ -269,9 +333,9 @@ class ContextManager:
             content = str(item.get("content", ""))
             if role == "tool":
                 tool_name = item.get("tool_name", "")
-                content = _truncate_tool_content(content, tool_name)
-            elif len(content) > DEFAULT_TRUNCATION:
-                content = content[:DEFAULT_TRUNCATION] + "..."
+                content = _truncate_tool_content(content, tool_name, budget=self.budget)
+            elif self.budget.count(content) > DEFAULT_TOOL_TRUNCATION:
+                content = self.budget.fit(content, DEFAULT_TOOL_TRUNCATION) + "..."
             lines.append(f"**{role}**: {content}")
             lines.append("")
         return "\n".join(lines)

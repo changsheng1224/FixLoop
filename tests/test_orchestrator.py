@@ -1,6 +1,6 @@
 """Orchestrator 集成测试：FakeClient 模拟完整修复流水线。"""
 
-from agent_runtime.providers.clients import FakeModelClient
+from agent_runtime.providers.clients import FakeModelClient, FakeNativeToolClient
 from agent_runtime.workspace import WorkspaceContext
 from src.agents.localizer import create_localizer
 from src.agents.patcher import create_patcher
@@ -120,6 +120,61 @@ class TestOrchestrator:
         assert "patcher_ms" in state.node_timings
         assert state.node_timings.get("total_tokens", 0) > 0
         assert "token_usage" in state.node_timings
+
+    def test_repair_unified_trace_and_per_agent_tokens(self, temp_workspace):
+        import json
+
+        (temp_workspace / "calc.py").write_text("old\n", encoding="utf-8")
+        ws = WorkspaceContext.build(str(temp_workspace))
+        loc_client = FakeNativeToolClient(
+            [
+                '<final>[{"file_path":"calc.py","start_line":42,"end_line":44,'
+                '"function_name":"add","reason":"堆栈指向","confidence":0.95}]</final>',
+            ]
+        )
+        ret_client = FakeNativeToolClient(
+            ['<final>{"related_tests":["test_calc.py::test_add"]}</final>']
+        )
+        pat_client = FakeModelClient(
+            ['<final>[{"file_path":"calc.py","diff":"-old\\n+new","explanation":"fix"}]</final>']
+        )
+        orch = Orchestrator(
+            create_localizer(loc_client, ws),
+            create_retriever(ret_client, ws),
+            create_patcher(pat_client, ws),
+        )
+        state = orch.repair("TypeError at calc.py:42")
+        assert state.repair_run_id.startswith("repair-")
+
+        runs_dir = temp_workspace / ".agent" / "runs" / state.repair_run_id
+        assert (runs_dir / "trace.jsonl").is_file()
+        assert (runs_dir / "report.json").is_file()
+
+        agents_seen = set()
+        for line in (runs_dir / "trace.jsonl").read_text(encoding="utf-8").strip().splitlines():
+            rec = json.loads(line)
+            agent = rec.get("payload", {}).get("agent")
+            if agent:
+                agents_seen.add(agent)
+        assert "localizer" in agents_seen
+        assert "retriever" in agents_seen
+        assert "orchestrator" in agents_seen
+
+        report = json.loads((runs_dir / "report.json").read_text(encoding="utf-8"))
+        by_agent = state.node_timings.get("token_usage_by_agent") or report.get(
+            "token_usage_by_agent", {}
+        )
+        assert "localizer" in by_agent
+        assert "retriever" in by_agent
+        assert "patcher" in by_agent
+        assert by_agent["localizer"]["total_tokens"] > 0
+        assert by_agent["retriever"]["total_tokens"] > 0
+        assert by_agent["patcher"]["total_tokens"] > 0
+        tool_summary = report.get("tool_usage_by_agent") or state.node_timings.get(
+            "tool_usage_by_agent", {}
+        )
+        assert "localizer" in tool_summary
+        assert report.get("total_tool_steps") == sum(tool_summary.values())
 
     def test_retriever_prompt_from_plan(self):
         orch = Orchestrator(None, None, None)

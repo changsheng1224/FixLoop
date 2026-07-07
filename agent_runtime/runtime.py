@@ -41,6 +41,8 @@ class Agent:
         self._system_prompt = system_prompt
         self._agent_name = agent_name
         self._tool_policy = tool_policy
+        self.shared_run_id: str | None = None
+        self._last_budget_meta: dict = {}
 
         # 构建工具上下文和注册表（允许外部注入）
         self.tool_context = ToolContext(root=self._cwd)
@@ -89,12 +91,36 @@ class Agent:
 
     def complete_once(self, user_message: str) -> str:
         """单次 LLM completion，不进入 AgentLoop（使用构造时的 system_prompt）。"""
+        user_message, budget_meta = self.fit_user_message(user_message)
+        self._last_budget_meta = budget_meta
         prefix = self._system_prompt
         full_prompt = f"{prefix}\n\n{user_message}" if prefix else user_message
         return self.model_client.complete(
             full_prompt,
             max_new_tokens=self.config.max_new_tokens or 4096,
         )
+
+    def fit_user_message(self, user_message: str) -> tuple[str, dict]:
+        """用统一 TokenBudget 裁剪 user 段，保留 system/prefix 优先。"""
+        from agent_runtime.context_manager import TOTAL_BUDGET, fit_prompt_to_budget
+
+        system = self._system_text_for_budget()
+        _, fitted_user, meta = fit_prompt_to_budget(
+            system,
+            user_message,
+            model=self.config.model,
+            provider=self.config.provider,
+            total_limit=self.config.prompt_budget or TOTAL_BUDGET,
+        )
+        meta["prompt_budget"] = self.config.prompt_budget
+        return fitted_user, meta
+
+    def _system_text_for_budget(self) -> str:
+        """预算计算用的 system 文本（native 用 prefix，complete_once 用 system_prompt）。"""
+        prefix_text = getattr(self._prefix, "text", "") or ""
+        if prefix_text:
+            return prefix_text
+        return self._system_prompt or ""
 
     def prompt(self, user_message: str) -> str:
         """组装完整 prompt 文本（经 ContextManager token 预算控制）。"""
