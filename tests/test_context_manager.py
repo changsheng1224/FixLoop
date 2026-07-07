@@ -8,6 +8,7 @@ from agent_runtime.context_manager import (
     ContextManager,
     TokenBudget,
     fit_prompt_to_budget,
+    history_window_budget,
 )
 from agent_runtime.providers.clients import FakeModelClient
 from agent_runtime.runtime import Agent
@@ -21,7 +22,7 @@ def budget():
 
 @pytest.fixture
 def agent(temp_workspace):
-    config = AgentConfig(provider="fake", max_steps=4)
+    config = AgentConfig(provider="fake", max_steps=4, prompt_budget=6000)
     ws = WorkspaceContext.build(str(temp_workspace))
     client = FakeModelClient(["<final>ok</final>"])
     return Agent(config=config, model_client=client, workspace=ws)
@@ -116,7 +117,7 @@ class TestContextManagerBuild:
         # 最近 KEEP_RECENT_HISTORY 条保留
         assert f"question {29}" in prompt
         # 总 token 在预算内
-        assert meta["total_tokens"] <= 6000
+        assert meta["total_tokens"] <= agent.config.prompt_budget
 
     def test_budget_overflow_triggers_cuts(self, agent):
         cm = ContextManager(agent, total_budget=500)  # 极小预算
@@ -144,4 +145,4 @@ class TestHistoryCompression:
         history_text = cm._get_compressed_history()
         # 旧工具结果被压缩
         tokens = cm.budget.count(history_text)
-        assert tokens < 2600
+        assert tokens < history_window_budget(cm.budget.total_limit)

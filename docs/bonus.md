@@ -174,48 +174,84 @@ session["history"] + session["memory"]     ContextManager.build(user_message)
 
 ### 3.3 压缩管线 L0–L5
 
-> 参考 Claude Code / Cursor 分级口径；FixLoop **已实现 L1 + L5 子集 + 规则降级**，L2–L4 为目标增强。
+> 参考 Claude Code / Cursor 分级口径；FixLoop **已实现完整 L0→L5 管线**（`compression_pipeline.py`），经 `ContextManager._get_compressed_history()` 统一调用；**canonical `session["history"]` 不动**，只改投影副本。  
+> **模块**：`compression_pipeline.py` · `tier_policy.py` · `turn_tracking.py` · `context_manager.py`
 
 | 级别 | 名称 | 触发 | 动作 | FixLoop |
 |------|------|------|------|---------|
-| **L0** | Tier Guard | 组装前 | 减不该进窗的内容 | 部分：allowed_tools；Skills/MCP 按需 |
-| **L1** | Budget Reduction | 始终 | tool 返回硬截断 | ✅ `TOOL_TRUNCATION` + 重要行优先 |
-| **L2** | Snip | 55% window | 整轮删除无价值旧轮 | 目标 |
-| **L3** | Microcompact | 70% | 旧 tool → `[ref:#id]` | 目标 |
-| **L4** | Collapse | 82% | 折叠投影，canonical 不动 | 目标 |
-| **L5** | Auto Compact | history>2600tok | LLM 摘要旧 history | ✅ `_maybe_summarize_history` |
+| **L0** | Tier Guard | 组装前 | 减不该进窗的内容 | ✅ `tier_policy.l0_filter_history`：allowed_tools · 丢弃 rejected/空/low-value · 钉扎 user/error/summary/current turn；Skills/MCP 按需 **待接** |
+| **L1** | Budget Reduction | 始终 | tool 返回硬截断 | ✅ **token 级** `TOOL_TRUNCATION_TOKENS` + 重要行优先 |
+| **L2** | Snip | **55%** history window | 整轮删除低价值只读探索轮 | ✅ `l2_snip` · snip 标记 · 保护 recent 2 turn + 尾部保护区 |
+| **L3** | Microcompact | **70%** window | 旧 tool → `[ref:#id]` stub | ✅ `l3_microcompact` · metadata 侧表 `l3_refs` |
+| **L4** | Collapse | **82%** window | 旧 turn 折叠为摘要行 | ✅ `l4_collapse` · canonical 不动 |
+| **L5** | Auto Compact | **100%** window | LLM 摘要前半段 | ✅ `l5_auto_compact` · 在 L1–L4 **之后**触发 · `_summary_cache` 内存 · 失败保留最近 8 条 |
 
-**L1 截断表**（字符级，现状 ✅）：
+**触发口径**（相对 **history section 预算**，随 `AgentConfig.prompt_budget` 等比缩放；参考布局 6000 总预算时 history window = 2600）：
 
-| 工具 | 上限 | 策略 |
-|------|------|------|
-| read_file | 2000 | Error/路径行优先，再填其余 |
-| search | 800 | 同上 |
-| run_shell | 500 | 同上 |
-| 默认 | 500 | `_truncate_tool_content` |
+| 预算示例 | history window | L2 55% | L3 70% | L4 82% | L5 100% |
+|----------|----------------|--------|--------|--------|---------|
+| 6k（测试） | 2600 | 1430 | 1820 | 2132 | 2600 |
+| 100k（默认） | ~43333 | ~23833 | ~30333 | ~35533 | ~43333 |
 
-**History 压缩路径**（现状 ✅，按优先级尝试）：
+**L1 截断表**（**token 级**，现状 ✅）：
+
+| 工具 | 上限 (tok) | 策略 |
+|------|------------|------|
+| read_file | 570 | Error/Fail/路径行优先，再填其余 |
+| search | 230 | 同上 |
+| run_shell | 145 | 同上 |
+| list_files | 60 | 同上 |
+| write_file / patch_file | 90 | 同上 |
+| 默认 | 150 | `truncate_tool_content` |
+
+**History 压缩路径**（`build()` → `run_compression_pipeline()`，现状 ✅）：
 
 ```
-history token > 2600?
-  ├─ 是 → L5: LLM 摘要前半 → [Earlier summary] + recent（_summary_cache 内存）
-  │        失败 → 保留最近 8 条
-  └─ 否 → 规则: 旧段 _compress_old_entries（合并 read_file · 工具一行 · user 60 字）
-           + 最近 KEEP_RECENT_HISTORY=6 条完整（tool 仍走 L1 截断）
+session["history"]（canonical）
+  → L0 Tier Guard（TierPolicy：allowed_tools · turn_id 钉扎 · 过滤噪声）
+  → L1 每条 tool token 截断
+  → L2 Snip（>55% window）
+  → L3 Microcompact（>70%）
+  → L4 Collapse（>82%）
+  → L5 Auto Compact（>100% window；LLM 摘要 old_half，失败 → 最近 8 条）
+  → 格式化进 history section
+       ├─ L5 已触发 → 直接渲染投影结果
+       └─ 未触发 L5 → 最近 KEEP_RECENT_HISTORY=6 条完整
+                      + 若 L2–L4 均未触发 → 旧段 `_compress_old_entries` 规则合并（read_file 路径等）
 ```
 
-**L5 目标 schema**：用户任务 · 涉及文件 · **用户消息列表** · 决策 · 未完成 · 下一步。
+**保护区（L2–L4 豁免）**（现状 ✅）：
 
-- **[P1] [C:⭐ I:⭐⭐⭐] ✅ 按工具类型截断 + 重要行优先**：Error/Fail/路径行排在截断前部
-- **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] ✅ LLM 摘要 + 三级降级**：LLM → 规则压缩 → 最近 8 条
+| 机制 | 说明 |
+|------|------|
+| **current turn_id** | `turn_tracking` 标记；当前 turn 内 user/assistant/tool 不 snip/compact/collapse |
+| **最近 2 turn** | `L2_PROTECT_RECENT_TURNS` 硬保护 |
+| **尾部 20k token** | `AgentConfig.tail_protect_tokens`（默认 20_000）；**跨边界整 turn 保护**；小 window 时 `effective = min(20k, window×2000/2600)` |
+| **Error/Traceback** | `PROTECTED_KEYWORDS` · L3 跳过含 error 的 tool 正文 |
+
+**L5 目标 schema**（部分 ✅）：用户任务 · 涉及文件 · 决策 · 未完成 · 下一步（当前 prompt 为 1–2 句英文摘要 + 300 字 cap）。
+
+**Gap（诚实讲）**：
+
+| 项 | 状态 |
+|----|------|
+| `chat_with_native_tools` 路径 | 仅 tool 返回走 **L1**（`truncate_tool_result_for_agent`），**未**经 L0–L5 全管线 |
+| L2 Orchestrator 手工 prompt | 未复用 `run_compression_pipeline` · `tier_pins.yaml` 仅声明未接线 |
+| L0 Skills/MCP | `skill_mode` 字段存在，默认 `off` |
+| 阈值外置 yaml | 55/70/82/100% 仍硬编码于 `compression_pipeline.py` |
+
+- **[P1] [C:⭐ I:⭐⭐⭐] ✅ 按工具类型截断 + 重要行优先**：token 级；Error/Fail/路径行排在截断前部
+- **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] ✅ LLM 摘要 + 三级降级**：L5 在 L1–L4 之后；LLM → fallback 最近 8 条；未触发 L5 时仍可用规则 `_compress_old_entries`
 - **[P1] [C:⭐ I:⭐⭐⭐] 摘要缓存持久化**：`_summary_cache` 落盘 `.agent/summary_cache/`（现状内存 dict）
-- **[P2] [C:⭐ I:⭐⭐⭐] ✅ 规则路径合并 read_file**：`_compress_old_entries` 合并已读路径
+- **[P2] [C:⭐ I:⭐⭐⭐] ✅ 规则路径合并 read_file**：`_compress_old_entries`（L2–L4 未触发时的旧段降级）
 - **[P2] [C:⭐⭐ I:⭐⭐⭐] 增量摘要**：在 `[Earlier summary]` 上追加，避免每轮全量重摘要
-- **[P2] [C:⭐ I:⭐⭐⭐] Error/Traceback 强制保留**：L2–L4 标记 protected lines
-- **[P2] [C:⭐ I:⭐⭐⭐] L2–L4 分级实现**：Snip / Microcompact / Collapse + yaml 阈值 55/70/82%
-- **[P1] [C:⭐⭐ I:⭐⭐⭐] 最近 20k token 保护区**：tiktoken 计量；区内 assistant/tool 豁免 L2–L4
+- **[P2] [C:⭐ I:⭐⭐⭐] ✅ Error/Traceback 强制保留**：L2–L4 `PROTECTED_KEYWORDS` / `has_protected_tool_content`
+- **[P2] [C:⭐ I:⭐⭐⭐] ✅ L2–L4 分级实现**：Snip / Microcompact / Collapse + 百分比阈值 55/70/82%
+- **[P1] [C:⭐⭐ I:⭐⭐⭐] ✅ 最近 20k token 保护区**：tiktoken 计量 · turn 级 · 跨边界整 turn 保护 · L2–L4 豁免
 - **[P2] [C:⭐ I:⭐⭐] KEEP_RECENT_HISTORY 可配置**：默认 6；eval 长会话调大
-- **[P2] [C:⭐ I:⭐⭐⭐] turn_id 标记**：当前 turn 内事件不压缩
+- **[P2] [C:⭐ I:⭐⭐⭐] ✅ turn_id 标记**：`Agent.record()` 打标 · 当前 turn 内事件不压缩
+- **[P1] [C:⭐ I:⭐⭐⭐] native 路径接入全管线**：`chat_with_native_tools` history 走 L0–L5
+- **[P2] [C:⭐ I:⭐⭐⭐] 压缩阈值 yaml 外置**：55/70/82/100% 可配置
 
 ### 3.4 L2 Repair 与 Memory 衔接
 

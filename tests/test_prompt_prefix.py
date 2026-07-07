@@ -65,3 +65,19 @@ class TestBuildPromptPrefix:
         p2 = build_prompt_prefix(ws, registry)
         # 相同输入 → 相同 hash（用于 prompt cache）
         assert p1.hash == p2.hash
+
+    def test_l0_filters_prefix_tools_to_enabled_set(self, temp_workspace):
+        from agent_runtime.workspace import WorkspaceContext
+
+        ws = WorkspaceContext.build(str(temp_workspace))
+        ctx = ToolContext(root=str(temp_workspace))
+        registry = build_tool_registry(ctx)
+        enabled = {"read_file", "search"}
+
+        prefix = build_prompt_prefix(ws, registry, tool_names=enabled)
+
+        tools_section = prefix.text.split("## 调用示例", 1)[0]
+        assert "### read_file" in tools_section
+        assert "### search" in tools_section
+        assert "### write_file" not in tools_section
+        assert "### list_files" not in tools_section

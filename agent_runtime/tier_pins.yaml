@@ -1,0 +1,13 @@
+# L0 钉扎区：以下字段/角色在压缩与 L0 过滤中永不丢弃
+pin_roles:
+  - user
+
+pin_content_markers:
+  - "[Earlier summary]"
+  - "Error: Traceback"
+
+# L2 Orchestrator 手工 prompt 中应全文保留的 logical 字段名（供后续 registry 接入）
+orchestrator_pin_fields:
+  - issue
+  - stack
+  - request

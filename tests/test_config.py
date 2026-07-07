@@ -17,6 +17,7 @@ class TestAgentConfigDefault:
         assert config.max_new_tokens == 2048
         assert config.approval == "ask"
         assert config.temperature == 0.2
+        assert config.prompt_budget == 100_000
 
     def test_default_provider(self):
         """不传 provider 时应使用默认值 'deepseek'。"""

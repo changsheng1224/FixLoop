@@ -138,9 +138,13 @@ class Agent:
         """向会话历史追加一条记录。
 
         Args:
-            item: 包含 role 和 content 的字典。
+            item: 包含 role 和 content 的字典；user 消息会递增 turn_id。
         """
-        self.session["history"].append(item)
+        from agent_runtime.turn_tracking import stamp_turn_id
+
+        self.session.setdefault("history", [])
+        self.session.setdefault("_turn_counter", 0)
+        self.session["history"].append(stamp_turn_id(self.session, item))
 
     def execute_tool(self, name: str, args: dict):
         """执行指定工具（经 ToolExecutor 闸口），返回 ToolExecutionResult。"""
@@ -371,6 +375,7 @@ class Agent:
             self.tools,
             dry_run=self.dry_run,
             approval=self.config.approval,
+            tool_names=set(self._tool_names),
         )
 
     def _new_session_id(self) -> str:
@@ -387,6 +392,7 @@ class Agent:
             "id": self._new_session_id(),
             "history": [],
             "memory": default_memory_state(),
+            "_turn_counter": 0,
         }
 
     def update_memory_after_tool(self, name: str, args: dict, result_text: str):
