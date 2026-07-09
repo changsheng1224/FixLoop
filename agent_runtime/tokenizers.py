@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import logging
 import os
 from typing import Protocol
 
-log = logging.getLogger(__name__)
+from agent_runtime.logging_setup import get_logger
+
+log = get_logger("tokenizers")
 
 # DeepSeek API / FixLoop 默认模型共用 DeepSeek 词表（可用环境变量覆盖）
 DEFAULT_DEEPSEEK_TOKENIZER = "deepseek-ai/deepseek-llm-7b-chat"

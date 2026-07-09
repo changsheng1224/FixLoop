@@ -10,9 +10,10 @@ from agent_runtime.compression_pipeline import truncate_tool_result_for_agent
 
 
 def _log_loop(msg: str) -> None:
-    """向 stderr 输出 loop 阶段日志（供 --verbose 观测）。"""
-    _sys.stderr.write(msg)
-    _sys.stderr.flush()
+    """Loop 阶段 debug 日志（受 --log-level 控制）。"""
+    from agent_runtime.logging_setup import get_logger
+
+    get_logger("agent_loop").debug(msg.rstrip("\n"))
 
 
 def _build_anthropic_tools(tools_registry: dict) -> list[dict]:
