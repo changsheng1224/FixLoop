@@ -7,6 +7,12 @@ from concurrent.futures import ThreadPoolExecutor
 
 from agent_runtime.logging_setup import get_logger
 from src.repair.output_parsers import parse_retrieved_context, parse_suspect_list
+from src.repair.timing_schema import (
+    finalize_phases,
+    set_parallel_wall_ms,
+    set_phase_ms,
+    set_repair_total_ms,
+)
 from src.state import RepairState, RetrievedContext, SuspectLocation
 
 log = get_logger("repair.pipeline")
@@ -91,7 +97,6 @@ class RepairPipelineMixin:
         """修复流水线主体（可被 repair() 超时包装）。"""
         max_retries = state.max_retries
         issue = state.issue_input
-        timings = {}
 
         t_start = time.time()
         self._repair_started_at = t_start
@@ -105,22 +110,28 @@ class RepairPipelineMixin:
         if skill and state.repair_plan:
             state.repair_plan.estimated_impact = skill.get("suggested_tools", [])
         ms = int((time.time() - t0) * 1000)
-        timings["parse_issue_ms"] = ms
+        state.node_timings["parse_issue_ms"] = ms
         log.info("parse_issue: %dms", ms)
 
         log.info("Localizer + Retriever 并行开始...")
         t0 = time.time()
         suspects, context, loc_timing, ret_timing = self._run_localize_and_retrieve(state)
         wall_ms = int((time.time() - t0) * 1000)
-        timings["localize_retrieve_ms"] = wall_ms
-        timings["localizer_ms"] = loc_timing["total_ms"]
-        timings["retriever_ms"] = ret_timing["total_ms"]
+        set_parallel_wall_ms(state.node_timings, wall_ms)
+        set_phase_ms(
+            state.node_timings,
+            "localize",
+            loc_timing["total_ms"],
+            internal=loc_timing["internal"],
+        )
+        set_phase_ms(
+            state.node_timings,
+            "retrieve",
+            ret_timing["total_ms"],
+            internal=ret_timing["internal"],
+        )
         state.suspect_locations = suspects
         state.retrieved_context = context
-        state.node_timings["localizer_ms"] = loc_timing["total_ms"]
-        state.node_timings["localizer_internal"] = loc_timing["internal"]
-        state.node_timings["retriever_ms"] = ret_timing["total_ms"]
-        state.node_timings["retriever_internal"] = ret_timing["internal"]
         n = len(suspects)
         n_tests = len(context.related_tests) if context else 0
         log.info(
@@ -138,7 +149,7 @@ class RepairPipelineMixin:
             t0 = time.time()
             state.candidate_patches = self._run_patcher(state)
             ms = int((time.time() - t0) * 1000)
-            timings["patcher_ms"] = ms
+            set_phase_ms(state.node_timings, "patch", ms)
             n = len(state.candidate_patches)
             log.info("Patcher 完成: %dms, %d个补丁", ms, n)
 
@@ -161,7 +172,7 @@ class RepairPipelineMixin:
             t0 = time.time()
             state.verification_result = self._run_verifier(state)
             ms = int((time.time() - t0) * 1000)
-            timings["verifier_ms"] = ms
+            set_phase_ms(state.node_timings, "verify", ms)
             log.info("Verifier 完成: %dms", ms)
 
             if state.verification_result.all_passed:
@@ -178,11 +189,10 @@ class RepairPipelineMixin:
         if state.status not in ("fixed", "patched"):
             state.status = "exhausted" if state.retry_count >= max_retries else "failed"
 
-        merged = dict(state.node_timings)
-        merged.update(timings)
-        state.node_timings = merged
+        total_ms = int((time.time() - t_start) * 1000)
+        set_repair_total_ms(state.node_timings, total_ms)
+        finalize_phases(state.node_timings)
         self._attach_token_usage(state)
         self._end_repair_trace(state)
-        total_ms = int((time.time() - t_start) * 1000)
         log.info("总耗时: %dms, status=%s", total_ms, state.status)
         return state

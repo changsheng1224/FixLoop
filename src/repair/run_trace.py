@@ -86,9 +86,12 @@ class RepairRunTracer:
 
         by_agent = collect_agent_reports_from_run(self.store.runs_dir / self.run_id)
         tool_summary = summarize_agent_tool_usage(by_agent)
+        from src.repair.timing_schema import phases_for_report
+
         report = {
             "run_id": self.run_id,
             "status": state.status,
+            "phases": phases_for_report(state.node_timings),
             "token_usage_by_agent": by_agent,
             **tool_summary,
             **token_summary,

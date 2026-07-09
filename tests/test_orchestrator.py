@@ -114,8 +114,12 @@ class TestOrchestrator:
         assert state.suspect_locations[0].file_path == "calc.py"
         assert len(state.candidate_patches) == 1
         assert state.status == "patched"
+        phases = state.node_timings.get("phases", {})
+        assert phases.get("localize_ms", 0) > 0
+        assert phases.get("retrieve_ms", 0) > 0
+        assert phases.get("patch_ms", 0) > 0
+        assert phases.get("repair_total_ms", 0) > 0
         assert "localizer_ms" in state.node_timings
-        assert "retriever_ms" in state.node_timings
         assert "localize_retrieve_ms" in state.node_timings
         assert "patcher_ms" in state.node_timings
         assert state.node_timings.get("total_tokens", 0) > 0
@@ -163,6 +167,7 @@ class TestOrchestrator:
         assert "orchestrator" in agents_seen
 
         report = json.loads((runs_dir / "report.json").read_text(encoding="utf-8"))
+        assert report.get("phases", {}).get("repair_total_ms", 0) > 0
         by_agent = state.node_timings.get("token_usage_by_agent") or report.get(
             "token_usage_by_agent", {}
         )

@@ -204,14 +204,27 @@ def _print_repair_result(state, verbose: bool) -> None:
             )
         print(f"[Patcher] 生成 {len(state.candidate_patches)} 个补丁", file=sys.stderr)
         print("--- Timing ---", file=sys.stderr)
-        wall = state.node_timings.get("localize_retrieve_ms")
+        from src.repair.timing_schema import get_phase_ms
+
+        wall = state.node_timings.get("localize_retrieve_ms") or (
+            state.node_timings.get("parallel_wall_ms") or {}
+        ).get("localize_retrieve_ms")
         if wall:
             print(f"  localize+retrieve (parallel wall): {wall}ms", file=sys.stderr)
-        for agent in ("localizer", "retriever", "patcher", "verifier"):
-            total = state.node_timings.get(f"{agent}_ms", 0)
+        phase_labels = (
+            ("localize", "localizer"),
+            ("retrieve", "retriever"),
+            ("patch", "patcher"),
+            ("verify", "verifier"),
+        )
+        for phase, agent in phase_labels:
+            total = get_phase_ms(state.node_timings, phase)
             if total == 0:
                 continue
-            intern = state.node_timings.get(f"{agent}_internal", {})
+            legacy_internal = f"{agent}_internal"
+            intern = (state.node_timings.get("phases_internal") or {}).get(phase) or state.node_timings.get(
+                legacy_internal, {}
+            )
             print(
                 f"  {agent}: {total}ms "
                 f"(prompt={intern.get('prompt_build_ms', 0)}ms, "
@@ -219,6 +232,9 @@ def _print_repair_result(state, verbose: bool) -> None:
                 f"tool={intern.get('tool_exec_ms', 0)}ms)",
                 file=sys.stderr,
             )
+        repair_total = get_phase_ms(state.node_timings, "repair_total")
+        if repair_total:
+            print(f"  repair_total: {repair_total}ms", file=sys.stderr)
         by_agent = state.node_timings.get("token_usage_by_agent") or {}
         tool_by_agent = state.node_timings.get("tool_usage_by_agent") or {}
         if by_agent:

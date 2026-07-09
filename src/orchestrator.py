@@ -361,6 +361,7 @@ class Orchestrator(RepairPipelineMixin):
 
         issue_type = plan.issue_type if plan else ""
         patcher_system = self._patcher_system_prompt(plan)
+        from src.repair.timing_schema import set_phase_ms
 
         t0 = time.time()
         tracer = self._repair_tracer
@@ -383,12 +384,21 @@ class Orchestrator(RepairPipelineMixin):
         except Exception as e:
             state.agent_errors["patcher"] = str(e)
             elapsed_ms = int((time.time() - t0) * 1000)
-            state.node_timings["patcher_ms"] = elapsed_ms
+            set_phase_ms(
+                state.node_timings,
+                "patch",
+                elapsed_ms,
+                internal={"model_call_ms": elapsed_ms},
+            )
             log.warning("[patcher] 模型调用失败: %s", e)
             return []
         elapsed_ms = int((time.time() - t0) * 1000)
-        state.node_timings["patcher_ms"] = elapsed_ms
-        state.node_timings["patcher_internal"] = {"model_call_ms": elapsed_ms}
+        set_phase_ms(
+            state.node_timings,
+            "patch",
+            elapsed_ms,
+            internal={"model_call_ms": elapsed_ms},
+        )
         if tracer and self.patcher is not None:
             from src.eval.token_usage import diff_client_usage, get_client_session_usage
 
