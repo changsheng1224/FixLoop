@@ -101,6 +101,8 @@ class TestToolExecutorGates:
         result = executor_never.execute("write_file", {"path": "t.txt", "content": "x"})
         assert "rejected" in result.metadata["tool_status"]
         assert result.metadata["tool_error_code"] == "approval_denied"
+        assert result.metadata["rejection_layer"] == "executor"
+        assert result.metadata["gate_id"] == 7
 
     # Gate 6+7+8: snapshot + execute + diff
     def test_writes_get_snapshot_diff(self, agent):

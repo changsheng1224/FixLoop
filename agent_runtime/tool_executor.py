@@ -124,11 +124,15 @@ class ToolExecutor:
                 )
 
         # ---- Gate 7: 审批检查 ----
+        gate7_meta = None
         if name in self._high_risk_tools:
             if not self._approve(name, args, patch_preview_meta):
                 denied_meta = {
                     "tool_status": "rejected",
                     "tool_error_code": "approval_denied",
+                    "rejection_layer": "executor",
+                    "gate_id": 7,
+                    "approval_policy": self.approval_policy,
                 }
                 if patch_preview_meta:
                     denied_meta["patch_preview"] = patch_preview_meta
@@ -138,6 +142,13 @@ class ToolExecutor:
                     ),
                     metadata=denied_meta,
                 )
+            gate7_meta = {
+                "gate_id": 7,
+                "approval_policy": self.approval_policy,
+                "approval_result": (
+                    "auto_allowed" if self.approval_policy == "auto" else "user_approved"
+                ),
+            }
 
         # ---- Gate 8: 执行前工作区快照 ----
         is_risky = name in self._high_risk_tools
@@ -154,6 +165,8 @@ class ToolExecutor:
 
         # ---- Gate 9 续: 执行后快照对比 ----
         metadata = {"tool_status": "success"}
+        if gate7_meta:
+            metadata.update(gate7_meta)
         if patch_preview_meta:
             metadata["patch_preview"] = patch_preview_meta
         if name == "run_shell":

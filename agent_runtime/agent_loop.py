@@ -332,7 +332,19 @@ class AgentLoop:
         preview = meta.get("patch_preview")
         if preview:
             self._emit("tool_preview", {"tool": tool_name, **preview})
-        self._emit("tool_executed", {"tool": tool_name})
+        trace_keys = (
+            "tool_status",
+            "tool_error_code",
+            "rejection_layer",
+            "gate_id",
+            "approval_policy",
+            "approval_result",
+        )
+        payload = {"tool": tool_name}
+        for key in trace_keys:
+            if key in meta:
+                payload[key] = meta[key]
+        self._emit("tool_executed", payload)
 
     def _emit(self, event: str, payload: dict | None = None):
         """发送 trace 事件到 RunStore。"""

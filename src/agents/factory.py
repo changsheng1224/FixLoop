@@ -38,8 +38,15 @@ def create_repair_agent(
     workspace,
     cwd: str = "",
     light_client=None,
+    approval: str = "auto",
 ) -> Agent:
-    """创建指定角色的修复 Agent（含 baseline 单 Agent 变体）。"""
+    """创建指定角色的修复 Agent（含 baseline 单 Agent 变体）。
+
+    Args:
+        approval: Gate 7 审批策略。headless repair 默认 ``auto``（Layer 1 Gateway
+            承担角色隔离；Layer 2 仍执行并 trace ``approval_policy`` / ``gate_id``）。
+            交互式 CLI 可传 ``ask`` 启用双层拦截。
+    """
     root = cwd or workspace.repo_root
     ctx = ToolContext(root=root)
     tools = build_repair_agent_tools(ctx, role)
@@ -62,7 +69,7 @@ def create_repair_agent(
         light = light_client if role in ("localizer", "retriever") else None
 
     return Agent(
-        config=AgentConfig(provider="deepseek", approval="auto", **defaults),
+        config=AgentConfig(provider="deepseek", approval=approval, **defaults),
         model_client=model_client,
         workspace=workspace,
         cwd=root,
@@ -75,24 +82,32 @@ def create_repair_agent(
     )
 
 
-def create_localizer(model_client, workspace, cwd: str = "", light_client=None) -> Agent:
-    return create_repair_agent("localizer", model_client, workspace, cwd, light_client)
+def create_localizer(
+    model_client, workspace, cwd: str = "", light_client=None, approval: str = "auto"
+) -> Agent:
+    return create_repair_agent(
+        "localizer", model_client, workspace, cwd, light_client, approval=approval
+    )
 
 
-def create_patcher(model_client, workspace, cwd: str = "") -> Agent:
-    return create_repair_agent("patcher", model_client, workspace, cwd)
+def create_patcher(model_client, workspace, cwd: str = "", approval: str = "auto") -> Agent:
+    return create_repair_agent("patcher", model_client, workspace, cwd, approval=approval)
 
 
-def create_retriever(model_client, workspace, cwd: str = "", light_client=None) -> Agent:
-    return create_repair_agent("retriever", model_client, workspace, cwd, light_client)
+def create_retriever(
+    model_client, workspace, cwd: str = "", light_client=None, approval: str = "auto"
+) -> Agent:
+    return create_repair_agent(
+        "retriever", model_client, workspace, cwd, light_client, approval=approval
+    )
 
 
-def create_verifier(model_client, workspace, cwd: str = "") -> Agent:
-    return create_repair_agent("verifier", model_client, workspace, cwd)
+def create_verifier(model_client, workspace, cwd: str = "", approval: str = "auto") -> Agent:
+    return create_repair_agent("verifier", model_client, workspace, cwd, approval=approval)
 
 
-def create_baseline_agent(model_client, workspace, cwd: str = "") -> Agent:
-    return create_repair_agent("baseline", model_client, workspace, cwd)
+def create_baseline_agent(model_client, workspace, cwd: str = "", approval: str = "auto") -> Agent:
+    return create_repair_agent("baseline", model_client, workspace, cwd, approval=approval)
 
 
 __all__ = [

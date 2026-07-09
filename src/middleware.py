@@ -29,6 +29,7 @@ class ToolGateway:
                 metadata={
                     "tool_status": "rejected",
                     "tool_error_code": "permission_denied",
+                    "rejection_layer": "gateway",
                 },
             )
         return execute_fn()
@@ -47,6 +48,8 @@ class ToolGateway:
 
 # ---- 共享权限表 ----
 
+# 未列出的工具默认拒绝（can_call 无通配 fallback）。
+# run_shell 禁止 multi-agent repair 宿主机 shell；baseline 使用 _baseline_gateway。
 REPAIR_PERMISSION_TABLE = {
     "ast_parse": {"localizer"},
     "stack_parse": {"localizer"},
@@ -58,7 +61,7 @@ REPAIR_PERMISSION_TABLE = {
     "search": {"*"},
     "read_file": {"*"},
     "list_files": {"*"},
-    "*": {"*"},  # 其余工具所有 Agent 可用
+    "run_shell": set(),
 }
 
 
