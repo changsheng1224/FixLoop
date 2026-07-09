@@ -117,7 +117,7 @@ class AgentLoop:
             ts.node_timings["tool_exec_ms"] += te_ms
             _log_loop(f"  [loop] {tool_name} tool={te_ms}ms\n")
             self.agent.update_memory_after_tool(tool_name, tool_input, result_text)
-            self._emit_tool_trace(tool_name, result)
+            self._record_tool_outcome(tool_name, result, ts)
             if callback:
                 callback.on_tool_executed(tool_name, result_text)
             return result_text
@@ -240,7 +240,7 @@ class AgentLoop:
                 self.agent.record(
                     {"role": "tool", "content": result_text, "tool_name": tool_name}
                 )
-                self._emit_tool_trace(tool_name, result)
+                self._record_tool_outcome(tool_name, result, ts)
                 if callback:
                     callback.on_tool_executed(tool_name, result_text)
                 user_message = f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
@@ -326,6 +326,12 @@ class AgentLoop:
             self._store = RunStore(root=self.agent._cwd)
         return self._store
 
+    def _record_tool_outcome(self, tool_name: str, result, ts) -> None:
+        """记录工具拒绝统计并写入 trace。"""
+        meta = getattr(result, "metadata", None) or {}
+        ts.record_tool_rejection(tool_name, meta)
+        self._emit_tool_trace(tool_name, result)
+
     def _emit_tool_trace(self, tool_name: str, result) -> None:
         """写入 tool_preview（若有）与 tool_executed trace 事件。"""
         meta = getattr(result, "metadata", None) or {}
@@ -336,6 +342,7 @@ class AgentLoop:
             "tool_status",
             "tool_error_code",
             "rejection_layer",
+            "rejection_reason",
             "gate_id",
             "approval_policy",
             "approval_result",
@@ -387,6 +394,7 @@ class AgentLoop:
                 "prompt_cache_key": getattr(self.agent._prefix, "hash", ""),
                 "node_timings": ts.node_timings,
                 **report_token,
+                **ts.rejection_report_fields(),
             }
             if shared:
                 store.write_task_state_named(shared, f"task_state.{agent_name}.json", ts)

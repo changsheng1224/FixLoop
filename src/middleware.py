@@ -30,6 +30,7 @@ class ToolGateway:
                     "tool_status": "rejected",
                     "tool_error_code": "permission_denied",
                     "rejection_layer": "gateway",
+                    "rejection_reason": "role_not_allowed",
                 },
             )
         return execute_fn()

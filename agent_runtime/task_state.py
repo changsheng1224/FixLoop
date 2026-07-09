@@ -26,6 +26,9 @@ class TaskState:
     checkpoint_id: str = ""
     resume_status: str = ""
     node_timings: dict = field(default_factory=dict)  # 如 {"prompt_build_ms": 5, ...}
+    tool_rejections_by_layer: dict = field(default_factory=dict)
+    tool_rejections_by_gate: dict = field(default_factory=dict)
+    permission_denied_by_tool: dict = field(default_factory=dict)
 
     @classmethod
     def create(
@@ -62,6 +65,49 @@ class TaskState:
         """每次执行工具后 +1，记录最后使用的工具名。"""
         self.tool_steps += 1
         self.last_tool = name
+
+    def record_tool_rejection(self, tool_name: str, metadata: dict | None):
+        """累计工具拒绝语义（Gateway / Executor 双层）。"""
+        if not metadata:
+            return
+        status = metadata.get("tool_status")
+        if status not in ("rejected", "error"):
+            return
+
+        layer = metadata.get("rejection_layer")
+        code = metadata.get("tool_error_code")
+        if layer == "gateway" or code == "permission_denied":
+            self._incr(self.tool_rejections_by_layer, "gateway")
+            self._incr(self.tool_rejections_by_gate, "gateway")
+            if code == "permission_denied":
+                self._incr(self.permission_denied_by_tool, tool_name)
+            return
+
+        if layer != "executor":
+            return
+
+        self._incr(self.tool_rejections_by_layer, "executor")
+        gate_id = metadata.get("gate_id")
+        if gate_id is not None:
+            self._incr(self.tool_rejections_by_gate, str(gate_id))
+
+    @staticmethod
+    def _incr(mapping: dict, key: str, delta: int = 1) -> None:
+        mapping[key] = mapping.get(key, 0) + delta
+
+    def rejection_report_fields(self) -> dict:
+        """report.json 拒绝统计字段（无拒绝时返回空 dict）。"""
+        if not (
+            self.tool_rejections_by_layer
+            or self.tool_rejections_by_gate
+            or self.permission_denied_by_tool
+        ):
+            return {}
+        return {
+            "tool_rejections_by_layer": dict(self.tool_rejections_by_layer),
+            "tool_rejections_by_gate": dict(self.tool_rejections_by_gate),
+            "permission_denied_by_tool": dict(self.permission_denied_by_tool),
+        }
 
     def stop(self, reason: str, status: str):
         """通用停机方法。"""
