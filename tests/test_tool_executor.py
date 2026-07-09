@@ -150,28 +150,6 @@ class TestToolExecutorGates:
         assert "patch_preview" in result.metadata
 
 
-class TestToolPolicy:
-    def test_tool_policy_denied(self, agent):
-        executor = ToolExecutor(
-            agent=agent,
-            approval_policy="auto",
-            agent_name="localizer",
-            tool_policy=lambda role, tool: tool != "write_file",
-        )
-        result = executor.execute("write_file", {"path": "x.py", "content": "y"})
-        assert result.metadata["tool_error_code"] == "permission_denied"
-
-    def test_tool_policy_allows(self, agent):
-        executor = ToolExecutor(
-            agent=agent,
-            approval_policy="auto",
-            agent_name="localizer",
-            tool_policy=lambda role, tool: True,
-        )
-        result = executor.execute("list_files", {"path": "."})
-        assert result.metadata["tool_status"] == "success"
-
-
 class TestApproval:
     """approve() 方法测试。"""
 

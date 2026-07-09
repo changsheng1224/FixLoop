@@ -17,10 +17,12 @@ def _log_loop(msg: str) -> None:
 
 
 def _build_anthropic_tools(tools_registry: dict) -> list[dict]:
-    """将内部工具注册表转换为 Anthropic tool_use 格式。"""
+    """将内部工具注册表转换为 Anthropic tool_use 格式（仅 schema 字段）。"""
+    from agent_runtime.tool_schema import tool_schema_view
+
     type_map = {"str": "string", "int": "integer", "float": "number", "bool": "boolean"}
     result = []
-    for name, spec in tools_registry.items():
+    for name, spec in tool_schema_view(tools_registry).items():
         schema = spec.get("schema", {})
         properties = {}
         required = []

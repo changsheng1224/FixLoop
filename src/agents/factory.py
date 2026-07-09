@@ -70,7 +70,7 @@ def create_repair_agent(
         system_prompt=system_prompt,
         light_client=light,
         agent_name=agent_name,
-        tool_policy=gw.can_call,
+        tool_dispatch=gw.dispatch,
         prefix_mode="repair",
     )
 

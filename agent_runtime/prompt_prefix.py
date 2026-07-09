@@ -187,10 +187,13 @@ def _repair_tool_gateway_note() -> str:
 
 
 def _tools_section(registry: dict) -> str:
-    """从工具注册表生成工具列表描述。"""
+    """从工具注册表生成工具列表描述（模型只见 schema，不含 run）。"""
+    from agent_runtime.tool_schema import tool_schema_view
+
+    view = tool_schema_view(registry)
     lines = ["## 可用工具", ""]
-    for name in sorted(registry.keys()):
-        spec = registry[name]
+    for name in sorted(view):
+        spec = view[name]
         risk = "⚠ 高风险" if spec.get("risky") else "✓ 安全"
         schema_str = json.dumps(spec.get("schema", {}), ensure_ascii=False)
         lines.append(f"### {name} [{risk}]")
