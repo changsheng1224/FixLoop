@@ -11,7 +11,7 @@ from agent_runtime.workspace import WorkspaceContext
 
 @pytest.fixture
 def agent(temp_workspace):
-    config = AgentConfig(provider="fake", max_steps=3)
+    config = AgentConfig(provider="fake", model="deepseek-v4-pro", max_steps=3, prompt_budget=6000)
     ws = WorkspaceContext.build(str(temp_workspace))
     client = FakeModelClient(["<final>ok</final>"])
     return Agent(config=config, model_client=client, workspace=ws)

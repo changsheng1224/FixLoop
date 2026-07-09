@@ -1,12 +1,20 @@
 """System Prompt 构建：组装发送给模型的系统提示词。
 
 包含：规则 → 工具列表（含签名和风险标记）→ 调用示例 → Workspace 快照。
+稳定段（persona/rules/tools/examples）参与 prompt cache hash；workspace 可变段不参与。
 """
 
-import hashlib
 import json
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from dataclasses import dataclass
+
+from agent_runtime.prefix_stable import assert_stable_prefix_clean, hash_stable_prefix
+
+__all__ = [
+    "PromptPrefix",
+    "TOOL_EXAMPLES",
+    "build_custom_system_prefix",
+    "build_prompt_prefix",
+]
 
 
 @dataclass
@@ -14,10 +22,10 @@ class PromptPrefix:
     """系统提示词前缀。"""
 
     text: str
-    hash: str  # prefix_text 的 SHA256（用于 prompt cache key）
+    stable_text: str
+    hash: str  # stable_text 的 SHA256（prompt cache key）
     workspace_fingerprint: str
     tool_signature: str  # 工具 schema 的 SHA256
-    built_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
 # ============================================================================
@@ -75,20 +83,36 @@ def build_prompt_prefix(
     """
     if tool_names is not None:
         tools_registry = {k: v for k, v in tools_registry.items() if k in tool_names}
-    sections = [
+    stable_sections = [
         _system_persona(),
         _rules(dry_run=dry_run, approval=approval),
         _tools_section(tools_registry),
         _examples_section(),
-        workspace.text(),
     ]
-    text = "\n\n".join(sections)
+    stable_text = "\n\n".join(stable_sections)
+    tool_sig = _tool_signature(tools_registry)
+    return _assemble_prefix(stable_text, workspace, tool_sig)
 
+
+def build_custom_system_prefix(system_prompt: str, workspace) -> PromptPrefix:
+    """L2 角色 system prompt + workspace；稳定段仅为 system_prompt。"""
+    stable_text = system_prompt.strip()
+    return _assemble_prefix(stable_text, workspace, tool_signature="")
+
+
+def _assemble_prefix(stable_text: str, workspace, tool_signature: str) -> PromptPrefix:
+    assert_stable_prefix_clean(stable_text)
+    workspace_text = workspace.text()
+    if workspace_text:
+        text = f"{stable_text}\n\n{workspace_text}"
+    else:
+        text = stable_text
     return PromptPrefix(
         text=text,
-        hash=hashlib.sha256(text.encode()).hexdigest(),
+        stable_text=stable_text,
+        hash=hash_stable_prefix(stable_text),
         workspace_fingerprint=workspace.fingerprint(),
-        tool_signature=_tool_signature(tools_registry),
+        tool_signature=tool_signature,
     )
 
 
@@ -169,6 +193,8 @@ def _examples_section() -> str:
 
 def _tool_signature(registry: dict) -> str:
     """计算工具注册表的 SHA256 签名（用于 prompt cache 检测变更）。"""
+    import hashlib
+
     schemas = {name: spec.get("schema", {}) for name, spec in sorted(registry.items())}
     return hashlib.sha256(
         json.dumps(schemas, ensure_ascii=False, sort_keys=True).encode()

@@ -6,6 +6,7 @@ import os
 from typing import Protocol
 
 from agent_runtime.logging_setup import get_logger
+from agent_runtime.tokenizer_assets import local_tokenizer_json
 
 log = get_logger("tokenizers")
 
@@ -67,7 +68,13 @@ class HuggingFaceTokenizerCounter:
         try:
             from tokenizers import Tokenizer
 
-            self._tokenizer = Tokenizer.from_pretrained(self.tokenizer_id)
+            local_json = local_tokenizer_json(self.tokenizer_id)
+            if local_json is not None:
+                self._tokenizer = Tokenizer.from_file(str(local_json))
+                self.backend = f"huggingface-local:{self.tokenizer_id}"
+            else:
+                self._tokenizer = Tokenizer.from_pretrained(self.tokenizer_id)
+                self.backend = f"huggingface:{self.tokenizer_id}"
         except Exception as exc:
             log.warning(
                 "无法加载 HuggingFace tokenizer %s（%s），回退 cl100k_base",

@@ -361,15 +361,9 @@ class Agent:
     def _build_prefix(self, system_prompt: str = ""):
         """构建 System Prompt 前缀。system_prompt 非空时用它替代默认前缀。"""
         if system_prompt:
-            from agent_runtime.prompt_prefix import PromptPrefix
+            from agent_runtime.prompt_prefix import build_custom_system_prefix
 
-            text = system_prompt + "\n\n" + self.workspace.text()
-            return PromptPrefix(
-                text=text,
-                hash="",
-                workspace_fingerprint=self.workspace.fingerprint(),
-                tool_signature="",
-            )
+            return build_custom_system_prefix(system_prompt, self.workspace)
         return build_prompt_prefix(
             self.workspace,
             self.tools,
