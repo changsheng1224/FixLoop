@@ -202,3 +202,6 @@ class TestNativeToolsTokenUsage:
         data = json.loads(report_path.read_text(encoding="utf-8"))
         assert data["total_tokens"] > 0
         assert data["api_calls"] >= 1
+        assert data["cache_read_tokens"] == 0
+        assert data["cache_creation_tokens"] == 0
+        assert data["cache_hit_rate"] == 0.0

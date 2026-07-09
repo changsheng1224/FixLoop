@@ -348,6 +348,12 @@ class AgentLoop:
             store = self._get_store()
             shared = getattr(self.agent, "shared_run_id", None)
             agent_name = getattr(self.agent, "_agent_name", "") or "agent"
+            session_usage = getattr(self.agent.model_client, "session_usage", None) or {}
+            from agent_runtime.token_accounting import build_report_token_fields
+
+            report_token = build_report_token_fields(session_usage, self._last_token_meta)
+            if report_token.get("prompt_budget") is None:
+                report_token["prompt_budget"] = getattr(self.agent.config, "prompt_budget", 0)
             report_body = {
                 "run_id": ts.run_id,
                 "agent": agent_name,
@@ -357,14 +363,7 @@ class AgentLoop:
                 "status": ts.status,
                 "prompt_cache_key": getattr(self.agent._prefix, "hash", ""),
                 "node_timings": ts.node_timings,
-                "token_usage": self._last_token_meta.get("sections", {}),
-                "total_tokens": self._last_token_meta.get("total_tokens", 0),
-                "input_tokens": self._last_token_meta.get("input_tokens", 0),
-                "output_tokens": self._last_token_meta.get("output_tokens", 0),
-                "api_calls": self._last_token_meta.get("api_calls", 0),
-                "prompt_budget": self._last_token_meta.get("prompt_budget")
-                or getattr(self.agent.config, "prompt_budget", 0),
-                "budget_cuts": self._last_token_meta.get("cuts", []),
+                **report_token,
             }
             if shared:
                 store.write_task_state_named(shared, f"task_state.{agent_name}.json", ts)

@@ -28,6 +28,17 @@ class TestFakeClientSessionUsage:
         usage = get_client_session_usage(client)
         assert usage["total_tokens"] == 0
         assert usage["api_calls"] == 0
+        assert usage["cache_read_tokens"] == 0
+        assert usage["cache_hit_rate"] == 0.0
+
+    def test_session_usage_includes_cache_fields(self):
+        client = FakeModelClient(["<final>ok</final>"])
+        client.session_usage["cache_read_tokens"] = 100
+        client.session_usage["cache_creation_tokens"] = 50
+        usage = get_client_session_usage(client)
+        assert usage["cache_read_tokens"] == 100
+        assert usage["cache_creation_tokens"] == 50
+        assert usage["cache_hit_rate"] == round(100 / 150, 4)
 
 
 class TestCollectRepoTokenReports:
@@ -72,3 +83,15 @@ class TestBuildTokenUsageSummary:
         summary = build_repair_token_usage([client_a, client_b], temp_workspace)
         assert summary["api_calls"] == 2
         assert summary["total_tokens"] > 0
+
+    def test_repair_summary_merges_cache_across_clients(self, temp_workspace):
+        client_a = FakeModelClient(["<final>a</final>"])
+        client_b = FakeModelClient(["<final>b</final>"])
+        client_a.session_usage["cache_read_tokens"] = 80
+        client_a.session_usage["cache_creation_tokens"] = 20
+        client_b.session_usage["cache_read_tokens"] = 40
+        client_b.session_usage["cache_creation_tokens"] = 10
+        summary = build_repair_token_usage([client_a, client_b], temp_workspace)
+        assert summary["cache_read_tokens"] == 120
+        assert summary["cache_creation_tokens"] == 30
+        assert summary["cache_hit_rate"] == round(120 / 150, 4)
