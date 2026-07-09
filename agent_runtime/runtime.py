@@ -6,11 +6,14 @@ Agent 是最外层的用户接口，封装了模型客户端、工具注册表�
 import json
 import re
 from pathlib import Path
+from typing import Literal
 
 from agent_runtime.config import AgentConfig
 from agent_runtime.prompt_prefix import build_prompt_prefix
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.tools import build_tool_registry
+
+PrefixMode = Literal["default", "repair"]
 
 
 class Agent:
@@ -31,6 +34,7 @@ class Agent:
         system_prompt: str = "",
         agent_name: str = "",
         tool_policy=None,
+        prefix_mode: PrefixMode = "default",
     ):
         self.config = config
         self.model_client = model_client
@@ -41,6 +45,7 @@ class Agent:
         self._system_prompt = system_prompt
         self._agent_name = agent_name
         self._tool_policy = tool_policy
+        self._prefix_mode: PrefixMode = prefix_mode
         self.shared_run_id: str | None = None
         self._last_budget_meta: dict = {}
 
@@ -90,7 +95,11 @@ class Agent:
         return loop.run(user_message, callback=callback)
 
     def complete_once(self, user_message: str, *, system_prompt: str | None = None) -> str:
-        """单次 LLM completion，不进入 AgentLoop（使用构造时的 system_prompt）。"""
+        """单次 LLM completion，不进入 AgentLoop。
+
+        默认使用构造时的 ``system_prompt``；传入 ``system_prompt`` 可 per-call 覆盖
+        （如 Patcher 按 issue_type 注入变体，且故意不含 L1 repair prefix）。
+        """
         user_message, budget_meta = self.fit_user_message(
             user_message, system_override=system_prompt
         )
@@ -380,9 +389,7 @@ class Agent:
     def _build_prefix(self, system_prompt: str = ""):
         """构建 System Prompt 前缀。system_prompt 非空时用它替代默认前缀。"""
         if system_prompt:
-            from src.tools.composite import is_repair_canonical_registry
-
-            if is_repair_canonical_registry(self.tools):
+            if self._prefix_mode == "repair":
                 from agent_runtime.prompt_prefix import build_repair_agent_prefix
 
                 return build_repair_agent_prefix(

@@ -40,6 +40,12 @@ class TestAgentFactories:
         assert "write_file" in agent.tools
         assert "patch_file" in agent.tools
 
+    def test_repair_agents_use_repair_prefix_mode(self, client, workspace):
+        agent = create_localizer(client, workspace)
+        assert agent._prefix_mode == "repair"
+        assert "可用工具" in agent._prefix.stable_text
+        assert agent._prefix.role_text
+
     def test_all_agents_work(self, workspace):
         """3 个 Agent 都能正常 ask。"""
         c1 = FakeModelClient(["<final>ok</final>"])

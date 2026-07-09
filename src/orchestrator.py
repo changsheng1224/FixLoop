@@ -25,6 +25,7 @@ from src.repair.patch_applier import PatchApplier, apply_patch_to_text, parse_pa
 from src.repair.pipeline import RepairPipelineMixin
 from src.repair.repo_snapshot import restore_repo_snapshot, snapshot_repo
 from src.repair.verify import DockerVerifyStrategy, PytestVerifyStrategy, record_verify_timings
+from src.prompts.loader import load_role_prompt
 from src.state import (
     CandidatePatch,
     RepairPlan,
@@ -236,19 +237,16 @@ class Orchestrator(RepairPipelineMixin):
     def _restore_repo_snapshot(self, snapshot: dict[str, str]) -> None:
         restore_repo_snapshot(self._repo_root, snapshot)
 
-    def _complete_with_system_prompt(
-        self,
-        agent,
-        prompt_name: str,
-        user_prompt: str,
-        *,
-        system_prompt: str | None = None,
-    ) -> tuple[str, int]:
-        """经 Agent.complete_once 做单次 completion（不走 Agent loop）。"""
-        del prompt_name
-        t0 = time.time()
-        raw = agent.complete_once(user_prompt, system_prompt=system_prompt)
-        return raw, int((time.time() - t0) * 1000)
+    @staticmethod
+    def _patcher_system_prompt(plan: RepairPlan | None) -> str:
+        """Patcher ``complete_once`` 使用的 L2 system 文本（base + issue suffix）。
+
+        故意不含 L1 repair prefix（rules/tools/examples）：Patcher 单次 JSON
+        completion 不调工具，经 ``complete_once(system_prompt=...)`` 注入，
+        而非 ContextManager 的 role 段。
+        """
+        issue_type = plan.issue_type if plan else ""
+        return load_role_prompt("patcher", issue_type)
 
     def _run_agent(
         self,
@@ -343,19 +341,17 @@ class Orchestrator(RepairPipelineMixin):
         不走 Agent loop，因为 DeepSeek 不遵守工具调用格式。
         1 次 API 调用 → 解析 JSON → 直接 patch 文件。
         """
+        plan = state.repair_plan
         prompt = self._patcher_prompt(
             state.suspect_locations,
             state.retrieved_context,
             state.feedback,
-            plan=state.repair_plan,
+            plan=plan,
             issue=state.issue_input,
         )
 
-        from src.prompts.loader import load_role_prompt
-
-        plan = state.repair_plan
         issue_type = plan.issue_type if plan else ""
-        patcher_system = load_role_prompt("patcher", issue_type)
+        patcher_system = self._patcher_system_prompt(plan)
 
         t0 = time.time()
         tracer = self._repair_tracer
@@ -374,12 +370,7 @@ class Orchestrator(RepairPipelineMixin):
 
             usage_before = get_client_session_usage(self.patcher.model_client)
         try:
-            raw, _ = self._complete_with_system_prompt(
-                self.patcher,
-                "patcher",
-                prompt,
-                system_prompt=patcher_system,
-            )
+            raw = self.patcher.complete_once(prompt, system_prompt=patcher_system)
         except Exception as e:
             state.agent_errors["patcher"] = str(e)
             elapsed_ms = int((time.time() - t0) * 1000)

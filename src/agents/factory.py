@@ -71,6 +71,7 @@ def create_repair_agent(
         light_client=light,
         agent_name=agent_name,
         tool_policy=gw.can_call,
+        prefix_mode="repair",
     )
 
 

@@ -4,18 +4,7 @@ from pathlib import Path
 
 _PROMPTS_DIR = Path(__file__).parent
 _SUFFIX_DIR = _PROMPTS_DIR / "patcher_suffix"
-
-_VALID_PATCHER_SUFFIXES = frozenset(
-    {
-        "type_error",
-        "import_error",
-        "logic_error",
-        "attribute_error",
-        "config_error",
-        "composite",
-        "default",
-    }
-)
+_DEFAULT_SUFFIX = "default"
 
 
 def load_system_prompt(name: str) -> str:
@@ -35,16 +24,18 @@ def load_role_prompt(role: str, issue_type: str = "") -> str:
     return f"{base}\n\n{suffix}"
 
 
+def _read_suffix_file(name: str) -> str:
+    path = _SUFFIX_DIR / f"{name}.txt"
+    if path.is_file():
+        return path.read_text(encoding="utf-8").strip()
+    return ""
+
+
 def _load_patcher_suffix(issue_type: str) -> str:
     key = (issue_type or "").strip().lower()
     if not key:
         return ""
-    if key not in _VALID_PATCHER_SUFFIXES:
-        key = "default"
-    path = _SUFFIX_DIR / f"{key}.txt"
-    if path.is_file():
-        return path.read_text(encoding="utf-8").strip()
-    fallback = _SUFFIX_DIR / "default.txt"
-    if fallback.is_file():
-        return fallback.read_text(encoding="utf-8").strip()
-    return ""
+    text = _read_suffix_file(key)
+    if text:
+        return text
+    return _read_suffix_file(_DEFAULT_SUFFIX)

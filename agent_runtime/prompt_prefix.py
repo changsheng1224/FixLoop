@@ -62,6 +62,44 @@ def _resolve_assets(workspace, repo_root: str | Path | None, assets: PromptAsset
     return load_prompt_assets(_resolve_repo_root(workspace, repo_root))
 
 
+def _filter_tools(
+    tools_registry: dict,
+    tool_names: set[str] | tuple[str, ...] | None,
+) -> dict:
+    if tool_names is None:
+        return tools_registry
+    allowed = set(tool_names)
+    return {k: v for k, v in tools_registry.items() if k in allowed}
+
+
+def _make_prompt_prefix(
+    stable_text: str,
+    workspace,
+    tool_signature: str,
+    assets_fingerprint: str = "",
+    *,
+    role_text: str = "",
+) -> PromptPrefix:
+    assert_stable_prefix_clean(stable_text)
+    workspace_text = workspace.text()
+    parts = [stable_text]
+    if role_text:
+        parts.append(role_text)
+    if workspace_text:
+        parts.append(workspace_text)
+    text = "\n\n".join(parts)
+    return PromptPrefix(
+        text=text,
+        stable_text=stable_text,
+        workspace_text=workspace_text,
+        hash=hash_stable_prefix(stable_text),
+        workspace_fingerprint=workspace.fingerprint(),
+        tool_signature=tool_signature,
+        role_text=role_text,
+        assets_fingerprint=assets_fingerprint,
+    )
+
+
 def build_prompt_prefix(
     workspace,
     tools_registry: dict,
@@ -76,9 +114,7 @@ def build_prompt_prefix(
 
     L0：tool_names 非空时 prefix 仅注入启用工具签名。
     """
-    if tool_names is not None:
-        allowed = set(tool_names)
-        tools_registry = {k: v for k, v in tools_registry.items() if k in allowed}
+    tools_registry = _filter_tools(tools_registry, tool_names)
     prompt_assets = _resolve_assets(workspace, repo_root, assets)
     stable_sections = [
         _system_persona(),
@@ -88,7 +124,9 @@ def build_prompt_prefix(
     ]
     stable_text = "\n\n".join(stable_sections)
     tool_sig = _tool_signature(tools_registry)
-    return _assemble_prefix(stable_text, workspace, tool_sig, prompt_assets.fingerprint)
+    return _make_prompt_prefix(
+        stable_text, workspace, tool_sig, prompt_assets.fingerprint
+    )
 
 
 def build_repair_agent_prefix(
@@ -103,9 +141,7 @@ def build_repair_agent_prefix(
     assets: PromptAssets | None = None,
 ) -> PromptPrefix:
     """Repair 双层 prefix：L1 stable（rules+tools+examples）+ L2 role（不进 hash）。"""
-    if tool_names is not None:
-        allowed = set(tool_names)
-        tools_registry = {k: v for k, v in tools_registry.items() if k in allowed}
+    tools_registry = _filter_tools(tools_registry, tool_names)
     prompt_assets = _resolve_assets(workspace, repo_root, assets)
     stable_sections = [
         compose_rules(prompt_assets, dry_run=dry_run, approval=approval),
@@ -118,62 +154,19 @@ def build_repair_agent_prefix(
     if role_text:
         assert_stable_prefix_clean(role_text)
     tool_sig = _tool_signature(tools_registry)
-    return _assemble_repair_prefix(stable_text, role_text, workspace, tool_sig, prompt_assets.fingerprint)
+    return _make_prompt_prefix(
+        stable_text,
+        workspace,
+        tool_sig,
+        prompt_assets.fingerprint,
+        role_text=role_text,
+    )
 
 
 def build_custom_system_prefix(system_prompt: str, workspace) -> PromptPrefix:
     """L2 角色 system prompt + workspace；稳定段仅为 system_prompt。"""
     stable_text = system_prompt.strip()
-    return _assemble_prefix(stable_text, workspace, tool_signature="")
-
-
-def _assemble_repair_prefix(
-    stable_text: str,
-    role_text: str,
-    workspace,
-    tool_signature: str,
-    assets_fingerprint: str = "",
-) -> PromptPrefix:
-    assert_stable_prefix_clean(stable_text)
-    workspace_text = workspace.text()
-    parts = [stable_text]
-    if role_text:
-        parts.append(role_text)
-    if workspace_text:
-        parts.append(workspace_text)
-    return PromptPrefix(
-        text="\n\n".join(parts),
-        stable_text=stable_text,
-        workspace_text=workspace_text,
-        hash=hash_stable_prefix(stable_text),
-        workspace_fingerprint=workspace.fingerprint(),
-        tool_signature=tool_signature,
-        role_text=role_text,
-        assets_fingerprint=assets_fingerprint,
-    )
-
-
-def _assemble_prefix(
-    stable_text: str,
-    workspace,
-    tool_signature: str,
-    assets_fingerprint: str = "",
-) -> PromptPrefix:
-    assert_stable_prefix_clean(stable_text)
-    workspace_text = workspace.text()
-    if workspace_text:
-        text = f"{stable_text}\n\n{workspace_text}"
-    else:
-        text = stable_text
-    return PromptPrefix(
-        text=text,
-        stable_text=stable_text,
-        workspace_text=workspace_text,
-        hash=hash_stable_prefix(stable_text),
-        workspace_fingerprint=workspace.fingerprint(),
-        tool_signature=tool_signature,
-        assets_fingerprint=assets_fingerprint,
-    )
+    return _make_prompt_prefix(stable_text, workspace, tool_signature="")
 
 
 def _system_persona() -> str:
