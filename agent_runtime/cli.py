@@ -8,6 +8,7 @@ from pathlib import Path
 from agent_runtime.bootstrap import create_model_client
 from agent_runtime.bootstrap import load_dotenv as _load_dotenv
 from agent_runtime.config import AgentConfig
+from agent_runtime.logging_setup import add_log_level_argument, setup_logging_from_args
 from agent_runtime.runtime import Agent
 from agent_runtime.workspace import WorkspaceContext
 
@@ -53,6 +54,7 @@ def _make_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--health", action="store_true", help="健康检查：检查所有模块状态并退出")
     p.add_argument("--resume", default=None, help="恢复会话（latest / session_id）")
+    add_log_level_argument(p)
     return p
 
 
@@ -81,6 +83,7 @@ def main() -> int:
     """命令行入口，one-shot 模式。"""
     parser = _make_parser()
     args = parser.parse_args()
+    setup_logging_from_args(args)
 
     if args.health:
         return _health_check()

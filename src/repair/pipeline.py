@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-import sys as _sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+from agent_runtime.logging_setup import get_logger
 from src.repair.output_parsers import parse_retrieved_context, parse_suspect_list
 from src.state import RepairState, RetrievedContext, SuspectLocation
 
-
-def _ts() -> str:
-    return time.strftime("%H:%M:%S")
+log = get_logger("repair.pipeline")
 
 
 class RepairPipelineMixin:
@@ -57,10 +55,9 @@ class RepairPipelineMixin:
             )
             suspects = parse_suspect_list(answer)
             if not suspects:
-                print(
-                    f"  [localizer] ⚠ 0 suspects, raw[:500]={answer.strip()[:500]!r}",
-                    file=_sys.stderr,
-                    flush=True,
+                log.warning(
+                    "[localizer] 0 suspects, raw[:500]=%r",
+                    answer.strip()[:500],
                 )
             return suspects, timing
 
@@ -83,11 +80,9 @@ class RepairPipelineMixin:
         if not suspects:
             suspects = self._fallback_suspects_from_plan(plan, issue)
             if suspects:
-                print(
-                    f"  [localizer] 降级: RepairPlan → {len(suspects)} suspect\n",
-                    end="",
-                    file=_sys.stderr,
-                    flush=True,
+                log.info(
+                    "[localizer] 降级: RepairPlan → %d suspect",
+                    len(suspects),
                 )
 
         return suspects, context, loc_timing, ret_timing
@@ -102,7 +97,7 @@ class RepairPipelineMixin:
         self._repair_started_at = t_start
         self._reset_token_tracking()
         self._begin_repair_trace(state)
-        print(f"[{_ts()}] Orchestrator 开始\n", end="", file=_sys.stderr, flush=True)
+        log.info("Orchestrator 开始")
 
         t0 = time.time()
         state.repair_plan = self._parse_issue(issue)
@@ -111,11 +106,9 @@ class RepairPipelineMixin:
             state.repair_plan.estimated_impact = skill.get("suggested_tools", [])
         ms = int((time.time() - t0) * 1000)
         timings["parse_issue_ms"] = ms
-        print(f"[{_ts()}] parse_issue: {ms}ms\n", end="", file=_sys.stderr, flush=True)
+        log.info("parse_issue: %dms", ms)
 
-        print(
-            f"[{_ts()}] Localizer + Retriever 并行开始...\n", end="", file=_sys.stderr, flush=True
-        )
+        log.info("Localizer + Retriever 并行开始...")
         t0 = time.time()
         suspects, context, loc_timing, ret_timing = self._run_localize_and_retrieve(state)
         wall_ms = int((time.time() - t0) * 1000)
@@ -130,31 +123,24 @@ class RepairPipelineMixin:
         state.node_timings["retriever_internal"] = ret_timing["internal"]
         n = len(suspects)
         n_tests = len(context.related_tests) if context else 0
-        print(
-            f"[{_ts()}] Localizer+Retriever 完成: 墙钟{wall_ms}ms "
-            f"(L={loc_timing['total_ms']}ms, R={ret_timing['total_ms']}ms), "
-            f"{n} suspect, {n_tests} tests\n",
-            end="",
-            file=_sys.stderr,
-            flush=True,
+        log.info(
+            "Localizer+Retriever 完成: 墙钟%dms (L=%dms, R=%dms), %d suspect, %d tests",
+            wall_ms,
+            loc_timing["total_ms"],
+            ret_timing["total_ms"],
+            n,
+            n_tests,
         )
 
         while state.retry_count < max_retries:
             repo_snapshot = self._snapshot_repo() if self._verification_enabled() else None
-            print(
-                f"[{_ts()}] Patcher 开始 (retry={state.retry_count})...\n",
-                end="",
-                file=_sys.stderr,
-                flush=True,
-            )
+            log.info("Patcher 开始 (retry=%d)...", state.retry_count)
             t0 = time.time()
             state.candidate_patches = self._run_patcher(state)
             ms = int((time.time() - t0) * 1000)
             timings["patcher_ms"] = ms
             n = len(state.candidate_patches)
-            print(
-                f"[{_ts()}] Patcher 完成: {ms}ms, {n}个补丁\n", end="", file=_sys.stderr, flush=True
-            )
+            log.info("Patcher 完成: %dms, %d个补丁", ms, n)
 
             if not self._verification_enabled():
                 state.status = "patched" if state.candidate_patches else "failed"
@@ -171,12 +157,12 @@ class RepairPipelineMixin:
                 state.retry_count += 1
                 continue
 
-            print(f"[{_ts()}] Verifier 开始...\n", end="", file=_sys.stderr, flush=True)
+            log.info("Verifier 开始...")
             t0 = time.time()
             state.verification_result = self._run_verifier(state)
             ms = int((time.time() - t0) * 1000)
             timings["verifier_ms"] = ms
-            print(f"[{_ts()}] Verifier 完成: {ms}ms\n", end="", file=_sys.stderr, flush=True)
+            log.info("Verifier 完成: %dms", ms)
 
             if state.verification_result.all_passed:
                 state.status = "fixed"
@@ -198,10 +184,5 @@ class RepairPipelineMixin:
         self._attach_token_usage(state)
         self._end_repair_trace(state)
         total_ms = int((time.time() - t_start) * 1000)
-        print(
-            f"[{_ts()}] 总耗时: {total_ms}ms, status={state.status}\n",
-            end="",
-            file=_sys.stderr,
-            flush=True,
-        )
+        log.info("总耗时: %dms, status=%s", total_ms, state.status)
         return state

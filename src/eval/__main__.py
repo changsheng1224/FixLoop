@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 
+from agent_runtime.logging_setup import add_log_level_argument, setup_logging_from_args
 from src.eval.cli_helpers import print_eval_report, run_eval
 from src.eval.runner import DEFAULT_CASES_DIR
 
@@ -16,6 +17,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cases-dir", default=str(DEFAULT_CASES_DIR), help="Case 根目录")
     parser.add_argument("--output", default="eval_results", help="报告目录或 .json 路径")
     parser.add_argument("--verbose", action="store_true", help="打印每个 Case 摘要")
+    add_log_level_argument(parser)
     parser.add_argument(
         "--fake",
         action="store_true",
@@ -37,6 +39,7 @@ def main(argv: list[str] | None = None) -> int:
         help="CI 模式：--all --fake --skip-verify，输出到 eval_results/ci",
     )
     args = parser.parse_args(argv)
+    setup_logging_from_args(args)
 
     if args.ci:
         args.all = True

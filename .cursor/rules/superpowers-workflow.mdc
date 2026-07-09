@@ -1,0 +1,44 @@
+---
+description: FixLoop 会话自动启用 Superpowers 工作流（skill 路由 + bonus 开发）
+alwaysApply: true
+---
+
+# Superpowers 自动工作流
+
+本仓库已 vendored [obra/superpowers](https://github.com/obra/superpowers) 于 `.cursor/skills/`。**无需** `@` 或 `/skill-name`，按下列规则自动读 skill 并执行。
+
+## 每条用户消息的第一动作
+
+1. 判断是否有适用 skill（哪怕只有 1% 可能也要读）。
+2. **先 Read 对应 `SKILL.md`，再回复或改代码**。
+3. 开头声明：`Using <skill-name> to <purpose>`。
+
+全局路由：`.cursor/skills/using-superpowers/SKILL.md`
+
+## FixLoop bonus / 功能开发（自动触发）
+
+当用户消息涉及以下**任一**情况，**必须先 Read** `.cursor/skills/fixloop-bonus-superpowers/SKILL.md`（及其 `reference.md`）：
+
+- bonus、增强、P1/P2、Layer1/Layer2 扩展
+- 引用 `docs/bonus.md` 或 superpowers spec/plan
+- 在 `agent_runtime/`、`src/` 做新功能（非纯问答/解释）
+
+FixLoop 硬约束仍服从 `CLAUDE.md`：**动手前说明并获确认**；PR 前 `pytest tests/ -v`。
+
+## 任务 → skill 自动路由
+
+| 场景 | Read 此 skill |
+|------|----------------|
+| 新功能 / 改行为 / 设计 | `brainstorming` |
+| 已有 spec，要写实现计划 | `writing-plans` |
+| 按计划写代码 | `test-driven-development` + `executing-plans` 或 `subagent-driven-development` |
+| bug / 测试失败 / repair 失败 | `systematic-debugging` |
+| 推 PR / 合并分支 | `finishing-a-development-branch` |
+| 纯解释、读代码、无实现 | 可不读 process skill |
+
+路径前缀：`.cursor/skills/<name>/SKILL.md`
+
+## 产出物路径
+
+- Spec：`docs/superpowers/specs/YYYY-MM-DD-<slug>-design.md`
+- Plan：`docs/superpowers/plans/YYYY-MM-DD-<slug>.md`

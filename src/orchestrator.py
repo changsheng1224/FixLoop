@@ -8,7 +8,6 @@
 """
 
 import re
-import sys as _sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
@@ -16,6 +15,7 @@ from pathlib import Path
 
 import yaml
 
+from agent_runtime.logging_setup import get_logger
 from src.repair.output_parsers import (
     parse_retrieved_context,
     parse_suspect_list,
@@ -33,6 +33,8 @@ from src.state import (
     SuspectLocation,
     VerificationResult,
 )
+
+log = get_logger("orchestrator")
 
 __all__ = ["Orchestrator", "apply_patch_to_text"]
 
@@ -98,12 +100,7 @@ class Orchestrator(RepairPipelineMixin):
                 state.status = "failed"
                 state.agent_errors["orchestrator"] = f"repair timeout ({repair_timeout_s}s)"
                 state.node_timings["repair_timeout"] = repair_timeout_s
-                print(
-                    f"[{_ts()}] ⚠ 修复超时 ({repair_timeout_s}s)\n",
-                    end="",
-                    file=_sys.stderr,
-                    flush=True,
-                )
+                log.warning("修复超时 (%ds)", repair_timeout_s)
                 return state
 
     def _parse_issue(self, issue: str) -> RepairPlan:
@@ -265,12 +262,7 @@ class Orchestrator(RepairPipelineMixin):
         except Exception as e:
             if state is not None:
                 state.agent_errors[agent_name] = str(e)
-            print(
-                f"  [{agent_name}] ⚠ Agent 失败: {e}\n",
-                end="",
-                file=_sys.stderr,
-                flush=True,
-            )
+            log.warning("[%s] Agent 失败: %s", agent_name, e)
             elapsed_ms = int((time.time() - t0) * 1000)
             return "", {"total_ms": elapsed_ms, "internal": {}}
         elapsed_ms = int((time.time() - t0) * 1000)
@@ -372,12 +364,7 @@ class Orchestrator(RepairPipelineMixin):
             state.agent_errors["patcher"] = str(e)
             elapsed_ms = int((time.time() - t0) * 1000)
             state.node_timings["patcher_ms"] = elapsed_ms
-            print(
-                f"  [patcher] ⚠ 模型调用失败: {e}\n",
-                end="",
-                file=_sys.stderr,
-                flush=True,
-            )
+            log.warning("[patcher] 模型调用失败: %s", e)
             return []
         elapsed_ms = int((time.time() - t0) * 1000)
         state.node_timings["patcher_ms"] = elapsed_ms
@@ -402,15 +389,11 @@ class Orchestrator(RepairPipelineMixin):
         # 解析模型输出的 JSON → CandidatePatch 列表
         patches = self._parse_patches(raw)
         if not patches:
-            print(
-                f"  [patcher] ⚠ 0 patches parsed, raw[:300]={raw.strip()[:300]!r}",
-                file=_sys.stderr,
-                flush=True,
-            )
+            log.debug("[patcher] 0 patches parsed, raw[:300]=%r", raw.strip()[:300])
 
         applied_patches = self._apply_patches_on_disk(patches)
         if patches and not applied_patches:
-            print("  [patcher] ⚠ 补丁解析成功但未写入任何文件", file=_sys.stderr, flush=True)
+            log.warning("[patcher] 补丁解析成功但未写入任何文件")
             state.agent_errors["patcher_apply"] = "apply_failed"
 
         return applied_patches
@@ -426,12 +409,7 @@ class Orchestrator(RepairPipelineMixin):
                 test_path=self._pick_test_path(state),
             )
             if run.error:
-                print(
-                    f"  [verifier] ⚠ 沙箱验证失败: {run.error}\n",
-                    end="",
-                    file=_sys.stderr,
-                    flush=True,
-                )
+                log.warning("[verifier] 沙箱验证失败: %s", run.error)
             record_verify_timings(state, run, log_sandbox=True)
             return run.result
         if self.use_pytest_verify:
@@ -726,8 +704,3 @@ class Orchestrator(RepairPipelineMixin):
 
     def _parse_patches(self, answer: str) -> list[CandidatePatch]:
         return parse_patches(answer)
-
-
-def _ts() -> str:
-    """返回当前时间戳字符串 HH:MM:SS。"""
-    return time.strftime("%H:%M:%S")

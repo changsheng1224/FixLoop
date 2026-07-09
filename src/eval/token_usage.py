@@ -5,12 +5,17 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from agent_runtime.token_accounting import merge_session_snapshots, snapshot_from_session
+
 
 def _empty_usage() -> dict:
     return {
         "total_tokens": 0,
         "input_tokens": 0,
         "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "cache_hit_rate": 0.0,
         "api_calls": 0,
         "estimated_total": 0,
         "estimated_sections": {},
@@ -61,14 +66,7 @@ def collect_repo_token_reports(repo: Path, since_ts: float | None = None) -> dic
 def get_client_session_usage(model_client) -> dict:
     """读取 model_client.session_usage 并归一化为 token 统计 dict。"""
     usage = getattr(model_client, "session_usage", None) or {}
-    inp = int(usage.get("input_tokens", 0) or 0)
-    out = int(usage.get("output_tokens", 0) or 0)
-    return {
-        "input_tokens": inp,
-        "output_tokens": out,
-        "total_tokens": inp + out,
-        "api_calls": int(usage.get("calls", 0) or 0),
-    }
+    return snapshot_from_session(usage)
 
 
 def resolve_model_clients(*agents) -> list:
@@ -113,6 +111,9 @@ def collect_agent_reports_from_run(run_dir: Path) -> dict:
             "total_tokens": int(data.get("total_tokens", 0) or 0),
             "input_tokens": int(data.get("input_tokens", 0) or 0),
             "output_tokens": int(data.get("output_tokens", 0) or 0),
+            "cache_read_tokens": int(data.get("cache_read_tokens", 0) or 0),
+            "cache_creation_tokens": int(data.get("cache_creation_tokens", 0) or 0),
+            "cache_hit_rate": float(data.get("cache_hit_rate", 0) or 0),
             "api_calls": int(data.get("api_calls", 0) or 0),
             "token_usage": data.get("token_usage") or {},
             "tool_steps": int(data.get("tool_steps", 0) or 0),
@@ -156,16 +157,16 @@ def build_repair_token_usage(
         by_agent = collect_agent_reports_from_run(repo / ".agent" / "runs" / repair_run_id)
 
     reports = collect_repo_token_reports(repo, since_ts=since_ts)
-    input_tokens = 0
-    output_tokens = 0
-    api_calls = 0
-    for client in model_clients:
-        api = get_client_session_usage(client)
-        input_tokens += api["input_tokens"]
-        output_tokens += api["output_tokens"]
-        api_calls += api["api_calls"]
+    client_snaps = [get_client_session_usage(client) for client in model_clients]
+    api_summary = merge_session_snapshots(*client_snaps) if client_snaps else _empty_usage()
+    input_tokens = api_summary["input_tokens"]
+    output_tokens = api_summary["output_tokens"]
+    api_calls = api_summary["api_calls"]
+    cache_read_tokens = api_summary["cache_read_tokens"]
+    cache_creation_tokens = api_summary["cache_creation_tokens"]
+    cache_hit_rate = api_summary["cache_hit_rate"]
 
-    total_tokens = input_tokens + output_tokens
+    total_tokens = api_summary["total_tokens"]
     if total_tokens == 0 and by_agent:
         total_tokens = sum(v.get("total_tokens", 0) for v in by_agent.values())
     if total_tokens == 0:
@@ -176,6 +177,9 @@ def build_repair_token_usage(
         "total_tokens": total_tokens,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
+        "cache_read_tokens": cache_read_tokens,
+        "cache_creation_tokens": cache_creation_tokens,
+        "cache_hit_rate": cache_hit_rate,
         "api_calls": api_calls,
         "estimated_total": reports["estimated_total"],
         "estimated_sections": reports["estimated_sections"],

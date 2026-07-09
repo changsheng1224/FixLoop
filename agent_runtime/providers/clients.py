@@ -23,13 +23,25 @@ class FakeModelClient:
         self.prompts: list[str] = []
         self.last_usage: dict = {}
         self.last_call_usage: dict = {}
-        self.session_usage: dict = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
+        self.session_usage: dict = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_creation_tokens": 0,
+            "calls": 0,
+        }
 
     def reset_session_usage(self) -> None:
         """清零本次 session 的 token 与 API 调用计数。"""
         self.last_usage = {}
         self.last_call_usage = {}
-        self.session_usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
+        self.session_usage = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_creation_tokens": 0,
+            "calls": 0,
+        }
 
     def _record_usage(self, prompt: str, result: str) -> None:
         inp = max(1, len(prompt) // 4)
@@ -78,7 +90,13 @@ class FakeNativeToolClient(FakeModelClient):
         import json
         import re
 
-        call_usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
+        call_usage = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_creation_tokens": 0,
+            "calls": 0,
+        }
         user_msg = user_message
 
         for _ in range(max_turns):
@@ -87,6 +105,8 @@ class FakeNativeToolClient(FakeModelClient):
             usage = dict(self.last_usage)
             call_usage["input_tokens"] += int(usage.get("input_tokens", 0) or 0)
             call_usage["output_tokens"] += int(usage.get("output_tokens", 0) or 0)
+            call_usage["cache_read_tokens"] += int(usage.get("cache_read_tokens", 0) or 0)
+            call_usage["cache_creation_tokens"] += int(usage.get("cache_creation_tokens", 0) or 0)
             call_usage["calls"] += 1
 
             final_match = re.search(r"<final>(.*?)</final>", raw, re.DOTALL)
@@ -139,22 +159,50 @@ class AnthropicCompatibleModelClient:
         self._latencies: list[float] = []
         self.last_usage: dict = {}
         self.last_call_usage: dict = {}
-        self.session_usage: dict = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
+        self.session_usage: dict = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_creation_tokens": 0,
+            "calls": 0,
+        }
 
     def reset_session_usage(self) -> None:
         """清零本次 session 的 token 与 API 调用计数。"""
         self.last_usage = {}
         self.last_call_usage = {}
-        self.session_usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
+        self.session_usage = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_creation_tokens": 0,
+            "calls": 0,
+        }
 
     def _record_usage(self, usage: dict | None) -> None:
+        from agent_runtime.token_accounting import parse_provider_usage
+
         if not usage:
             return
-        inp = int(usage.get("input_tokens", 0) or 0)
-        out = int(usage.get("output_tokens", 0) or 0)
-        self.last_usage = {"input_tokens": inp, "output_tokens": out}
+        parsed = parse_provider_usage(usage)
+        inp = parsed["input_tokens"]
+        out = parsed["output_tokens"]
+        cache_read = parsed["cache_read_tokens"]
+        cache_creation = parsed["cache_creation_tokens"]
+        self.last_usage = {
+            "input_tokens": inp,
+            "output_tokens": out,
+            "cache_read_tokens": cache_read,
+            "cache_creation_tokens": cache_creation,
+        }
         self.session_usage["input_tokens"] += inp
         self.session_usage["output_tokens"] += out
+        self.session_usage["cache_read_tokens"] = (
+            int(self.session_usage.get("cache_read_tokens", 0) or 0) + cache_read
+        )
+        self.session_usage["cache_creation_tokens"] = (
+            int(self.session_usage.get("cache_creation_tokens", 0) or 0) + cache_creation
+        )
         self.session_usage["calls"] += 1
 
     def complete(
@@ -203,7 +251,13 @@ class AnthropicCompatibleModelClient:
             (最终文本回复, 本次 call 累计 usage dict)。
         """
         messages = []
-        call_usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
+        call_usage = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_creation_tokens": 0,
+            "calls": 0,
+        }
         # 系统提示词放在第一条消息中
         full_text = system_prompt + "\n\n" + user_message if system_prompt else user_message
         messages.append(
@@ -257,8 +311,13 @@ class AnthropicCompatibleModelClient:
 
             turn_usage = data.get("usage") or {}
             self._record_usage(turn_usage)
-            call_usage["input_tokens"] += int(turn_usage.get("input_tokens", 0) or 0)
-            call_usage["output_tokens"] += int(turn_usage.get("output_tokens", 0) or 0)
+            from agent_runtime.token_accounting import parse_provider_usage
+
+            parsed = parse_provider_usage(turn_usage)
+            call_usage["input_tokens"] += parsed["input_tokens"]
+            call_usage["output_tokens"] += parsed["output_tokens"]
+            call_usage["cache_read_tokens"] += parsed["cache_read_tokens"]
+            call_usage["cache_creation_tokens"] += parsed["cache_creation_tokens"]
             call_usage["calls"] += 1
 
             # 解析响应中的 content blocks

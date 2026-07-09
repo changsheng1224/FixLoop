@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from agent_runtime.bootstrap import load_dotenv
+from agent_runtime.logging_setup import add_log_level_argument, setup_logging_from_args
 from src.eval.cli_helpers import print_ablation_report, print_eval_report, run_ablation, run_eval
 from src.eval.runner import DEFAULT_CASES_DIR
 from src.repair_factory import make_orchestrator_factory
@@ -12,6 +13,7 @@ from src.repair_factory import make_orchestrator_factory
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="src.cli", description="多 Agent 代码修复")
+    add_log_level_argument(parser)
     sub = parser.add_subparsers(dest="command")
 
     p_repair = sub.add_parser("repair", help="执行修复")
@@ -98,6 +100,7 @@ def main() -> int:
     )
 
     args = parser.parse_args()
+    setup_logging_from_args(args)
     if args.command == "repair":
         return _repair(args)
     if args.command == "eval":
