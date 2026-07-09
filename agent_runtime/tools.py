@@ -23,6 +23,9 @@ class ListFilesArgs:
     """列出目录内容。"""
 
     path: str = "."
+    glob: str = ""
+    depth: int = 1
+    max_results: int = 200
 
 
 @dataclass
@@ -54,11 +57,12 @@ class WriteFileArgs:
 
 @dataclass
 class PatchFileArgs:
-    """精确文本替换（M2 实现）。"""
+    """精确文本替换或 unified diff 多 hunk 修补。"""
 
     path: str = ""
     old_text: str = ""
     new_text: str = ""
+    diff: str = ""
 
 
 @dataclass
@@ -99,10 +103,20 @@ IGNORED_PATH_NAMES = {
 def tool_list_files(context, args: dict) -> str:
     """列出目录内容。
 
-    遍历目录，输出 [F] 文件 / [D] 目录，过滤忽略的路径名。
+    遍历目录，输出 [F] 文件 / [D] 目录。depth=1 仅直接子项；更大 depth 递归列文件路径。
+    glob 过滤（如 ``*.py``）；depth=0 表示不限层数，受 max_results 限制。
     """
-
     raw_path = args.get("path", ".")
+    glob_pattern = args.get("glob", "") or ""
+    try:
+        depth = int(args.get("depth", 1))
+    except (TypeError, ValueError):
+        depth = 1
+    try:
+        max_results = int(args.get("max_results", 200))
+    except (TypeError, ValueError):
+        max_results = 200
+
     try:
         target = context.resolve(raw_path)
     except ValueError as e:
@@ -113,19 +127,24 @@ def tool_list_files(context, args: dict) -> str:
     if not target.is_dir():
         return f"Error: 不是目录: {raw_path}"
 
-    items = []
-    for child in sorted(target.iterdir()):
-        name = child.name
-        # 过滤忽略的路径名
-        if name in IGNORED_PATH_NAMES or name.startswith("."):
-            continue
-        prefix = "[D]" if child.is_dir() else "[F]"
-        items.append(f"{prefix} {name}")
+    from agent_runtime.file_listing import list_directory_entries
 
-    if not items:
+    lines, total = list_directory_entries(
+        target,
+        depth=depth,
+        glob_pattern=glob_pattern,
+        max_results=max_results,
+        ignored_names=IGNORED_PATH_NAMES,
+    )
+
+    if not lines:
+        if glob_pattern:
+            return f"(无匹配) {raw_path} glob={glob_pattern!r}"
         return f"(空目录) {raw_path}"
 
-    return "\n".join(items)
+    if total > len(lines):
+        lines.append(f"(另有 {total - len(lines)} 项未显示，可缩小 glob/depth 或提高 max_results)")
+    return "\n".join(lines)
 
 
 def tool_read_file(context, args: dict) -> str:
@@ -283,17 +302,16 @@ def tool_write_file(context, args: dict) -> str:
     except ValueError as e:
         return f"Error: {e}"
 
-    # 自动创建父目录
-    target.parent.mkdir(parents=True, exist_ok=True)
+    from agent_runtime.atomic_io import atomic_write_text
 
     try:
         if append and target.exists():
-            with open(target, "a", encoding="utf-8") as f:
-                f.write(content)
+            payload = target.read_text(encoding="utf-8") + content
             mode = "已追加到"
         else:
-            target.write_text(content, encoding="utf-8")
+            payload = content
             mode = "已写入"
+        atomic_write_text(target, payload)
     except OSError as e:
         return f"Error: 写入文件失败: {e}"
 
@@ -301,15 +319,14 @@ def tool_write_file(context, args: dict) -> str:
 
 
 def tool_patch_file(context, args: dict) -> str:
-    """精确文本替换：old_text 必须出现恰好 1 次。
+    """精确文本替换或 unified diff 多 hunk 修补。
 
-    Args 必须包含 'path'、'old_text'、'new_text'。
+    Args 必须包含 path，以及 diff 或 (old_text + new_text)。
+    old_text 必须出现恰好 1 次；diff 支持多个 @@ hunk。
     """
     raw_path = args.get("path", "")
     if not raw_path:
         return "Error: 缺少必填参数 path"
-    old_text = args.get("old_text", "")
-    new_text = args.get("new_text", "")
 
     try:
         target = context.resolve(raw_path)
@@ -326,23 +343,50 @@ def tool_patch_file(context, args: dict) -> str:
     except UnicodeDecodeError:
         return f"Error: 无法以 UTF-8 编码读取: {raw_path}"
 
-    count = text.count(old_text)
-    if count == 0:
-        return "Error: old_text 在文件中未找到（出现 0 次）。old_text 必须恰好出现 1 次。"
-    if count > 1:
-        return f"Error: old_text 出现 {count} 次，必须恰好出现 1 次。请提供更多上下文使其唯一。"
+    from agent_runtime.atomic_io import atomic_write_text
+    from agent_runtime.patch_engine import apply_plan, build_preview, parse_patch_input
 
-    target.write_text(text.replace(old_text, new_text, 1), encoding="utf-8")
-    return f"已修补 {raw_path}（替换 1 处，{len(new_text) - len(old_text):+d} 字符）"
+    try:
+        plan = parse_patch_input(args)
+    except ValueError as e:
+        return f"Error: {e}"
+
+    if plan.mode == "legacy":
+        count = text.count(plan.old_text)
+        if count == 0:
+            return "Error: old_text 在文件中未找到（出现 0 次）。old_text 必须恰好出现 1 次。"
+        if count > 1:
+            return (
+                f"Error: old_text 出现 {count} 次，必须恰好出现 1 次。"
+                "请提供更多上下文使其唯一。"
+            )
+
+    new_text = apply_plan(text, plan)
+    if new_text is None:
+        return "Error: 补丁无法应用到文件（hunk 与文件内容不匹配）。"
+
+    try:
+        atomic_write_text(target, new_text)
+    except OSError as e:
+        return f"Error: 写入文件失败: {e}"
+
+    preview = build_preview(raw_path, plan)
+    delta = preview.lines_added - preview.lines_removed
+    if preview.hunk_count == 1 and plan.mode == "legacy":
+        return f"已修补 {raw_path}（替换 1 处，{delta:+d} 字符）"
+    return (
+        f"已修补 {raw_path}（{preview.hunk_count} 个 hunk，"
+        f"-{preview.lines_removed}/+{preview.lines_added} 行）"
+    )
 
 
 def tool_run_shell(context, args: dict) -> str:
     """在 workspace 根目录执行 Shell 命令。
 
     Args 必须包含 'command'，可选 'timeout'(默认20s)。
-    环境变量经过白名单过滤，禁止泄露密钥。
+    环境变量经过白名单过滤；输出经 redact_text 脱敏。
     """
-    from agent_runtime.security import shell_env as _shell_env
+    from agent_runtime.security import redact_text, shell_env as _shell_env
 
     command = args.get("command", "")
     if not command:
@@ -354,6 +398,11 @@ def tool_run_shell(context, args: dict) -> str:
     timeout = max(1, min(timeout, 120))  # 限制 1-120 秒
 
     root = context.root
+    provider = getattr(context, "shell_env_provider", None)
+    if callable(provider):
+        env = provider()
+    else:
+        env = _shell_env(root=root)
 
     try:
         result = subprocess.run(
@@ -363,10 +412,10 @@ def tool_run_shell(context, args: dict) -> str:
             capture_output=True,
             text=True,
             timeout=timeout,
-            env=_shell_env(root=root),
+            env=env,
         )
     except subprocess.TimeoutExpired:
-        return f"Error: 命令超时（{timeout} 秒）: {command[:100]}"
+        return redact_text(f"Error: 命令超时（{timeout} 秒）: {command[:100]}")
 
     out = []
     if result.stdout.strip():
@@ -375,7 +424,7 @@ def tool_run_shell(context, args: dict) -> str:
         out.append(f"stderr:\n{result.stderr.rstrip()}")
     out.insert(0, f"exit_code: {result.returncode}")
 
-    return "\n".join(out)
+    return redact_text("\n".join(out))
 
 
 # ============================================================================
@@ -392,6 +441,10 @@ def build_tool_registry(context) -> dict:
     Returns:
         工具注册表字典。
     """
+    from agent_runtime.security import shell_env
+
+    context.shell_env_provider = lambda: shell_env(root=context.root)
+
     registry = {}
 
     # ---- list_files ----

@@ -21,7 +21,7 @@ class ToolContext:
 
     root: str
     path_resolver: Callable[[str], Path] = field(default=None)
-    shell_env_provider: Callable[[], dict] = field(default=dict)
+    shell_env_provider: Callable[[], dict] | None = None
 
     def __post_init__(self):
         if self.path_resolver is None:

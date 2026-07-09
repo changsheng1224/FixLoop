@@ -117,6 +117,38 @@ class TestToolExecutorGates:
         # 只读工具不做快照
         assert "affected_paths" not in result.metadata
 
+    def test_patch_file_includes_preview_metadata(self, agent, temp_workspace):
+        (temp_workspace / "p.py").write_text("x = 1\n")
+        executor = ToolExecutor(agent=agent, approval_policy="auto")
+        result = executor.execute(
+            "patch_file",
+            {"path": "p.py", "old_text": "x = 1", "new_text": "x = 2"},
+        )
+        assert result.metadata["tool_status"] == "success"
+        preview = result.metadata.get("patch_preview")
+        assert preview is not None
+        assert preview["hunk_count"] == 1
+        assert "preview_text" in preview
+
+    def test_patch_file_approval_shows_preview(self, agent, temp_workspace, monkeypatch):
+        (temp_workspace / "a.py").write_text("hello\n")
+        executor = ToolExecutor(agent=agent, approval_policy="ask")
+        prompts: list[str] = []
+
+        def fake_input(prompt):
+            prompts.append(prompt)
+            return "n"
+
+        monkeypatch.setattr("builtins.input", fake_input)
+        result = executor.execute(
+            "patch_file",
+            {"path": "a.py", "old_text": "hello", "new_text": "world"},
+        )
+        assert result.metadata["tool_error_code"] == "approval_denied"
+        assert prompts
+        assert "预览" in prompts[0]
+        assert "patch_preview" in result.metadata
+
 
 class TestToolPolicy:
     def test_tool_policy_denied(self, agent):

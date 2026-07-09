@@ -1,7 +1,10 @@
 """write_file + patch_file 单测。"""
 
+from unittest.mock import patch
+
 import pytest
 
+from agent_runtime.atomic_io import atomic_write_text
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.tools import tool_patch_file, tool_write_file
 
@@ -46,6 +49,37 @@ class TestWriteFile:
         result = tool_write_file(ctx, {"path": "new.txt", "content": "hello", "append": True})
         assert "已写入" in result
         assert (temp_workspace / "new.txt").read_text() == "hello"
+
+    def test_atomic_write_no_tmp_residue(self, ctx, temp_workspace):
+        result = tool_write_file(ctx, {"path": "clean.txt", "content": "ok"})
+        assert "已写入" in result
+        assert (temp_workspace / "clean.txt").read_text() == "ok"
+        assert not (temp_workspace / "clean.txt.tmp").exists()
+
+    def test_atomic_write_preserves_original_on_failure(self, ctx, temp_workspace):
+        target = temp_workspace / "keep.txt"
+        target.write_text("original")
+        with patch.object(type(target), "replace", side_effect=OSError("replace failed")):
+            result = tool_write_file(ctx, {"path": "keep.txt", "content": "broken"})
+        assert "Error" in result
+        assert target.read_text() == "original"
+        assert not (temp_workspace / "keep.txt.tmp").exists()
+
+
+class TestAtomicWriteText:
+    """atomic_write_text 单元测试。"""
+
+    def test_writes_new_file(self, tmp_path):
+        path = tmp_path / "a.txt"
+        atomic_write_text(path, "hello")
+        assert path.read_text() == "hello"
+        assert not path.with_suffix(path.suffix + ".tmp").exists()
+
+    def test_overwrites_existing(self, tmp_path):
+        path = tmp_path / "b.py"
+        path.write_text("old")
+        atomic_write_text(path, "new")
+        assert path.read_text() == "new"
 
 
 class TestPatchFile:
@@ -98,3 +132,21 @@ class TestPatchFile:
             },
         )
         assert "Error" in result
+
+    def test_patch_multi_hunk_diff(self, ctx, temp_workspace):
+        (temp_workspace / "multi.py").write_text("line1\nold\nline3\nfoo\n")
+        diff = (
+            "@@ -1,3 +1,3 @@\n"
+            " line1\n"
+            "-old\n"
+            "+new\n"
+            " line3\n"
+            "@@ -4,1 +4,2 @@\n"
+            " foo\n"
+            "+bar\n"
+        )
+        result = tool_patch_file(ctx, {"path": "multi.py", "diff": diff})
+        assert "已修补" in result
+        assert "2 个 hunk" in result
+        assert (temp_workspace / "multi.py").read_text() == "line1\nnew\nline3\nfoo\nbar\n"
+        assert not (temp_workspace / "multi.py.tmp").exists()
