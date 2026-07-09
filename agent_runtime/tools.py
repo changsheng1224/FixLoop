@@ -23,6 +23,9 @@ class ListFilesArgs:
     """列出目录内容。"""
 
     path: str = "."
+    glob: str = ""
+    depth: int = 1
+    max_results: int = 200
 
 
 @dataclass
@@ -100,10 +103,20 @@ IGNORED_PATH_NAMES = {
 def tool_list_files(context, args: dict) -> str:
     """列出目录内容。
 
-    遍历目录，输出 [F] 文件 / [D] 目录，过滤忽略的路径名。
+    遍历目录，输出 [F] 文件 / [D] 目录。depth=1 仅直接子项；更大 depth 递归列文件路径。
+    glob 过滤（如 ``*.py``）；depth=0 表示不限层数，受 max_results 限制。
     """
-
     raw_path = args.get("path", ".")
+    glob_pattern = args.get("glob", "") or ""
+    try:
+        depth = int(args.get("depth", 1))
+    except (TypeError, ValueError):
+        depth = 1
+    try:
+        max_results = int(args.get("max_results", 200))
+    except (TypeError, ValueError):
+        max_results = 200
+
     try:
         target = context.resolve(raw_path)
     except ValueError as e:
@@ -114,19 +127,24 @@ def tool_list_files(context, args: dict) -> str:
     if not target.is_dir():
         return f"Error: 不是目录: {raw_path}"
 
-    items = []
-    for child in sorted(target.iterdir()):
-        name = child.name
-        # 过滤忽略的路径名
-        if name in IGNORED_PATH_NAMES or name.startswith("."):
-            continue
-        prefix = "[D]" if child.is_dir() else "[F]"
-        items.append(f"{prefix} {name}")
+    from agent_runtime.file_listing import list_directory_entries
 
-    if not items:
+    lines, total = list_directory_entries(
+        target,
+        depth=depth,
+        glob_pattern=glob_pattern,
+        max_results=max_results,
+        ignored_names=IGNORED_PATH_NAMES,
+    )
+
+    if not lines:
+        if glob_pattern:
+            return f"(无匹配) {raw_path} glob={glob_pattern!r}"
         return f"(空目录) {raw_path}"
 
-    return "\n".join(items)
+    if total > len(lines):
+        lines.append(f"(另有 {total - len(lines)} 项未显示，可缩小 glob/depth 或提高 max_results)")
+    return "\n".join(lines)
 
 
 def tool_read_file(context, args: dict) -> str:
