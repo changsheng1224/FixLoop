@@ -8,8 +8,8 @@ L3 (持久化前): .env 不入索引
 
 import os
 
-# Shell 子进程允许透传的环境变量白名单
-SHELL_ENV_WHITELIST = {
+# Shell 子进程允许透传的环境变量白名单（严格固定，不可运行时扩展）
+SHELL_ENV_WHITELIST = frozenset({
     "HOME",
     "PATH",
     "PWD",
@@ -22,28 +22,29 @@ SHELL_ENV_WHITELIST = {
     "SYSTEMROOT",
     "COMSPEC",
     "PATHEXT",
-}
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "WINDIR",
+})
 
 
-def shell_env(allowlist: set[str] | None = None, root: str = "") -> dict:
+def shell_env(allowlist: set[str] | frozenset[str] | None = None, root: str = "") -> dict:
     """返回经过白名单过滤的安全环境变量。
 
-    Args:
-        allowlist: 允许透传的变量名集合，默认使用 SHELL_ENV_WHITELIST。
-        root: workspace 根目录，会覆盖 PWD。
-
-    Returns:
-        白名单过滤后的环境变量字典。
+    仅透传 allowlist 中的键；键名命中敏感词规则的一律剔除；永不复制全量 os.environ。
     """
     allowed = allowlist or SHELL_ENV_WHITELIST
-    result = {}
+    result: dict[str, str] = {}
     for key in allowed:
+        if looks_sensitive_env_name(key):
+            continue
         val = os.environ.get(key, "")
         if val:
             result[key] = val
-    # 覆盖 PWD 为 workspace 根目录
     if root:
         result["PWD"] = root
+    result["PYTHONIOENCODING"] = "utf-8"
     return result
 
 

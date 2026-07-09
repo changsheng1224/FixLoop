@@ -176,6 +176,10 @@ class ToolExecutor:
         metadata = {"tool_status": "success"}
         if patch_preview_meta:
             metadata["patch_preview"] = patch_preview_meta
+        if name == "run_shell":
+            provider = getattr(self.agent.tool_context, "shell_env_provider", None)
+            if callable(provider):
+                metadata["shell_env_keys"] = sorted(provider().keys())
         if is_risky:
             after_snapshot = self._capture_snapshot()
             metadata.update(self._diff_snapshots(before_snapshot, after_snapshot))

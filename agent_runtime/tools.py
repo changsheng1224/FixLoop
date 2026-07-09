@@ -384,9 +384,9 @@ def tool_run_shell(context, args: dict) -> str:
     """在 workspace 根目录执行 Shell 命令。
 
     Args 必须包含 'command'，可选 'timeout'(默认20s)。
-    环境变量经过白名单过滤，禁止泄露密钥。
+    环境变量经过白名单过滤；输出经 redact_text 脱敏。
     """
-    from agent_runtime.security import shell_env as _shell_env
+    from agent_runtime.security import redact_text, shell_env as _shell_env
 
     command = args.get("command", "")
     if not command:
@@ -398,6 +398,11 @@ def tool_run_shell(context, args: dict) -> str:
     timeout = max(1, min(timeout, 120))  # 限制 1-120 秒
 
     root = context.root
+    provider = getattr(context, "shell_env_provider", None)
+    if callable(provider):
+        env = provider()
+    else:
+        env = _shell_env(root=root)
 
     try:
         result = subprocess.run(
@@ -407,10 +412,10 @@ def tool_run_shell(context, args: dict) -> str:
             capture_output=True,
             text=True,
             timeout=timeout,
-            env=_shell_env(root=root),
+            env=env,
         )
     except subprocess.TimeoutExpired:
-        return f"Error: 命令超时（{timeout} 秒）: {command[:100]}"
+        return redact_text(f"Error: 命令超时（{timeout} 秒）: {command[:100]}")
 
     out = []
     if result.stdout.strip():
@@ -419,7 +424,7 @@ def tool_run_shell(context, args: dict) -> str:
         out.append(f"stderr:\n{result.stderr.rstrip()}")
     out.insert(0, f"exit_code: {result.returncode}")
 
-    return "\n".join(out)
+    return redact_text("\n".join(out))
 
 
 # ============================================================================
@@ -436,6 +441,10 @@ def build_tool_registry(context) -> dict:
     Returns:
         工具注册表字典。
     """
+    from agent_runtime.security import shell_env
+
+    context.shell_env_provider = lambda: shell_env(root=context.root)
+
     registry = {}
 
     # ---- list_files ----

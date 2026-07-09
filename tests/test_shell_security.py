@@ -1,5 +1,7 @@
 """run_shell + security 单测。"""
 
+import sys
+
 import pytest
 
 from agent_runtime.security import (
@@ -9,7 +11,7 @@ from agent_runtime.security import (
     shell_env,
 )
 from agent_runtime.tool_context import ToolContext
-from agent_runtime.tools import tool_run_shell
+from agent_runtime.tools import build_tool_registry, tool_run_shell
 
 
 @pytest.fixture
@@ -35,6 +37,20 @@ class TestRunShell:
         result = tool_run_shell(ctx, {})
         assert "Error" in result
 
+    def test_child_process_env_excludes_api_key(self, ctx, monkeypatch):
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-leak-test-secret-value-99")
+        cmd = "set" if sys.platform == "win32" else "env"
+        result = tool_run_shell(ctx, {"command": cmd})
+        assert "DEEPSEEK_API_KEY" not in result
+        assert "sk-leak-test-secret-value-99" not in result
+
+    def test_output_redacts_secret_values(self, ctx, monkeypatch):
+        secret = "sk-redact-me-abcdefghijklmnop"
+        monkeypatch.setenv("DEEPSEEK_API_KEY", secret)
+        result = tool_run_shell(ctx, {"command": f"echo {secret}"})
+        assert secret not in result
+        assert "<redacted>" in result
+
 
 class TestSecurity:
     """security 模块测试。"""
@@ -43,9 +59,29 @@ class TestSecurity:
         """验证 shell_env() 只包含白名单变量。"""
         env = shell_env(root="/test")
         for key in env:
+            if key == "PYTHONIOENCODING":
+                continue
             assert key in SHELL_ENV_WHITELIST, f"{key} 不在白名单中"
-        # PWD 被覆盖为 root
         assert env.get("PWD") == "/test"
+        assert env.get("PYTHONIOENCODING") == "utf-8"
+
+    def test_shell_env_excludes_host_secrets(self, monkeypatch):
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-host-secret-value-12345")
+        env = shell_env(root="/workspace")
+        assert "DEEPSEEK_API_KEY" not in env
+
+    def test_shell_env_skips_sensitive_names_in_allowlist(self, monkeypatch):
+        monkeypatch.setenv("CUSTOM_API_KEY", "secret")
+        env = shell_env(allowlist={"CUSTOM_API_KEY", "PATH"}, root="/w")
+        assert "CUSTOM_API_KEY" not in env
+
+    def test_registry_wires_shell_env_provider(self, temp_workspace):
+        ctx = ToolContext(root=str(temp_workspace))
+        build_tool_registry(ctx)
+        assert callable(ctx.shell_env_provider)
+        env = ctx.shell_env_provider()
+        assert env.get("PYTHONIOENCODING") == "utf-8"
+        assert "DEEPSEEK_API_KEY" not in env
 
     def test_looks_sensitive_env_name(self):
         """检测敏感变量名。"""
