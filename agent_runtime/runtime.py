@@ -89,22 +89,29 @@ class Agent:
         loop = AgentLoop(agent=self)
         return loop.run(user_message, callback=callback)
 
-    def complete_once(self, user_message: str) -> str:
+    def complete_once(self, user_message: str, *, system_prompt: str | None = None) -> str:
         """单次 LLM completion，不进入 AgentLoop（使用构造时的 system_prompt）。"""
-        user_message, budget_meta = self.fit_user_message(user_message)
+        user_message, budget_meta = self.fit_user_message(
+            user_message, system_override=system_prompt
+        )
         self._last_budget_meta = budget_meta
-        prefix = self._system_prompt
+        prefix = system_prompt if system_prompt is not None else self._system_prompt
         full_prompt = f"{prefix}\n\n{user_message}" if prefix else user_message
         return self.model_client.complete(
             full_prompt,
             max_new_tokens=self.config.max_new_tokens or 4096,
         )
 
-    def fit_user_message(self, user_message: str) -> tuple[str, dict]:
+    def fit_user_message(
+        self, user_message: str, *, system_override: str | None = None
+    ) -> tuple[str, dict]:
         """用统一 TokenBudget 裁剪 user 段，保留 system/prefix 优先。"""
         from agent_runtime.context_manager import TOTAL_BUDGET, fit_prompt_to_budget
 
-        system = self._system_text_for_budget()
+        if system_override is not None:
+            system = system_override
+        else:
+            system = self._system_text_for_budget()
         _, fitted_user, meta = fit_prompt_to_budget(
             system,
             user_message,

@@ -151,6 +151,17 @@ class TestCompleteOnce:
         assert "You are patcher" in client.prompts[0]
         assert "fix the bug" in client.prompts[0]
 
+    def test_system_prompt_override(self, config, workspace):
+        client = FakeModelClient(["ok"])
+        agent = Agent(
+            config=config,
+            model_client=client,
+            workspace=workspace,
+            system_prompt="base system",
+        )
+        agent.complete_once("user task", system_prompt="type_error variant")
+        assert client.prompts[0].startswith("type_error variant\n\nuser task")
+
 
 class TestNativeToolsTokenUsage:
     def test_chat_with_tools_returns_call_usage(self, config, workspace):

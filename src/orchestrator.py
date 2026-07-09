@@ -241,11 +241,13 @@ class Orchestrator(RepairPipelineMixin):
         agent,
         prompt_name: str,
         user_prompt: str,
+        *,
+        system_prompt: str | None = None,
     ) -> tuple[str, int]:
         """经 Agent.complete_once 做单次 completion（不走 Agent loop）。"""
         del prompt_name
         t0 = time.time()
-        raw = agent.complete_once(user_prompt)
+        raw = agent.complete_once(user_prompt, system_prompt=system_prompt)
         return raw, int((time.time() - t0) * 1000)
 
     def _run_agent(
@@ -349,17 +351,35 @@ class Orchestrator(RepairPipelineMixin):
             issue=state.issue_input,
         )
 
+        from src.prompts.loader import load_role_prompt
+
+        plan = state.repair_plan
+        issue_type = plan.issue_type if plan else ""
+        patcher_system = load_role_prompt("patcher", issue_type)
+
         t0 = time.time()
         tracer = self._repair_tracer
         if tracer:
-            tracer.emit("patcher", "complete_once_started", {})
+            tracer.emit(
+                "patcher",
+                "complete_once_started",
+                {
+                    "issue_type": issue_type,
+                    "prompt_variant": issue_type or "default",
+                },
+            )
         usage_before = {}
         if self.patcher is not None:
             from src.eval.token_usage import get_client_session_usage
 
             usage_before = get_client_session_usage(self.patcher.model_client)
         try:
-            raw, _ = self._complete_with_system_prompt(self.patcher, "patcher", prompt)
+            raw, _ = self._complete_with_system_prompt(
+                self.patcher,
+                "patcher",
+                prompt,
+                system_prompt=patcher_system,
+            )
         except Exception as e:
             state.agent_errors["patcher"] = str(e)
             elapsed_ms = int((time.time() - t0) * 1000)
@@ -521,30 +541,11 @@ class Orchestrator(RepairPipelineMixin):
             parts.append(f"[上一轮验证反馈]\n{feedback}\n")
         parts.append("基于以下信息生成修复补丁：")
 
-        if plan and plan.issue_type == "type_error":
-            parts.append(
-                "修复提示: 这是类型错误。若测试断言期望数字结果，"
-                "请用 int()/float() 做数值转换，禁止 str() 拼接。"
-            )
-        if plan and plan.issue_type in ("import_error", "composite"):
-            parts.append(
-                "修复提示: import 错误通常修正 import 路径或模块名（如 helper → helpers）。"
-                "只修改下方已提供的源文件，不要引用其他项目文件名。"
-            )
-            if re.search(r"cannot import name", issue, re.IGNORECASE):
-                parts.append("修复提示: 除 import 行外，须同步修改本文件内对错误符号名的所有调用。")
+        if plan and re.search(r"cannot import name", issue, re.IGNORECASE):
+            parts.append("修复提示: 除 import 行外，须同步修改本文件内对错误符号名的所有调用。")
         if plan and plan.issue_type == "composite":
             parts.append(
-                "修复提示: 复合错误可能需修改多个文件（import + 类型转换）。"
-                "输出 JSON 数组，每项对应一个 file_path；"
                 f"至少修改 {len(plan.suspect_files or [])} 个相关文件中的每一处错误。"
-            )
-        if plan and plan.issue_type == "config_error":
-            parts.append(
-                "修复提示: 配置错误通常需修改 pyproject.toml。"
-                "使用 diff 字段追加 TOML 段（如 [tool.eval]），"
-                "不要改 unrelated 字段；JSON 中 diff 用 \\n 表示换行，"
-                "避免 multiline original_lines。"
             )
         if issue and "concatenate str" in issue.lower():
             parts.append(

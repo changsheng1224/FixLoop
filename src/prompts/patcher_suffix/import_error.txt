@@ -1,0 +1,5 @@
+导入错误（ImportError / ModuleNotFoundError）修复原则：
+- 修正错误的模块名或 import 路径（如 utils.helper → utils.helpers）
+- 若错误为 cannot import name 'X'，除修正 import 中的符号名外，还须同步修改本文件内所有 X(...) 调用为正确符号
+- file_path 必须是下方已提供的源文件，禁止输出 calculator.py 等其他项目文件名
+- 同一文件若 import 与调用点都需修改，输出多条 JSON 对象（或一条含多行 diff）
