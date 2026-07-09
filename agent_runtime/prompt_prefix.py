@@ -23,6 +23,7 @@ class PromptPrefix:
 
     text: str
     stable_text: str
+    workspace_text: str
     hash: str  # stable_text 的 SHA256（prompt cache key）
     workspace_fingerprint: str
     tool_signature: str  # 工具 schema 的 SHA256
@@ -110,6 +111,7 @@ def _assemble_prefix(stable_text: str, workspace, tool_signature: str) -> Prompt
     return PromptPrefix(
         text=text,
         stable_text=stable_text,
+        workspace_text=workspace_text,
         hash=hash_stable_prefix(stable_text),
         workspace_fingerprint=workspace.fingerprint(),
         tool_signature=tool_signature,

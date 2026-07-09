@@ -70,6 +70,8 @@ class TestBuildPromptPrefixStableHash:
 
         assert "Workspace:" in prefix.text
         assert "Workspace:" not in prefix.stable_text
+        assert prefix.workspace_text
+        assert "Workspace:" in prefix.workspace_text
         assert prefix.text.endswith(prefix.stable_text) is False
         assert prefix.stable_text in prefix.text
 

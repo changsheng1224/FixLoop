@@ -2,8 +2,7 @@
 
 按 model/provider 选择 tokenizer（DeepSeek HF / OpenAI tiktoken），中文计数更准确。
 
-裁剪优先级：relevant_note → history → memory → prefix。
-用户请求永不裁剪。
+裁剪优先级（后填先裁）：history → relevant → memory → workspace；system 与 request 优先保留。
 """
 
 from __future__ import annotations
@@ -108,15 +107,19 @@ def fit_prompt_to_budget(
 
 
 class ContextManager:
-    """Prompt 组装器：按预算拼接 5 个 section，超限时自动裁剪。
+    """Prompt 组装器：按预算拼接 section，超限时自动裁剪。
 
-    Sections:
-    1. prefix       (~2000 tokens) — System Prompt + 工具列表 + Workspace
-    2. memory       (~800 tokens)  — 工作记忆
-    3. relevant     (~600 tokens)  — 相关记忆条目
-    4. history      — 对话/工具调用历史（预算随 prompt_budget 缩放）
-    5. request      (不限制)       — 当前用户输入
+    Sections（填充顺序）:
+    1. system     — 稳定段（persona / rules / tools / examples）
+    2. workspace  — Workspace 快照（可变）
+    3. memory     (~800 tokens)  — 工作记忆
+    4. relevant   (~600 tokens)  — 相关记忆条目
+    5. history    — 对话/工具调用历史（预算随 prompt_budget 缩放）
+    6. request    — 当前用户输入（L1 截断后）
     """
+
+    SECTION_ORDER = ("system", "workspace", "memory", "relevant", "history")
+    DYNAMIC_ORDER = ("workspace", "memory", "relevant", "history")
 
     def __init__(self, agent, total_budget: int | None = None):
         self.agent = agent
@@ -134,25 +137,55 @@ class ContextManager:
 
         metadata 含各 section token 数、裁剪日志和 prompt_cache_key。
         """
-        metadata = {"sections": {}, "cuts": []}
+        metadata = self._base_metadata()
+        sections = self._fill_sections(user_message, metadata)
+        result_parts = [sections[name] for name in self.SECTION_ORDER if sections.get(name)]
+        result_parts.append(f"\n## 当前任务\n\n{sections['request']}")
+        return "\n".join(result_parts), metadata
 
-        # Prompt Cache key = prefix hash
-        metadata["prompt_cache_key"] = getattr(self.agent._prefix, "hash", "")
+    def build_dynamic_context(self, user_message: str) -> tuple[str, dict]:
+        """组装动态上下文（不含 system / request）。"""
+        metadata = self._base_metadata()
+        sections = self._fill_sections(
+            user_message, metadata, include_system=False, include_request=False
+        )
+        parts = [sections[name] for name in self.DYNAMIC_ORDER if sections.get(name)]
+        return "\n\n".join(parts), metadata
 
-        # 收集各 section 源文本
-        prefix_text = self._get_prefix()
-        memory_text = self._get_memory()
-        relevant_text = self._get_relevant(user_message)
-        history_text = self._get_compressed_history(metadata)
+    def build_for_native(self, user_message: str) -> tuple[str, str, dict]:
+        """Native API：stable system + 动态 user 上下文（含 task）。"""
+        metadata = self._base_metadata()
+        sections = self._fill_sections(user_message, metadata)
+        system_prompt = sections.get("system", "")
+        user_parts = [sections[name] for name in self.DYNAMIC_ORDER if sections.get(name)]
+        user_parts.append(f"## 当前任务\n\n{sections['request']}")
+        return system_prompt, "\n\n".join(user_parts), metadata
 
-        # 逐 section 填充，超限时按优先级裁剪
+    def _base_metadata(self) -> dict:
+        return {
+            "sections": {},
+            "cuts": [],
+            "prompt_cache_key": getattr(self.agent._prefix, "hash", ""),
+        }
+
+    def _fill_sections(
+        self,
+        user_message: str,
+        metadata: dict,
+        *,
+        include_system: bool = True,
+        include_request: bool = True,
+    ) -> dict[str, str]:
+        """按预算填充各 section，返回 name → 文本。"""
         used = 0
-        result_parts = []
+        sections: dict[str, str] = {}
+        total = self.budget.total_limit
 
         def add_section(name: str, text: str, budget_limit: int):
             nonlocal used
+            if not text:
+                return
             if used + self.budget.count(text) > self.budget.total_limit:
-                # 需要裁剪
                 remaining = self.budget.total_limit - used
                 if remaining <= 0:
                     metadata["cuts"].append(f"跳过 {name}（预算耗尽）")
@@ -163,38 +196,62 @@ class ContextManager:
             tokens = self.budget.count(text)
             used += tokens
             metadata["sections"][name] = tokens
-            if text:
-                result_parts.append(text)
+            sections[name] = text
 
-        # 按优先级添加（section 预算随 total_limit 等比缩放）
-        total = self.budget.total_limit
-        add_section("prefix", prefix_text, scaled_section_budget(BUDGET_PREFIX, total))
-        add_section("memory", memory_text, scaled_section_budget(BUDGET_MEMORY, total))
-        add_section("relevant", relevant_text, scaled_section_budget(BUDGET_RELEVANT, total))
-        add_section("history", history_text, history_window_budget(total))
-        user_message = apply_l1_to_request_text(user_message, self.budget)
-        request_tokens = self.budget.count(user_message)
-        used += request_tokens
-        metadata["sections"]["request"] = request_tokens
-        if used > self.budget.total_limit:
-            allowed_request = max(256, self.budget.total_limit - (used - request_tokens))
-            if request_tokens > allowed_request:
-                user_message = self.budget.fit(user_message, allowed_request)
-                request_tokens = self.budget.count(user_message)
-                used = used - metadata["sections"]["request"] + request_tokens
-                metadata["sections"]["request"] = request_tokens
-                metadata["cuts"].append(f"裁剪 request 到 {request_tokens} tokens")
-        result_parts.append(f"\n## 当前任务\n\n{user_message}")
+        if include_system:
+            add_section("system", self._get_system(), scaled_section_budget(BUDGET_PREFIX, total))
+        add_section("workspace", self._get_workspace(), scaled_section_budget(BUDGET_PREFIX, total))
+        add_section("memory", self._get_memory(), scaled_section_budget(BUDGET_MEMORY, total))
+        add_section(
+            "relevant",
+            self._get_relevant(user_message),
+            scaled_section_budget(BUDGET_RELEVANT, total),
+        )
+        add_section(
+            "history",
+            self._get_compressed_history(metadata),
+            history_window_budget(total),
+        )
+
+        if include_request:
+            user_message = apply_l1_to_request_text(user_message, self.budget)
+            request_tokens = self.budget.count(user_message)
+            used += request_tokens
+            metadata["sections"]["request"] = request_tokens
+            if used > self.budget.total_limit:
+                allowed_request = max(256, self.budget.total_limit - (used - request_tokens))
+                if request_tokens > allowed_request:
+                    user_message = self.budget.fit(user_message, allowed_request)
+                    request_tokens = self.budget.count(user_message)
+                    used = used - metadata["sections"]["request"] + request_tokens
+                    metadata["sections"]["request"] = request_tokens
+                    metadata["cuts"].append(f"裁剪 request 到 {request_tokens} tokens")
+            sections["request"] = user_message
+
+        sys_tokens = metadata["sections"].get("system", 0)
+        ws_tokens = metadata["sections"].get("workspace", 0)
+        if sys_tokens or ws_tokens:
+            metadata["sections"]["prefix"] = sys_tokens + ws_tokens
 
         metadata["total_tokens"] = used
         metadata["budget"] = self.budget.total_limit
         metadata["tokenizer_backend"] = self.budget.backend
-        return "\n".join(result_parts), metadata
+        return sections
 
     # ---- Section 收集 ----
 
-    def _get_prefix(self) -> str:
-        return self.agent._prefix.text
+    def _get_system(self) -> str:
+        stable = getattr(self.agent._prefix, "stable_text", "")
+        if stable:
+            return stable
+        return getattr(self.agent, "_system_prompt", "") or ""
+
+    def _get_workspace(self) -> str:
+        workspace_text = getattr(self.agent._prefix, "workspace_text", "")
+        if workspace_text:
+            return workspace_text
+        workspace = getattr(self.agent, "workspace", None)
+        return workspace.text() if workspace else ""
 
     def _get_memory(self) -> str:
         """Working Memory：当前任务 + 最近文件 + 文件摘要。"""

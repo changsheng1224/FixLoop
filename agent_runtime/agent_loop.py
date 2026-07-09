@@ -95,13 +95,13 @@ class AgentLoop:
 
     def _run_with_native_tools(self, user_message: str, ts, callback=None) -> str:
         """使用 API 原生 tool_use 协议（Anthropic 兼容）。"""
-        user_message, budget_meta = self.agent.fit_user_message(user_message)
+        system_prompt, user_message, budget_meta = self.agent.build_for_native(user_message)
         self._last_budget_meta = budget_meta
         # 构建 Anthropic 格式的工具定义
         tools_def = _build_anthropic_tools(self.agent.tools)
 
-        # 系统提示词
-        system_prompt = getattr(self.agent._prefix, "text", "")
+        # 系统提示词（仅 stable 段，便于 prompt cache）
+        system_prompt = system_prompt or getattr(self.agent._prefix, "stable_text", "")
 
         # 工具执行回调
         def executor(tool_name: str, tool_input: dict) -> str:

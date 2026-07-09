@@ -116,11 +116,23 @@ class Agent:
         return fitted_user, meta
 
     def _system_text_for_budget(self) -> str:
-        """预算计算用的 system 文本（native 用 prefix，complete_once 用 system_prompt）。"""
-        prefix_text = getattr(self._prefix, "text", "") or ""
-        if prefix_text:
-            return prefix_text
+        """预算计算用的 system 文本（仅 stable 段，不含 workspace）。"""
+        stable = getattr(self._prefix, "stable_text", "") or ""
+        if stable:
+            return stable
         return self._system_prompt or ""
+
+    def build_dynamic_context(self, user_message: str) -> tuple[str, dict]:
+        """动态上下文：workspace → memory → relevant → history。"""
+        from agent_runtime.context_manager import ContextManager
+
+        return ContextManager(self).build_dynamic_context(user_message)
+
+    def build_for_native(self, user_message: str) -> tuple[str, str, dict]:
+        """Native API 路径的 system + user 拆分。"""
+        from agent_runtime.context_manager import ContextManager
+
+        return ContextManager(self).build_for_native(user_message)
 
     def prompt(self, user_message: str) -> str:
         """组装完整 prompt 文本（经 ContextManager token 预算控制）。"""
