@@ -385,6 +385,7 @@ class Agent:
                     dry_run=self.dry_run,
                     approval=self.config.approval,
                     tool_names=self._tool_names,
+                    repo_root=self._cwd,
                 )
             from agent_runtime.prompt_prefix import build_custom_system_prefix
 
@@ -395,6 +396,7 @@ class Agent:
             dry_run=self.dry_run,
             approval=self.config.approval,
             tool_names=self._tool_names,
+            repo_root=self._cwd,
         )
 
     def _new_session_id(self) -> str:
