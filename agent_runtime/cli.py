@@ -9,6 +9,7 @@ from agent_runtime.bootstrap import create_model_client
 from agent_runtime.bootstrap import load_dotenv as _load_dotenv
 from agent_runtime.config import AgentConfig
 from agent_runtime.logging_setup import add_log_level_argument, setup_logging_from_args
+from agent_runtime.repl_input import read_repl_input
 from agent_runtime.runtime import Agent
 from agent_runtime.workspace import WorkspaceContext
 
@@ -269,12 +270,12 @@ def _repl_mode(args) -> int:
 
     while True:
         try:
-            user_input = input("\n> ").strip()
+            user_input = read_repl_input()
         except (EOFError, KeyboardInterrupt):
             print("\n再见！")
             return 0
 
-        if not user_input:
+        if not user_input.strip():
             continue
 
         # 内置命令

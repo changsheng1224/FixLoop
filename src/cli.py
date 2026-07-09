@@ -6,6 +6,11 @@ from pathlib import Path
 
 from agent_runtime.bootstrap import load_dotenv
 from agent_runtime.logging_setup import add_log_level_argument, setup_logging_from_args
+from src.cli_exit_codes import (
+    REPAIR_EXIT_CONFIG,
+    repair_config_error,
+    repair_exit_code,
+)
 from src.eval.cli_helpers import print_ablation_report, print_eval_report, run_ablation, run_eval
 from src.eval.runner import DEFAULT_CASES_DIR
 from src.repair_factory import make_orchestrator_factory
@@ -113,9 +118,18 @@ def main() -> int:
 
 def _repair(args) -> int:
     load_dotenv()
-    factory = make_orchestrator_factory(skip_verify=args.skip_verify, dry_run=args.dry_run)
     repo = str(Path(args.repo).resolve())
-    orch = factory(repo)
+    config_err = repair_config_error(repo)
+    if config_err:
+        print(config_err, file=sys.stderr)
+        return REPAIR_EXIT_CONFIG
+
+    try:
+        factory = make_orchestrator_factory(skip_verify=args.skip_verify, dry_run=args.dry_run)
+        orch = factory(repo)
+    except Exception as exc:
+        print(f"错误: 配置/初始化失败: {exc}", file=sys.stderr)
+        return REPAIR_EXIT_CONFIG
 
     if args.dry_run:
         print("⚠ DRY-RUN MODE", file=sys.stderr)
@@ -128,7 +142,7 @@ def _repair(args) -> int:
 
     state = orch.repair(args.issue)
     _print_repair_result(state, verbose=args.verbose)
-    return 0
+    return repair_exit_code(state)
 
 
 def _eval(args) -> int:
