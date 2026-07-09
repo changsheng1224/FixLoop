@@ -5,6 +5,7 @@ import tempfile
 
 import pytest
 
+from agent_runtime.run_ids import is_valid_run_id
 from agent_runtime.run_store import RunStore
 from agent_runtime.session_store import SessionStore
 from agent_runtime.task_state import TaskState
@@ -17,7 +18,7 @@ class TestTaskState:
         ts = TaskState.create(user_request="test")
         assert ts.status == "running"
         assert ts.user_request == "test"
-        assert len(ts.run_id) == 15  # YYYYMMDD-HHMMSS
+        assert is_valid_run_id(ts.run_id)
 
     def test_state_machine(self):
         ts = TaskState.create(user_request="fix bug")

@@ -144,7 +144,9 @@ class TestOrchestrator:
             create_patcher(pat_client, ws),
         )
         state = orch.repair("TypeError at calc.py:42")
-        assert state.repair_run_id.startswith("repair-")
+        from agent_runtime.run_ids import is_valid_run_id
+
+        assert is_valid_run_id(state.repair_run_id)
 
         runs_dir = temp_workspace / ".agent" / "runs" / state.repair_run_id
         assert (runs_dir / "trace.jsonl").is_file()

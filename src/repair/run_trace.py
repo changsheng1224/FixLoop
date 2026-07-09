@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import uuid
-from datetime import UTC, datetime
-
+from agent_runtime.run_ids import new_run_id
 from agent_runtime.run_store import RunStore
 
 
@@ -23,8 +21,7 @@ class RepairRunTracer:
         return self._store
 
     def begin(self, issue: str) -> str:
-        ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-        self.run_id = f"repair-{ts}-{uuid.uuid4().hex[:6]}"
+        self.run_id = new_run_id()
         self.store.start_run_by_id(self.run_id)
         self.emit(
             "orchestrator",
@@ -46,6 +43,7 @@ class RepairRunTracer:
     def emit(self, agent_name: str, event: str, payload: dict | None = None) -> None:
         data = dict(payload or {})
         data.setdefault("agent", agent_name)
+        data.setdefault("run_id", self.run_id)
         self.store.append_trace_event(self.run_id, event, data)
 
     def write_agent_token(self, agent_name: str, usage: dict, extra: dict | None = None) -> None:

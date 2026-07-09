@@ -348,8 +348,12 @@ class AgentLoop:
             payload = dict(payload or {})
             agent_name = getattr(self.agent, "_agent_name", "") or "agent"
             payload.setdefault("agent", agent_name)
-            store = self._get_store()
             shared = getattr(self.agent, "shared_run_id", None)
+            ts = self._task_state
+            run_id = shared or (ts.run_id if ts else "")
+            if run_id:
+                payload.setdefault("run_id", run_id)
+            store = self._get_store()
             if shared:
                 store.append_trace_event(shared, event, payload)
             elif self._task_state:
