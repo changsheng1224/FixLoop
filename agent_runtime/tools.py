@@ -283,17 +283,16 @@ def tool_write_file(context, args: dict) -> str:
     except ValueError as e:
         return f"Error: {e}"
 
-    # 自动创建父目录
-    target.parent.mkdir(parents=True, exist_ok=True)
+    from agent_runtime.atomic_io import atomic_write_text
 
     try:
         if append and target.exists():
-            with open(target, "a", encoding="utf-8") as f:
-                f.write(content)
+            payload = target.read_text(encoding="utf-8") + content
             mode = "已追加到"
         else:
-            target.write_text(content, encoding="utf-8")
+            payload = content
             mode = "已写入"
+        atomic_write_text(target, payload)
     except OSError as e:
         return f"Error: 写入文件失败: {e}"
 
