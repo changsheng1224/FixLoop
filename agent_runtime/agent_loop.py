@@ -75,6 +75,7 @@ class AgentLoop:
         Returns:
             模型最终回答文本。
         """
+        from agent_runtime.log_context import log_context
         from agent_runtime.task_state import TaskState
 
         shared = getattr(self.agent, "shared_run_id", None)
@@ -83,17 +84,19 @@ class AgentLoop:
         if shared:
             ts.task_id = f"{shared}-{agent_name}"
         self._task_state = ts
-        self._emit("run_started")
 
-        self.agent.record({"role": "user", "content": user_message})
-        self._gen_task_summary(user_message)
+        with log_context(run_id=ts.run_id, agent=agent_name):
+            self._emit("run_started")
 
-        # 如果模型客户端支持原生 tool_use，使用 API 原生协议（免文本解析）
-        if hasattr(self.agent.model_client, "chat_with_tools"):
-            return self._run_with_native_tools(user_message, ts, callback)
+            self.agent.record({"role": "user", "content": user_message})
+            self._gen_task_summary(user_message)
 
-        # 降级：传统文本解析模式
-        return self._run_with_text_parsing(user_message, ts, callback)
+            # 如果模型客户端支持原生 tool_use，使用 API 原生协议（免文本解析）
+            if hasattr(self.agent.model_client, "chat_with_tools"):
+                return self._run_with_native_tools(user_message, ts, callback)
+
+            # 降级：传统文本解析模式
+            return self._run_with_text_parsing(user_message, ts, callback)
 
     def _run_with_native_tools(self, user_message: str, ts, callback=None) -> str:
         """使用 API 原生 tool_use 协议（Anthropic 兼容）。"""

@@ -1,79 +1,108 @@
-"""统一 logging 配置测试。"""
+"""logging_setup 单测：文本 / JSON 格式与 log context。"""
 
+import io
+import json
 import logging
+import uuid
 
+import pytest
+
+from agent_runtime.log_context import log_context
 from agent_runtime.logging_setup import (
-    add_log_level_argument,
+    JsonFormatter,
     configure_logging,
-    get_logger,
-    resolve_log_level,
+    reset_logging_for_tests,
+    resolve_log_format,
 )
 
 
-def _capture_logger(name: str, level: str) -> tuple[logging.Logger, list[str]]:
-    """配置并返回带内存 handler 的 logger。"""
-    configure_logging(level)
-    log = get_logger(name)
-    records: list[str] = []
-
-    class _ListHandler(logging.Handler):
-        def emit(self, record: logging.LogRecord) -> None:
-            records.append(record.getMessage())
-
-    log.handlers.clear()
-    log.propagate = False
-    handler = _ListHandler()
-    handler.setLevel(logging.DEBUG)
-    log.addHandler(handler)
-    log.setLevel(getattr(logging, level))
-    return log, records
+@pytest.fixture(autouse=True)
+def _clean_logging(monkeypatch):
+    reset_logging_for_tests()
+    monkeypatch.delenv("FIXLOOP_LOG", raising=False)
+    monkeypatch.delenv("FIXLOOP_LOG_LEVEL", raising=False)
+    yield
+    reset_logging_for_tests()
 
 
-class TestResolveLogLevel:
-    def test_default_info(self):
-        assert resolve_log_level() == "INFO"
+def _capture_stderr_logger(level: str = "DEBUG", log_format: str = "text"):
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    if log_format == "json":
+        handler.setFormatter(JsonFormatter())
+    else:
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s"),
+        )
+    logger = logging.getLogger("fixloop")
+    logger.handlers.clear()
+    logger.setLevel(getattr(logging, level))
+    logger.addHandler(handler)
+    logger.propagate = False
+    return logger, stream
 
-    def test_verbose_maps_to_debug(self):
-        assert resolve_log_level(verbose=True) == "DEBUG"
 
-    def test_explicit_overrides_verbose(self):
-        assert resolve_log_level(log_level="WARNING", verbose=True) == "WARNING"
+class TestResolveLogFormat:
+    def test_default_text(self, monkeypatch):
+        monkeypatch.delenv("FIXLOOP_LOG", raising=False)
+        assert resolve_log_format() == "text"
 
-    def test_env_fallback(self, monkeypatch):
-        monkeypatch.setenv("FIXLOOP_LOG_LEVEL", "ERROR")
-        assert resolve_log_level() == "ERROR"
+    def test_json_env(self, monkeypatch):
+        monkeypatch.setenv("FIXLOOP_LOG", "json")
+        assert resolve_log_format() == "json"
 
-    def test_cli_overrides_env(self, monkeypatch):
-        monkeypatch.setenv("FIXLOOP_LOG_LEVEL", "ERROR")
-        assert resolve_log_level(log_level="DEBUG") == "DEBUG"
+
+class TestTextLogging:
+    def test_default_format_is_human_readable(self):
+        logger, stream = _capture_stderr_logger(log_format="text")
+        logger.info("hello")
+        line = stream.getvalue().strip()
+        assert "INFO" in line
+        assert "hello" in line
+        with pytest.raises(json.JSONDecodeError):
+            json.loads(line)
+
+
+class TestJsonLogging:
+    def test_json_line_has_required_fields(self):
+        logger, stream = _capture_stderr_logger(log_format="json")
+        logger.warning("parse failed")
+        record = json.loads(stream.getvalue().strip())
+        assert record["level"] == "WARNING"
+        assert record["logger"] == "fixloop"
+        assert record["message"] == "parse failed"
+        assert "ts" in record
+        assert record["ts"].endswith("Z")
+
+    def test_json_includes_run_id_from_context(self):
+        logger, stream = _capture_stderr_logger(log_format="json")
+        run_id = str(uuid.uuid4())
+        with log_context(run_id=run_id, agent="localizer"):
+            logger.warning("0 suspects")
+        record = json.loads(stream.getvalue().strip())
+        assert record["run_id"] == run_id
+        assert record["agent"] == "localizer"
+
+    def test_json_omits_run_id_without_context(self):
+        logger, stream = _capture_stderr_logger(log_format="json")
+        logger.info("no context")
+        record = json.loads(stream.getvalue().strip())
+        assert "run_id" not in record
+        assert "agent" not in record
+
+    def test_debug_filtered_at_warning_level(self):
+        logger, stream = _capture_stderr_logger(level="WARNING", log_format="json")
+        logger.debug("hidden")
+        logger.warning("visible")
+        lines = [ln for ln in stream.getvalue().splitlines() if ln.strip()]
+        assert len(lines) == 1
+        assert json.loads(lines[0])["message"] == "visible"
 
 
 class TestConfigureLogging:
-    def test_warning_filters_info(self):
-        log, records = _capture_logger("test.filter", "WARNING")
-        log.info("hidden")
-        log.warning("shown")
-        assert records == ["shown"]
-
-    def test_debug_includes_debug(self):
-        log, records = _capture_logger("agent_loop", "DEBUG")
-        log.debug("step detail")
-        assert records == ["step detail"]
-
-
-class TestGetLogger:
-    def test_prefixes_fixloop(self):
-        assert get_logger("repair.pipeline").name == "fixloop.repair.pipeline"
-
-    def test_idempotent_prefix(self):
-        assert get_logger("fixloop.orchestrator").name == "fixloop.orchestrator"
-
-
-class TestAddLogLevelArgument:
-    def test_registers_optional_flag(self):
-        import argparse
-
-        p = argparse.ArgumentParser()
-        add_log_level_argument(p)
-        args = p.parse_args(["--log-level", "ERROR"])
-        assert args.log_level == "ERROR"
+    def test_configure_json_via_env(self, monkeypatch):
+        monkeypatch.setenv("FIXLOOP_LOG", "json")
+        configure_logging("INFO")
+        root = logging.getLogger("fixloop")
+        assert root.handlers
+        assert isinstance(root.handlers[0].formatter, JsonFormatter)

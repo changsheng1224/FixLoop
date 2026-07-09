@@ -63,6 +63,7 @@ class Orchestrator(RepairPipelineMixin):
         self.verifier = verifier
         self.use_pytest_verify = use_pytest_verify
         self._repair_tracer = None
+        self._log_run_id_token = None
         # 修复目标目录：优先 --repo / Agent cwd，而非 git 顶层仓库
         self._repo_root = str(Path.cwd())
         if localizer is not None:
@@ -292,6 +293,7 @@ class Orchestrator(RepairPipelineMixin):
             return {}
 
     def _begin_repair_trace(self, state: RepairState) -> None:
+        from agent_runtime.log_context import bind_run_id
         from src.repair.run_trace import RepairRunTracer
 
         tracer = RepairRunTracer(self._repo_root)
@@ -299,8 +301,11 @@ class Orchestrator(RepairPipelineMixin):
         tracer.bind_agents(self.localizer, self.retriever, self.patcher)
         self._repair_tracer = tracer
         state.repair_run_id = run_id
+        self._log_run_id_token = bind_run_id(run_id)
 
     def _end_repair_trace(self, state: RepairState) -> None:
+        from agent_runtime.log_context import reset_run_id
+
         tracer = self._repair_tracer
         if tracer is None:
             return
@@ -308,6 +313,10 @@ class Orchestrator(RepairPipelineMixin):
         tracer.finalize(state, token_summary)
         tracer.unbind_agents(self.localizer, self.retriever, self.patcher)
         self._repair_tracer = None
+        token = getattr(self, "_log_run_id_token", None)
+        if token is not None:
+            reset_run_id(token)
+            self._log_run_id_token = None
 
     def _reset_token_tracking(self) -> None:
         from src.eval.token_usage import reset_clients_session_usage
