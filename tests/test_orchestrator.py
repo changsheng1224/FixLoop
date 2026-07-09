@@ -212,7 +212,10 @@ class TestOrchestrator:
             issue="TypeError: concatenate str",
         )
         assert 'assert add("3", 2) == 5' in prompt
-        assert "int()" in prompt or "数值转换" in prompt
+        from src.prompts.loader import load_role_prompt
+
+        system = load_role_prompt("patcher", "type_error")
+        assert "int(a)" in system or "TypeError" in system
 
 
 class TestApplyPatch:

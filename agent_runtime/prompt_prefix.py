@@ -1,12 +1,35 @@
 """System Prompt 构建：组装发送给模型的系统提示词。
 
 包含：规则 → 工具列表（含签名和风险标记）→ 调用示例 → Workspace 快照。
+稳定段（persona/rules/tools/examples）参与 prompt cache hash；workspace 可变段不参与。
+rules / examples 可外置至 `.agent/rules.md`、`.agent/examples.md`（见 prompt_external）。
 """
 
-import hashlib
+from __future__ import annotations
+
 import json
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from pathlib import Path
+
+from agent_runtime.prefix_stable import assert_stable_prefix_clean, hash_stable_prefix
+from agent_runtime.prompt_external import (
+    BUILTIN_TOOL_EXAMPLES,
+    PromptAssets,
+    compose_examples,
+    compose_rules,
+    load_prompt_assets,
+)
+
+__all__ = [
+    "PromptPrefix",
+    "TOOL_EXAMPLES",
+    "build_custom_system_prefix",
+    "build_prompt_prefix",
+    "build_repair_agent_prefix",
+]
+
+# 向后兼容：few-shot 内置条目
+TOOL_EXAMPLES = BUILTIN_TOOL_EXAMPLES
 
 
 @dataclass
@@ -14,51 +37,67 @@ class PromptPrefix:
     """系统提示词前缀。"""
 
     text: str
-    hash: str  # prefix_text 的 SHA256（用于 prompt cache key）
+    stable_text: str
+    workspace_text: str
+    hash: str  # stable_text 的 SHA256（prompt cache key）
     workspace_fingerprint: str
     tool_signature: str  # 工具 schema 的 SHA256
-    built_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+    role_text: str = ""  # L2 角色 prompt（不进 hash）
+    assets_fingerprint: str = ""  # 外置 rules+examples 内容 hash
 
 
-# ============================================================================
-# 示例：模型调用工具的正确格式
-# ============================================================================
+def _resolve_repo_root(workspace, repo_root: str | Path | None) -> Path:
+    if repo_root is not None:
+        return Path(repo_root)
+    for attr in ("repo_root", "cwd"):
+        value = getattr(workspace, attr, "") or ""
+        if value:
+            return Path(value)
+    return Path(".")
 
-TOOL_EXAMPLES = [
-    {
-        "description": "读取文件（推荐格式：function_calls）",
-        "tool": (
-            "<function_calls>\n"
-            '<invoke name="read_file">\n'
-            '<parameter name="path">src/main.py</parameter>\n'
-            '<parameter name="start">1</parameter>\n'
-            '<parameter name="end">50</parameter>\n'
-            "</invoke>\n"
-            "</function_calls>"
-        ),
-    },
-    {
-        "description": "列出当前目录的文件（JSON格式也可）",
-        "tool": '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
-    },
-    {
-        "description": "搜索特定模式",
-        "tool": (
-            "<function_calls>\n"
-            '<invoke name="search">\n'
-            '<parameter name="pattern">TODO</parameter>\n'
-            '<parameter name="path">src</parameter>\n'
-            "</invoke>\n"
-            "</function_calls>"
-        ),
-    },
-    {
-        "description": "返回最终答案",
-        "response": (
-            "<final>问题已解决：原因是类型转换缺失，已在第 42 行添加了 int() 转换。</final>"
-        ),
-    },
-]
+
+def _resolve_assets(workspace, repo_root: str | Path | None, assets: PromptAssets | None) -> PromptAssets:
+    if assets is not None:
+        return assets
+    return load_prompt_assets(_resolve_repo_root(workspace, repo_root))
+
+
+def _filter_tools(
+    tools_registry: dict,
+    tool_names: set[str] | tuple[str, ...] | None,
+) -> dict:
+    if tool_names is None:
+        return tools_registry
+    allowed = set(tool_names)
+    return {k: v for k, v in tools_registry.items() if k in allowed}
+
+
+def _make_prompt_prefix(
+    stable_text: str,
+    workspace,
+    tool_signature: str,
+    assets_fingerprint: str = "",
+    *,
+    role_text: str = "",
+) -> PromptPrefix:
+    assert_stable_prefix_clean(stable_text)
+    workspace_text = workspace.text()
+    parts = [stable_text]
+    if role_text:
+        parts.append(role_text)
+    if workspace_text:
+        parts.append(workspace_text)
+    text = "\n\n".join(parts)
+    return PromptPrefix(
+        text=text,
+        stable_text=stable_text,
+        workspace_text=workspace_text,
+        hash=hash_stable_prefix(stable_text),
+        workspace_fingerprint=workspace.fingerprint(),
+        tool_signature=tool_signature,
+        role_text=role_text,
+        assets_fingerprint=assets_fingerprint,
+    )
 
 
 def build_prompt_prefix(
@@ -67,29 +106,67 @@ def build_prompt_prefix(
     dry_run: bool = False,
     approval: str = "ask",
     *,
-    tool_names: set[str] | None = None,
+    tool_names: set[str] | tuple[str, ...] | None = None,
+    repo_root: str | Path | None = None,
+    assets: PromptAssets | None = None,
 ) -> PromptPrefix:
     """构建 System Prompt 前缀。
 
     L0：tool_names 非空时 prefix 仅注入启用工具签名。
     """
-    if tool_names is not None:
-        tools_registry = {k: v for k, v in tools_registry.items() if k in tool_names}
-    sections = [
+    tools_registry = _filter_tools(tools_registry, tool_names)
+    prompt_assets = _resolve_assets(workspace, repo_root, assets)
+    stable_sections = [
         _system_persona(),
-        _rules(dry_run=dry_run, approval=approval),
+        compose_rules(prompt_assets, dry_run=dry_run, approval=approval),
         _tools_section(tools_registry),
-        _examples_section(),
-        workspace.text(),
+        compose_examples(prompt_assets),
     ]
-    text = "\n\n".join(sections)
-
-    return PromptPrefix(
-        text=text,
-        hash=hashlib.sha256(text.encode()).hexdigest(),
-        workspace_fingerprint=workspace.fingerprint(),
-        tool_signature=_tool_signature(tools_registry),
+    stable_text = "\n\n".join(stable_sections)
+    tool_sig = _tool_signature(tools_registry)
+    return _make_prompt_prefix(
+        stable_text, workspace, tool_sig, prompt_assets.fingerprint
     )
+
+
+def build_repair_agent_prefix(
+    l2_role_prompt: str,
+    workspace,
+    tools_registry: dict,
+    dry_run: bool = False,
+    approval: str = "ask",
+    *,
+    tool_names: tuple[str, ...] | set[str] | None = None,
+    repo_root: str | Path | None = None,
+    assets: PromptAssets | None = None,
+) -> PromptPrefix:
+    """Repair 双层 prefix：L1 stable（rules+tools+examples）+ L2 role（不进 hash）。"""
+    tools_registry = _filter_tools(tools_registry, tool_names)
+    prompt_assets = _resolve_assets(workspace, repo_root, assets)
+    stable_sections = [
+        compose_rules(prompt_assets, dry_run=dry_run, approval=approval),
+        _repair_tool_gateway_note(),
+        _tools_section(tools_registry),
+        compose_examples(prompt_assets),
+    ]
+    stable_text = "\n\n".join(stable_sections)
+    role_text = l2_role_prompt.strip()
+    if role_text:
+        assert_stable_prefix_clean(role_text)
+    tool_sig = _tool_signature(tools_registry)
+    return _make_prompt_prefix(
+        stable_text,
+        workspace,
+        tool_sig,
+        prompt_assets.fingerprint,
+        role_text=role_text,
+    )
+
+
+def build_custom_system_prefix(system_prompt: str, workspace) -> PromptPrefix:
+    """L2 角色 system prompt + workspace；稳定段仅为 system_prompt。"""
+    stable_text = system_prompt.strip()
+    return _make_prompt_prefix(stable_text, workspace, tool_signature="")
 
 
 def _system_persona() -> str:
@@ -102,38 +179,11 @@ def _system_persona() -> str:
     )
 
 
-def _rules(dry_run: bool = False, approval: str = "ask") -> str:
-    rules = [
-        "## 核心规则（必须严格遵守）",
-        "",
-        "**1. 工具调用格式**（任选其一）：",
-        '   格式A (JSON): <tool>{"name":"工具名","args":{"参数名":"值"}}</tool>',
-        "   格式B (function_calls):",
-        "     <function_calls>",
-        '     <invoke name="工具名">',
-        '     <parameter name="参数名">值</parameter>',
-        "     </invoke>",
-        "     </function_calls>",
-        "   推荐使用格式B（function_calls）。",
-        "",
-        "**2. 最终答案格式**：",
-        "   <final>你的答案</final>",
-        "",
-        "**3. 每次只调用一个工具**，等待结果后再决定下一步。",
-        "**4. 通过工具探索代码库**——不要猜测文件内容。",
-        "**5. 答案必须基于实际读取的文件内容**，不要捏造。",
-        "**6. 如果找不到答案，诚实告知而不是编造。",
-    ]
-    if dry_run:
-        rules.append(
-            "8. 当前是演习模式（Dry-Run），工具返回 [DRY RUN] 表示不会实际执行。"
-            "你仍应基于 DRY RUN 结果输出完整方案。"
-        )
-    if approval == "auto":
-        rules.append(
-            "9. 你拥有自动审批权限，可以直接修改文件和执行命令。谨慎使用这些权限，只做必要的修改。"
-        )
-    return "\n".join(rules)
+def _repair_tool_gateway_note() -> str:
+    return (
+        "**7. 工具可见性与权限**：下列为 repair 流水线工具全集；"
+        "实际可调用范围由运行时权限控制。若调用被拒绝，请换用其他工具或返回 <final>。"
+    )
 
 
 def _tools_section(registry: dict) -> str:
@@ -152,23 +202,10 @@ def _tools_section(registry: dict) -> str:
     return "\n".join(lines)
 
 
-def _examples_section() -> str:
-    """生成工具调用示例。"""
-    lines = ["## 调用示例", ""]
-    for i, ex in enumerate(TOOL_EXAMPLES, 1):
-        lines.append(f"### 示例 {i}: {ex['description']}")
-        if "tool" in ex:
-            lines.append("**格式**: 工具调用（JSON 格式）")
-            lines.append(f"```\n{ex['tool']}\n```")
-        if "response" in ex:
-            lines.append("**格式**: 最终答案")
-            lines.append(f"```\n{ex['response']}\n```")
-        lines.append("")
-    return "\n".join(lines)
-
-
 def _tool_signature(registry: dict) -> str:
     """计算工具注册表的 SHA256 签名（用于 prompt cache 检测变更）。"""
+    import hashlib
+
     schemas = {name: spec.get("schema", {}) for name, spec in sorted(registry.items())}
     return hashlib.sha256(
         json.dumps(schemas, ensure_ascii=False, sort_keys=True).encode()

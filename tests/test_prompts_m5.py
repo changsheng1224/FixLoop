@@ -53,8 +53,10 @@ class TestPatcherPrompt:
         assert "patched_lines" in text
         assert "不要调工具" in text or "不要调任何工具" in text
 
-    def test_type_error_fix_guidance(self):
-        text = _read("patcher.txt")
+    def test_type_error_fix_guidance_in_suffix(self):
+        from src.prompts.loader import load_role_prompt
+
+        text = load_role_prompt("patcher", "type_error")
         assert "int(a)" in text or "int()" in text
         assert "str(a)" in text or "str()" in text
 

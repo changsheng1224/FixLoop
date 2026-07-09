@@ -1,0 +1,4 @@
+通用修复原则：
+- 以预读测试 assert 的期望行为为准，做最小必要改动
+- 只修改下方已提供的源文件，不要引用其他项目文件名
+- 优先单行 diff，避免 multiline original_lines 导致 JSON 截断

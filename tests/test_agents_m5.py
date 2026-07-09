@@ -9,30 +9,42 @@ from src.agents.retriever import create_retriever
 from src.middleware import ToolGateway
 
 
+from src.tools.composite import REPAIR_CANONICAL_TOOL_NAMES
+
+
 @pytest.fixture
 def client():
     return FakeModelClient(["<final>ok</final>"])
 
 
 class TestAgentFactories:
-    def test_localizer_has_ast_parse(self, client, workspace):
+    def test_repair_agents_share_canonical_tool_registry(self, client, workspace):
+        """各 role 可见同一 canonical schema 集；执行权限由 Gateway 控制。"""
+        for factory in (create_localizer, create_retriever, create_patcher):
+            agent = factory(client, workspace)
+            assert agent._tool_names == REPAIR_CANONICAL_TOOL_NAMES
+            assert tuple(sorted(agent.tools.keys())) == REPAIR_CANONICAL_TOOL_NAMES
+
+    def test_localizer_registry_includes_ast_tools(self, client, workspace):
         agent = create_localizer(client, workspace)
         assert "ast_parse" in agent.tools
         assert "stack_parse" in agent.tools
-        assert "write_file" not in agent.tools
 
-    def test_retriever_has_git_tools(self, client, workspace):
+    def test_retriever_registry_includes_git_tools(self, client, workspace):
         agent = create_retriever(client, workspace)
         assert "git_blame" in agent.tools
         assert "find_test" in agent.tools
-        assert "ast_parse" not in agent.tools
 
-    def test_patcher_has_write_tools(self, client, workspace):
+    def test_patcher_registry_includes_write_tools(self, client, workspace):
         agent = create_patcher(client, workspace)
         assert "write_file" in agent.tools
         assert "patch_file" in agent.tools
-        assert "ast_parse" not in agent.tools  # 不能自己定位
-        assert "stack_parse" not in agent.tools
+
+    def test_repair_agents_use_repair_prefix_mode(self, client, workspace):
+        agent = create_localizer(client, workspace)
+        assert agent._prefix_mode == "repair"
+        assert "可用工具" in agent._prefix.stable_text
+        assert agent._prefix.role_text
 
     def test_all_agents_work(self, workspace):
         """3 个 Agent 都能正常 ask。"""

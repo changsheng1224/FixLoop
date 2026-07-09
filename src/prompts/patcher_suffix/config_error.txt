@@ -1,0 +1,4 @@
+配置错误（KeyError / pyproject.toml）修复原则：
+- 修改 pyproject.toml，追加缺失的 TOML 段（如 [tool.eval] multiplier = 2）
+- 优先使用 diff 字段（单行 -/+），避免 multiline original_lines 导致 JSON 截断
+- 不要修改与 Issue 无关的配置项

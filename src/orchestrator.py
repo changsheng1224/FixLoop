@@ -25,6 +25,7 @@ from src.repair.patch_applier import PatchApplier, apply_patch_to_text, parse_pa
 from src.repair.pipeline import RepairPipelineMixin
 from src.repair.repo_snapshot import restore_repo_snapshot, snapshot_repo
 from src.repair.verify import DockerVerifyStrategy, PytestVerifyStrategy, record_verify_timings
+from src.prompts.loader import load_role_prompt
 from src.state import (
     CandidatePatch,
     RepairPlan,
@@ -236,17 +237,16 @@ class Orchestrator(RepairPipelineMixin):
     def _restore_repo_snapshot(self, snapshot: dict[str, str]) -> None:
         restore_repo_snapshot(self._repo_root, snapshot)
 
-    def _complete_with_system_prompt(
-        self,
-        agent,
-        prompt_name: str,
-        user_prompt: str,
-    ) -> tuple[str, int]:
-        """经 Agent.complete_once 做单次 completion（不走 Agent loop）。"""
-        del prompt_name
-        t0 = time.time()
-        raw = agent.complete_once(user_prompt)
-        return raw, int((time.time() - t0) * 1000)
+    @staticmethod
+    def _patcher_system_prompt(plan: RepairPlan | None) -> str:
+        """Patcher ``complete_once`` 使用的 L2 system 文本（base + issue suffix）。
+
+        故意不含 L1 repair prefix（rules/tools/examples）：Patcher 单次 JSON
+        completion 不调工具，经 ``complete_once(system_prompt=...)`` 注入，
+        而非 ContextManager 的 role 段。
+        """
+        issue_type = plan.issue_type if plan else ""
+        return load_role_prompt("patcher", issue_type)
 
     def _run_agent(
         self,
@@ -341,25 +341,36 @@ class Orchestrator(RepairPipelineMixin):
         不走 Agent loop，因为 DeepSeek 不遵守工具调用格式。
         1 次 API 调用 → 解析 JSON → 直接 patch 文件。
         """
+        plan = state.repair_plan
         prompt = self._patcher_prompt(
             state.suspect_locations,
             state.retrieved_context,
             state.feedback,
-            plan=state.repair_plan,
+            plan=plan,
             issue=state.issue_input,
         )
+
+        issue_type = plan.issue_type if plan else ""
+        patcher_system = self._patcher_system_prompt(plan)
 
         t0 = time.time()
         tracer = self._repair_tracer
         if tracer:
-            tracer.emit("patcher", "complete_once_started", {})
+            tracer.emit(
+                "patcher",
+                "complete_once_started",
+                {
+                    "issue_type": issue_type,
+                    "prompt_variant": issue_type or "default",
+                },
+            )
         usage_before = {}
         if self.patcher is not None:
             from src.eval.token_usage import get_client_session_usage
 
             usage_before = get_client_session_usage(self.patcher.model_client)
         try:
-            raw, _ = self._complete_with_system_prompt(self.patcher, "patcher", prompt)
+            raw = self.patcher.complete_once(prompt, system_prompt=patcher_system)
         except Exception as e:
             state.agent_errors["patcher"] = str(e)
             elapsed_ms = int((time.time() - t0) * 1000)
@@ -521,30 +532,11 @@ class Orchestrator(RepairPipelineMixin):
             parts.append(f"[上一轮验证反馈]\n{feedback}\n")
         parts.append("基于以下信息生成修复补丁：")
 
-        if plan and plan.issue_type == "type_error":
-            parts.append(
-                "修复提示: 这是类型错误。若测试断言期望数字结果，"
-                "请用 int()/float() 做数值转换，禁止 str() 拼接。"
-            )
-        if plan and plan.issue_type in ("import_error", "composite"):
-            parts.append(
-                "修复提示: import 错误通常修正 import 路径或模块名（如 helper → helpers）。"
-                "只修改下方已提供的源文件，不要引用其他项目文件名。"
-            )
-            if re.search(r"cannot import name", issue, re.IGNORECASE):
-                parts.append("修复提示: 除 import 行外，须同步修改本文件内对错误符号名的所有调用。")
+        if plan and re.search(r"cannot import name", issue, re.IGNORECASE):
+            parts.append("修复提示: 除 import 行外，须同步修改本文件内对错误符号名的所有调用。")
         if plan and plan.issue_type == "composite":
             parts.append(
-                "修复提示: 复合错误可能需修改多个文件（import + 类型转换）。"
-                "输出 JSON 数组，每项对应一个 file_path；"
                 f"至少修改 {len(plan.suspect_files or [])} 个相关文件中的每一处错误。"
-            )
-        if plan and plan.issue_type == "config_error":
-            parts.append(
-                "修复提示: 配置错误通常需修改 pyproject.toml。"
-                "使用 diff 字段追加 TOML 段（如 [tool.eval]），"
-                "不要改 unrelated 字段；JSON 中 diff 用 \\n 表示换行，"
-                "避免 multiline original_lines。"
             )
         if issue and "concatenate str" in issue.lower():
             parts.append(

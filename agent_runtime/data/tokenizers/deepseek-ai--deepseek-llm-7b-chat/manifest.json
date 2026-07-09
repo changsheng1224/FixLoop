@@ -1,0 +1,7 @@
+{
+  "repo_id": "deepseek-ai/deepseek-llm-7b-chat",
+  "files": {
+    "tokenizer.json": "tokenizer.json",
+    "tokenizer_config.json": "tokenizer_config.json"
+  }
+}

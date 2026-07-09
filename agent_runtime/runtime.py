@@ -6,11 +6,14 @@ Agent 是最外层的用户接口，封装了模型客户端、工具注册表�
 import json
 import re
 from pathlib import Path
+from typing import Literal
 
 from agent_runtime.config import AgentConfig
 from agent_runtime.prompt_prefix import build_prompt_prefix
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.tools import build_tool_registry
+
+PrefixMode = Literal["default", "repair"]
 
 
 class Agent:
@@ -31,6 +34,7 @@ class Agent:
         system_prompt: str = "",
         agent_name: str = "",
         tool_policy=None,
+        prefix_mode: PrefixMode = "default",
     ):
         self.config = config
         self.model_client = model_client
@@ -41,13 +45,14 @@ class Agent:
         self._system_prompt = system_prompt
         self._agent_name = agent_name
         self._tool_policy = tool_policy
+        self._prefix_mode: PrefixMode = prefix_mode
         self.shared_run_id: str | None = None
         self._last_budget_meta: dict = {}
 
         # 构建工具上下文和注册表（允许外部注入）
         self.tool_context = ToolContext(root=self._cwd)
         self.tools = tools if tools is not None else build_tool_registry(self.tool_context)
-        self._tool_names = set(self.tools.keys())
+        self._tool_names = tuple(sorted(self.tools.keys()))
 
         # 会话状态 + 记忆
         self.session: dict = self._new_session()
@@ -89,22 +94,33 @@ class Agent:
         loop = AgentLoop(agent=self)
         return loop.run(user_message, callback=callback)
 
-    def complete_once(self, user_message: str) -> str:
-        """单次 LLM completion，不进入 AgentLoop（使用构造时的 system_prompt）。"""
-        user_message, budget_meta = self.fit_user_message(user_message)
+    def complete_once(self, user_message: str, *, system_prompt: str | None = None) -> str:
+        """单次 LLM completion，不进入 AgentLoop。
+
+        默认使用构造时的 ``system_prompt``；传入 ``system_prompt`` 可 per-call 覆盖
+        （如 Patcher 按 issue_type 注入变体，且故意不含 L1 repair prefix）。
+        """
+        user_message, budget_meta = self.fit_user_message(
+            user_message, system_override=system_prompt
+        )
         self._last_budget_meta = budget_meta
-        prefix = self._system_prompt
+        prefix = system_prompt if system_prompt is not None else self._system_prompt
         full_prompt = f"{prefix}\n\n{user_message}" if prefix else user_message
         return self.model_client.complete(
             full_prompt,
             max_new_tokens=self.config.max_new_tokens or 4096,
         )
 
-    def fit_user_message(self, user_message: str) -> tuple[str, dict]:
+    def fit_user_message(
+        self, user_message: str, *, system_override: str | None = None
+    ) -> tuple[str, dict]:
         """用统一 TokenBudget 裁剪 user 段，保留 system/prefix 优先。"""
         from agent_runtime.context_manager import TOTAL_BUDGET, fit_prompt_to_budget
 
-        system = self._system_text_for_budget()
+        if system_override is not None:
+            system = system_override
+        else:
+            system = self._system_text_for_budget()
         _, fitted_user, meta = fit_prompt_to_budget(
             system,
             user_message,
@@ -116,11 +132,23 @@ class Agent:
         return fitted_user, meta
 
     def _system_text_for_budget(self) -> str:
-        """预算计算用的 system 文本（native 用 prefix，complete_once 用 system_prompt）。"""
-        prefix_text = getattr(self._prefix, "text", "") or ""
-        if prefix_text:
-            return prefix_text
+        """预算计算用的 system 文本（仅 stable 段，不含 workspace）。"""
+        stable = getattr(self._prefix, "stable_text", "") or ""
+        if stable:
+            return stable
         return self._system_prompt or ""
+
+    def build_dynamic_context(self, user_message: str) -> tuple[str, dict]:
+        """动态上下文：workspace → memory → relevant → history。"""
+        from agent_runtime.context_manager import ContextManager
+
+        return ContextManager(self).build_dynamic_context(user_message)
+
+    def build_for_native(self, user_message: str) -> tuple[str, str, dict]:
+        """Native API 路径的 system + user 拆分。"""
+        from agent_runtime.context_manager import ContextManager
+
+        return ContextManager(self).build_for_native(user_message)
 
     def prompt(self, user_message: str) -> str:
         """组装完整 prompt 文本（经 ContextManager token 预算控制）。"""
@@ -361,21 +389,28 @@ class Agent:
     def _build_prefix(self, system_prompt: str = ""):
         """构建 System Prompt 前缀。system_prompt 非空时用它替代默认前缀。"""
         if system_prompt:
-            from agent_runtime.prompt_prefix import PromptPrefix
+            if self._prefix_mode == "repair":
+                from agent_runtime.prompt_prefix import build_repair_agent_prefix
 
-            text = system_prompt + "\n\n" + self.workspace.text()
-            return PromptPrefix(
-                text=text,
-                hash="",
-                workspace_fingerprint=self.workspace.fingerprint(),
-                tool_signature="",
-            )
+                return build_repair_agent_prefix(
+                    system_prompt,
+                    self.workspace,
+                    self.tools,
+                    dry_run=self.dry_run,
+                    approval=self.config.approval,
+                    tool_names=self._tool_names,
+                    repo_root=self._cwd,
+                )
+            from agent_runtime.prompt_prefix import build_custom_system_prefix
+
+            return build_custom_system_prefix(system_prompt, self.workspace)
         return build_prompt_prefix(
             self.workspace,
             self.tools,
             dry_run=self.dry_run,
             approval=self.config.approval,
-            tool_names=set(self._tool_names),
+            tool_names=self._tool_names,
+            repo_root=self._cwd,
         )
 
     def _new_session_id(self) -> str:

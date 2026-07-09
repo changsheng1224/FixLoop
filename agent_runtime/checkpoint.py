@@ -18,6 +18,7 @@ RUNTIME_IDENTITY_KEYS = [
     "model",
     "approval",
     "max_steps",
+    "prompt_assets_fingerprint",
 ]
 
 
@@ -37,6 +38,7 @@ def current_runtime_identity(agent) -> dict:
         "approval": agent.config.approval,
         "max_steps": agent.config.max_steps,
         "tools_signature": agent._prefix.tool_signature,
+        "prompt_assets_fingerprint": getattr(agent._prefix, "assets_fingerprint", "") or "",
     }
 
 

@@ -94,9 +94,12 @@ class TestContextManagerBuild:
 
     def test_prefix_included(self, agent):
         cm = ContextManager(agent)
-        prompt, _ = cm.build("test")
+        prompt, meta = cm.build("test")
         assert "可用工具" in prompt
         assert "list_files" in prompt
+        assert "Workspace:" in prompt
+        assert meta["sections"]["system"] > 0
+        assert meta["sections"]["workspace"] > 0
 
     def test_history_present_when_multiple_rounds(self, agent):
         # 模拟多轮对话
