@@ -3,6 +3,9 @@
 权限规则对 Agent 透明——Agent 收到的是普通工具错误返回，不知道被拦截。
 """
 
+from agent_runtime.tool_executor import ToolExecutionResult
+from agent_runtime.tool_rejection import build_gateway_rejection_metadata
+
 
 class ToolGateway:
     """Agent 工具调用权限网关。"""
@@ -22,16 +25,9 @@ class ToolGateway:
     def dispatch(self, agent_name: str, tool_name: str, execute_fn):
         """有权限则执行 execute_fn，否则返回 permission_denied 工具结果。"""
         if not self.can_call(agent_name, tool_name):
-            from agent_runtime.tool_executor import ToolExecutionResult
-
             return ToolExecutionResult(
                 content=f"Error: 工具 '{tool_name}' 对 '{agent_name}' 不可用。",
-                metadata={
-                    "tool_status": "rejected",
-                    "tool_error_code": "permission_denied",
-                    "rejection_layer": "gateway",
-                    "rejection_reason": "role_not_allowed",
-                },
+                metadata=build_gateway_rejection_metadata(),
             )
         return execute_fn()
 

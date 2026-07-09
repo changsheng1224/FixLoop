@@ -9,7 +9,8 @@ from agent_runtime.config import AgentConfig
 from agent_runtime.providers.clients import FakeModelClient
 from agent_runtime.runtime import Agent
 from agent_runtime.task_state import TaskState
-from agent_runtime.tool_executor import QuotaEnforcer, ToolExecutor, build_executor_rejection_metadata
+from agent_runtime.tool_executor import QuotaEnforcer, ToolExecutor
+from agent_runtime.tool_rejection import build_executor_rejection_metadata
 from src.agents.factory import create_localizer, create_patcher
 from src.middleware import ToolGateway
 

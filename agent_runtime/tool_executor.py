@@ -19,28 +19,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from agent_runtime.schema_utils import auto_validate
-
-
-def build_executor_rejection_metadata(gate_id: int, tool_error_code: str, **extra) -> dict:
-    meta = {
-        "tool_status": "rejected",
-        "tool_error_code": tool_error_code,
-        "rejection_layer": "executor",
-        "gate_id": gate_id,
-    }
-    meta.update(extra)
-    return meta
-
-
-def build_executor_error_metadata(tool_error_code: str = "runtime_error", **extra) -> dict:
-    meta = {
-        "tool_status": "error",
-        "tool_error_code": tool_error_code,
-        "rejection_layer": "executor",
-        "gate_id": 9,
-    }
-    meta.update(extra)
-    return meta
+from agent_runtime.tool_rejection import (
+    build_executor_error_metadata,
+    build_executor_rejection_metadata,
+    build_gate7_pass_metadata,
+)
 
 
 @dataclass
@@ -76,13 +59,11 @@ class ToolExecutor:
         approval_policy: str = "ask",
         dry_run: bool = False,
         quota: "QuotaEnforcer | None" = None,
-        agent_name: str = "",
     ):
         self.agent = agent
         self.approval_policy = approval_policy or agent.config.approval
         self.dry_run = dry_run
         self._quota = quota
-        self._agent_name = agent_name
         self._high_risk_tools = self._collect_high_risk()
 
     def execute_gated(self, name: str, args: dict) -> ToolExecutionResult:
@@ -158,13 +139,7 @@ class ToolExecutor:
                     f"Error: 工具 '{name}' 调用被拒绝（approval_policy={self.approval_policy}）",
                     **extra,
                 )
-            gate7_meta = {
-                "gate_id": 7,
-                "approval_policy": self.approval_policy,
-                "approval_result": (
-                    "auto_allowed" if self.approval_policy == "auto" else "user_approved"
-                ),
-            }
+            gate7_meta = build_gate7_pass_metadata(self.approval_policy)
 
         # ---- Gate 8: 执行前工作区快照 ----
         is_risky = name in self._high_risk_tools

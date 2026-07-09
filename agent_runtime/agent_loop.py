@@ -334,24 +334,13 @@ class AgentLoop:
 
     def _emit_tool_trace(self, tool_name: str, result) -> None:
         """写入 tool_preview（若有）与 tool_executed trace 事件。"""
+        from agent_runtime.tool_rejection import tool_trace_payload
+
         meta = getattr(result, "metadata", None) or {}
         preview = meta.get("patch_preview")
         if preview:
             self._emit("tool_preview", {"tool": tool_name, **preview})
-        trace_keys = (
-            "tool_status",
-            "tool_error_code",
-            "rejection_layer",
-            "rejection_reason",
-            "gate_id",
-            "approval_policy",
-            "approval_result",
-        )
-        payload = {"tool": tool_name}
-        for key in trace_keys:
-            if key in meta:
-                payload[key] = meta[key]
-        self._emit("tool_executed", payload)
+        self._emit("tool_executed", tool_trace_payload(tool_name, meta))
 
     def _emit(self, event: str, payload: dict | None = None):
         """发送 trace 事件到 RunStore。"""

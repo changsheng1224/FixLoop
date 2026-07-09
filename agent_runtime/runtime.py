@@ -194,7 +194,6 @@ class Agent:
                 approval_policy=self.config.approval,
                 dry_run=self.dry_run,
                 quota=self.quota,
-                agent_name=self._agent_name,
             )
         return self._tool_executor
 
