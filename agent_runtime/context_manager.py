@@ -118,8 +118,8 @@ class ContextManager:
     6. request    — 当前用户输入（L1 截断后）
     """
 
-    SECTION_ORDER = ("system", "workspace", "memory", "relevant", "history")
-    DYNAMIC_ORDER = ("workspace", "memory", "relevant", "history")
+    SECTION_ORDER = ("system", "role", "workspace", "memory", "relevant", "history")
+    DYNAMIC_ORDER = ("role", "workspace", "memory", "relevant", "history")
 
     def __init__(self, agent, total_budget: int | None = None):
         self.agent = agent
@@ -200,6 +200,7 @@ class ContextManager:
 
         if include_system:
             add_section("system", self._get_system(), scaled_section_budget(BUDGET_PREFIX, total))
+        add_section("role", self._get_role(), scaled_section_budget(BUDGET_PREFIX, total))
         add_section("workspace", self._get_workspace(), scaled_section_budget(BUDGET_PREFIX, total))
         add_section("memory", self._get_memory(), scaled_section_budget(BUDGET_MEMORY, total))
         add_section(
@@ -245,6 +246,9 @@ class ContextManager:
         if stable:
             return stable
         return getattr(self.agent, "_system_prompt", "") or ""
+
+    def _get_role(self) -> str:
+        return getattr(self.agent._prefix, "role_text", "") or ""
 
     def _get_workspace(self) -> str:
         workspace_text = getattr(self.agent._prefix, "workspace_text", "")

@@ -47,7 +47,7 @@ class Agent:
         # 构建工具上下文和注册表（允许外部注入）
         self.tool_context = ToolContext(root=self._cwd)
         self.tools = tools if tools is not None else build_tool_registry(self.tool_context)
-        self._tool_names = set(self.tools.keys())
+        self._tool_names = tuple(sorted(self.tools.keys()))
 
         # 会话状态 + 记忆
         self.session: dict = self._new_session()
@@ -373,6 +373,19 @@ class Agent:
     def _build_prefix(self, system_prompt: str = ""):
         """构建 System Prompt 前缀。system_prompt 非空时用它替代默认前缀。"""
         if system_prompt:
+            from src.tools.composite import is_repair_canonical_registry
+
+            if is_repair_canonical_registry(self.tools):
+                from agent_runtime.prompt_prefix import build_repair_agent_prefix
+
+                return build_repair_agent_prefix(
+                    system_prompt,
+                    self.workspace,
+                    self.tools,
+                    dry_run=self.dry_run,
+                    approval=self.config.approval,
+                    tool_names=self._tool_names,
+                )
             from agent_runtime.prompt_prefix import build_custom_system_prefix
 
             return build_custom_system_prefix(system_prompt, self.workspace)
@@ -381,7 +394,7 @@ class Agent:
             self.tools,
             dry_run=self.dry_run,
             approval=self.config.approval,
-            tool_names=set(self._tool_names),
+            tool_names=self._tool_names,
         )
 
     def _new_session_id(self) -> str:

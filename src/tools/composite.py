@@ -11,45 +11,38 @@ from src.tools.sandbox_tools import build_sandbox_tool_registry
 
 RepairAgentRole = Literal["localizer", "retriever", "patcher", "verifier", "baseline"]
 
-_WRITE_TOOLS = ("write_file", "patch_file", "run_shell")
-_LOCALIZER_REMOVE = _WRITE_TOOLS
-_RETRIEVER_REMOVE = _WRITE_TOOLS + ("ast_parse", "stack_parse")
+REPAIR_CANONICAL_TOOL_NAMES: tuple[str, ...] = (
+    "ast_parse",
+    "find_test",
+    "git_blame",
+    "git_diff",
+    "list_files",
+    "patch_file",
+    "read_file",
+    "run_shell",
+    "sandbox_build",
+    "sandbox_test",
+    "sandbox_verify",
+    "search",
+    "stack_parse",
+    "write_file",
+)
+
+
+def build_repair_canonical_tools(ctx: ToolContext) -> dict:
+    """Repair 流水线 canonical 工具全集（字典序固定，各 phase 共用）。"""
+    tools = build_tool_registry(ctx)
+    tools.update(build_repair_tools(ctx))
+    tools.update(build_sandbox_tool_registry(ctx))
+    return {name: tools[name] for name in REPAIR_CANONICAL_TOOL_NAMES}
+
+
+def is_repair_canonical_registry(tools: dict) -> bool:
+    """注册表是否为 repair canonical 全集。"""
+    return tuple(sorted(tools.keys())) == REPAIR_CANONICAL_TOOL_NAMES
 
 
 def build_repair_agent_tools(ctx: ToolContext, role: RepairAgentRole) -> dict:
-    """按修复流水线角色返回完整工具注册表。"""
-    if role == "verifier":
-        return build_sandbox_tool_registry(ctx)
-
-    if role == "baseline":
-        tools = build_tool_registry(ctx)
-        tools.update(build_repair_tools(ctx))
-        tools.update(build_sandbox_tool_registry(ctx))
-        return tools
-
-    tools = build_tool_registry(ctx)
-    repair_tools = build_repair_tools(ctx)
-
-    if role == "localizer":
-        tools.update(
-            {
-                "ast_parse": repair_tools["ast_parse"],
-                "stack_parse": repair_tools["stack_parse"],
-            }
-        )
-        for name in _LOCALIZER_REMOVE:
-            tools.pop(name, None)
-    elif role == "retriever":
-        tools.update(
-            {
-                "git_blame": repair_tools["git_blame"],
-                "git_diff": repair_tools["git_diff"],
-                "find_test": repair_tools["find_test"],
-            }
-        )
-        for name in _RETRIEVER_REMOVE:
-            tools.pop(name, None)
-    elif role == "patcher":
-        tools.pop("run_shell", None)
-
-    return tools
+    """按修复流水线角色返回 canonical 工具注册表（执行权限由 ToolGateway 控制）。"""
+    del role  # 各 phase 同一 schema 集；权限见 src/middleware.py
+    return build_repair_canonical_tools(ctx)

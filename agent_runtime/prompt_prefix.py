@@ -14,6 +14,7 @@ __all__ = [
     "TOOL_EXAMPLES",
     "build_custom_system_prefix",
     "build_prompt_prefix",
+    "build_repair_agent_prefix",
 ]
 
 
@@ -27,6 +28,7 @@ class PromptPrefix:
     hash: str  # stable_text 的 SHA256（prompt cache key）
     workspace_fingerprint: str
     tool_signature: str  # 工具 schema 的 SHA256
+    role_text: str = ""  # L2 角色 prompt（不进 hash）
 
 
 # ============================================================================
@@ -95,10 +97,61 @@ def build_prompt_prefix(
     return _assemble_prefix(stable_text, workspace, tool_sig)
 
 
+def build_repair_agent_prefix(
+    l2_role_prompt: str,
+    workspace,
+    tools_registry: dict,
+    dry_run: bool = False,
+    approval: str = "ask",
+    *,
+    tool_names: tuple[str, ...] | set[str] | None = None,
+) -> PromptPrefix:
+    """Repair 双层 prefix：L1 stable（rules+tools+examples）+ L2 role（不进 hash）。"""
+    if tool_names is not None:
+        allowed = set(tool_names)
+        tools_registry = {k: v for k, v in tools_registry.items() if k in allowed}
+    stable_sections = [
+        _rules(dry_run=dry_run, approval=approval),
+        _repair_tool_gateway_note(),
+        _tools_section(tools_registry),
+        _examples_section(),
+    ]
+    stable_text = "\n\n".join(stable_sections)
+    role_text = l2_role_prompt.strip()
+    if role_text:
+        assert_stable_prefix_clean(role_text)
+    tool_sig = _tool_signature(tools_registry)
+    return _assemble_repair_prefix(stable_text, role_text, workspace, tool_sig)
+
+
 def build_custom_system_prefix(system_prompt: str, workspace) -> PromptPrefix:
     """L2 角色 system prompt + workspace；稳定段仅为 system_prompt。"""
     stable_text = system_prompt.strip()
     return _assemble_prefix(stable_text, workspace, tool_signature="")
+
+
+def _assemble_repair_prefix(
+    stable_text: str,
+    role_text: str,
+    workspace,
+    tool_signature: str,
+) -> PromptPrefix:
+    assert_stable_prefix_clean(stable_text)
+    workspace_text = workspace.text()
+    parts = [stable_text]
+    if role_text:
+        parts.append(role_text)
+    if workspace_text:
+        parts.append(workspace_text)
+    return PromptPrefix(
+        text="\n\n".join(parts),
+        stable_text=stable_text,
+        workspace_text=workspace_text,
+        hash=hash_stable_prefix(stable_text),
+        workspace_fingerprint=workspace.fingerprint(),
+        tool_signature=tool_signature,
+        role_text=role_text,
+    )
 
 
 def _assemble_prefix(stable_text: str, workspace, tool_signature: str) -> PromptPrefix:
@@ -160,6 +213,13 @@ def _rules(dry_run: bool = False, approval: str = "ask") -> str:
             "9. 你拥有自动审批权限，可以直接修改文件和执行命令。谨慎使用这些权限，只做必要的修改。"
         )
     return "\n".join(rules)
+
+
+def _repair_tool_gateway_note() -> str:
+    return (
+        "**7. 工具可见性与权限**：下列为 repair 流水线工具全集；"
+        "实际可调用范围由运行时权限控制。若调用被拒绝，请换用其他工具或返回 <final>。"
+    )
 
 
 def _tools_section(registry: dict) -> str:
