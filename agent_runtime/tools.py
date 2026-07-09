@@ -54,11 +54,12 @@ class WriteFileArgs:
 
 @dataclass
 class PatchFileArgs:
-    """精确文本替换（M2 实现）。"""
+    """精确文本替换或 unified diff 多 hunk 修补。"""
 
     path: str = ""
     old_text: str = ""
     new_text: str = ""
+    diff: str = ""
 
 
 @dataclass
@@ -300,15 +301,14 @@ def tool_write_file(context, args: dict) -> str:
 
 
 def tool_patch_file(context, args: dict) -> str:
-    """精确文本替换：old_text 必须出现恰好 1 次。
+    """精确文本替换或 unified diff 多 hunk 修补。
 
-    Args 必须包含 'path'、'old_text'、'new_text'。
+    Args 必须包含 path，以及 diff 或 (old_text + new_text)。
+    old_text 必须出现恰好 1 次；diff 支持多个 @@ hunk。
     """
     raw_path = args.get("path", "")
     if not raw_path:
         return "Error: 缺少必填参数 path"
-    old_text = args.get("old_text", "")
-    new_text = args.get("new_text", "")
 
     try:
         target = context.resolve(raw_path)
@@ -325,14 +325,41 @@ def tool_patch_file(context, args: dict) -> str:
     except UnicodeDecodeError:
         return f"Error: 无法以 UTF-8 编码读取: {raw_path}"
 
-    count = text.count(old_text)
-    if count == 0:
-        return "Error: old_text 在文件中未找到（出现 0 次）。old_text 必须恰好出现 1 次。"
-    if count > 1:
-        return f"Error: old_text 出现 {count} 次，必须恰好出现 1 次。请提供更多上下文使其唯一。"
+    from agent_runtime.atomic_io import atomic_write_text
+    from agent_runtime.patch_engine import apply_plan, build_preview, parse_patch_input
 
-    target.write_text(text.replace(old_text, new_text, 1), encoding="utf-8")
-    return f"已修补 {raw_path}（替换 1 处，{len(new_text) - len(old_text):+d} 字符）"
+    try:
+        plan = parse_patch_input(args)
+    except ValueError as e:
+        return f"Error: {e}"
+
+    if plan.mode == "legacy":
+        count = text.count(plan.old_text)
+        if count == 0:
+            return "Error: old_text 在文件中未找到（出现 0 次）。old_text 必须恰好出现 1 次。"
+        if count > 1:
+            return (
+                f"Error: old_text 出现 {count} 次，必须恰好出现 1 次。"
+                "请提供更多上下文使其唯一。"
+            )
+
+    new_text = apply_plan(text, plan)
+    if new_text is None:
+        return "Error: 补丁无法应用到文件（hunk 与文件内容不匹配）。"
+
+    try:
+        atomic_write_text(target, new_text)
+    except OSError as e:
+        return f"Error: 写入文件失败: {e}"
+
+    preview = build_preview(raw_path, plan)
+    delta = preview.lines_added - preview.lines_removed
+    if preview.hunk_count == 1 and plan.mode == "legacy":
+        return f"已修补 {raw_path}（替换 1 处，{delta:+d} 字符）"
+    return (
+        f"已修补 {raw_path}（{preview.hunk_count} 个 hunk，"
+        f"-{preview.lines_removed}/+{preview.lines_added} 行）"
+    )
 
 
 def tool_run_shell(context, args: dict) -> str:

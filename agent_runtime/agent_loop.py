@@ -115,7 +115,7 @@ class AgentLoop:
             ts.node_timings["tool_exec_ms"] += te_ms
             _log_loop(f"  [loop] {tool_name} tool={te_ms}ms\n")
             self.agent.update_memory_after_tool(tool_name, tool_input, result_text)
-            self._emit("tool_executed", {"tool": tool_name})
+            self._emit_tool_trace(tool_name, result)
             if callback:
                 callback.on_tool_executed(tool_name, result_text)
             return result_text
@@ -238,7 +238,7 @@ class AgentLoop:
                 self.agent.record(
                     {"role": "tool", "content": result_text, "tool_name": tool_name}
                 )
-                self._emit("tool_executed", {"tool": tool_name})
+                self._emit_tool_trace(tool_name, result)
                 if callback:
                     callback.on_tool_executed(tool_name, result_text)
                 user_message = f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
@@ -323,6 +323,14 @@ class AgentLoop:
 
             self._store = RunStore(root=self.agent._cwd)
         return self._store
+
+    def _emit_tool_trace(self, tool_name: str, result) -> None:
+        """写入 tool_preview（若有）与 tool_executed trace 事件。"""
+        meta = getattr(result, "metadata", None) or {}
+        preview = meta.get("patch_preview")
+        if preview:
+            self._emit("tool_preview", {"tool": tool_name, **preview})
+        self._emit("tool_executed", {"tool": tool_name})
 
     def _emit(self, event: str, payload: dict | None = None):
         """发送 trace 事件到 RunStore。"""

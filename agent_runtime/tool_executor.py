@@ -133,14 +133,30 @@ class ToolExecutor:
                 metadata={"tool_status": "success", "dry_run": True},
             )
 
+        # ---- Gate 6.5: patch_file 预览（apply 前校验 + 摘要） ----
+        patch_preview_meta = None
+        if name == "patch_file":
+            patch_preview_meta, preview_err = self._build_patch_preview(args)
+            if preview_err:
+                return ToolExecutionResult(
+                    content=f"Error: 补丁预览失败: {preview_err}",
+                    metadata={"tool_status": "rejected", "tool_error_code": "invalid_args"},
+                )
+
         # ---- Gate 7: 审批检查 ----
         if name in self._high_risk_tools:
-            if not self._approve(name, args):
+            if not self._approve(name, args, patch_preview_meta):
+                denied_meta = {
+                    "tool_status": "rejected",
+                    "tool_error_code": "approval_denied",
+                }
+                if patch_preview_meta:
+                    denied_meta["patch_preview"] = patch_preview_meta
                 return ToolExecutionResult(
                     content=(
                         f"Error: 工具 '{name}' 调用被拒绝（approval_policy={self.approval_policy}）"
                     ),
-                    metadata={"tool_status": "rejected", "tool_error_code": "approval_denied"},
+                    metadata=denied_meta,
                 )
 
         # ---- Gate 8: 执行前工作区快照 ----
@@ -158,6 +174,8 @@ class ToolExecutor:
 
         # ---- Gate 9 续: 执行后快照对比 ----
         metadata = {"tool_status": "success"}
+        if patch_preview_meta:
+            metadata["patch_preview"] = patch_preview_meta
         if is_risky:
             after_snapshot = self._capture_snapshot()
             metadata.update(self._diff_snapshots(before_snapshot, after_snapshot))
@@ -201,7 +219,7 @@ class ToolExecutor:
         same_args = recent[0].get("tool_args") == recent[1].get("tool_args") == args
         return same_name and same_args
 
-    def _approve(self, name: str, args: dict) -> bool:
+    def _approve(self, name: str, args: dict, patch_preview: dict | None = None) -> bool:
         """审批检查。
         - "auto" → True
         - "never" → False
@@ -213,14 +231,45 @@ class ToolExecutor:
             return False
         # "ask" 模式
         try:
-            response = input(
-                f"\n⚠ 审批: 允许执行高风险工具 '{name}'?\n"
-                f"  参数: {args}\n"
-                f"  输入 'y' 批准，其他键拒绝: "
-            )
+            if patch_preview and name == "patch_file":
+                prompt = (
+                    f"\n⚠ 审批: patch_file → {patch_preview.get('path', args.get('path', ''))}\n"
+                    f"{patch_preview.get('preview_text', '')}\n"
+                    f"  输入 'y' 批准，其他键拒绝: "
+                )
+            else:
+                prompt = (
+                    f"\n⚠ 审批: 允许执行高风险工具 '{name}'?\n"
+                    f"  参数: {args}\n"
+                    f"  输入 'y' 批准，其他键拒绝: "
+                )
+            response = input(prompt)
             return response.strip().lower() == "y"
         except (EOFError, KeyboardInterrupt):
             return False
+
+    def _build_patch_preview(self, args: dict) -> tuple[dict | None, str | None]:
+        """为 patch_file 构建 apply 前预览；失败返回错误信息。"""
+        from agent_runtime.patch_engine import try_build_patch_preview
+
+        raw_path = args.get("path", "")
+        if not raw_path:
+            return None, "缺少必填参数 path"
+        try:
+            target = self.agent.tool_context.resolve(raw_path)
+        except ValueError as e:
+            return None, str(e)
+        if not target.exists():
+            return None, f"文件不存在: {raw_path}"
+        if not target.is_file():
+            return None, f"不是文件: {raw_path}"
+        try:
+            text = target.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            return None, f"无法以 UTF-8 编码读取: {raw_path}"
+        except OSError as e:
+            return None, f"读取文件失败: {e}"
+        return try_build_patch_preview(raw_path, text, args)
 
     def _capture_snapshot(self) -> dict[str, str]:
         """对 workspace 根目录下所有文件做 SHA256 快照。"""
