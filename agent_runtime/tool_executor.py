@@ -19,6 +19,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from agent_runtime.schema_utils import auto_validate
+from agent_runtime.tool_rejection import (
+    build_executor_error_metadata,
+    build_executor_rejection_metadata,
+    build_gate7_pass_metadata,
+)
 
 
 @dataclass
@@ -34,6 +39,8 @@ class ToolExecutionResult:
     #   tool_status: "success" | "rejected" | "error"
     #   tool_error_code: "allowed_tools" | "not_found" | "invalid_args" |
     #                    "duplicate" | "approval_denied" | "runtime_error"
+    #   rejection_layer: "executor"（Gateway 拒绝在 middleware）
+    #   gate_id: 1–9
     #   affected_paths: list[str]
     #   diff_summary: str
 
@@ -52,52 +59,28 @@ class ToolExecutor:
         approval_policy: str = "ask",
         dry_run: bool = False,
         quota: "QuotaEnforcer | None" = None,
-        agent_name: str = "",
-        tool_policy=None,
     ):
         self.agent = agent
         self.approval_policy = approval_policy or agent.config.approval
         self.dry_run = dry_run
         self._quota = quota
-        self._agent_name = agent_name
-        self._tool_policy = tool_policy
         self._high_risk_tools = self._collect_high_risk()
 
-    def execute(self, name: str, args: dict) -> ToolExecutionResult:
-        """按序执行闸口，返回结构化结果。
-
-        Args:
-            name: 工具名称。
-            args: 工具参数字典。
-
-        Returns:
-            ToolExecutionResult 实例。
-        """
-        if self._tool_policy is not None and not self._tool_policy(self._agent_name, name):
-            return ToolExecutionResult(
-                content=f"Error: 工具 '{name}' 对 '{self._agent_name}' 不可用。",
-                metadata={
-                    "tool_status": "rejected",
-                    "tool_error_code": "permission_denied",
-                },
-            )
-
-        # ---- Gate 1: allowed_tools 白名单 ----
+    def execute_gated(self, name: str, args: dict) -> ToolExecutionResult:
+        """按序执行 Executor 闸口（Gate 1–9），不含 Gateway 权限层。"""
         allowed = self.agent._tool_names
         if name not in allowed:
-            return ToolExecutionResult(
-                content=f"Error: 工具 '{name}' 不在允许列表中。"
+            return self._rejected(
+                1,
+                "allowed_tools",
+                f"Error: 工具 '{name}' 不在允许列表中。"
                 f"可用工具: {', '.join(sorted(allowed))}",
-                metadata={"tool_status": "rejected", "tool_error_code": "allowed_tools"},
             )
 
         # ---- Gate 2: 工具存在检查 ----
         tool_spec = self.agent.tools.get(name)
         if tool_spec is None:
-            return ToolExecutionResult(
-                content=f"Error: 工具 '{name}' 未注册。",
-                metadata={"tool_status": "rejected", "tool_error_code": "not_found"},
-            )
+            return self._rejected(2, "not_found", f"Error: 工具 '{name}' 未注册。")
 
         # ---- Gate 3: 参数校验 ----
         args_dataclass = self._get_args_class(name)
@@ -105,25 +88,24 @@ class ToolExecutor:
             try:
                 args = auto_validate(args_dataclass, args)
             except ValueError as e:
-                return ToolExecutionResult(
-                    content=f"Error: 参数校验失败: {e}",
-                    metadata={"tool_status": "rejected", "tool_error_code": "invalid_args"},
-                )
+                return self._rejected(3, "invalid_args", f"Error: 参数校验失败: {e}")
 
         # ---- Gate 4: 配额检查 ----
         if self._quota is not None:
             if not self._quota.check(name):
-                return ToolExecutionResult(
-                    content=f"Error: 工具 '{name}' 超出配额限制。{self._quota.status()}",
-                    metadata={"tool_status": "rejected", "tool_error_code": "quota_exceeded"},
+                return self._rejected(
+                    4,
+                    "quota_exceeded",
+                    f"Error: 工具 '{name}' 超出配额限制。{self._quota.status()}",
                 )
 
         # ---- Gate 5: 重复调用检测 ----
         if self._is_duplicate(name, args):
-            return ToolExecutionResult(
-                content=f"Error: 重复调用检测：'{name}' 与最近调用完全相同，可能是死循环。"
+            return self._rejected(
+                5,
+                "duplicate",
+                f"Error: 重复调用检测：'{name}' 与最近调用完全相同，可能是死循环。"
                 f"请尝试不同的参数或切换到其他工具。",
-                metadata={"tool_status": "rejected", "tool_error_code": "duplicate"},
             )
 
         # ---- Gate 6: Dry-Run 模式（在审批之前，因为不实际修改） ----
@@ -138,26 +120,26 @@ class ToolExecutor:
         if name == "patch_file":
             patch_preview_meta, preview_err = self._build_patch_preview(args)
             if preview_err:
-                return ToolExecutionResult(
-                    content=f"Error: 补丁预览失败: {preview_err}",
-                    metadata={"tool_status": "rejected", "tool_error_code": "invalid_args"},
+                return self._rejected(
+                    3,
+                    "invalid_args",
+                    f"Error: 补丁预览失败: {preview_err}",
                 )
 
         # ---- Gate 7: 审批检查 ----
+        gate7_meta = None
         if name in self._high_risk_tools:
             if not self._approve(name, args, patch_preview_meta):
-                denied_meta = {
-                    "tool_status": "rejected",
-                    "tool_error_code": "approval_denied",
-                }
+                extra = {"approval_policy": self.approval_policy}
                 if patch_preview_meta:
-                    denied_meta["patch_preview"] = patch_preview_meta
-                return ToolExecutionResult(
-                    content=(
-                        f"Error: 工具 '{name}' 调用被拒绝（approval_policy={self.approval_policy}）"
-                    ),
-                    metadata=denied_meta,
+                    extra["patch_preview"] = patch_preview_meta
+                return self._rejected(
+                    7,
+                    "approval_denied",
+                    f"Error: 工具 '{name}' 调用被拒绝（approval_policy={self.approval_policy}）",
+                    **extra,
                 )
+            gate7_meta = build_gate7_pass_metadata(self.approval_policy)
 
         # ---- Gate 8: 执行前工作区快照 ----
         is_risky = name in self._high_risk_tools
@@ -169,11 +151,13 @@ class ToolExecutor:
         except Exception as e:
             return ToolExecutionResult(
                 content=f"Error: 工具 '{name}' 执行异常: {e}",
-                metadata={"tool_status": "error", "tool_error_code": "runtime_error"},
+                metadata=build_executor_error_metadata(),
             )
 
         # ---- Gate 9 续: 执行后快照对比 ----
         metadata = {"tool_status": "success"}
+        if gate7_meta:
+            metadata.update(gate7_meta)
         if patch_preview_meta:
             metadata["patch_preview"] = patch_preview_meta
         if name == "run_shell":
@@ -190,7 +174,18 @@ class ToolExecutor:
 
         return ToolExecutionResult(content=result_text, metadata=metadata)
 
+    def execute(self, name: str, args: dict) -> ToolExecutionResult:
+        """兼容旧调用；生产路径应经 Agent.execute_tool → dispatch。"""
+        return self.execute_gated(name, args)
+
     # ---- 内部方法 ----
+
+    def _rejected(self, gate_id: int, tool_error_code: str, content: str, **extra) -> ToolExecutionResult:
+        """构造 Executor 闸口拒绝结果。"""
+        return ToolExecutionResult(
+            content=content,
+            metadata=build_executor_rejection_metadata(gate_id, tool_error_code, **extra),
+        )
 
     def _collect_high_risk(self) -> set[str]:
         """收集所有标记为 risky=True 的工具名。"""

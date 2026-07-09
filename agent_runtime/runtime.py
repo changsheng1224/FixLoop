@@ -33,7 +33,7 @@ class Agent:
         tools: dict | None = None,
         system_prompt: str = "",
         agent_name: str = "",
-        tool_policy=None,
+        tool_dispatch=None,
         prefix_mode: PrefixMode = "default",
     ):
         self.config = config
@@ -44,7 +44,7 @@ class Agent:
         self._cwd = cwd or workspace.repo_root or str(Path.cwd())
         self._system_prompt = system_prompt
         self._agent_name = agent_name
-        self._tool_policy = tool_policy
+        self._tool_dispatch = tool_dispatch
         self._prefix_mode: PrefixMode = prefix_mode
         self.shared_run_id: str | None = None
         self._last_budget_meta: dict = {}
@@ -175,7 +175,17 @@ class Agent:
         self.session["history"].append(stamp_turn_id(self.session, item))
 
     def execute_tool(self, name: str, args: dict):
-        """执行指定工具（经 ToolExecutor 闸口），返回 ToolExecutionResult。"""
+        """执行指定工具：经 ToolGateway.dispatch（若配置）→ ToolExecutor 闸口。"""
+        executor = self._get_tool_executor()
+
+        def run():
+            return executor.execute_gated(name, args)
+
+        if self._tool_dispatch is not None:
+            return self._tool_dispatch(self._agent_name, name, run)
+        return run()
+
+    def _get_tool_executor(self):
         from agent_runtime.tool_executor import ToolExecutor
 
         if not hasattr(self, "_tool_executor"):
@@ -184,10 +194,8 @@ class Agent:
                 approval_policy=self.config.approval,
                 dry_run=self.dry_run,
                 quota=self.quota,
-                agent_name=self._agent_name,
-                tool_policy=self._tool_policy,
             )
-        return self._tool_executor.execute(name, args)
+        return self._tool_executor
 
     # ---- 类方法 ----
 

@@ -3,6 +3,9 @@
 权限规则对 Agent 透明——Agent 收到的是普通工具错误返回，不知道被拦截。
 """
 
+from agent_runtime.tool_executor import ToolExecutionResult
+from agent_runtime.tool_rejection import build_gateway_rejection_metadata
+
 
 class ToolGateway:
     """Agent 工具调用权限网关。"""
@@ -22,14 +25,9 @@ class ToolGateway:
     def dispatch(self, agent_name: str, tool_name: str, execute_fn):
         """有权限则执行 execute_fn，否则返回 permission_denied 工具结果。"""
         if not self.can_call(agent_name, tool_name):
-            from agent_runtime.tool_executor import ToolExecutionResult
-
             return ToolExecutionResult(
                 content=f"Error: 工具 '{tool_name}' 对 '{agent_name}' 不可用。",
-                metadata={
-                    "tool_status": "rejected",
-                    "tool_error_code": "permission_denied",
-                },
+                metadata=build_gateway_rejection_metadata(),
             )
         return execute_fn()
 
@@ -47,6 +45,8 @@ class ToolGateway:
 
 # ---- 共享权限表 ----
 
+# 未列出的工具默认拒绝（can_call 无通配 fallback）。
+# run_shell 禁止 multi-agent repair 宿主机 shell；baseline 使用 _baseline_gateway。
 REPAIR_PERMISSION_TABLE = {
     "ast_parse": {"localizer"},
     "stack_parse": {"localizer"},
@@ -58,7 +58,7 @@ REPAIR_PERMISSION_TABLE = {
     "search": {"*"},
     "read_file": {"*"},
     "list_files": {"*"},
-    "*": {"*"},  # 其余工具所有 Agent 可用
+    "run_shell": set(),
 }
 
 

@@ -119,7 +119,7 @@ class TestToolRegistry:
 
     def test_write_tools_are_marked_risky(self, ctx):
         registry = build_tool_registry(ctx)
-        risky = {"write_file", "patch_file"}
+        risky = {"write_file", "patch_file", "run_shell"}
         for name in risky:
             assert name in registry, f"{name} 缺失"
             assert registry[name]["risky"] is True, f"{name} 应为高风险工具"

@@ -101,6 +101,8 @@ class TestToolExecutorGates:
         result = executor_never.execute("write_file", {"path": "t.txt", "content": "x"})
         assert "rejected" in result.metadata["tool_status"]
         assert result.metadata["tool_error_code"] == "approval_denied"
+        assert result.metadata["rejection_layer"] == "executor"
+        assert result.metadata["gate_id"] == 7
 
     # Gate 6+7+8: snapshot + execute + diff
     def test_writes_get_snapshot_diff(self, agent):
@@ -148,28 +150,6 @@ class TestToolExecutorGates:
         assert prompts
         assert "预览" in prompts[0]
         assert "patch_preview" in result.metadata
-
-
-class TestToolPolicy:
-    def test_tool_policy_denied(self, agent):
-        executor = ToolExecutor(
-            agent=agent,
-            approval_policy="auto",
-            agent_name="localizer",
-            tool_policy=lambda role, tool: tool != "write_file",
-        )
-        result = executor.execute("write_file", {"path": "x.py", "content": "y"})
-        assert result.metadata["tool_error_code"] == "permission_denied"
-
-    def test_tool_policy_allows(self, agent):
-        executor = ToolExecutor(
-            agent=agent,
-            approval_policy="auto",
-            agent_name="localizer",
-            tool_policy=lambda role, tool: True,
-        )
-        result = executor.execute("list_files", {"path": "."})
-        assert result.metadata["tool_status"] == "success"
 
 
 class TestApproval:
