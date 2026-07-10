@@ -402,7 +402,7 @@
 > 设计见 [DESIGN §15](bonus/DESIGN.md#15-自愈闭环)。
 
 - **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] 反馈环增强**：失败测试 + 上轮改动 + 回滚提示 + build_log → `state.feedback`
-- **[P1] [C:⭐⭐ I:⭐⭐⭐] 终止条件枚举**：`fixed|exhausted|regression|timeout|user_cancel` → `RepairState.status`
+- **[P1] [C:⭐⭐ I:⭐⭐⭐] 终止条件枚举** ✅：`fixed|exhausted|regression|timeout|user_cancel` → `RepairState.status`
 
 ### 15.1 Bad Case 闭环
 

@@ -36,6 +36,10 @@ class TestRepairExitCode:
         state = RepairState(issue_input="x", status="exhausted")
         assert repair_exit_code(state) == REPAIR_EXIT_FAIL
 
+    def test_timeout_status_returns_timeout_exit(self):
+        state = RepairState(issue_input="x", status="timeout")
+        assert repair_exit_code(state) == REPAIR_EXIT_TIMEOUT
+
     def test_timeout_via_node_timings(self):
         state = RepairState(
             issue_input="x",

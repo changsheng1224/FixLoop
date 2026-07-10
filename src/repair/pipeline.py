@@ -5,7 +5,10 @@ from __future__ import annotations
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+from pathlib import Path
+
 from agent_runtime.logging_setup import get_logger
+from src.repair.termination import RepairTerminalStatus, apply_terminal_status
 from src.repair.output_parsers import parse_retrieved_context, parse_suspect_list
 from src.repair.timing_schema import (
     finalize_phases,
@@ -143,6 +146,12 @@ class RepairPipelineMixin:
             n_tests,
         )
 
+        if self._verification_enabled():
+            from src.eval.runner import run_pytest
+
+            baseline_code, _ = run_pytest(Path(self._repo_root))
+            state.node_timings["baseline_pytest_code"] = baseline_code
+
         while state.retry_count < max_retries:
             repo_snapshot = self._snapshot_repo() if self._verification_enabled() else None
             log.info("Patcher 开始 (retry=%d)...", state.retry_count)
@@ -161,7 +170,9 @@ class RepairPipelineMixin:
             log.info("Patcher 完成: %dms, %d个补丁", ms, n)
 
             if not self._verification_enabled():
-                state.status = "patched" if state.candidate_patches else "failed"
+                if state.candidate_patches:
+                    state.status = RepairTerminalStatus.FIXED
+                    state.node_timings["verify_skipped"] = True
                 break
 
             if not state.candidate_patches:
@@ -183,8 +194,13 @@ class RepairPipelineMixin:
             log.info("Verifier 完成: %dms", ms)
 
             if state.verification_result.all_passed:
-                state.status = "fixed"
+                state.status = RepairTerminalStatus.FIXED
                 break
+
+            from src.eval.runner import run_pytest
+
+            post_code, _ = run_pytest(Path(self._repo_root))
+            state.node_timings["post_patch_pytest_code"] = post_code
 
             if repo_snapshot is not None:
                 self._restore_repo_snapshot(repo_snapshot)
@@ -193,8 +209,7 @@ class RepairPipelineMixin:
             state.feedback = self._build_feedback(state.verification_result)
             state.retry_count += 1
 
-        if state.status not in ("fixed", "patched"):
-            state.status = "exhausted" if state.retry_count >= max_retries else "failed"
+        apply_terminal_status(state)
 
         total_ms = int((time.time() - t_start) * 1000)
         set_repair_total_ms(state.node_timings, total_ms)

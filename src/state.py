@@ -253,7 +253,7 @@ class RepairState:
     feedback: str = ""
     retry_count: int = 0
     max_retries: int = 3
-    status: str = "pending"  # pending / localizing / patched / fixed / failed / exhausted
+    status: str = "pending"  # pending / localizing / fixed / exhausted / regression / timeout / user_cancel / failed
     node_timings: dict = field(default_factory=dict)
     agent_errors: dict = field(default_factory=dict)
     repair_run_id: str = ""

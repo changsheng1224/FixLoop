@@ -31,7 +31,8 @@ class TestNoRetrieverOrchestrator:
         )
         state = orch.repair("TypeError at calc.py:2", max_retries=1)
         assert state.node_timings.get("retriever_ms", 0) == 0
-        assert state.status == "patched"
+        assert state.status == "fixed"
+        assert state.node_timings.get("verify_skipped") is True
         assert "return a + b" in (temp_workspace / "calc.py").read_text()
 
     def test_factory_returns_no_retriever_orchestrator(self, temp_workspace):

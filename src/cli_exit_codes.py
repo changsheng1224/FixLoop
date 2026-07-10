@@ -34,6 +34,8 @@ def repair_config_error(repo: str, *, api_key: str | None = None) -> str | None:
 
 def repair_exit_code(state: RepairState) -> int:
     """根据 RepairState 计算 repair 子命令进程退出码。"""
+    if state.status == "timeout":
+        return REPAIR_EXIT_TIMEOUT
     if state.node_timings.get("repair_timeout"):
         return REPAIR_EXIT_TIMEOUT
     orch_err = state.agent_errors.get("orchestrator", "")

@@ -65,14 +65,17 @@ class SingleAgentOrchestrator:
             if patches:
                 applied = applier.apply_patches(patches)
                 if applied:
-                    state.status = "patched"
+                    state.status = "fixed"
+                    state.node_timings["verify_skipped"] = True
                 elif _repo_sources_changed(repo, before):
-                    state.status = "patched"
+                    state.status = "fixed"
+                    state.node_timings["verify_skipped"] = True
                 else:
                     state.status = "failed"
                     state.agent_errors["baseline"] = "patches parsed but not applied"
             elif _repo_sources_changed(repo, before):
-                state.status = "patched"
+                state.status = "fixed"
+                state.node_timings["verify_skipped"] = True
             else:
                 state.status = "failed"
                 state.agent_errors["baseline"] = "no patches in agent output"

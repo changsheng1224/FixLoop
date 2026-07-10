@@ -266,7 +266,8 @@ def _print_repair_result(state, verbose: bool) -> None:
             print(f"--- Trace: .agent/runs/{state.repair_run_id}/trace.jsonl ---", file=sys.stderr)
 
     if state.status in ("fixed", "patched") and state.candidate_patches:
-        emoji = "✅" if state.status == "fixed" else "⚠"
+        verified = state.status == "fixed" and not state.node_timings.get("verify_skipped")
+        emoji = "✅" if verified or state.status == "fixed" else "⚠"
         print(f"\n{emoji} 修复完成! 状态={state.status}")
         for patch in state.candidate_patches:
             print(f"\n--- {patch.file_path} ---")

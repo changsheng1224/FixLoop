@@ -113,7 +113,8 @@ class TestOrchestrator:
         assert len(state.suspect_locations) == 1
         assert state.suspect_locations[0].file_path == "calc.py"
         assert len(state.candidate_patches) == 1
-        assert state.status == "patched"
+        assert state.status == "fixed"
+        assert state.node_timings.get("verify_skipped") is True
         phases = state.node_timings.get("phases", {})
         assert phases.get("localize_ms", 0) > 0
         assert phases.get("retrieve_ms", 0) > 0
