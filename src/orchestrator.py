@@ -269,8 +269,14 @@ class Orchestrator(RepairPipelineMixin):
         completion 不调工具，经 ``complete_once(system_prompt=...)`` 注入，
         而非 ContextManager 的 role 段。
         """
-        issue_type = plan.issue_type if plan else ""
-        return load_role_prompt("patcher", issue_type)
+        variant = "default"
+        if plan:
+            variant = (plan.prompt_variants or {}).get("patcher", "")
+            if not variant:
+                from src.repair.prompt_router import resolve_prompt_routing
+
+                variant = resolve_prompt_routing(plan).patcher_variant
+        return load_role_prompt("patcher", variant)
 
     def _run_agent(
         self,
@@ -402,6 +408,7 @@ class Orchestrator(RepairPipelineMixin):
         )
 
         issue_type = plan.issue_type if plan else ""
+        patcher_variant = (plan.prompt_variants or {}).get("patcher", "default") if plan else "default"
         patcher_system = self._patcher_system_prompt(plan)
 
         from agent_runtime.context_manager import fit_repair_user_prompt
@@ -422,7 +429,7 @@ class Orchestrator(RepairPipelineMixin):
                 "complete_once_started",
                 {
                     "issue_type": issue_type,
-                    "prompt_variant": issue_type or "default",
+                    "prompt_variant": patcher_variant,
                 },
             )
             tracer.emit("patcher", "model_request_start", {"step": 1, "attempt": 1})

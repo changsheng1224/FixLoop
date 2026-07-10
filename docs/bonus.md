@@ -546,7 +546,7 @@
 
 > Agent 裁剪 · subtasks 见 [§12.1](#121-角色与机制) · [§12.8](#128-子问题拆分)；prompt 见 [§5.2](#52-l2-角色-prompt)。
 
-- **[P1] [C:⭐ I:⭐⭐⭐⭐] issue_type → prompt 变体自动选择**：Orchestrator 按 plan 选 patcher 后缀模板
+- **[P1] [C:⭐ I:⭐⭐⭐⭐] issue_type → prompt 变体自动选择** ✅：`prompt_router` 集中路由；`patcher_suffix` + `localizer_hints`；trace `prompt_routing`
 
 ### 22.5 可观测与评测
 

@@ -75,6 +75,7 @@ class RepairPlan:
     suspect_files: list[str] = field(default_factory=list)
     estimated_impact: list[str] = field(default_factory=list)
     reasoning: str = ""
+    prompt_variants: dict[str, str] = field(default_factory=dict)
     schema_version: str = "1.0"
 
     def to_dict(self) -> dict:
@@ -86,6 +87,7 @@ class RepairPlan:
             "suspect_files": self.suspect_files,
             "estimated_impact": self.estimated_impact,
             "reasoning": self.reasoning,
+            "prompt_variants": dict(self.prompt_variants),
             "schema_version": self.schema_version,
         }
 
@@ -99,6 +101,7 @@ class RepairPlan:
             suspect_files=data.get("suspect_files", []),
             estimated_impact=data.get("estimated_impact", []),
             reasoning=data.get("reasoning", ""),
+            prompt_variants=dict(data.get("prompt_variants") or {}),
             schema_version=data.get("schema_version", "1.0"),
         )
 

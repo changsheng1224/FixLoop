@@ -119,6 +119,13 @@ class RepairPipelineMixin:
 
         t0 = time.time()
         state.repair_plan = self._parse_issue(issue)
+        if state.repair_plan:
+            from src.repair.prompt_router import apply_prompt_routing
+
+            routing = apply_prompt_routing(state.repair_plan)
+            tracer = self._repair_tracer
+            if tracer is not None:
+                tracer.emit("orchestrator", "prompt_routing", routing.to_trace_payload())
         if state.repair_plan and state.repair_plan.language != "python":
             log.warning(
                 "检测到 language=%s（%s），当前 Verifier 仅支持 Python 修复",

@@ -23,21 +23,17 @@ def render_repair_task(name: str, variables: dict[str, str]) -> tuple[str, dict]
 
 
 def build_localizer_variables(plan, issue: str = "") -> dict[str, str]:
+    from src.prompts.loader import load_localizer_hints
+    from src.repair.prompt_router import resolve_prompt_routing
+
     issue_text = issue or plan.reasoning
     suspect_line = ""
     if plan.suspect_files:
         suspect_line = f"嫌疑文件: {', '.join(plan.suspect_files)}"
-    if plan.issue_type == "import_error":
-        hints = (
-            "这是 import 错误（ModuleNotFoundError/ImportError）。"
-            "优先 read_file 读取嫌疑文件的 import 行；无完整 traceback 时可跳过 stack_parse。"
-            "最后输出 SuspectList JSON，指向错误的 import 语句行。"
-        )
-    else:
-        hints = (
-            "请用 stack_parse 解析堆栈，再用 ast_parse 分析文件结构，"
-            "最后输出 SuspectList JSON。"
-        )
+    hints_key = (plan.prompt_variants or {}).get("localizer")
+    if not hints_key:
+        hints_key = resolve_prompt_routing(plan).localizer_hints_key
+    hints = load_localizer_hints(hints_key)
     return {
         "issue": issue_text,
         "suspect_files_line": suspect_line,

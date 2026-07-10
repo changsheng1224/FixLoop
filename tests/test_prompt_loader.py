@@ -53,6 +53,28 @@ class TestLoadRolePrompt:
 
         assert load_role_prompt("localizer", "type_error") == load_system_prompt("localizer").strip()
 
+
+class TestLoadLocalizerHints:
+    def test_import_first_hints(self):
+        from src.prompts.loader import load_localizer_hints
+
+        text = load_localizer_hints("import_first")
+        assert "import 错误" in text
+        assert "stack_parse" in text
+
+    def test_stack_first_default(self):
+        from src.prompts.loader import load_localizer_hints
+
+        text = load_localizer_hints("stack_first")
+        assert "stack_parse" in text
+        assert "ast_parse" in text
+
+    def test_unknown_key_falls_back_to_stack_first(self):
+        from src.prompts.loader import load_localizer_hints
+
+        text = load_localizer_hints("missing_key")
+        assert "stack_parse" in text
+
 class TestPatcherPromptDedup:
     def test_user_prompt_no_type_error_system_hints(self, temp_workspace):
         from src.orchestrator import Orchestrator
