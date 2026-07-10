@@ -23,6 +23,12 @@ class AgentConfig(BaseModel):
         le=3600,
         description="单工具 Gate 9 执行超时秒数，0=禁用",
     )
+    step_timeout_s: int = Field(
+        default=300,
+        ge=0,
+        le=7200,
+        description="单步 wall-clock 超时秒数（context+model+tool），0=禁用",
+    )
     max_new_tokens: int = Field(
         default=2048, ge=1, le=8192, description="每次 LLM 调用的最大输出 token 数"
     )

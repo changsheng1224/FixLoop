@@ -122,6 +122,13 @@ class TaskState:
         """格式错误过多。"""
         self.stop(f"attempts >= {max_attempts}", "failed")
 
+    def stop_step_timeout(self, timeout_s: int, step: int):
+        """单步 wall-clock 超时。"""
+        self.stop_reason = "step_timeout"
+        self.status = "stopped"
+        self.node_timings["step_timeout_s"] = int(timeout_s)
+        self.node_timings["step_timeout_step"] = int(step)
+
     def finish_success(self, final_answer: str):
         """正常结束。"""
         self.final_answer = final_answer

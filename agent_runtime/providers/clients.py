@@ -74,6 +74,7 @@ class FakeNativeToolClient(FakeModelClient):
         executor,
         max_turns: int = 6,
         phase_hook=None,
+        step_boundary_hook=None,
     ) -> tuple[str, dict]:
         """模拟原生 tool 多轮对话（测试用）。"""
         import json
@@ -97,6 +98,8 @@ class FakeNativeToolClient(FakeModelClient):
                 phase_hook(ReactPhase.REASONING, step=step)
             full = f"{system_prompt}\n\n{user_msg}" if system_prompt else user_msg
             raw = self.complete(full)
+            if step_boundary_hook is not None:
+                step_boundary_hook(step)
             usage = dict(self.last_usage)
             call_usage["input_tokens"] += int(usage.get("input_tokens", 0) or 0)
             call_usage["output_tokens"] += int(usage.get("output_tokens", 0) or 0)
@@ -234,6 +237,7 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
         executor,
         max_turns: int = 6,
         phase_hook=None,
+        step_boundary_hook=None,
     ) -> tuple[str, dict]:
         """使用原生 Anthropic tool_use 协议进行多轮对话。
 
@@ -284,6 +288,8 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
             payload["messages"] = list(messages)  # shallow copy
             body = json.dumps(payload).encode("utf-8")
             data, timing = self._post_messages(body)
+            if step_boundary_hook is not None:
+                step_boundary_hook(step)
             timing.step = turn + 1
             call_timings.append(timing)
             self.last_call_timing = timing

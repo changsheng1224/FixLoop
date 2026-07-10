@@ -107,6 +107,44 @@ class AgentLoop:
         if on_phase is not None:
             on_phase(str(phase), step, self.max_steps, tool=tool or "")
 
+    def _step_timeout_limit_s(self) -> int:
+        return int(getattr(self.agent.config, "step_timeout_s", 0) or 0)
+
+    def _finish_step_timeout(self, ts, error, *, clock=None) -> str:
+        """单步 wall-clock 超时：写 trace 工件并返回 final 文本。"""
+        from agent_runtime.step_clock import StepTimeoutError
+
+        if not isinstance(error, StepTimeoutError):
+            raise error
+        self.stop_reason = "step_timeout"
+        ts.stop_step_timeout(error.timeout_s, error.step)
+        elapsed_ms = clock.elapsed_ms() if clock is not None else 0
+        self._emit(
+            "step_timeout",
+            {
+                "step": error.step,
+                "step_timeout_s": error.timeout_s,
+                "elapsed_ms": elapsed_ms,
+                "path": error.path,
+            },
+        )
+        self._emit("run_finished", {"stop_reason": "step_timeout"})
+        self._finalize_run(ts)
+        return (
+            f"<final>单步执行超时（{error.timeout_s} 秒），"
+            f"step={error.step}，path={error.path or 'unknown'}。</final>"
+        )
+
+    def _maybe_step_timeout(self, ts, clock, step: int, path: str):
+        """阶段边界检查；超时时返回 final 文本，否则 None。"""
+        from agent_runtime.step_clock import StepTimeoutError
+
+        try:
+            clock.check(step=step, path=path)
+        except StepTimeoutError as e:
+            return self._finish_step_timeout(ts, e, clock=clock)
+        return None
+
     def run(self, user_message: str, callback=None) -> str:
         """执行一次 Agent 任务：ReAct 循环直至 final answer 或 max_steps。
 
@@ -144,6 +182,12 @@ class AgentLoop:
     def _run_with_native_tools(self, user_message: str, ts, callback=None) -> str:
         """使用 API 原生 tool_use 协议（Anthropic 兼容）。"""
         from agent_runtime.react_phases import ReactPhase
+        from agent_runtime.step_clock import StepClock, StepTimeoutError
+
+        step_timeout_s = self._step_timeout_limit_s()
+        step_clock = StepClock(step_timeout_s)
+        if (msg := self._maybe_step_timeout(ts, step_clock, 1, "native")) is not None:
+            return msg
 
         system_prompt, user_message, budget_meta = self.agent.build_for_native(user_message)
         self._last_budget_meta = budget_meta
@@ -163,8 +207,15 @@ class AgentLoop:
 
         # 工具执行回调
         def phase_hook(phase, *, step: int, tool: str | None = None) -> None:
-            if phase == ReactPhase.REASONING and callback is not None:
-                callback.on_step_start(step, self.max_steps)
+            nonlocal step_clock
+            if phase == ReactPhase.REASONING:
+                if step > 1:
+                    step_clock = StepClock(step_timeout_s)
+                step_clock.check(step=step, path="native")
+                if callback is not None:
+                    callback.on_step_start(step, self.max_steps)
+            elif phase == ReactPhase.ACTING:
+                step_clock.check(step=step, path="native")
             self._notify_react_phase(
                 phase,
                 step=step,
@@ -196,6 +247,9 @@ class AgentLoop:
                 callback.on_tool_executed(tool_name, result_text)
             return result_text
 
+        def after_model(step: int) -> None:
+            step_clock.check(step=step, path="native")
+
         t0 = _time.time()
         self._emit("model_request_start", {"step": 1, "attempt": 1})
         try:
@@ -206,6 +260,7 @@ class AgentLoop:
                 executor=executor,
                 max_turns=self.max_steps,
                 phase_hook=phase_hook,
+                step_boundary_hook=after_model,
             )
             if isinstance(result, tuple):
                 answer, call_usage = result
@@ -214,6 +269,8 @@ class AgentLoop:
                 call_usage = getattr(self.agent.model_client, "last_call_usage", {}) or {}
             self._apply_call_usage_meta(call_usage)
             self._record_model_timings(ts, collect_client_timings(self.agent.model_client), default_attempt=1)
+        except StepTimeoutError as e:
+            return self._finish_step_timeout(ts, e, clock=step_clock)
         except Exception as e:
             self.stop_reason = f"error: {e}"
             return f"<final>API 错误: {e}</final>"
@@ -239,6 +296,7 @@ class AgentLoop:
     def _run_with_text_parsing(self, user_message: str, ts, callback=None) -> str:
         """传统文本解析模式（降级路径）。"""
         from agent_runtime.react_phases import ReactPhase
+        from agent_runtime.step_clock import StepClock
 
         while True:
             if ts.tool_steps > self.max_steps:
@@ -261,6 +319,9 @@ class AgentLoop:
                 )
 
             step = ts.tool_steps + 1
+            step_clock = StepClock(self._step_timeout_limit_s())
+            if (msg := self._maybe_step_timeout(ts, step_clock, step, "xml")) is not None:
+                return msg
             if callback is not None:
                 callback.on_step_start(step, self.max_steps)
 
@@ -309,6 +370,9 @@ class AgentLoop:
                     return f"<final>API 熔断：{e}</final>"
                 raise
 
+            if (msg := self._maybe_step_timeout(ts, step_clock, step, "xml")) is not None:
+                return msg
+
             # 3. 解析输出
             kind, payload = self.agent.parse(raw)
             t_parse = int((_time.time() - t1) * 1000)
@@ -333,6 +397,8 @@ class AgentLoop:
                     self.agent.record({"role": "system", "content": "工具调用格式错误"})
                     user_message = "工具调用格式错误，请重试。"
                     continue
+                if (msg := self._maybe_step_timeout(ts, step_clock, step, "xml")) is not None:
+                    return msg
                 tool_name = payload.get("name", "unknown")
                 tool_args = payload.get("args", {})
                 self._notify_react_phase(
@@ -383,6 +449,8 @@ class AgentLoop:
                 user_message = f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
 
             elif kind == "retry":
+                if (msg := self._maybe_step_timeout(ts, step_clock, step, "xml")) is not None:
+                    return msg
                 self._retry_count += 1
                 delay = min(2 ** (self._retry_count - 1), 8)
                 _log_loop(
