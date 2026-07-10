@@ -48,6 +48,15 @@ class TestPromptCache:
         assert meta["prefix_hashes"] == expected
         assert meta["prompt_cache_key"] == meta["prefix_hashes"]["cache_key"]
 
+    def test_task_template_in_metadata(self, agent):
+        from agent_runtime.context_manager import ContextManager
+
+        cm = ContextManager(agent)
+        _, meta = cm.build("hello")
+
+        assert meta["task_template_source"] == "builtin"
+        assert len(meta["task_template_fingerprint"]) == 64
+
     def test_client_supports_cache(self):
         from agent_runtime.providers.clients import (
             AnthropicCompatibleModelClient,

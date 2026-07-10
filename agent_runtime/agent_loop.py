@@ -220,6 +220,8 @@ class AgentLoop:
                     "total_tokens": token_meta.get("total_tokens"),
                     "budget": token_meta.get("budget"),
                     "prefix_hashes": token_meta.get("prefix_hashes"),
+                    "task_template_source": token_meta.get("task_template_source"),
+                    "task_template_fingerprint": token_meta.get("task_template_fingerprint"),
                 },
             )
             ts.node_timings.setdefault("prompt_build_ms", 0)

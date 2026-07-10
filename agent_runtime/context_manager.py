@@ -19,6 +19,7 @@ from agent_runtime.compression_pipeline import (
 from agent_runtime.tier_policy import TierPolicy, filter_relevant_results
 from agent_runtime.context_projection import attach_context_projection, attach_fit_context_projection
 from agent_runtime.tokenizers import resolve_token_counter, resolve_tokenizer_spec
+from agent_runtime.user_message_template import render_task_message
 
 # Section token 预算分配（以 REF_TOTAL_BUDGET 为参考布局，随 prompt_budget 等比缩放）
 REF_TOTAL_BUDGET = 6000
@@ -181,7 +182,8 @@ class ContextManager:
         metadata = self._base_metadata()
         sections = self._fill_sections(user_message, metadata)
         result_parts = [sections[name] for name in self.SECTION_ORDER if sections.get(name)]
-        result_parts.append(f"\n## 当前任务\n\n{sections['request']}")
+        if sections.get("request"):
+            result_parts.append(sections["request"])
         return "\n".join(result_parts), metadata
 
     def build_dynamic_context(self, user_message: str) -> tuple[str, dict]:
@@ -200,7 +202,8 @@ class ContextManager:
         system_parts = [sections[name] for name in self.NATIVE_SYSTEM_ORDER if sections.get(name)]
         system_prompt = "\n\n".join(system_parts)
         user_parts = [sections[name] for name in self.DYNAMIC_ORDER if sections.get(name)]
-        user_parts.append(f"## 当前任务\n\n{sections['request']}")
+        if sections.get("request"):
+            user_parts.append(sections["request"])
         return system_prompt, "\n\n".join(user_parts), metadata
 
     def _base_metadata(self) -> dict:
@@ -281,18 +284,23 @@ class ContextManager:
 
         if include_request:
             user_message = apply_l1_to_request_text(user_message, self.budget)
-            request_tokens = self.budget.count(user_message)
+            rendered, tpl_meta = render_task_message(
+                user_message,
+                repo_root=self._agent_repo_root(),
+            )
+            metadata.update(tpl_meta)
+            request_tokens = self.budget.count(rendered)
             used += request_tokens
             metadata["sections"]["request"] = request_tokens
             if used > self.budget.total_limit:
                 allowed_request = max(256, self.budget.total_limit - (used - request_tokens))
                 if request_tokens > allowed_request:
-                    user_message = self.budget.fit(user_message, allowed_request)
-                    request_tokens = self.budget.count(user_message)
+                    rendered = self.budget.fit(rendered, allowed_request)
+                    request_tokens = self.budget.count(rendered)
                     used = used - metadata["sections"]["request"] + request_tokens
                     metadata["sections"]["request"] = request_tokens
                     metadata["cuts"].append(f"裁剪 request 到 {request_tokens} tokens")
-            sections["request"] = user_message
+            sections["request"] = rendered
 
         sys_tokens = metadata["sections"].get("system", 0)
         tools_tokens = metadata["sections"].get("tools", 0)
@@ -308,6 +316,16 @@ class ContextManager:
         metadata["tokenizer_backend"] = self.budget.backend
         attach_context_projection(metadata, agent=self.agent, budget=self.budget)
         return sections
+
+    def _agent_repo_root(self) -> str | None:
+        agent = self.agent
+        cwd = getattr(agent, "_cwd", "") or ""
+        if cwd:
+            return cwd
+        workspace = getattr(agent, "workspace", None)
+        if workspace is None:
+            return None
+        return getattr(workspace, "repo_root", "") or getattr(workspace, "cwd", "") or None
 
     # ---- Section 收集 ----
 
