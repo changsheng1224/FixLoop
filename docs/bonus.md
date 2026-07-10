@@ -269,7 +269,7 @@
 - **[P1] [C:⭐⭐⭐ I:⭐⭐⭐] Ollama / OpenAI streaming**：SSE/chunk 增量解析，REPL 实时输出
 - **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] 熔断事件进 trace**：`circuit_opened` / `half_open_probe` / `circuit_closed`
 - **[P2] ✅ [C:⭐ I:⭐⭐⭐] Retry-After + jitter**：429 退避加随机抖动（`retry_policy` + Anthropic client）
-- **[P2] [C:⭐ I:⭐⭐⭐] 半开成功阈值**：连续 2 次 probe 成功才 CLOSED
+- **[P2] ✅ [C:⭐ I:⭐⭐⭐] 半开成功阈值**：连续 2 次 probe 成功才 CLOSED（`half_open_success_threshold`）
 - **[P3] [C:⭐⭐ I:⭐⭐] HTTP keep-alive**：同 session 连接复用
 
 ### 10.2 修复流水线降级

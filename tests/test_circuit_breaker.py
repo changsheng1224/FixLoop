@@ -43,18 +43,44 @@ class TestCircuitBreaker:
         with pytest.raises(CircuitBreakerOpenError):
             cb.call(lambda: "ok")
 
-    def test_half_open_recovers(self):
+    def test_half_open_recovers_after_two_successes(self):
         cb = CircuitBreaker(failure_threshold=2, recovery_timeout=0.05)
         for _ in range(2):
             with pytest.raises(RuntimeError):
                 cb.call(lambda: (_ for _ in ()).throw(RuntimeError("fail")))
         assert cb.state == "open"
 
-        # 等待恢复
         time.sleep(0.1)
-        result = cb.call(lambda: "recovered")
-        assert result == "recovered"
+        assert cb.call(lambda: "probe-1") == "probe-1"
+        assert cb.state == "half_open"
+        assert cb.half_open_success_count == 1
+
+        assert cb.call(lambda: "probe-2") == "probe-2"
         assert cb.state == "closed"
+        assert cb.half_open_success_count == 0
+
+    def test_half_open_one_success_stays_half_open(self):
+        cb = CircuitBreaker(failure_threshold=2, recovery_timeout=0.05)
+        for _ in range(2):
+            with pytest.raises(RuntimeError):
+                cb.call(lambda: (_ for _ in ()).throw(RuntimeError("fail")))
+        time.sleep(0.1)
+        cb.call(lambda: "ok")
+        assert cb.state == "half_open"
+        assert cb.half_open_success_count == 1
+
+    def test_half_open_failure_reopens_immediately(self):
+        cb = CircuitBreaker(failure_threshold=5, recovery_timeout=0.05)
+        for _ in range(5):
+            with pytest.raises(RuntimeError):
+                cb.call(lambda: (_ for _ in ()).throw(RuntimeError("fail")))
+        time.sleep(0.1)
+        cb.call(lambda: "probe-ok")
+        assert cb.state == "half_open"
+        with pytest.raises(RuntimeError):
+            cb.call(lambda: (_ for _ in ()).throw(RuntimeError("fail again")))
+        assert cb.state == "open"
+        assert cb.half_open_success_count == 0
 
     def test_half_open_fails_back_to_open(self):
         cb = CircuitBreaker(failure_threshold=2, recovery_timeout=0.05)

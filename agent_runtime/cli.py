@@ -327,7 +327,10 @@ def _handle_command(cmd: str, agent: Agent) -> str:
             remain = cb.recovery_timeout - (time.time() - cb._opened_at)
             print(f"CB: OPEN (恢复 {remain:.0f}s, 失败 {cb._failure_count}/{cb.failure_threshold})")
         elif cb.state == "half_open":
-            print("CB: HALF_OPEN (探测中)")
+            print(
+                f"CB: HALF_OPEN (探测 {cb.half_open_success_count}/"
+                f"{cb.half_open_success_threshold})"
+            )
         else:
             print(f"CB: CLOSED (失败 {cb._failure_count}/{cb.failure_threshold})")
         if hasattr(agent.model_client, "latency_stats"):

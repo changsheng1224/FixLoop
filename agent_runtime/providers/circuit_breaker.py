@@ -2,8 +2,8 @@
 
 三态状态机：
   CLOSED（正常）→ 连续失败 ≥ threshold → OPEN（拒绝请求）
-  → 等待 recovery_timeout 秒 → HALF_OPEN（允许 1 次探测）
-  → 成功 → CLOSED / 失败 → OPEN
+  → 等待 recovery_timeout 秒 → HALF_OPEN（探测）
+  → 连续成功 ≥ half_open_success_threshold → CLOSED / 失败 → OPEN
 """
 
 import time
@@ -25,18 +25,34 @@ class CircuitBreaker:
     避免在服务不可用时浪费资源和时间等待超时。
     """
 
-    def __init__(self, failure_threshold: int = 5, recovery_timeout: float = 30.0):
+    def __init__(
+        self,
+        failure_threshold: int = 5,
+        recovery_timeout: float = 30.0,
+        half_open_success_threshold: int = 2,
+    ):
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
+        self.half_open_success_threshold = max(1, half_open_success_threshold)
         self._state = State.CLOSED
         self._failure_count = 0
         self._last_failure_time = 0.0
         self._opened_at = 0.0
+        self._half_open_success_count = 0
 
     @property
     def state(self) -> str:
         """当前状态字符串（closed / open / half_open）。"""
         return self._state.value
+
+    @property
+    def half_open_success_count(self) -> int:
+        """半开阶段已连续成功的 probe 次数。"""
+        return self._half_open_success_count
+
+    def _enter_half_open(self) -> None:
+        self._state = State.HALF_OPEN
+        self._half_open_success_count = 0
 
     def call(self, fn, *args, **kwargs):
         """包裹执行函数，熔断时直接拒绝。
@@ -53,7 +69,7 @@ class CircuitBreaker:
         """
         if self._state == State.OPEN:
             if time.time() - self._opened_at >= self.recovery_timeout:
-                self._state = State.HALF_OPEN
+                self._enter_half_open()
             else:
                 raise CircuitBreakerOpenError(
                     f"Circuit breaker is open. "
@@ -74,10 +90,19 @@ class CircuitBreaker:
 
     def _on_success(self):
         if self._state == State.HALF_OPEN:
-            self._state = State.CLOSED
+            self._half_open_success_count += 1
+            if self._half_open_success_count >= self.half_open_success_threshold:
+                self._state = State.CLOSED
+                self._half_open_success_count = 0
         self._failure_count = 0
 
     def _on_failure(self):
+        if self._state == State.HALF_OPEN:
+            self._state = State.OPEN
+            self._opened_at = time.time()
+            self._half_open_success_count = 0
+            return
+
         self._failure_count += 1
         self._last_failure_time = time.time()
         if self._failure_count >= self.failure_threshold:
