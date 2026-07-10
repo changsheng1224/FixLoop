@@ -62,7 +62,7 @@
 
 ### 2.4 ReAct 步进 · 超时 · 解析
 
-- **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] 单步工具超时**：`concurrent.futures` 防 hang
+- **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] 单步工具超时** ✅：`tool_timeout.py` + Gate 9 `concurrent.futures`（默认 120s，`0`=禁用）
 - **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] 单步 wall-clock 超时**：整步（含 model + tools）超 `step_timeout` 则 `stop_reason=step_timeout`
 - **[P2] [C:⭐ I:⭐⭐⭐] stop_reason 枚举**：`final|step_limit|circuit_breaker|parse_fail|user_cancel|stall`
 - **[P2] [C:⭐ I:⭐⭐⭐] 解析失败 recovery prompt**：附「上一 valid 输出片段 + 错误位置 caret」，减少 blind retry
