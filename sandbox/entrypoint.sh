@@ -1,6 +1,10 @@
 #!/bin/bash
 set -e
 
+export HOME=/code
+export PYTHONUSERBASE=/code/.local
+mkdir -p /code/.local /tmp
+
 mkdir -p /code
 cd /code
 

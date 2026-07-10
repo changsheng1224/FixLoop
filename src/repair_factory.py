@@ -26,12 +26,15 @@ __all__ = [
 
 
 def try_create_verifier(client, ws, repo: str):
-    """Docker 可用时创建 Verifier Agent，否则返回 None。"""
-    try:
-        import docker as _docker
+    """Docker 探针就绪时创建 Verifier Agent，否则返回 None。"""
+    import sys
 
-        _docker.from_env().ping()
-    except Exception:
+    from src.harness.sandbox_health import probe_sandbox_health
+
+    report = probe_sandbox_health(run_smoke=False)
+    if not report.ready:
+        detail = "; ".join(report.errors) or "sandbox not ready"
+        print(f"[repair_factory] sandbox health probe failed: {detail}", file=sys.stderr)
         return None
     try:
         return create_verifier(client, ws, cwd=repo)

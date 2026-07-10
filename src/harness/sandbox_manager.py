@@ -5,16 +5,50 @@
 使用 tar 流式传输替代 bind mount，避免 Windows bind mount I/O 瓶颈。
 """
 
-import io
 import os
-import tarfile
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
 from pathlib import Path
 
+from src.harness.sandbox_tar import build_sandbox_tar
+
 BUILD_TIMEOUT_S = 600
 TEST_TIMEOUT_S = 900
+EXEC_TIMEOUT_EXIT_CODE = -1
+
+# 可写面仅 /code + /tmp（read_only rootfs + tmpfs）；大小可通过环境变量调节。
+DEFAULT_TMPFS_TMP = "size=512m"
+DEFAULT_TMPFS_CODE = "size=2g"
+
+
+def sandbox_tmpfs_mounts() -> dict[str, str]:
+    """read_only 容器下的可写 tmpfs 挂载。"""
+    return {
+        "/tmp": os.getenv("FIXLOOP_SANDBOX_TMPFS_TMP", DEFAULT_TMPFS_TMP),
+        "/code": os.getenv("FIXLOOP_SANDBOX_TMPFS_CODE", DEFAULT_TMPFS_CODE),
+    }
+
+
+def sandbox_container_run_kwargs(image: str) -> dict:
+    """``containers.run`` 参数：网络/资源/只读 rootfs + 双 tmpfs。"""
+    return {
+        "image": image,
+        "command": ["sleep", "infinity"],
+        "entrypoint": "",
+        "read_only": True,
+        "tmpfs": sandbox_tmpfs_mounts(),
+        "mem_limit": "4g",
+        "cpu_quota": 200000,
+        "network_mode": "none",
+        "detach": True,
+        "remove": True,
+    }
+
+
+def sandbox_pip_install_command() -> str:
+    """pip 写入限定在 /code/.local（只读 rootfs 下不可写 /usr/local）。"""
+    return "/entrypoint.sh build pip install --user -e /code 2>&1 | tail -5"
 
 
 @dataclass
@@ -40,7 +74,9 @@ class SandboxManager:
 
     设计原则：
     - 一个容器 = 一次验证 Turn
+    - tar 预检打包（排除 + 大小上限）后再创建容器
     - tar 流式传文件进容器（绕过 Windows bind mount 性能问题）
+    - read_only rootfs + tmpfs /code、/tmp 为唯一可写面
     - 资源限制（mem_limit=4g, cpu_quota=200000）
     """
 
@@ -67,30 +103,39 @@ class SandboxManager:
 
         Returns:
             Sandbox 实例。
+
+        Raises:
+            SandboxArchiveError: tar 排除后为空或超过大小上限。
         """
         import time
 
         repo = Path(repo_path).resolve()
-        image = f"{self.IMAGE}" if profile == "python" else self.IMAGE
+        image = self.IMAGE
         timings: dict[str, int] = {}
+
+        t_pack = time.time()
+        tar_stream, stats = build_sandbox_tar(repo, "/code")
+        timings["tar_pack_ms"] = int((time.time() - t_pack) * 1000)
+        timings["tar_bytes"] = stats.total_bytes
+        timings["tar_file_count"] = stats.file_count
+        timings["tar_max_bytes"] = stats.max_bytes
 
         t0 = time.time()
         # entrypoint.sh 启动时会 cd /code；镜像内尚无 /code 时容器会立刻退出，
         # 导致 put_archive 报 RWLayer nil。保持容器存活用 bare sleep，exec 仍走 entrypoint。
-        container = self.docker.containers.run(
-            image,
-            ["sleep", "infinity"],
-            entrypoint="",
-            mem_limit="4g",
-            cpu_quota=200000,
-            network_mode="none",
-            detach=True,
-            remove=True,
-        )
+        container = self.docker.containers.run(**sandbox_container_run_kwargs(image))
         timings["container_create_ms"] = int((time.time() - t0) * 1000)
 
         t1 = time.time()
-        self._copy_to_container(container, repo, "/code")
+        try:
+            tar_stream.seek(0)
+            container.put_archive("/", tar_stream)
+        except Exception:
+            try:
+                container.kill()
+            except Exception:
+                pass
+            raise
         timings["tar_copy_ms"] = int((time.time() - t1) * 1000)
 
         return Sandbox(id=container.id, profile=profile, timings=timings)
@@ -112,8 +157,12 @@ class SandboxManager:
             try:
                 exit_code, output = fut.result(timeout=timeout)
             except FuturesTimeoutError:
+                try:
+                    container.kill()
+                except Exception:
+                    pass
                 return ExecResult(
-                    exit_code=-1,
+                    exit_code=EXEC_TIMEOUT_EXIT_CODE,
                     stdout="",
                     stderr=f"timeout after {timeout}s",
                 )
@@ -130,35 +179,3 @@ class SandboxManager:
             container.kill()
         except Exception:
             pass
-
-    def _copy_to_container(self, container, src: Path, dst: str):
-        """用 put_archive 流式传文件进容器（替代 bind mount）。"""
-        tar_stream = io.BytesIO()
-        with tarfile.open(fileobj=tar_stream, mode="w") as tar:
-            # 只打包 Python 源码和配置（跳过 .git, __pycache__, .agent 等）
-            for root, dirs, files in os.walk(src):
-                # 跳过非必要目录
-                dirs[:] = [
-                    d
-                    for d in dirs
-                    if d
-                    not in {
-                        ".git",
-                        "__pycache__",
-                        ".pytest_cache",
-                        ".agent",
-                        ".venv",
-                        "venv",
-                        "node_modules",
-                        ".ruff_cache",
-                    }
-                ]
-                for name in files:
-                    if name.endswith((".pyc", ".pyo")):
-                        continue
-                    full = Path(root) / name
-                    arcname = str(Path(dst) / full.relative_to(src)).replace("\\", "/")
-                    tar.add(full, arcname=arcname)
-
-        tar_stream.seek(0)
-        container.put_archive("/", tar_stream)

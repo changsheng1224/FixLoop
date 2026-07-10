@@ -6,6 +6,7 @@
 import json
 
 from src.harness.sandbox_manager import TEST_TIMEOUT_S
+from src.harness.sandbox_results import is_exec_timeout, verification_result_for_exec_timeout
 from src.state import VerificationResult
 
 
@@ -36,6 +37,9 @@ class PythonTestRunner:
             f"/entrypoint.sh test {test_cmd}",
             timeout=TEST_TIMEOUT_S,
         )
+
+        if is_exec_timeout(test):
+            return verification_result_for_exec_timeout("pytest", TEST_TIMEOUT_S, test)
 
         # 尝试解析 JSON 报告
         try:

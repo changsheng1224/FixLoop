@@ -417,8 +417,8 @@
 
 ### 16.1 文件系统隔离
 
-- **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] 仅暴露 `/code` + `/tmp` 可写**：`read_only=True` + tmpfs `/tmp`
-- **[P1] [C:⭐ I:⭐⭐⭐] tar 排除与大小上限**：排除 `.git`、`.venv`、`node_modules`；超 N MB 拒绝
+- **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] 仅暴露 `/code` + `/tmp` 可写** ✅：`read_only=True` + tmpfs `/code`/`/tmp`；pip `--user` 写入 `/code/.local`
+- **[P1] [C:⭐ I:⭐⭐⭐] tar 排除与大小上限** ✅：``sandbox_tar`` 预检打包；排除 `.git`/`.venv`/`node_modules` 等；默认 200MB 拒绝（`FIXLOOP_SANDBOX_TAR_MAX_MB`）
 - **[P2] [C:⭐ I:⭐⭐⭐] verify 后不留持久层**：`destroy` 必执行
 - **[P2] [C:⭐⭐ I:⭐⭐⭐] 宿主机零挂载**：禁止 bind mount 宿主机目录
 
@@ -428,9 +428,9 @@
 
 ### 16.3 资源隔离
 
-- **[P1] [C:⭐ I:⭐⭐⭐] sandbox 健康探针**：`docker info` + 镜像 + `network_mode=none` 冒烟
+- **[P1] [C:⭐ I:⭐⭐⭐] sandbox 健康探针** ✅：`sandbox_health.probe`（docker info + 镜像 + `network_mode=none` 冒烟）；`try_create_verifier` + `--health`
 - **[P2] [C:⭐ I:⭐⭐⭐] 全局并发沙箱上限**：`FIXLOOP_MAX_SANDBOXES` 信号量
-- **[P2] [C:⭐ I:⭐⭐⭐] pytest 超时兜底**：`exit_code=-1` 仍生成明确 `failure_logs`
+- **[P2] [C:⭐ I:⭐⭐⭐] pytest 超时兜底** ✅：`exit_code=-1` → 明确 `failure_logs`（pytest / pip install）；pip 超时跳过 pytest
 
 ### 16.4 权限降级
 

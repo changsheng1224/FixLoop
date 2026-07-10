@@ -81,10 +81,14 @@ class TestOrchestratorRobustness:
         mgr.create.return_value = sandbox
 
         ctx = ToolContext(root=".")
-        with patch("src.harness.sandbox_manager.SandboxManager", return_value=mgr):
-            with patch("src.harness.python_runner.PythonTestRunner") as runner_cls:
-                runner_cls.return_value.run.side_effect = RuntimeError("pytest boom")
-                with pytest.raises(RuntimeError, match="pytest boom"):
-                    _run_test_in_sandbox(ctx, ".", "")
+        with patch("src.harness.sandbox_verify.SandboxManager", return_value=mgr):
+            with patch(
+                "src.harness.sandbox_verify.maybe_pip_install",
+                return_value=("skipped", 0, None),
+            ):
+                with patch("src.harness.sandbox_verify.PythonTestRunner") as runner_cls:
+                    runner_cls.return_value.run.side_effect = RuntimeError("pytest boom")
+                    with pytest.raises(RuntimeError, match="pytest boom"):
+                        _run_test_in_sandbox(ctx, ".", "")
         mgr.destroy.assert_called_once_with(sandbox)
         assert getattr(ctx, "_sandbox_id", "x") is None
