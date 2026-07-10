@@ -110,13 +110,30 @@ class AgentLoop:
     def _step_timeout_limit_s(self) -> int:
         return int(getattr(self.agent.config, "step_timeout_s", 0) or 0)
 
+    def _run_finished_payload(self, ts) -> dict:
+        """构造 run_finished trace payload（含 optional detail）。"""
+        payload = {"stop_reason": ts.stop_reason or self.stop_reason}
+        detail = ts.node_timings.get("stop_reason_detail", "")
+        if detail:
+            payload["stop_reason_detail"] = detail
+        return payload
+
+    def _emit_run_finished(self, ts) -> None:
+        self._emit("run_finished", self._run_finished_payload(ts))
+
+    def _set_loop_stop_reason(self, reason) -> None:
+        from agent_runtime.stop_reasons import StopReason
+
+        self.stop_reason = reason.value if isinstance(reason, StopReason) else str(reason)
+
     def _finish_step_timeout(self, ts, error, *, clock=None) -> str:
         """单步 wall-clock 超时：写 trace 工件并返回 final 文本。"""
         from agent_runtime.step_clock import StepTimeoutError
+        from agent_runtime.stop_reasons import StopReason
 
         if not isinstance(error, StepTimeoutError):
             raise error
-        self.stop_reason = "step_timeout"
+        self._set_loop_stop_reason(StopReason.STEP_TIMEOUT)
         ts.stop_step_timeout(error.timeout_s, error.step)
         elapsed_ms = clock.elapsed_ms() if clock is not None else 0
         self._emit(
@@ -128,7 +145,7 @@ class AgentLoop:
                 "path": error.path,
             },
         )
-        self._emit("run_finished", {"stop_reason": "step_timeout"})
+        self._emit_run_finished(ts)
         self._finalize_run(ts)
         return (
             f"<final>单步执行超时（{error.timeout_s} 秒），"
@@ -183,6 +200,7 @@ class AgentLoop:
         """使用 API 原生 tool_use 协议（Anthropic 兼容）。"""
         from agent_runtime.react_phases import ReactPhase
         from agent_runtime.step_clock import StepClock, StepTimeoutError
+        from agent_runtime.stop_reasons import StopReason
 
         step_timeout_s = self._step_timeout_limit_s()
         step_clock = StepClock(step_timeout_s)
@@ -272,14 +290,17 @@ class AgentLoop:
         except StepTimeoutError as e:
             return self._finish_step_timeout(ts, e, clock=step_clock)
         except Exception as e:
-            self.stop_reason = f"error: {e}"
+            self._set_loop_stop_reason(StopReason.API_ERROR)
+            ts.stop_with_reason(StopReason.API_ERROR, "failed", detail=f"error: {e}")
+            self._emit_run_finished(ts)
+            self._finalize_run(ts)
             return f"<final>API 错误: {e}</final>"
 
         elapsed_ms = int((_time.time() - t0) * 1000)
         ts.node_timings["model_call_ms"] = elapsed_ms
 
         self.agent.record({"role": "assistant", "content": answer})
-        self.stop_reason = "final"
+        self._set_loop_stop_reason(StopReason.FINAL)
         ts.finish_success(answer)
         self._notify_react_phase(
             ReactPhase.RECORDING,
@@ -287,7 +308,7 @@ class AgentLoop:
             path="native",
             callback=callback,
         )
-        self._emit("run_finished", {"stop_reason": "final"})
+        self._emit_run_finished(ts)
         self._finalize_run(ts)
 
         _log_loop(f"  [loop] final ({elapsed_ms}ms total)\n")
@@ -297,21 +318,23 @@ class AgentLoop:
         """传统文本解析模式（降级路径）。"""
         from agent_runtime.react_phases import ReactPhase
         from agent_runtime.step_clock import StepClock
+        from agent_runtime.stop_reasons import StopReason
 
         while True:
             if ts.tool_steps > self.max_steps:
-                self.stop_reason = f"tool_steps >= {self.max_steps}"
                 ts.stop_step_limit(self.max_steps)
-                self._emit("run_finished", {"stop_reason": self.stop_reason})
+                self._set_loop_stop_reason(StopReason.STEP_LIMIT)
+                self._emit_run_finished(ts)
                 self._finalize_run(ts)
                 return (
                     f"<final>已达到最大工具调用步数限制({self.max_steps})，当前任务未完成。</final>"
                 )
 
             if ts.attempts >= self.max_steps * 3 + 4:
-                self.stop_reason = f"attempts >= {self.max_steps * 3 + 4}"
-                ts.stop_retry_limit(self.max_steps * 3 + 4)
-                self._emit("run_finished", {"stop_reason": self.stop_reason})
+                limit = self.max_steps * 3 + 4
+                ts.stop_retry_limit(limit)
+                self._set_loop_stop_reason(StopReason.PARSE_FAIL)
+                self._emit_run_finished(ts)
                 self._finalize_run(ts)
                 return (
                     "<final>模型输出格式错误次数过多，已终止。"
@@ -363,10 +386,16 @@ class AgentLoop:
                 from agent_runtime.providers.retry_policy import RateLimitExceededError
 
                 if isinstance(e, RateLimitExceededError):
-                    self.stop_reason = "rate_limited"
+                    self._set_loop_stop_reason(StopReason.RATE_LIMITED)
+                    ts.stop_with_reason(StopReason.RATE_LIMITED, "stopped", detail=str(e))
+                    self._emit_run_finished(ts)
+                    self._finalize_run(ts)
                     return f"<final>API 限流：{e}</final>"
                 if "Circuit breaker is open" in str(e):
-                    self.stop_reason = "circuit_breaker"
+                    self._set_loop_stop_reason(StopReason.CIRCUIT_BREAKER)
+                    ts.stop_with_reason(StopReason.CIRCUIT_BREAKER, "stopped", detail=str(e))
+                    self._emit_run_finished(ts)
+                    self._finalize_run(ts)
                     return f"<final>API 熔断：{e}</final>"
                 raise
 
@@ -380,7 +409,7 @@ class AgentLoop:
             if kind == "final":
                 _log_loop(f"  [loop] final ({t_parse}ms parse)\n")
                 self.agent.record({"role": "assistant", "content": str(payload)})
-                self.stop_reason = "final"
+                self._set_loop_stop_reason(StopReason.FINAL)
                 ts.finish_success(str(payload))
                 self._notify_react_phase(
                     ReactPhase.RECORDING,
@@ -388,7 +417,7 @@ class AgentLoop:
                     path="xml",
                     callback=callback,
                 )
-                self._emit("run_finished", {"stop_reason": "final"})
+                self._emit_run_finished(ts)
                 self._finalize_run(ts)
                 return str(payload)
 

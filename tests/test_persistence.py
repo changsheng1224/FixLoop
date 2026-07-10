@@ -40,13 +40,15 @@ class TestTaskState:
         ts = TaskState.create(user_request="test")
         ts.stop_step_limit(6)
         assert ts.status == "stopped"
-        assert "tool_steps" in ts.stop_reason
+        assert ts.stop_reason == "step_limit"
+        assert ts.node_timings["stop_reason_detail"] == "tool_steps > 6"
 
     def test_stop_retry_limit(self):
         ts = TaskState.create(user_request="test")
         ts.stop_retry_limit(22)
         assert ts.status == "failed"
-        assert "attempts" in ts.stop_reason
+        assert ts.stop_reason == "parse_fail"
+        assert "attempts" in ts.node_timings["stop_reason_detail"]
 
     def test_to_dict_from_dict_roundtrip(self):
         ts = TaskState.create(task_id="T1", user_request="hello")
