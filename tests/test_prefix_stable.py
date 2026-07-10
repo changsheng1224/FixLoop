@@ -9,7 +9,11 @@ from agent_runtime.prefix_stable import (
     assert_stable_prefix_clean,
     hash_stable_prefix,
 )
-from agent_runtime.prompt_prefix import build_custom_system_prefix, build_prompt_prefix
+from agent_runtime.prompt_prefix import (
+    build_custom_system_prefix,
+    build_prompt_prefix,
+    cache_stable_text,
+)
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.tools import build_tool_registry
 
@@ -92,7 +96,9 @@ class TestBuildPromptPrefixStableHash:
         registry = build_tool_registry(ctx)
         prefix = build_prompt_prefix(ws, registry)
 
-        assert prefix.hash == hash_stable_prefix(prefix.stable_text)
+        assert prefix.hash == hash_stable_prefix(
+            cache_stable_text(prefix.stable_system_text, prefix.stable_tools_text)
+        )
 
     def test_no_built_at_field(self, temp_workspace):
         from agent_runtime.workspace import WorkspaceContext

@@ -95,25 +95,31 @@ def build_context_sections(
     budget: TokenBudget | Any,
 ) -> dict[str, int]:
     """五/六 section 实现层 → 八段语义投影。"""
-    prefix = getattr(agent, "_prefix", None)
-    stable = getattr(prefix, "stable_text", "") or ""
-    core, tools_text, examples_text = split_stable_text(stable)
-
-    core_t = _count_text(budget, core)
-    tools_t = _count_text(budget, tools_text)
-    examples_t = _count_text(budget, examples_text)
-    stable_impl = int(implementation_sections.get("system", 0) or 0)
-    core_t, tools_t, examples_t = _reconcile_stable_splits(
-        core_t, tools_t, examples_t, stable_impl
-    )
-
-    workspace_t = int(implementation_sections.get("workspace", 0) or 0)
-    role_t = int(implementation_sections.get("role", 0) or 0)
-
     ctx = empty_context_sections()
-    ctx["system"] = core_t + workspace_t
-    ctx["tools"] = tools_t
-    ctx["skills"] = examples_t + role_t
+
+    if "tools" in implementation_sections or "skills" in implementation_sections:
+        ctx["system"] = int(implementation_sections.get("system", 0) or 0) + int(
+            implementation_sections.get("workspace", 0) or 0
+        )
+        ctx["tools"] = int(implementation_sections.get("tools", 0) or 0)
+        ctx["skills"] = int(implementation_sections.get("skills", 0) or 0)
+    else:
+        prefix = getattr(agent, "_prefix", None)
+        stable = getattr(prefix, "stable_text", "") or ""
+        core, tools_text, examples_text = split_stable_text(stable)
+        core_t = _count_text(budget, core)
+        tools_t = _count_text(budget, tools_text)
+        examples_t = _count_text(budget, examples_text)
+        stable_impl = int(implementation_sections.get("system", 0) or 0)
+        core_t, tools_t, examples_t = _reconcile_stable_splits(
+            core_t, tools_t, examples_t, stable_impl
+        )
+        workspace_t = int(implementation_sections.get("workspace", 0) or 0)
+        role_t = int(implementation_sections.get("role", 0) or 0)
+        ctx["system"] = core_t + workspace_t
+        ctx["tools"] = tools_t
+        ctx["skills"] = examples_t + role_t
+
     ctx["memory"] = int(implementation_sections.get("memory", 0) or 0)
     ctx["knowledge"] = int(implementation_sections.get("relevant", 0) or 0)
     ctx["state"] = count_state_section(agent, budget)

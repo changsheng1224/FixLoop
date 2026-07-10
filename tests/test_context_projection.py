@@ -81,13 +81,13 @@ class TestBuildContextSections:
         ctx = build_context_sections(meta["sections"], agent=agent, budget=budget)
         assert ctx["state"] > 0
 
-    def test_tools_positive_when_prefix_has_tools(self, agent):
-        budget = TokenBudget(provider="fake", total_limit=6000)
+    def test_context_sections_match_physical_sections(self, agent):
         cm = ContextManager(agent)
         _, meta = cm.build("hello")
-        ctx = build_context_sections(meta["sections"], agent=agent, budget=budget)
-        assert ctx["tools"] > 0
-        assert ctx["system"] > 0
+        ctx = meta["context_sections"]
+        assert ctx["tools"] == meta["sections"]["tools"]
+        assert ctx["skills"] == meta["sections"]["skills"]
+        assert ctx["system"] == meta["sections"]["system"] + meta["sections"]["workspace"]
 
 
 class TestAttachContextProjection:

@@ -100,6 +100,7 @@ class TestContextManagerBuild:
         assert "list_files" in prompt
         assert "Workspace:" in prompt
         assert meta["sections"]["system"] > 0
+        assert meta["sections"]["tools"] > 0
         assert meta["sections"]["workspace"] > 0
 
     def test_history_present_when_multiple_rounds(self, agent):

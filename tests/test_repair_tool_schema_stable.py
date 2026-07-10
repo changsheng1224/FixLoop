@@ -69,9 +69,15 @@ class TestRepairPrefixHash:
         assert agent._tool_names == REPAIR_CANONICAL_TOOL_NAMES
 
     def test_stable_hash_includes_tools_not_l2_role(self, ws):
+        from agent_runtime.prompt_prefix import cache_stable_text
+
         agent = create_localizer(FakeModelClient(["<final>ok</final>"]), ws)
-        assert agent._prefix.hash == hash_stable_prefix(agent._prefix.stable_text)
-        assert "list_files" in agent._prefix.stable_text
+        cache = cache_stable_text(
+            agent._prefix.stable_system_text,
+            agent._prefix.stable_tools_text,
+        )
+        assert agent._prefix.hash == hash_stable_prefix(cache)
+        assert "list_files" in agent._prefix.stable_tools_text
         assert agent._prefix.role_text[:20] in agent._prefix.text
 
 
@@ -84,13 +90,20 @@ class TestRepairGatewayStillRestricts:
 
 
 class TestRepairNativePromptSplit:
-    def test_native_stable_excludes_l2_role(self, temp_workspace):
+    def test_native_stable_excludes_l2_role_from_cache_block(self, temp_workspace):
+        from agent_runtime.prompt_prefix import cache_stable_text
+
         client = FakeNativeToolClient(["<final>done</final>"])
         ws = WorkspaceContext.build(str(temp_workspace))
         agent = create_localizer(client, ws, cwd=str(temp_workspace))
         role_snippet = agent._prefix.role_text[:30]
         agent.ask("locate bug")
         first = client.prompts[0]
-        assert agent._prefix.stable_text in first
+        cache = cache_stable_text(
+            agent._prefix.stable_system_text,
+            agent._prefix.stable_tools_text,
+        )
+        assert cache in first
         assert role_snippet in first
-        assert first.index(agent._prefix.stable_text) < first.index(role_snippet)
+        assert role_snippet not in cache
+        assert first.index(cache) < first.index(role_snippet)

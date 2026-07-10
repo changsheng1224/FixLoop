@@ -3,6 +3,7 @@
 import pytest
 
 from agent_runtime.prefix_stable import PrefixStableError, hash_stable_prefix
+from agent_runtime.prompt_prefix import cache_stable_text
 from agent_runtime.prompt_external import (
     compose_examples,
     compose_rules,
@@ -73,8 +74,10 @@ class TestPrefixIntegration:
         ctx = ToolContext(root=str(temp_workspace))
         registry = build_tool_registry(ctx)
         prefix = build_prompt_prefix(ws, registry, repo_root=str(temp_workspace))
-        assert "Always be concise" in prefix.stable_text
-        assert prefix.hash == hash_stable_prefix(prefix.stable_text)
+        assert "Always be concise" in prefix.stable_system_text
+        assert prefix.hash == hash_stable_prefix(
+            cache_stable_text(prefix.stable_system_text, prefix.stable_tools_text)
+        )
         assert prefix.assets_fingerprint != ""
 
     def test_repair_agents_share_assets_fingerprint(self, temp_workspace):

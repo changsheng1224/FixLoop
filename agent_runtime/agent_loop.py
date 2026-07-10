@@ -125,8 +125,15 @@ class AgentLoop:
         # 构建 Anthropic 格式的工具定义
         tools_def = _build_anthropic_tools(self.agent.tools)
 
-        # 系统提示词（仅 stable 段，便于 prompt cache）
-        system_prompt = system_prompt or getattr(self.agent._prefix, "stable_text", "")
+        # 系统提示词（system + tools，便于 prompt cache）
+        if not system_prompt:
+            from agent_runtime.prompt_prefix import cache_stable_text
+
+            prefix = self.agent._prefix
+            system_prompt = cache_stable_text(
+                getattr(prefix, "stable_system_text", "") or "",
+                getattr(prefix, "stable_tools_text", "") or "",
+            ) or getattr(prefix, "stable_text", "")
 
         # 工具执行回调
         def executor(tool_name: str, tool_input: dict) -> str:

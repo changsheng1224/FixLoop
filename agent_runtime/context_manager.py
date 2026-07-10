@@ -24,6 +24,9 @@ from agent_runtime.tokenizers import resolve_token_counter, resolve_tokenizer_sp
 REF_TOTAL_BUDGET = 6000
 TOTAL_BUDGET = 100_000
 BUDGET_PREFIX = 2000
+BUDGET_SYSTEM = 700
+BUDGET_TOOLS = 900
+BUDGET_SKILLS = 400
 BUDGET_MEMORY = 800
 BUDGET_RELEVANT = 600
 BUDGET_HISTORY = 2600
@@ -137,16 +140,27 @@ class ContextManager:
     """Prompt 组装器：按预算拼接 section，超限时自动裁剪。
 
     Sections（填充顺序）:
-    1. system     — 稳定段（persona / rules / tools / examples）
-    2. workspace  — Workspace 快照（可变）
-    3. memory     (~800 tokens)  — 工作记忆
-    4. relevant   (~600 tokens)  — 相关记忆条目
-    5. history    — 对话/工具调用历史（预算随 prompt_budget 缩放）
-    6. request    — 当前用户输入（L1 截断后）
+    1. system     — persona / rules（stable，可缓存）
+    2. tools      — 工具签名（stable，可缓存）
+    3. skills     — 调用示例 + L2 role
+    4. workspace  — Workspace 快照（可变）
+    5. memory     (~800 tokens)  — 工作记忆
+    6. relevant   (~600 tokens)  — 相关记忆条目
+    7. history    — 对话/工具调用历史（预算随 prompt_budget 缩放）
+    8. request    — 当前用户输入（L1 截断后）
     """
 
-    SECTION_ORDER = ("system", "role", "workspace", "memory", "relevant", "history")
-    DYNAMIC_ORDER = ("role", "workspace", "memory", "relevant", "history")
+    SECTION_ORDER = (
+        "system",
+        "tools",
+        "skills",
+        "workspace",
+        "memory",
+        "relevant",
+        "history",
+    )
+    NATIVE_SYSTEM_ORDER = ("system", "tools")
+    DYNAMIC_ORDER = ("skills", "workspace", "memory", "relevant", "history")
 
     def __init__(self, agent, total_budget: int | None = None):
         self.agent = agent
@@ -180,10 +194,11 @@ class ContextManager:
         return "\n\n".join(parts), metadata
 
     def build_for_native(self, user_message: str) -> tuple[str, str, dict]:
-        """Native API：stable system + 动态 user 上下文（含 task）。"""
+        """Native API：stable system+tools + 动态 user 上下文（含 skills/task）。"""
         metadata = self._base_metadata()
         sections = self._fill_sections(user_message, metadata)
-        system_prompt = sections.get("system", "")
+        system_parts = [sections[name] for name in self.NATIVE_SYSTEM_ORDER if sections.get(name)]
+        system_prompt = "\n\n".join(system_parts)
         user_parts = [sections[name] for name in self.DYNAMIC_ORDER if sections.get(name)]
         user_parts.append(f"## 当前任务\n\n{sections['request']}")
         return system_prompt, "\n\n".join(user_parts), metadata
@@ -225,9 +240,27 @@ class ContextManager:
             metadata["sections"][name] = tokens
             sections[name] = text
 
+        def add_stable_section(name: str, text: str, section_cap: int):
+            """stable 段：超 section cap 或总预算不足时整段丢弃（不 splice）。"""
+            nonlocal used
+            if not text:
+                return
+            tokens = self.budget.count(text)
+            cap = scaled_section_budget(section_cap, total)
+            if tokens > cap:
+                metadata["cuts"].append(f"丢弃 {name}（{tokens} > section cap {cap}）")
+                return
+            if used + tokens > total:
+                metadata["cuts"].append(f"丢弃 {name}（总预算不足）")
+                return
+            used += tokens
+            metadata["sections"][name] = tokens
+            sections[name] = text
+
         if include_system:
-            add_section("system", self._get_system(), scaled_section_budget(BUDGET_PREFIX, total))
-        add_section("role", self._get_role(), scaled_section_budget(BUDGET_PREFIX, total))
+            add_stable_section("system", self._get_system(), BUDGET_SYSTEM)
+            add_stable_section("tools", self._get_tools(), BUDGET_TOOLS)
+            add_stable_section("skills", self._get_skills(), BUDGET_SKILLS)
         add_section("workspace", self._get_workspace(), scaled_section_budget(BUDGET_PREFIX, total))
         add_section("memory", self._get_memory(), scaled_section_budget(BUDGET_MEMORY, total))
         add_section(
@@ -257,9 +290,13 @@ class ContextManager:
             sections["request"] = user_message
 
         sys_tokens = metadata["sections"].get("system", 0)
+        tools_tokens = metadata["sections"].get("tools", 0)
+        skills_tokens = metadata["sections"].get("skills", 0)
         ws_tokens = metadata["sections"].get("workspace", 0)
-        if sys_tokens or ws_tokens:
-            metadata["sections"]["prefix"] = sys_tokens + ws_tokens
+        if sys_tokens or tools_tokens or skills_tokens or ws_tokens:
+            metadata["sections"]["prefix"] = (
+                sys_tokens + tools_tokens + skills_tokens + ws_tokens
+            )
 
         metadata["total_tokens"] = used
         metadata["budget"] = self.budget.total_limit
@@ -270,13 +307,56 @@ class ContextManager:
     # ---- Section 收集 ----
 
     def _get_system(self) -> str:
-        stable = getattr(self.agent._prefix, "stable_text", "")
-        if stable:
-            return stable
+        prefix = getattr(self.agent, "_prefix", None)
+        if prefix is not None:
+            system = getattr(prefix, "stable_system_text", "") or ""
+            if system:
+                return system
+            stable = getattr(prefix, "stable_text", "")
+            if stable:
+                from agent_runtime.context_projection import split_stable_text
+
+                core, _, _ = split_stable_text(stable)
+                return core
         return getattr(self.agent, "_system_prompt", "") or ""
 
+    def _get_tools(self) -> str:
+        prefix = getattr(self.agent, "_prefix", None)
+        if prefix is None:
+            return ""
+        tools = getattr(prefix, "stable_tools_text", "") or ""
+        if tools:
+            return tools
+        stable = getattr(prefix, "stable_text", "") or ""
+        if stable:
+            from agent_runtime.context_projection import split_stable_text
+
+            _, tools_text, _ = split_stable_text(stable)
+            return tools_text
+        return ""
+
+    def _get_skills(self) -> str:
+        prefix = getattr(self.agent, "_prefix", None)
+        if prefix is None:
+            return ""
+        parts = []
+        skills = getattr(prefix, "stable_skills_text", "") or ""
+        if skills:
+            parts.append(skills)
+        elif getattr(prefix, "stable_text", ""):
+            from agent_runtime.context_projection import split_stable_text
+
+            _, _, examples = split_stable_text(prefix.stable_text)
+            if examples:
+                parts.append(examples)
+        role = getattr(prefix, "role_text", "") or ""
+        if role:
+            parts.append(role)
+        return "\n\n".join(parts)
+
     def _get_role(self) -> str:
-        return getattr(self.agent._prefix, "role_text", "") or ""
+        """Deprecated：role 已并入 skills section。"""
+        return getattr(getattr(self.agent, "_prefix", None), "role_text", "") or ""
 
     def _get_workspace(self) -> str:
         workspace_text = getattr(self.agent._prefix, "workspace_text", "")
