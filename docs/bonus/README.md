@@ -2,7 +2,7 @@
 
 | 文件 | 用途 |
 |------|------|
-| [../bonus.md](../bonus.md) | **待实现条目**（P/C/I backlog，不含 ✅ 已完成项） |
+| [../bonus.md](../bonus.md) | **待实现条目**（P/C/I backlog；`✅`/`🔶` 标记完成情况，条目均保留） |
 | [DESIGN.md](DESIGN.md) | **设计说明**（边界、架构、现状、Gap、面试要点） |
 | [OUT_OF_SCOPE.md](OUT_OF_SCOPE.md) | **Web 产品化归档**（主线不实现） |
 
