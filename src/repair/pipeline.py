@@ -193,6 +193,7 @@ class RepairPipelineMixin:
         set_repair_total_ms(state.node_timings, total_ms)
         finalize_phases(state.node_timings)
         self._attach_token_usage(state)
+        self._attach_rejection_stats(state)
         self._end_repair_trace(state)
         log.info("总耗时: %dms, status=%s", total_ms, state.status)
         return state

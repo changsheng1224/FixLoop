@@ -86,8 +86,11 @@ class RepairRunTracer:
 
         by_agent = collect_agent_reports_from_run(self.store.runs_dir / self.run_id)
         tool_summary = summarize_agent_tool_usage(by_agent)
+        from src.repair.rejection_aggregate import gateway_denial_count, summarize_repair_rejections
         from src.repair.timing_schema import phases_for_report
 
+        run_dir = self.store.runs_dir / self.run_id
+        rejection_summary = summarize_repair_rejections(run_dir)
         report = {
             "run_id": self.run_id,
             "status": state.status,
@@ -95,16 +98,23 @@ class RepairRunTracer:
             "token_usage_by_agent": by_agent,
             **tool_summary,
             **token_summary,
+            **rejection_summary,
         }
         self.store.write_report_by_id(self.run_id, report)
+        finished_payload = {
+            "status": state.status,
+            "total_tokens": token_summary.get("total_tokens", 0),
+            "total_tool_steps": tool_summary.get("total_tool_steps", 0),
+            "tool_usage_by_agent": tool_summary.get("tool_usage_by_agent", {}),
+            "agents": list(by_agent.keys()),
+        }
+        if rejection_summary:
+            finished_payload["gateway_denials"] = gateway_denial_count(rejection_summary)
+            denied = rejection_summary.get("permission_denied_by_tool")
+            if denied:
+                finished_payload["permission_denied_by_tool"] = denied
         self.emit(
             "orchestrator",
             "repair_finished",
-            {
-                "status": state.status,
-                "total_tokens": token_summary.get("total_tokens", 0),
-                "total_tool_steps": tool_summary.get("total_tool_steps", 0),
-                "tool_usage_by_agent": tool_summary.get("tool_usage_by_agent", {}),
-                "agents": list(by_agent.keys()),
-            },
+            finished_payload,
         )

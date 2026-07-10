@@ -344,6 +344,17 @@ class Orchestrator(RepairPipelineMixin):
         if summary.get("total_tool_steps") is not None:
             state.node_timings["total_tool_steps"] = summary["total_tool_steps"]
 
+    def _attach_rejection_stats(self, state: RepairState) -> None:
+        from src.repair.rejection_aggregate import summarize_repair_rejections
+
+        run_id = state.repair_run_id or ""
+        if not run_id:
+            return
+        run_dir = Path(self._repo_root) / ".agent" / "runs" / run_id
+        summary = summarize_repair_rejections(run_dir)
+        for key, value in summary.items():
+            state.node_timings[key] = value
+
     def _run_patcher(self, state: RepairState) -> list[CandidatePatch]:
         """Patcher：直接调模型生成 JSON，Orchestrator 自己应用补丁。
 

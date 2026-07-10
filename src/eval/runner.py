@@ -207,9 +207,11 @@ class EvalRunner:
             status = getattr(state, "status", "") if state else ""
             total_tokens = 0
             token_usage: dict = {}
+            permission_denied_by_tool: dict = {}
             if state and getattr(state, "node_timings", None):
                 node_timings = state.node_timings
                 token_usage = node_timings.get("token_usage") or {}
+                permission_denied_by_tool = dict(node_timings.get("permission_denied_by_tool") or {})
                 if isinstance(token_usage, dict):
                     total_tokens = int(
                         node_timings.get("total_tokens", 0) or token_usage.get("total_tokens", 0)
@@ -237,6 +239,7 @@ class EvalRunner:
                 status=status,
                 total_tokens=total_tokens,
                 token_usage=token_usage if isinstance(token_usage, dict) else {},
+                permission_denied_by_tool=permission_denied_by_tool,
             )
 
 

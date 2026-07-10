@@ -26,10 +26,11 @@ class CaseResult:
     run_index: int = 0
     total_tokens: int = 0
     token_usage: dict = field(default_factory=dict)
+    permission_denied_by_tool: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """序列化为 JSON 可写 dict。"""
-        return {
+        data = {
             "case_id": self.case_id,
             "issue_type": self.issue_type,
             "difficulty": self.difficulty,
@@ -48,6 +49,9 @@ class CaseResult:
             "total_tokens": self.total_tokens,
             "token_usage": self.token_usage,
         }
+        if self.permission_denied_by_tool:
+            data["permission_denied_by_tool"] = self.permission_denied_by_tool
+        return data
 
 
 @dataclass

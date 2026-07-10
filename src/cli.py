@@ -253,6 +253,15 @@ def _print_repair_result(state, verbose: bool) -> None:
             total_tools = state.node_timings.get("total_tool_steps")
             if total_tools is not None:
                 print(f"  total: {total_tools} tool calls", file=sys.stderr)
+        denied = state.node_timings.get("permission_denied_by_tool") or {}
+        if denied:
+            print("--- Gateway rejections (permission_denied) ---", file=sys.stderr)
+            for tool, count in sorted(denied.items()):
+                print(f"  {tool}: {count}", file=sys.stderr)
+            by_agent = state.node_timings.get("permission_denied_by_agent") or {}
+            for agent, tools in sorted(by_agent.items()):
+                parts = ", ".join(f"{name}={count}" for name, count in sorted(tools.items()))
+                print(f"  {agent}: {parts}", file=sys.stderr)
         if state.repair_run_id:
             print(f"--- Trace: .agent/runs/{state.repair_run_id}/trace.jsonl ---", file=sys.stderr)
 
