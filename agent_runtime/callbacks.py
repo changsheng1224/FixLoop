@@ -20,6 +20,7 @@ class ProgressCallback(Protocol):
 
     def on_step_start(self, step: int, max_steps: int): ...
     def on_tool_executed(self, name: str, result_preview: str): ...
+    def on_react_phase(self, phase: str, step: int, max_steps: int, *, tool: str = ""): ...
     def on_final_answer(self, text: str): ...
 
 
@@ -34,6 +35,14 @@ class CLIProgressCallback:
     def on_step_start(self, step: int, max_steps: int):
         """记录当前步数（工具输出前缀用）。"""
         self._step = step
+
+    def on_react_phase(self, phase: str, step: int, max_steps: int, *, tool: str = ""):
+        """向 stderr 打印 ReAct 阶段行。"""
+        suffix = f" {tool}" if tool else ""
+        print(
+            f"  {_YELLOW}[{step}/{max_steps}] {phase}{suffix}{_RESET}",
+            file=self._output,
+        )
 
     def on_tool_executed(self, name: str, result_preview: str):
         """向 stderr 打印彩色工具执行行。"""

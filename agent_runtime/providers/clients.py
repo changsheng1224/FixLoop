@@ -73,6 +73,7 @@ class FakeNativeToolClient(FakeModelClient):
         tools: list[dict],
         executor,
         max_turns: int = 6,
+        phase_hook=None,
     ) -> tuple[str, dict]:
         """模拟原生 tool 多轮对话（测试用）。"""
         import json
@@ -89,6 +90,11 @@ class FakeNativeToolClient(FakeModelClient):
         user_msg = user_message
 
         for turn in range(max_turns):
+            step = turn + 1
+            if phase_hook is not None:
+                from agent_runtime.react_phases import ReactPhase
+
+                phase_hook(ReactPhase.REASONING, step=step)
             full = f"{system_prompt}\n\n{user_msg}" if system_prompt else user_msg
             raw = self.complete(full)
             usage = dict(self.last_usage)
@@ -124,7 +130,15 @@ class FakeNativeToolClient(FakeModelClient):
                     return raw.strip(), call_usage
                 name = payload.get("name", "")
                 args = payload.get("args", {})
+                if phase_hook is not None:
+                    from agent_runtime.react_phases import ReactPhase
+
+                    phase_hook(ReactPhase.ACTING, step=step, tool=name)
                 result = executor(name, args)
+                if phase_hook is not None:
+                    from agent_runtime.react_phases import ReactPhase
+
+                    phase_hook(ReactPhase.OBSERVATION, step=step, tool=name)
                 user_msg = f"工具 {name} 执行完成。\n结果:\n{result}"
                 continue
 
@@ -219,6 +233,7 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
         tools: list[dict],
         executor,
         max_turns: int = 6,
+        phase_hook=None,
     ) -> tuple[str, dict]:
         """使用原生 Anthropic tool_use 协议进行多轮对话。
 
@@ -260,6 +275,11 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
         }
 
         for turn in range(max_turns):
+            step = turn + 1
+            if phase_hook is not None:
+                from agent_runtime.react_phases import ReactPhase
+
+                phase_hook(ReactPhase.REASONING, step=step)
             payload = dict(payload_base)
             payload["messages"] = list(messages)  # shallow copy
             body = json.dumps(payload).encode("utf-8")
@@ -309,10 +329,18 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
                     name = tu.get("name", "")
                     inp = tu.get("input", {})
                     tu_id = tu.get("id", "")
+                    if phase_hook is not None:
+                        from agent_runtime.react_phases import ReactPhase
+
+                        phase_hook(ReactPhase.ACTING, step=step, tool=name)
                     try:
                         result = executor(name, inp)
                     except Exception as e:
                         result = f"Error: {e}"
+                    if phase_hook is not None:
+                        from agent_runtime.react_phases import ReactPhase
+
+                        phase_hook(ReactPhase.OBSERVATION, step=step, tool=name)
                     tool_results.append(
                         {
                             "type": "tool_result",

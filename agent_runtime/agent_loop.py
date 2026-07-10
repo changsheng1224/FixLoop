@@ -85,6 +85,28 @@ class AgentLoop:
         )
         ts.node_timings["ttft_ms_total"] = int(ts.node_timings.get("ttft_ms_total", 0) or 0) + ttft_total
 
+    def _notify_react_phase(
+        self,
+        phase,
+        *,
+        step: int,
+        path: str,
+        tool: str | None = None,
+        callback=None,
+    ) -> None:
+        """写入 react_phase trace 并转发 CLI 回调。"""
+        from agent_runtime.react_phases import build_react_phase_payload
+
+        self._emit(
+            "react_phase",
+            build_react_phase_payload(phase, step=step, path=path, tool=tool),
+        )
+        if callback is None:
+            return
+        on_phase = getattr(callback, "on_react_phase", None)
+        if on_phase is not None:
+            on_phase(str(phase), step, self.max_steps, tool=tool or "")
+
     def run(self, user_message: str, callback=None) -> str:
         """执行一次 Agent 任务：ReAct 循环直至 final answer 或 max_steps。
 
@@ -121,6 +143,8 @@ class AgentLoop:
 
     def _run_with_native_tools(self, user_message: str, ts, callback=None) -> str:
         """使用 API 原生 tool_use 协议（Anthropic 兼容）。"""
+        from agent_runtime.react_phases import ReactPhase
+
         system_prompt, user_message, budget_meta = self.agent.build_for_native(user_message)
         self._last_budget_meta = budget_meta
         # 构建 Anthropic 格式的工具定义
@@ -137,18 +161,36 @@ class AgentLoop:
             ) or getattr(prefix, "stable_text", "")
 
         # 工具执行回调
+        def phase_hook(phase, *, step: int, tool: str | None = None) -> None:
+            if phase == ReactPhase.REASONING and callback is not None:
+                callback.on_step_start(step, self.max_steps)
+            self._notify_react_phase(
+                phase,
+                step=step,
+                path="native",
+                tool=tool,
+                callback=callback,
+            )
+
         def executor(tool_name: str, tool_input: dict) -> str:
             ts.record_tool(tool_name)
-            ts.node_timings.setdefault("tool_exec_ms", 0)
+            step = ts.tool_steps
             t0 = _time.time()
             result = self.agent.execute_tool(tool_name, tool_input)
             result_text = result.content if hasattr(result, "content") else str(result)
             result_text = truncate_tool_result_for_agent(self.agent, tool_name, result_text)
             te_ms = int((_time.time() - t0) * 1000)
-            ts.node_timings["tool_exec_ms"] += te_ms
+            ts.node_timings["tool_exec_ms"] = int(ts.node_timings.get("tool_exec_ms", 0) or 0) + te_ms
             _log_loop(f"  [loop] {tool_name} tool={te_ms}ms\n")
             self.agent.update_memory_after_tool(tool_name, tool_input, result_text)
             self._record_tool_outcome(tool_name, result, ts)
+            self._notify_react_phase(
+                ReactPhase.RECORDING,
+                step=step,
+                path="native",
+                tool=tool_name,
+                callback=callback,
+            )
             if callback:
                 callback.on_tool_executed(tool_name, result_text)
             return result_text
@@ -162,6 +204,7 @@ class AgentLoop:
                 tools=tools_def,
                 executor=executor,
                 max_turns=self.max_steps,
+                phase_hook=phase_hook,
             )
             if isinstance(result, tuple):
                 answer, call_usage = result
@@ -180,6 +223,12 @@ class AgentLoop:
         self.agent.record({"role": "assistant", "content": answer})
         self.stop_reason = "final"
         ts.finish_success(answer)
+        self._notify_react_phase(
+            ReactPhase.RECORDING,
+            step=max(ts.tool_steps, 1),
+            path="native",
+            callback=callback,
+        )
         self._emit("run_finished", {"stop_reason": "final"})
         self._finalize_run(ts)
 
@@ -188,6 +237,8 @@ class AgentLoop:
 
     def _run_with_text_parsing(self, user_message: str, ts, callback=None) -> str:
         """传统文本解析模式（降级路径）。"""
+        from agent_runtime.react_phases import ReactPhase
+
         while True:
             if ts.tool_steps > self.max_steps:
                 self.stop_reason = f"tool_steps >= {self.max_steps}"
@@ -208,11 +259,21 @@ class AgentLoop:
                     "请检查 System Prompt 中的工具调用格式说明。</final>"
                 )
 
+            step = ts.tool_steps + 1
+            if callback is not None:
+                callback.on_step_start(step, self.max_steps)
+
             # 1. 组装 prompt
             t0 = _time.time()
             prompt_text, token_meta = self.agent._build_prompt_with_meta(user_message)
             self._last_token_meta = token_meta
             self._emit("context_built", build_trace_payload(token_meta))
+            self._notify_react_phase(
+                ReactPhase.REASONING,
+                step=step,
+                path="xml",
+                callback=callback,
+            )
             ts.node_timings.setdefault("prompt_build_ms", 0)
             ts.node_timings["prompt_build_ms"] += int((_time.time() - t0) * 1000)
 
@@ -256,6 +317,12 @@ class AgentLoop:
                 self.agent.record({"role": "assistant", "content": str(payload)})
                 self.stop_reason = "final"
                 ts.finish_success(str(payload))
+                self._notify_react_phase(
+                    ReactPhase.RECORDING,
+                    step=step,
+                    path="xml",
+                    callback=callback,
+                )
                 self._emit("run_finished", {"stop_reason": "final"})
                 self._finalize_run(ts)
                 return str(payload)
@@ -267,6 +334,13 @@ class AgentLoop:
                     continue
                 tool_name = payload.get("name", "unknown")
                 tool_args = payload.get("args", {})
+                self._notify_react_phase(
+                    ReactPhase.ACTING,
+                    step=step,
+                    path="xml",
+                    tool=tool_name,
+                    callback=callback,
+                )
                 ts.record_tool(tool_name)
                 self.agent.record(
                     {
@@ -284,11 +358,25 @@ class AgentLoop:
                 ts.node_timings.setdefault("tool_exec_ms", 0)
                 ts.node_timings["tool_exec_ms"] += te_ms
                 _log_loop(f"  [loop] {tool_name} tool={te_ms}ms\n")
+                self._notify_react_phase(
+                    ReactPhase.OBSERVATION,
+                    step=step,
+                    path="xml",
+                    tool=tool_name,
+                    callback=callback,
+                )
                 self.agent.update_memory_after_tool(tool_name, tool_args, result_text)
                 self.agent.record(
                     {"role": "tool", "content": result_text, "tool_name": tool_name}
                 )
                 self._record_tool_outcome(tool_name, result, ts)
+                self._notify_react_phase(
+                    ReactPhase.RECORDING,
+                    step=step,
+                    path="xml",
+                    tool=tool_name,
+                    callback=callback,
+                )
                 if callback:
                     callback.on_tool_executed(tool_name, result_text)
                 user_message = f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
