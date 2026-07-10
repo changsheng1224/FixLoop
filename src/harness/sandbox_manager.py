@@ -16,6 +16,39 @@ from pathlib import Path
 BUILD_TIMEOUT_S = 600
 TEST_TIMEOUT_S = 900
 
+# 可写面仅 /code + /tmp（read_only rootfs + tmpfs）；大小可通过环境变量调节。
+DEFAULT_TMPFS_TMP = "size=512m"
+DEFAULT_TMPFS_CODE = "size=2g"
+
+
+def sandbox_tmpfs_mounts() -> dict[str, str]:
+    """read_only 容器下的可写 tmpfs 挂载。"""
+    return {
+        "/tmp": os.getenv("FIXLOOP_SANDBOX_TMPFS_TMP", DEFAULT_TMPFS_TMP),
+        "/code": os.getenv("FIXLOOP_SANDBOX_TMPFS_CODE", DEFAULT_TMPFS_CODE),
+    }
+
+
+def sandbox_container_run_kwargs(image: str) -> dict:
+    """``containers.run`` 参数：网络/资源/只读 rootfs + 双 tmpfs。"""
+    return {
+        "image": image,
+        "command": ["sleep", "infinity"],
+        "entrypoint": "",
+        "read_only": True,
+        "tmpfs": sandbox_tmpfs_mounts(),
+        "mem_limit": "4g",
+        "cpu_quota": 200000,
+        "network_mode": "none",
+        "detach": True,
+        "remove": True,
+    }
+
+
+def sandbox_pip_install_command() -> str:
+    """pip 写入限定在 /code/.local（只读 rootfs 下不可写 /usr/local）。"""
+    return "/entrypoint.sh build pip install --user -e /code 2>&1 | tail -5"
+
 
 @dataclass
 class ExecResult:
@@ -41,6 +74,7 @@ class SandboxManager:
     设计原则：
     - 一个容器 = 一次验证 Turn
     - tar 流式传文件进容器（绕过 Windows bind mount 性能问题）
+    - read_only rootfs + tmpfs /code、/tmp 为唯一可写面
     - 资源限制（mem_limit=4g, cpu_quota=200000）
     """
 
@@ -77,16 +111,7 @@ class SandboxManager:
         t0 = time.time()
         # entrypoint.sh 启动时会 cd /code；镜像内尚无 /code 时容器会立刻退出，
         # 导致 put_archive 报 RWLayer nil。保持容器存活用 bare sleep，exec 仍走 entrypoint。
-        container = self.docker.containers.run(
-            image,
-            ["sleep", "infinity"],
-            entrypoint="",
-            mem_limit="4g",
-            cpu_quota=200000,
-            network_mode="none",
-            detach=True,
-            remove=True,
-        )
+        container = self.docker.containers.run(**sandbox_container_run_kwargs(image))
         timings["container_create_ms"] = int((time.time() - t0) * 1000)
 
         t1 = time.time()

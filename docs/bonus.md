@@ -417,7 +417,7 @@
 
 ### 16.1 文件系统隔离
 
-- **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] 仅暴露 `/code` + `/tmp` 可写**：`read_only=True` + tmpfs `/tmp`
+- **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] 仅暴露 `/code` + `/tmp` 可写** ✅：`read_only=True` + tmpfs `/code`/`/tmp`；pip `--user` 写入 `/code/.local`
 - **[P1] [C:⭐ I:⭐⭐⭐] tar 排除与大小上限**：排除 `.git`、`.venv`、`node_modules`；超 N MB 拒绝
 - **[P2] [C:⭐ I:⭐⭐⭐] verify 后不留持久层**：`destroy` 必执行
 - **[P2] [C:⭐⭐ I:⭐⭐⭐] 宿主机零挂载**：禁止 bind mount 宿主机目录

@@ -72,3 +72,20 @@ class TestSandboxToolsMocked:
         out = sandbox_build(ctx, {"repo_path": str(temp_workspace)})
         assert "pip install" in out or "skipped" in out
         fake_mgr.create.assert_called_once()
+
+    def test_pip_install_uses_user_flag_when_dependencies(self, monkeypatch, temp_workspace):
+        (temp_workspace / "pyproject.toml").write_text(
+            '[project]\nname="t"\ndependencies=["requests"]\n',
+            encoding="utf-8",
+        )
+        ctx = ToolContext(root=str(temp_workspace))
+        fake_mgr = MagicMock()
+        fake_mgr.create.return_value = Sandbox(id="sb-2", profile="python")
+        fake_mgr.execute.return_value = ExecResult(0, "ok", "")
+        monkeypatch.setattr(
+            "src.harness.sandbox_manager.SandboxManager",
+            lambda: fake_mgr,
+        )
+        sandbox_build(ctx, {"repo_path": str(temp_workspace)})
+        cmd = fake_mgr.execute.call_args[0][1]
+        assert "pip install --user -e /code" in cmd

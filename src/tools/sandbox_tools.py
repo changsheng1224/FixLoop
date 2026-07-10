@@ -172,12 +172,12 @@ def _maybe_pip_install(mgr, sandbox, repo_path: str) -> tuple[str, int]:
     if not needs_install:
         return "skipped (no project dependencies detected)", 0
 
-    from src.harness.sandbox_manager import BUILD_TIMEOUT_S
+    from src.harness.sandbox_manager import BUILD_TIMEOUT_S, sandbox_pip_install_command
 
     t0 = time.time()
     result = mgr.execute(
         sandbox,
-        "/entrypoint.sh build pip install -e /code 2>&1 | tail -5",
+        sandbox_pip_install_command(),
         timeout=BUILD_TIMEOUT_S,
     )
     pip_ms = int((time.time() - t0) * 1000)
