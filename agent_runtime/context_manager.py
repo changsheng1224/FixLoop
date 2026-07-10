@@ -17,6 +17,7 @@ from agent_runtime.compression_pipeline import (
     truncate_tool_content as _truncate_tool_content,
 )
 from agent_runtime.tier_policy import TierPolicy, filter_relevant_results
+from agent_runtime.context_projection import attach_context_projection, attach_fit_context_projection
 from agent_runtime.tokenizers import resolve_token_counter, resolve_tokenizer_spec
 
 # Section token 预算分配（以 REF_TOTAL_BUDGET 为参考布局，随 prompt_budget 等比缩放）
@@ -108,6 +109,7 @@ def fit_prompt_to_budget(
         metadata["cuts"].append(f"裁剪 user 到 {user_tokens} tokens（剩余预算 {remaining}）")
     metadata["sections"]["user"] = user_tokens
     metadata["total_tokens"] = sys_tokens + user_tokens
+    attach_fit_context_projection(metadata)
     return system_text, user_text, metadata
 
 
@@ -262,6 +264,7 @@ class ContextManager:
         metadata["total_tokens"] = used
         metadata["budget"] = self.budget.total_limit
         metadata["tokenizer_backend"] = self.budget.backend
+        attach_context_projection(metadata, agent=self.agent, budget=self.budget)
         return sections
 
     # ---- Section 收集 ----

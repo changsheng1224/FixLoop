@@ -204,6 +204,16 @@ class AgentLoop:
             t0 = _time.time()
             prompt_text, token_meta = self.agent._build_prompt_with_meta(user_message)
             self._last_token_meta = token_meta
+            self._emit(
+                "context_built",
+                {
+                    "context_schema_version": token_meta.get("context_schema_version"),
+                    "context_sections": token_meta.get("context_sections"),
+                    "context_sections_total": token_meta.get("context_sections_total"),
+                    "total_tokens": token_meta.get("total_tokens"),
+                    "budget": token_meta.get("budget"),
+                },
+            )
             ts.node_timings.setdefault("prompt_build_ms", 0)
             ts.node_timings["prompt_build_ms"] += int((_time.time() - t0) * 1000)
 

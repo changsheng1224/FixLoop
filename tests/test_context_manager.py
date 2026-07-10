@@ -84,6 +84,7 @@ class TestContextManagerBuild:
         assert "当前任务" in prompt
         assert "what is this project?" in prompt
         assert "sections" in meta
+        assert "context_sections" in meta
         assert "total_tokens" in meta
 
     def test_request_section_never_cut(self, agent):
