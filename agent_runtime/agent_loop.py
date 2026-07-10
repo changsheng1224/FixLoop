@@ -3,17 +3,26 @@
 停机后产出 task_state.json + trace.jsonl + report.json（含 node_timings 耗时分布）。
 """
 
-import sys as _sys
 import time as _time
 
 from agent_runtime.compression_pipeline import truncate_tool_result_for_agent
 from agent_runtime.context_metadata import build_trace_payload
+from agent_runtime.loop_limits import NATIVE_MAX_TURNS_MESSAGE, max_parse_attempts
 from agent_runtime.model_timing import (
     ModelCallTiming,
     build_report_latency_fields,
     collect_client_timings,
     emit_model_timing_events,
 )
+from agent_runtime.parse_recovery import (
+    ParseRetry,
+    build_recovery_prompt,
+    failure_invalid_tool_payload,
+)
+from agent_runtime.providers.retry_policy import RateLimitExceededError
+from agent_runtime.react_phases import ReactPhase, ReactPath
+from agent_runtime.step_clock import StepClock, StepTimeoutError
+from agent_runtime.stop_reasons import StopReason
 
 
 def _log_loop(msg: str) -> None:
@@ -34,7 +43,6 @@ def _build_anthropic_tools(tools_registry: dict) -> list[dict]:
         properties = {}
         required = []
         for param, type_str in schema.items():
-            # 解析 "type=default" 格式
             if "=" in type_str:
                 ptype, _, default = type_str.partition("=")
             else:
@@ -70,11 +78,86 @@ class AgentLoop:
         self._task_state = None
         self._store = None
         self._last_token_meta = {}
-        self._retry_count = 0  # 最近一次 prompt 的 token 元数据
+        self._retry_count = 0
         self._call_timings: list[ModelCallTiming] = []
 
+    # ---- 停机与 trace 收尾 ----
+
+    def _sync_stop_reason(self, ts) -> None:
+        self.stop_reason = ts.stop_reason or self.stop_reason
+
+    def _run_finished_payload(self, ts) -> dict:
+        payload = {"stop_reason": ts.stop_reason or self.stop_reason}
+        detail = ts.node_timings.get("stop_reason_detail", "")
+        if detail:
+            payload["stop_reason_detail"] = detail
+        return payload
+
+    def _emit_run_finished(self, ts) -> None:
+        self._emit("run_finished", self._run_finished_payload(ts))
+
+    def _complete_run(
+        self,
+        ts,
+        answer: str,
+        *,
+        recording: dict | None = None,
+    ) -> str:
+        """TaskState 已写入终态后：同步 stop_reason、可选 recording、落盘。"""
+        self._sync_stop_reason(ts)
+        if recording is not None:
+            self._notify_react_phase(
+                ReactPhase.RECORDING,
+                step=recording["step"],
+                path=recording["path"],
+                tool=recording.get("tool"),
+                callback=recording.get("callback"),
+            )
+        self._emit_run_finished(ts)
+        self._finalize_run(ts)
+        return answer
+
+    def _finish_step_timeout(self, ts, error, *, clock=None) -> str:
+        if not isinstance(error, StepTimeoutError):
+            raise error
+        ts.stop_step_timeout(error.timeout_s, error.step)
+        elapsed_ms = clock.elapsed_ms() if clock is not None else 0
+        self._emit(
+            "step_timeout",
+            {
+                "step": error.step,
+                "step_timeout_s": error.timeout_s,
+                "elapsed_ms": elapsed_ms,
+                "path": error.path,
+            },
+        )
+        return self._complete_run(
+            ts,
+            (
+                f"<final>单步执行超时（{error.timeout_s} 秒），"
+                f"step={error.step}，path={error.path or 'unknown'}。</final>"
+            ),
+        )
+
+    def _maybe_step_timeout(self, ts, clock, step: int, path: ReactPath):
+        try:
+            clock.check(step=step, path=path)
+        except StepTimeoutError as e:
+            return self._finish_step_timeout(ts, e, clock=clock)
+        return None
+
+    def _stop_for_api_error(self, ts, error: Exception) -> str | None:
+        if isinstance(error, RateLimitExceededError):
+            ts.stop_with_reason(StopReason.RATE_LIMITED, "stopped", detail=str(error))
+            return self._complete_run(ts, f"<final>API 限流：{error}</final>")
+        if "Circuit breaker is open" in str(error):
+            ts.stop_with_reason(StopReason.CIRCUIT_BREAKER, "stopped", detail=str(error))
+            return self._complete_run(ts, f"<final>API 熔断：{error}</final>")
+        return None
+
+    # ---- ReAct / 计时 ----
+
     def _record_model_timings(self, ts, timings: list, *, default_attempt: int = 1) -> None:
-        """Merge timings into loop state and emit trace events."""
         if not timings:
             return
         self._call_timings.extend(timings)
@@ -85,16 +168,192 @@ class AgentLoop:
         )
         ts.node_timings["ttft_ms_total"] = int(ts.node_timings.get("ttft_ms_total", 0) or 0) + ttft_total
 
+    def _notify_react_phase(
+        self,
+        phase,
+        *,
+        step: int,
+        path: ReactPath,
+        tool: str | None = None,
+        callback=None,
+    ) -> None:
+        from agent_runtime.react_phases import build_react_phase_payload
+
+        self._emit(
+            "react_phase",
+            build_react_phase_payload(phase, step=step, path=path, tool=tool),
+        )
+        if callback is None:
+            return
+        on_phase = getattr(callback, "on_react_phase", None)
+        if on_phase is not None:
+            on_phase(str(phase), step, self.max_steps, tool=tool or "")
+
+    def _step_timeout_limit_s(self) -> int:
+        return int(getattr(self.agent.config, "step_timeout_s", 0) or 0)
+
+    # ---- 工具执行（XML / Native 共用）----
+
+    def _run_tool_step(
+        self,
+        ts,
+        tool_name: str,
+        tool_args: dict,
+        *,
+        step: int,
+        path: ReactPath,
+        callback=None,
+        record_assistant: bool = True,
+        emit_acting: bool = True,
+        emit_observation: bool = True,
+        emit_recording: bool = True,
+    ) -> str:
+        """执行工具、写 trace/history，返回下一轮 user_message。"""
+        if emit_acting:
+            self._notify_react_phase(
+                ReactPhase.ACTING,
+                step=step,
+                path=path,
+                tool=tool_name,
+                callback=callback,
+            )
+        ts.record_tool(tool_name)
+        if record_assistant:
+            self.agent.record(
+                {
+                    "role": "assistant",
+                    "content": f"调用工具: {tool_name}",
+                    "tool_name": tool_name,
+                    "tool_args": tool_args,
+                }
+            )
+        t0 = _time.time()
+        result = self.agent.execute_tool(tool_name, tool_args)
+        result_text = result.content if hasattr(result, "content") else str(result)
+        result_text = truncate_tool_result_for_agent(self.agent, tool_name, result_text)
+        te_ms = int((_time.time() - t0) * 1000)
+        ts.node_timings.setdefault("tool_exec_ms", 0)
+        ts.node_timings["tool_exec_ms"] += te_ms
+        _log_loop(f"  [loop] {tool_name} tool={te_ms}ms\n")
+        if emit_observation:
+            self._notify_react_phase(
+                ReactPhase.OBSERVATION,
+                step=step,
+                path=path,
+                tool=tool_name,
+                callback=callback,
+            )
+        self.agent.update_memory_after_tool(tool_name, tool_args, result_text)
+        self.agent.record({"role": "tool", "content": result_text, "tool_name": tool_name})
+        self._record_tool_outcome(tool_name, result, ts)
+        if emit_recording:
+            self._notify_react_phase(
+                ReactPhase.RECORDING,
+                step=step,
+                path=path,
+                tool=tool_name,
+                callback=callback,
+            )
+        if callback:
+            callback.on_tool_executed(tool_name, result_text)
+        return f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
+
+    # ---- XML 路径辅助 ----
+
+    def _check_xml_loop_limits(self, ts) -> str | None:
+        if ts.tool_steps > self.max_steps:
+            ts.stop_step_limit(self.max_steps)
+            return self._complete_run(
+                ts,
+                f"<final>已达到最大工具调用步数限制({self.max_steps})，当前任务未完成。</final>",
+            )
+        limit = max_parse_attempts(self.max_steps)
+        if ts.attempts >= limit:
+            ts.stop_retry_limit(limit)
+            return self._complete_run(
+                ts,
+                "<final>模型输出格式错误次数过多，已终止。"
+                "请检查 System Prompt 中的工具调用格式说明。</final>",
+            )
+        return None
+
+    def _xml_build_context(self, ts, user_message: str, *, step: int, callback) -> str:
+        t0 = _time.time()
+        prompt_text, token_meta = self.agent._build_prompt_with_meta(user_message)
+        self._last_token_meta = token_meta
+        self._emit("context_built", build_trace_payload(token_meta))
+        self._notify_react_phase(
+            ReactPhase.REASONING,
+            step=step,
+            path="xml",
+            callback=callback,
+        )
+        ts.node_timings.setdefault("prompt_build_ms", 0)
+        ts.node_timings["prompt_build_ms"] += int((_time.time() - t0) * 1000)
+        return prompt_text
+
+    def _xml_call_model(self, ts, prompt_text: str, *, step: int) -> tuple[str, float]:
+        ts.record_attempt()
+        t1 = _time.time()
+        self._emit(
+            "model_request_start",
+            {"step": ts.tool_steps + 1, "attempt": ts.attempts},
+        )
+        raw = self.agent.circuit_breaker.call(
+            self.agent.model_client.complete,
+            prompt_text,
+            max_new_tokens=self.agent.config.max_new_tokens,
+        )
+        ts.node_timings.setdefault("model_call_ms", 0)
+        ts.node_timings["model_call_ms"] += int((_time.time() - t1) * 1000)
+        self._record_model_timings(
+            ts,
+            collect_client_timings(self.agent.model_client),
+            default_attempt=ts.attempts,
+        )
+        return raw, t1
+
+    def _handle_parse_retry(self, ts, raw: str, payload, *, step: int) -> str:
+        self._retry_count += 1
+        delay = min(2 ** (self._retry_count - 1), 8)
+        _log_loop(
+            f"  [loop] retry#{self._retry_count} backoff={delay}s "
+            f"raw[:100]={raw.strip()[:100]}\n"
+        )
+        try:
+            from pathlib import Path
+
+            dbg = Path(self.agent._cwd) / ".agent" / "debug_retry.txt"
+            dbg.parent.mkdir(parents=True, exist_ok=True)
+            with open(dbg, "a", encoding="utf-8") as f:
+                f.write(f"\n=== retry#{self._retry_count} ===\n{raw}\n")
+        except Exception:
+            pass
+        for _ in range(int(delay * 10)):
+            _time.sleep(0.1)
+        prompt = str(payload)
+        failure = payload.failure if isinstance(payload, ParseRetry) else None
+        if failure is not None:
+            self._emit(
+                "parse_retry",
+                {
+                    "kind": failure.kind,
+                    "attempt": self._retry_count,
+                    "snippet_len": len(failure.snippet),
+                    "error_offset": failure.error_offset,
+                },
+            )
+        self.agent.record({"role": "system", "content": prompt})
+        return prompt
+
+    def _xml_invalid_tool_retry(self, ts, payload, *, raw: str, step: int) -> str:
+        failure = failure_invalid_tool_payload(payload)
+        retry = ParseRetry(build_recovery_prompt(failure), failure)
+        return self._handle_parse_retry(ts, raw, retry, step=step)
+
+    # ---- 入口 ----
+
     def run(self, user_message: str, callback=None) -> str:
-        """执行一次 Agent 任务：ReAct 循环直至 final answer 或 max_steps。
-
-        Args:
-            user_message: 用户输入。
-            callback: 可选 ProgressCallback，用于 CLI 进度输出。
-
-        Returns:
-            模型最终回答文本。
-        """
         from agent_runtime.log_context import log_context
         from agent_runtime.task_state import TaskState
 
@@ -105,28 +364,28 @@ class AgentLoop:
             ts.task_id = f"{shared}-{agent_name}"
         self._task_state = ts
         self._call_timings = []
+        self._retry_count = 0
 
         with log_context(run_id=ts.run_id, agent=agent_name):
             self._emit("run_started")
-
             self.agent.record({"role": "user", "content": user_message})
             self._gen_task_summary(user_message)
 
-            # 如果模型客户端支持原生 tool_use，使用 API 原生协议（免文本解析）
             if hasattr(self.agent.model_client, "chat_with_tools"):
                 return self._run_with_native_tools(user_message, ts, callback)
-
-            # 降级：传统文本解析模式
             return self._run_with_text_parsing(user_message, ts, callback)
 
     def _run_with_native_tools(self, user_message: str, ts, callback=None) -> str:
-        """使用 API 原生 tool_use 协议（Anthropic 兼容）。"""
+        step_timeout_s = self._step_timeout_limit_s()
+        step_clock = StepClock(step_timeout_s)
+        if (msg := self._maybe_step_timeout(ts, step_clock, 1, "native")) is not None:
+            return msg
+
         system_prompt, user_message, budget_meta = self.agent.build_for_native(user_message)
         self._last_budget_meta = budget_meta
-        # 构建 Anthropic 格式的工具定义
+        self._emit("context_built", build_trace_payload(budget_meta))
         tools_def = _build_anthropic_tools(self.agent.tools)
 
-        # 系统提示词（system + tools，便于 prompt cache）
         if not system_prompt:
             from agent_runtime.prompt_prefix import cache_stable_text
 
@@ -136,22 +395,41 @@ class AgentLoop:
                 getattr(prefix, "stable_tools_text", "") or "",
             ) or getattr(prefix, "stable_text", "")
 
-        # 工具执行回调
+        def phase_hook(phase, *, step: int, tool: str | None = None) -> None:
+            nonlocal step_clock
+            if phase == ReactPhase.REASONING:
+                if step > 1:
+                    step_clock = StepClock(step_timeout_s)
+                step_clock.check(step=step, path="native")
+                if callback is not None:
+                    callback.on_step_start(step, self.max_steps)
+            elif phase == ReactPhase.ACTING:
+                step_clock.check(step=step, path="native")
+            self._notify_react_phase(
+                phase,
+                step=step,
+                path="native",
+                tool=tool,
+                callback=callback,
+            )
+
         def executor(tool_name: str, tool_input: dict) -> str:
-            ts.record_tool(tool_name)
-            ts.node_timings.setdefault("tool_exec_ms", 0)
-            t0 = _time.time()
-            result = self.agent.execute_tool(tool_name, tool_input)
-            result_text = result.content if hasattr(result, "content") else str(result)
-            result_text = truncate_tool_result_for_agent(self.agent, tool_name, result_text)
-            te_ms = int((_time.time() - t0) * 1000)
-            ts.node_timings["tool_exec_ms"] += te_ms
-            _log_loop(f"  [loop] {tool_name} tool={te_ms}ms\n")
-            self.agent.update_memory_after_tool(tool_name, tool_input, result_text)
-            self._record_tool_outcome(tool_name, result, ts)
-            if callback:
-                callback.on_tool_executed(tool_name, result_text)
-            return result_text
+            step = ts.tool_steps + 1
+            return self._run_tool_step(
+                ts,
+                tool_name,
+                tool_input,
+                step=step,
+                path="native",
+                callback=callback,
+                record_assistant=False,
+                emit_acting=False,
+                emit_observation=False,
+                emit_recording=True,
+            )
+
+        def after_model(step: int) -> None:
+            step_clock.check(step=step, path="native")
 
         t0 = _time.time()
         self._emit("model_request_start", {"step": 1, "attempt": 1})
@@ -162,6 +440,8 @@ class AgentLoop:
                 tools=tools_def,
                 executor=executor,
                 max_turns=self.max_steps,
+                phase_hook=phase_hook,
+                step_boundary_hook=after_model,
             )
             if isinstance(result, tuple):
                 answer, call_usage = result
@@ -169,153 +449,104 @@ class AgentLoop:
                 answer = result
                 call_usage = getattr(self.agent.model_client, "last_call_usage", {}) or {}
             self._apply_call_usage_meta(call_usage)
-            self._record_model_timings(ts, collect_client_timings(self.agent.model_client), default_attempt=1)
+            self._record_model_timings(
+                ts, collect_client_timings(self.agent.model_client), default_attempt=1
+            )
+        except StepTimeoutError as e:
+            return self._finish_step_timeout(ts, e, clock=step_clock)
         except Exception as e:
-            self.stop_reason = f"error: {e}"
-            return f"<final>API 错误: {e}</final>"
+            if (msg := self._stop_for_api_error(ts, e)) is not None:
+                return msg
+            ts.stop_with_reason(StopReason.API_ERROR, "failed", detail=f"error: {e}")
+            return self._complete_run(ts, f"<final>API 错误: {e}</final>")
 
         elapsed_ms = int((_time.time() - t0) * 1000)
         ts.node_timings["model_call_ms"] = elapsed_ms
 
-        self.agent.record({"role": "assistant", "content": answer})
-        self.stop_reason = "final"
-        ts.finish_success(answer)
-        self._emit("run_finished", {"stop_reason": "final"})
-        self._finalize_run(ts)
+        if answer.strip() == NATIVE_MAX_TURNS_MESSAGE:
+            ts.stop_step_limit(self.max_steps)
+            return self._complete_run(
+                ts,
+                f"<final>已达到最大工具调用步数限制({self.max_steps})，当前任务未完成。</final>",
+            )
 
+        self.agent.record({"role": "assistant", "content": answer})
+        ts.finish_success(answer)
         _log_loop(f"  [loop] final ({elapsed_ms}ms total)\n")
-        return answer
+        return self._complete_run(
+            ts,
+            answer,
+            recording={
+                "step": max(ts.tool_steps, 1),
+                "path": "native",
+                "callback": callback,
+            },
+        )
 
     def _run_with_text_parsing(self, user_message: str, ts, callback=None) -> str:
-        """传统文本解析模式（降级路径）。"""
         while True:
-            if ts.tool_steps > self.max_steps:
-                self.stop_reason = f"tool_steps >= {self.max_steps}"
-                ts.stop_step_limit(self.max_steps)
-                self._emit("run_finished", {"stop_reason": self.stop_reason})
-                self._finalize_run(ts)
-                return (
-                    f"<final>已达到最大工具调用步数限制({self.max_steps})，当前任务未完成。</final>"
-                )
+            if (msg := self._check_xml_loop_limits(ts)) is not None:
+                return msg
 
-            if ts.attempts >= self.max_steps * 3 + 4:
-                self.stop_reason = f"attempts >= {self.max_steps * 3 + 4}"
-                ts.stop_retry_limit(self.max_steps * 3 + 4)
-                self._emit("run_finished", {"stop_reason": self.stop_reason})
-                self._finalize_run(ts)
-                return (
-                    "<final>模型输出格式错误次数过多，已终止。"
-                    "请检查 System Prompt 中的工具调用格式说明。</final>"
-                )
+            step = ts.tool_steps + 1
+            step_clock = StepClock(self._step_timeout_limit_s())
+            if (msg := self._maybe_step_timeout(ts, step_clock, step, "xml")) is not None:
+                return msg
+            if callback is not None:
+                callback.on_step_start(step, self.max_steps)
 
-            # 1. 组装 prompt
-            t0 = _time.time()
-            prompt_text, token_meta = self.agent._build_prompt_with_meta(user_message)
-            self._last_token_meta = token_meta
-            self._emit("context_built", build_trace_payload(token_meta))
-            ts.node_timings.setdefault("prompt_build_ms", 0)
-            ts.node_timings["prompt_build_ms"] += int((_time.time() - t0) * 1000)
+            prompt_text = self._xml_build_context(ts, user_message, step=step, callback=callback)
 
-            # 2. 调用模型
-            ts.record_attempt()
-            t1 = _time.time()
-            self._emit(
-                "model_request_start",
-                {"step": ts.tool_steps + 1, "attempt": ts.attempts},
-            )
             try:
-                raw = self.agent.circuit_breaker.call(
-                    self.agent.model_client.complete,
-                    prompt_text,
-                    max_new_tokens=self.agent.config.max_new_tokens,
-                )
-                ts.node_timings.setdefault("model_call_ms", 0)
-                ts.node_timings["model_call_ms"] += int((_time.time() - t1) * 1000)
-                self._record_model_timings(
-                    ts,
-                    collect_client_timings(self.agent.model_client),
-                    default_attempt=ts.attempts,
-                )
+                raw, t1 = self._xml_call_model(ts, prompt_text, step=step)
             except Exception as e:
-                from agent_runtime.providers.retry_policy import RateLimitExceededError
-
-                if isinstance(e, RateLimitExceededError):
-                    self.stop_reason = "rate_limited"
-                    return f"<final>API 限流：{e}</final>"
-                if "Circuit breaker is open" in str(e):
-                    self.stop_reason = "circuit_breaker"
-                    return f"<final>API 熔断：{e}</final>"
+                if (msg := self._stop_for_api_error(ts, e)) is not None:
+                    return msg
                 raise
 
-            # 3. 解析输出
+            if (msg := self._maybe_step_timeout(ts, step_clock, step, "xml")) is not None:
+                return msg
+
             kind, payload = self.agent.parse(raw)
             t_parse = int((_time.time() - t1) * 1000)
 
             if kind == "final":
                 _log_loop(f"  [loop] final ({t_parse}ms parse)\n")
                 self.agent.record({"role": "assistant", "content": str(payload)})
-                self.stop_reason = "final"
                 ts.finish_success(str(payload))
-                self._emit("run_finished", {"stop_reason": "final"})
-                self._finalize_run(ts)
-                return str(payload)
+                return self._complete_run(
+                    ts,
+                    str(payload),
+                    recording={"step": step, "path": "xml", "callback": callback},
+                )
 
-            elif kind == "tool":
+            if kind == "tool":
                 if not isinstance(payload, dict) or "name" not in payload:
-                    self.agent.record({"role": "system", "content": "工具调用格式错误"})
-                    user_message = "工具调用格式错误，请重试。"
+                    user_message = self._xml_invalid_tool_retry(
+                        ts, payload, raw=raw, step=step
+                    )
                     continue
+                if (msg := self._maybe_step_timeout(ts, step_clock, step, "xml")) is not None:
+                    return msg
                 tool_name = payload.get("name", "unknown")
                 tool_args = payload.get("args", {})
-                ts.record_tool(tool_name)
-                self.agent.record(
-                    {
-                        "role": "assistant",
-                        "content": f"调用工具: {tool_name}",
-                        "tool_name": tool_name,
-                        "tool_args": tool_args,
-                    }
+                user_message = self._run_tool_step(
+                    ts,
+                    tool_name,
+                    tool_args,
+                    step=step,
+                    path="xml",
+                    callback=callback,
                 )
-                t2 = _time.time()
-                result = self.agent.execute_tool(tool_name, tool_args)
-                result_text = result.content if hasattr(result, "content") else str(result)
-                result_text = truncate_tool_result_for_agent(self.agent, tool_name, result_text)
-                te_ms = int((_time.time() - t2) * 1000)
-                ts.node_timings.setdefault("tool_exec_ms", 0)
-                ts.node_timings["tool_exec_ms"] += te_ms
-                _log_loop(f"  [loop] {tool_name} tool={te_ms}ms\n")
-                self.agent.update_memory_after_tool(tool_name, tool_args, result_text)
-                self.agent.record(
-                    {"role": "tool", "content": result_text, "tool_name": tool_name}
-                )
-                self._record_tool_outcome(tool_name, result, ts)
-                if callback:
-                    callback.on_tool_executed(tool_name, result_text)
-                user_message = f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
+                continue
 
-            elif kind == "retry":
-                self._retry_count += 1
-                delay = min(2 ** (self._retry_count - 1), 8)
-                _log_loop(
-                    f"  [loop] retry#{self._retry_count} backoff={delay}s "
-                    f"raw[:100]={raw.strip()[:100]}\n"
-                )
-                try:
-                    from pathlib import Path
-
-                    dbg = Path(self.agent._cwd) / ".agent" / "debug_retry.txt"
-                    dbg.parent.mkdir(parents=True, exist_ok=True)
-                    with open(dbg, "a", encoding="utf-8") as f:
-                        f.write(f"\n=== retry#{self._retry_count} ===\n{raw}\n")
-                except Exception:
-                    pass
-                for _ in range(int(delay * 10)):
-                    _time.sleep(0.1)
-                self.agent.record({"role": "system", "content": str(payload)})
-                user_message = str(payload)
+            if kind == "retry":
+                if (msg := self._maybe_step_timeout(ts, step_clock, step, "xml")) is not None:
+                    return msg
+                user_message = self._handle_parse_retry(ts, raw, payload, step=step)
+                continue
 
     def _merge_budget_meta(self, meta: dict) -> None:
-        """将 TokenBudget 裁剪信息并入 token 元数据。"""
         budget_meta = getattr(self, "_last_budget_meta", None) or {}
         if not budget_meta:
             return
@@ -333,7 +564,6 @@ class AgentLoop:
             meta["total_tokens"] = budget_meta.get("total_tokens", 0)
 
     def _apply_call_usage_meta(self, call_usage: dict) -> None:
-        """将 chat_with_tools 返回的 API usage 写入 _last_token_meta。"""
         inp = int(call_usage.get("input_tokens", 0) or 0)
         out = int(call_usage.get("output_tokens", 0) or 0)
         self._last_token_meta = {
@@ -347,7 +577,6 @@ class AgentLoop:
         self._merge_budget_meta(self._last_token_meta)
 
     def _gen_task_summary(self, user_message: str):
-        """用轻量模型生成一句话任务摘要。"""
         from agent_runtime.features.memory import set_task_summary
 
         client = getattr(self.agent, "light_client", None)
@@ -367,7 +596,6 @@ class AgentLoop:
         set_task_summary(self.agent.session["memory"], summary)
 
     def _get_store(self):
-        """获取缓存的 RunStore 实例。"""
         if self._store is None:
             from agent_runtime.run_store import RunStore
 
@@ -375,13 +603,11 @@ class AgentLoop:
         return self._store
 
     def _record_tool_outcome(self, tool_name: str, result, ts) -> None:
-        """记录工具拒绝统计并写入 trace。"""
         meta = getattr(result, "metadata", None) or {}
         ts.record_tool_rejection(tool_name, meta)
         self._emit_tool_trace(tool_name, result)
 
     def _emit_tool_trace(self, tool_name: str, result) -> None:
-        """写入 tool_preview（若有）与 tool_executed trace 事件。"""
         from agent_runtime.tool_rejection import tool_trace_payload
 
         meta = getattr(result, "metadata", None) or {}
@@ -391,7 +617,6 @@ class AgentLoop:
         self._emit("tool_executed", tool_trace_payload(tool_name, meta))
 
     def _emit(self, event: str, payload: dict | None = None):
-        """发送 trace 事件到 RunStore。"""
         try:
             payload = dict(payload or {})
             agent_name = getattr(self.agent, "_agent_name", "") or "agent"
@@ -410,7 +635,6 @@ class AgentLoop:
             pass
 
     def _finalize_run(self, ts):
-        """完成 run：写入工件 + checkpoint + durable memory + session 保存。"""
         from agent_runtime.checkpoint import create_checkpoint
         from agent_runtime.features.memory import promote_durable_memory
         from agent_runtime.session_store import SessionStore

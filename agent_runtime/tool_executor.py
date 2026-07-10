@@ -146,8 +146,19 @@ class ToolExecutor:
         before_snapshot = self._capture_snapshot() if is_risky else {}
 
         # ---- Gate 9: 执行工具 ----
+        timeout_s = int(getattr(self.agent.config, "tool_timeout_s", 0) or 0)
         try:
-            result_text = tool_spec["run"](args)
+            from agent_runtime.tool_timeout import ToolTimeoutError, run_with_timeout
+
+            result_text = run_with_timeout(
+                lambda: tool_spec["run"](args),
+                timeout_s=timeout_s,
+            )
+        except ToolTimeoutError as e:
+            return ToolExecutionResult(
+                content=f"Error: 工具 '{name}' 执行超时（{e.timeout_s} 秒）",
+                metadata=build_executor_error_metadata("tool_timeout", timeout_s=e.timeout_s),
+            )
         except Exception as e:
             return ToolExecutionResult(
                 content=f"Error: 工具 '{name}' 执行异常: {e}",

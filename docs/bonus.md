@@ -57,15 +57,15 @@
 - **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] Middleware 链 + Callback 全覆盖**：扩展 `AgentCallback`（`pre_model` / `post_model` / `pre_tool` / `post_tool` · `on_step_start` / `on_final_answer`）；native 与 XML 路径统一 invoke
 - **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] 死循环检测**：相同 `(tool_name, args_hash)` 连续 **K** 次 → `stop_reason=circuit_breaker` · trace `loop_detected`
 - **[P1] [C:⭐ I:⭐⭐⭐⭐] 目标漂移 / stall 终止**：连续 N 步无 `affected_paths` 且无 final → `stop_reason=stall` · task_summary 锚定 · 提示 replan
-- **[P1] [C:⭐⭐⭐ I:⭐⭐⭐⭐] 显式 ReAct 阶段 trace**：每步 `react_phase: reasoning|acting|observation|recording`（native/XML 双路径）
-- **[P2] 🔶 [C:⭐ I:⭐⭐⭐] Agentic Loop trace 事件表**：Observe→Context→Model→Tool→Record 与 `context_built` · `tool_executed` 单测快照 — `context_built` 已 emit（`3c67e15`）；事件表单测快照待补
+- **[P1] [C:⭐⭐⭐ I:⭐⭐⭐⭐] 显式 ReAct 阶段 trace** ✅：每步 `react_phase: reasoning|acting|observation|recording`（native/XML 双路径）
+- **[P2] 🔶 [C:⭐ I:⭐⭐⭐] Agentic Loop trace 事件表** ✅：`loop_trace_schema.py` 五段映射 + XML/Native 快照单测；Native 补齐 `context_built`
 
 ### 2.4 ReAct 步进 · 超时 · 解析
 
-- **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] 单步工具超时**：`concurrent.futures` 防 hang
-- **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] 单步 wall-clock 超时**：整步（含 model + tools）超 `step_timeout` 则 `stop_reason=step_timeout`
-- **[P2] [C:⭐ I:⭐⭐⭐] stop_reason 枚举**：`final|step_limit|circuit_breaker|parse_fail|user_cancel|stall`
-- **[P2] [C:⭐ I:⭐⭐⭐] 解析失败 recovery prompt**：附「上一 valid 输出片段 + 错误位置 caret」，减少 blind retry
+- **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] 单步工具超时** ✅：`tool_timeout.py` + Gate 9 `concurrent.futures`（默认 120s，`0`=禁用）
+- **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] 单步 wall-clock 超时** ✅：`step_clock.py` + 边界检查，`stop_reason=step_timeout`（默认 300s）
+- **[P2] [C:⭐ I:⭐⭐⭐] stop_reason 枚举** ✅：`stop_reasons.py` `StopReason` + legacy 归一化 + `stop_reason_detail`
+- **[P2] [C:⭐ I:⭐⭐⭐] 解析失败 recovery prompt** ✅：`parse_recovery.py` 片段 + caret + `parse_retry` trace
 - **[P2] [C:⭐ I:⭐⭐] final_answer schema 校验**：可选 JSON mode final（如 repair 子任务），失败则回到 Acting
 - **[P3] [C:⭐⭐ I:⭐⭐⭐] CoT 提取**：thinking 块剥离后再进 history
 

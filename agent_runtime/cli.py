@@ -26,6 +26,18 @@ def _make_parser() -> argparse.ArgumentParser:
         "--max-steps", type=int, default=cfg.max_steps, help=f"最大工具步数（默认 {cfg.max_steps}）"
     )
     p.add_argument(
+        "--tool-timeout",
+        type=int,
+        default=cfg.tool_timeout_s,
+        help=f"单工具执行超时秒数，0=禁用（默认 {cfg.tool_timeout_s}）",
+    )
+    p.add_argument(
+        "--step-timeout",
+        type=int,
+        default=cfg.step_timeout_s,
+        help=f"单步 wall-clock 超时秒数，0=禁用（默认 {cfg.step_timeout_s}）",
+    )
+    p.add_argument(
         "--temperature",
         type=float,
         default=cfg.temperature,
@@ -65,6 +77,8 @@ def _make_config(args) -> AgentConfig:
         "provider": args.provider,
         "model": args.model or os.environ.get("DEEPSEEK_MODEL", AgentConfig().model),
         "max_steps": args.max_steps,
+        "tool_timeout_s": args.tool_timeout,
+        "step_timeout_s": args.step_timeout,
         "temperature": args.temperature,
         "approval": args.approval,
     }

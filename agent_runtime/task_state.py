@@ -6,6 +6,11 @@
 from dataclasses import dataclass, field
 
 from agent_runtime.run_ids import new_run_id
+from agent_runtime.stop_reasons import (
+    StopReason,
+    normalize_stop_reason,
+    stop_reason_detail_from_legacy,
+)
 
 
 @dataclass
@@ -110,23 +115,53 @@ class TaskState:
         }
 
     def stop(self, reason: str, status: str):
-        """通用停机方法。"""
-        self.stop_reason = reason
+        """通用停机（legacy 字符串会归一化为 canonical）。"""
+        self.stop_with_reason(
+            normalize_stop_reason(reason),
+            status,
+            detail=stop_reason_detail_from_legacy(reason),
+        )
+
+    def stop_with_reason(
+        self,
+        reason: StopReason | str,
+        status: str,
+        *,
+        detail: str = "",
+    ):
+        """写入 canonical stop_reason，可选 detail 进 node_timings。"""
+        self.stop_reason = str(reason)
         self.status = status
+        if detail:
+            self.node_timings["stop_reason_detail"] = detail
 
     def stop_step_limit(self, max_steps: int):
         """步数耗尽。"""
-        self.stop(f"tool_steps > {max_steps}", "stopped")
+        self.stop_with_reason(
+            StopReason.STEP_LIMIT,
+            "stopped",
+            detail=f"tool_steps > {max_steps}",
+        )
 
     def stop_retry_limit(self, max_attempts: int):
         """格式错误过多。"""
-        self.stop(f"attempts >= {max_attempts}", "failed")
+        self.stop_with_reason(
+            StopReason.PARSE_FAIL,
+            "failed",
+            detail=f"attempts >= {max_attempts}",
+        )
+
+    def stop_step_timeout(self, timeout_s: int, step: int):
+        """单步 wall-clock 超时。"""
+        self.stop_with_reason(StopReason.STEP_TIMEOUT, "stopped")
+        self.node_timings["step_timeout_s"] = int(timeout_s)
+        self.node_timings["step_timeout_step"] = int(step)
 
     def finish_success(self, final_answer: str):
         """正常结束。"""
         self.final_answer = final_answer
         self.status = "completed"
-        self.stop_reason = "final"
+        self.stop_reason = StopReason.FINAL.value
 
     # ---- 序列化 ----
 
@@ -150,6 +185,11 @@ class TaskState:
     @classmethod
     def from_dict(cls, data: dict) -> "TaskState":
         """从 dict 恢复 TaskState。"""
+        raw_reason = data.get("stop_reason", "")
+        node_timings = dict(data.get("node_timings", {}))
+        detail = stop_reason_detail_from_legacy(raw_reason)
+        if detail and "stop_reason_detail" not in node_timings:
+            node_timings["stop_reason_detail"] = detail
         return cls(
             run_id=data.get("run_id", ""),
             task_id=data.get("task_id", ""),
@@ -158,9 +198,9 @@ class TaskState:
             tool_steps=data.get("tool_steps", 0),
             attempts=data.get("attempts", 0),
             last_tool=data.get("last_tool", ""),
-            stop_reason=data.get("stop_reason", ""),
+            stop_reason=normalize_stop_reason(raw_reason),
             final_answer=data.get("final_answer", ""),
             checkpoint_id=data.get("checkpoint_id", ""),
             resume_status=data.get("resume_status", ""),
-            node_timings=data.get("node_timings", {}),
+            node_timings=node_timings,
         )

@@ -14,6 +14,8 @@ class TestAgentConfigDefault:
         assert config.provider == "deepseek"
         assert config.model == "deepseek-v4-pro"
         assert config.max_steps == 6
+        assert config.tool_timeout_s == 120
+        assert config.step_timeout_s == 300
         assert config.max_new_tokens == 2048
         assert config.approval == "ask"
         assert config.temperature == 0.2
