@@ -281,6 +281,11 @@ class Agent:
         """
         raw = raw.strip()
 
+        from agent_runtime.parse_recovery import failure_from_json_in_tool, make_parse_retry
+
+        if not raw:
+            return ("retry", make_parse_retry(raw))
+
         # 尝试匹配 <final>...</final>
         final_match = re.search(r"<final>(.*?)</final>", raw, re.DOTALL)
         if final_match:
@@ -362,12 +367,10 @@ class Agent:
             try:
                 payload = json.loads(json_match)
                 return ("tool", payload)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
                 return (
                     "retry",
-                    "工具调用 JSON 格式无效。<tool> 内必须是合法 JSON：\n"
-                    '  {"name":"工具名","args":{"参数":"值"}}\n'
-                    "请检查引号、括号是否匹配后重试。",
+                    make_parse_retry(raw, failure_from_json_in_tool(json_match, exc)),
                 )
 
         # 尝试匹配 XML 属性格式：<tool name="x" ...>body</tool>
@@ -382,25 +385,8 @@ class Agent:
             body = tool_xml_match.group(3).strip()
             return ("tool", {"name": name, "attrs": attrs, "body": body})
 
-        # 都不匹配
-        # 检测模型是否使用了错误的 XML 格式（如 <read_file>...</read_file>）
-        wrong_xml = re.match(r"<\w+>", raw)
-        if wrong_xml:
-            tag = wrong_xml.group(0).strip("<>")
-            notice = (
-                f"格式错误：你使用了 <{tag}>...</{tag}> 格式，这是不支持的。\n"
-                "唯一正确的工具调用格式是：\n"
-                f'<tool>{{"name":"{tag}","args":{{"path":"文件路径"}}}}</tool>\n'
-                "请用 <tool> 包裹 JSON 的格式重新调用。"
-            )
-        else:
-            notice = (
-                "无法解析你的输出。请严格使用以下格式之一：\n"
-                '  调用工具: <tool>{"name":"工具名","args":{...}}</tool>\n'
-                "  返回答案: <final>你的答案</final>\n"
-                f"收到: {raw[:200]}"
-            )
-        return ("retry", notice)
+        # 都不匹配 → recovery prompt（片段 + caret）
+        return ("retry", make_parse_retry(raw))
 
     # ---- 内部方法 ----
 

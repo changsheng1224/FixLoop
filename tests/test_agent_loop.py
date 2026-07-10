@@ -93,6 +93,42 @@ class TestAgentLoopStopConditions:
         # 应该有 retry 记录
         history_roles = [h["role"] for h in agent.session["history"]]
         assert "system" in history_roles  # retry 通知以 system 角色记录
+        system_msgs = [
+            h["content"] for h in agent.session["history"] if h["role"] == "system"
+        ]
+        assert any("解析失败" in m for m in system_msgs)
+
+    def test_parse_retry_emits_trace(self, config, workspace, temp_workspace):
+        """解析失败 recovery 写入 trace parse_retry 事件。"""
+        import json
+
+        from agent_runtime.run_store import RunStore
+
+        outputs = [
+            '<tool>{"name":"list_files","args":{"path": ".</tool>',
+            '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
+            "<final>caret 重试成功</final>",
+        ]
+        agent = _make_agent(outputs, config, workspace)
+        agent.cwd = str(temp_workspace)
+        answer = agent.ask("测试 caret trace")
+        assert "成功" in answer
+
+        run_dirs = list(RunStore(str(temp_workspace)).runs_dir.iterdir())
+        trace_path = run_dirs[0] / "trace.jsonl"
+        events = [
+            json.loads(line)
+            for line in trace_path.read_text(encoding="utf-8").strip().splitlines()
+        ]
+        parse_retries = [e for e in events if e.get("event") == "parse_retry"]
+        assert len(parse_retries) == 1
+        payload = parse_retries[0]["payload"]
+        assert payload["kind"] == "json_in_tool"
+        assert payload["attempt"] == 1
+        system_msgs = [
+            h["content"] for h in agent.session["history"] if h["role"] == "system"
+        ]
+        assert any("^" in m for m in system_msgs)
 
     def test_empty_model_response(self, config, workspace):
         """空响应被视为格式错误 → retry。"""

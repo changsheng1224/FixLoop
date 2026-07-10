@@ -65,7 +65,7 @@
 - **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] 单步工具超时** ✅：`tool_timeout.py` + Gate 9 `concurrent.futures`（默认 120s，`0`=禁用）
 - **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] 单步 wall-clock 超时** ✅：`step_clock.py` + 边界检查，`stop_reason=step_timeout`（默认 300s）
 - **[P2] [C:⭐ I:⭐⭐⭐] stop_reason 枚举** ✅：`stop_reasons.py` `StopReason` + legacy 归一化 + `stop_reason_detail`
-- **[P2] [C:⭐ I:⭐⭐⭐] 解析失败 recovery prompt**：附「上一 valid 输出片段 + 错误位置 caret」，减少 blind retry
+- **[P2] [C:⭐ I:⭐⭐⭐] 解析失败 recovery prompt** ✅：`parse_recovery.py` 片段 + caret + `parse_retry` trace
 - **[P2] [C:⭐ I:⭐⭐] final_answer schema 校验**：可选 JSON mode final（如 repair 子任务），失败则回到 Acting
 - **[P3] [C:⭐⭐ I:⭐⭐⭐] CoT 提取**：thinking 块剥离后再进 history
 

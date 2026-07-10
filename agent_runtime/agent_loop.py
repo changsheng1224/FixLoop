@@ -497,8 +497,22 @@ class AgentLoop:
                     pass
                 for _ in range(int(delay * 10)):
                     _time.sleep(0.1)
-                self.agent.record({"role": "system", "content": str(payload)})
-                user_message = str(payload)
+                from agent_runtime.parse_recovery import ParseRetry
+
+                prompt = str(payload)
+                failure = payload.failure if isinstance(payload, ParseRetry) else None
+                if failure is not None:
+                    self._emit(
+                        "parse_retry",
+                        {
+                            "kind": failure.kind,
+                            "attempt": self._retry_count,
+                            "snippet_len": len(failure.snippet),
+                            "error_offset": failure.error_offset,
+                        },
+                    )
+                self.agent.record({"role": "system", "content": prompt})
+                user_message = prompt
 
     def _merge_budget_meta(self, meta: dict) -> None:
         """将 TokenBudget 裁剪信息并入 token 元数据。"""
