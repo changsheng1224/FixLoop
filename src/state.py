@@ -254,6 +254,7 @@ class RepairState:
     retry_count: int = 0
     max_retries: int = 3
     status: str = "pending"  # pending / localizing / fixed / exhausted / regression / timeout / user_cancel / failed
+    failure_tags: list[str] = field(default_factory=list)
     node_timings: dict = field(default_factory=dict)
     agent_errors: dict = field(default_factory=dict)
     repair_run_id: str = ""
@@ -276,6 +277,7 @@ class RepairState:
             "retry_count": self.retry_count,
             "max_retries": self.max_retries,
             "status": self.status,
+            "failure_tags": list(self.failure_tags),
             "node_timings": self.node_timings,
             "agent_errors": self.agent_errors,
             "repair_run_id": self.repair_run_id,
@@ -310,6 +312,7 @@ class RepairState:
             retry_count=data.get("retry_count", 0),
             max_retries=data.get("max_retries", 3),
             status=data.get("status", "pending"),
+            failure_tags=list(data.get("failure_tags", [])),
             node_timings=data.get("node_timings", {}),
             agent_errors=data.get("agent_errors", {}),
             repair_run_id=data.get("repair_run_id", ""),

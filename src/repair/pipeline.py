@@ -9,6 +9,7 @@ from pathlib import Path
 
 from agent_runtime.logging_setup import get_logger
 from src.repair.termination import RepairTerminalStatus, apply_terminal_status
+from src.repair.failure_tags import apply_failure_tags
 from src.repair.output_parsers import parse_retrieved_context, parse_suspect_list
 from src.repair.timing_schema import (
     finalize_phases,
@@ -169,6 +170,9 @@ class RepairPipelineMixin:
             n = len(state.candidate_patches)
             log.info("Patcher 完成: %dms, %d个补丁", ms, n)
 
+            if not state.candidate_patches and not state.agent_errors.get("patcher_apply"):
+                state.node_timings["patcher_parse_failed"] = True
+
             if not self._verification_enabled():
                 if state.candidate_patches:
                     state.status = RepairTerminalStatus.FIXED
@@ -210,6 +214,7 @@ class RepairPipelineMixin:
             state.retry_count += 1
 
         apply_terminal_status(state)
+        apply_failure_tags(state)
 
         total_ms = int((time.time() - t_start) * 1000)
         set_repair_total_ms(state.node_timings, total_ms)

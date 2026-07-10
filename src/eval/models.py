@@ -22,6 +22,7 @@ class CaseResult:
     error: str = ""
     introduced_regression: bool = False
     status: str = ""
+    failure_tags: list[str] = field(default_factory=list)
     variant: str = ""
     run_index: int = 0
     total_tokens: int = 0
@@ -44,6 +45,7 @@ class CaseResult:
             "error": self.error,
             "introduced_regression": self.introduced_regression,
             "status": self.status,
+            "failure_tags": list(self.failure_tags),
             "variant": self.variant,
             "run_index": self.run_index,
             "total_tokens": self.total_tokens,

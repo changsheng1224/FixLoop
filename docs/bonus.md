@@ -409,7 +409,7 @@
 > 设计见 [DESIGN §15.1](bonus/DESIGN.md#151-bad-case-采集--回归闭环)。
 
 - **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] badcase → 新 eval Case 晋升**：标注 `expected_patch` · 进 `src/eval/cases/` · CI 回归
-- **[P2] [C:⭐ I:⭐⭐⭐] 失败分类 tag**：`parse_fail|wrong_file|regression|timeout` 进 badcase metadata
+- **[P2] [C:⭐ I:⭐⭐⭐] 失败分类 tag** ✅：`parse_fail|wrong_file|regression|timeout` 进 badcase metadata
 
 ---
 

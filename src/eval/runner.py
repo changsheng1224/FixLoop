@@ -205,6 +205,7 @@ class EvalRunner:
 
             retry_count = getattr(state, "retry_count", 0) if state else 0
             status = getattr(state, "status", "") if state else ""
+            failure_tags = list(getattr(state, "failure_tags", []) or []) if state else []
             total_tokens = 0
             token_usage: dict = {}
             permission_denied_by_tool: dict = {}
@@ -237,6 +238,7 @@ class EvalRunner:
                 error=error,
                 introduced_regression=introduced_regression,
                 status=status,
+                failure_tags=failure_tags,
                 total_tokens=total_tokens,
                 token_usage=token_usage if isinstance(token_usage, dict) else {},
                 permission_denied_by_tool=permission_denied_by_tool,
