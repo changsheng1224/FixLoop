@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_runtime.user_message_template import render_template, template_fingerprint
+from agent_runtime.template_render import render_template, template_metadata
 
 _TASKS_DIR = Path(__file__).parent / "tasks"
 
@@ -19,10 +19,7 @@ def load_repair_task_template(name: str) -> tuple[str, str]:
 
 def render_repair_task(name: str, variables: dict[str, str]) -> tuple[str, dict]:
     template, source = load_repair_task_template(name)
-    return render_template(template, variables), {
-        "task_template_source": source,
-        "task_template_fingerprint": template_fingerprint(template),
-    }
+    return render_template(template, variables), template_metadata(template, source)
 
 
 def build_localizer_variables(plan, issue: str = "") -> dict[str, str]:

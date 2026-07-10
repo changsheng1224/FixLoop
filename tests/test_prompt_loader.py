@@ -61,7 +61,7 @@ class TestPatcherPromptDedup:
         orch = Orchestrator(None, None, None)
         orch._repo_root = str(temp_workspace)
         plan = RepairPlan(issue_type="type_error")
-        prompt = orch._patcher_prompt(
+        prompt, _ = orch._patcher_prompt(
             [SuspectLocation(file_path="calc.py", start_line=1, end_line=2, reason="")],
             None,
             plan=plan,
@@ -76,5 +76,5 @@ class TestPatcherPromptDedup:
         orch = Orchestrator(None, None, None)
         plan = RepairPlan(issue_type="import_error", suspect_files=["app.py"])
         issue = "ImportError: cannot import name 'foo' from 'bar'"
-        prompt = orch._patcher_prompt([], None, plan=plan, issue=issue)
+        prompt, _ = orch._patcher_prompt([], None, plan=plan, issue=issue)
         assert "cannot import name" in prompt.lower() or "错误符号名" in prompt

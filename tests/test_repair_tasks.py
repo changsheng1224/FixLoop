@@ -62,7 +62,7 @@ class TestOrchestratorTemplateParity:
         orch = Orchestrator(None, None, None)
         orch._repo_root = str(temp_workspace)
         plan = RepairPlan(issue_type="import_error", suspect_files=["app.py"])
-        prompt = orch._patcher_prompt([], None, plan=plan, issue="ModuleNotFoundError at app.py:1")
+        prompt, _ = orch._patcher_prompt([], None, plan=plan, issue="ModuleNotFoundError at app.py:1")
         assert "test_app.py" in prompt
         assert "utils.helper" in prompt
         assert "直接输出 CandidatePatch JSON" in prompt

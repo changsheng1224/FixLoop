@@ -7,6 +7,7 @@ import sys as _sys
 import time as _time
 
 from agent_runtime.compression_pipeline import truncate_tool_result_for_agent
+from agent_runtime.context_metadata import build_trace_payload
 from agent_runtime.model_timing import (
     ModelCallTiming,
     build_report_latency_fields,
@@ -211,21 +212,7 @@ class AgentLoop:
             t0 = _time.time()
             prompt_text, token_meta = self.agent._build_prompt_with_meta(user_message)
             self._last_token_meta = token_meta
-            self._emit(
-                "context_built",
-                {
-                    "context_schema_version": token_meta.get("context_schema_version"),
-                    "context_sections": token_meta.get("context_sections"),
-                    "context_sections_total": token_meta.get("context_sections_total"),
-                    "total_tokens": token_meta.get("total_tokens"),
-                    "budget": token_meta.get("budget"),
-                    "prefix_hashes": token_meta.get("prefix_hashes"),
-                    "task_template_source": token_meta.get("task_template_source"),
-                    "task_template_fingerprint": token_meta.get("task_template_fingerprint"),
-                    "request_preserved": token_meta.get("request_preserved"),
-                    "task_budget_overflow": token_meta.get("task_budget_overflow"),
-                },
-            )
+            self._emit("context_built", build_trace_payload(token_meta))
             ts.node_timings.setdefault("prompt_build_ms", 0)
             ts.node_timings["prompt_build_ms"] += int((_time.time() - t0) * 1000)
 

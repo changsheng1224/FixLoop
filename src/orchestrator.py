@@ -26,9 +26,9 @@ from src.repair.pipeline import RepairPipelineMixin
 from src.repair.repo_snapshot import restore_repo_snapshot, snapshot_repo
 from src.repair.verify import DockerVerifyStrategy, PytestVerifyStrategy, record_verify_timings
 from src.prompts.loader import load_role_prompt
+from src.prompts.patcher_task_builder import assemble_patcher_variables
 from src.prompts.repair_tasks import (
     build_localizer_variables,
-    build_patcher_variables,
     build_retriever_template_and_variables,
     build_verifier_variables,
     render_repair_task,
@@ -377,7 +377,7 @@ class Orchestrator(RepairPipelineMixin):
             ``model_call_ms``, ``parse_apply_ms``, ``total_ms``.
         """
         plan = state.repair_plan
-        prompt = self._patcher_prompt(
+        prompt, tpl_meta = self._patcher_prompt(
             state.suspect_locations,
             state.retrieved_context,
             state.feedback,
@@ -390,10 +390,11 @@ class Orchestrator(RepairPipelineMixin):
 
         from agent_runtime.context_manager import fit_repair_user_prompt
 
-        prompt, _pre_budget_meta = fit_repair_user_prompt(
+        prompt, pre_budget_meta = fit_repair_user_prompt(
             self.patcher,
             prompt,
             patcher_system,
+            template_meta=tpl_meta,
         )
 
         t_start = time.time()
@@ -457,6 +458,10 @@ class Orchestrator(RepairPipelineMixin):
                     "tokenizer_backend": budget_meta.get("tokenizer_backend"),
                     "tokenizer_fallback": budget_meta.get("tokenizer_fallback"),
                     "tokenizer_id": budget_meta.get("tokenizer_id"),
+                    "task_template_source": pre_budget_meta.get("task_template_source"),
+                    "task_template_fingerprint": pre_budget_meta.get(
+                        "task_template_fingerprint"
+                    ),
                     **latency_fields,
                 },
             )
@@ -573,71 +578,18 @@ class Orchestrator(RepairPipelineMixin):
         feedback: str = "",
         plan: RepairPlan | None = None,
         issue: str = "",
-    ) -> str:
-        issue_hints: list[str] = []
-        if plan and re.search(r"cannot import name", issue, re.IGNORECASE):
-            issue_hints.append(
-                "修复提示: 除 import 行外，须同步修改本文件内对错误符号名的所有调用。"
-            )
-        if plan and plan.issue_type == "composite":
-            issue_hints.append(
-                f"至少修改 {len(plan.suspect_files or [])} 个相关文件中的每一处错误。"
-            )
-        if issue and "concatenate str" in issue.lower():
-            issue_hints.append(
-                "Issue 表明 str 与 int 不能直接相加；修复后混合类型输入应得到数字运算结果。"
-            )
-
-        effective_suspects = suspects or (
-            self._fallback_suspects_from_plan(plan, issue) if plan else []
+    ) -> tuple[str, dict]:
+        variables = assemble_patcher_variables(
+            suspects=suspects,
+            context=context,
+            feedback=feedback,
+            plan=plan,
+            issue=issue,
+            read_snippet=self._read_code_snippet,
+            read_test_context=self._read_test_context,
+            fallback_suspects=self._fallback_suspects_from_plan,
         )
-
-        allowed_files_line = ""
-        if plan and plan.suspect_files:
-            allowed_files_line = f"只允许修改以下文件: {', '.join(plan.suspect_files)}"
-
-        suspects_lines: list[str] = []
-        if effective_suspects:
-            suspects_lines.append("嫌疑位置（代码已预读，无需再调用 read_file）:")
-            for s in effective_suspects:
-                if not s.file_path:
-                    continue
-                suspects_lines.append(f"  - {s.file_path}:{s.start_line} ({s.reason})")
-                snippet = self._read_code_snippet(s.file_path, s.start_line, s.end_line)
-                if snippet:
-                    suspects_lines.append(snippet)
-                else:
-                    suspects_lines.append(f"    ⚠ 文件不存在: {s.file_path}")
-
-        extra_lines: list[str] = []
-        if plan and plan.issue_type == "composite" and plan.suspect_files:
-            seen_paths = {s.file_path for s in effective_suspects if s.file_path}
-            extra = [fp for fp in plan.suspect_files if fp not in seen_paths]
-            if extra:
-                extra_lines.append("其他相关源文件（代码已预读）:")
-                for fp in extra:
-                    snippet = self._read_code_snippet(fp, 1, 80)
-                    if snippet:
-                        extra_lines.append(f"  - {fp}")
-                        extra_lines.append(snippet)
-
-        test_blocks = self._read_test_context(context, effective_suspects, plan)
-        test_text = ""
-        if test_blocks:
-            test_text = "相关测试文件（补丁必须通过这些 assert）:\n" + "\n".join(test_blocks)
-
-        text, _ = render_repair_task(
-            "patcher",
-            build_patcher_variables(
-                feedback=feedback,
-                issue_hints_block="\n".join(issue_hints),
-                allowed_files_line=allowed_files_line,
-                suspects_block="\n".join(suspects_lines),
-                extra_files_block="\n".join(extra_lines),
-                test_blocks=test_text,
-            ),
-        )
-        return text
+        return render_repair_task("patcher", variables)
 
     def _read_code_snippet(self, file_path: str, start_line: int, end_line: int) -> str:
         """预读嫌疑文件上下文。"""

@@ -17,10 +17,17 @@ from agent_runtime.compression_pipeline import (
     truncate_tool_content as _truncate_tool_content,
 )
 from agent_runtime.tier_policy import TierPolicy, filter_relevant_results
-from agent_runtime.context_projection import attach_context_projection, attach_fit_context_projection
+from agent_runtime.context_projection import attach_context_projection
 from agent_runtime.tokenizers import resolve_token_counter, resolve_tokenizer_spec
-from agent_runtime.user_message_template import render_task_message
-from agent_runtime.task_preservation import reserve_section_budget, task_preservation_metadata
+from agent_runtime.task_section import (
+    render_task_message,
+    reserve_section_budget,
+    task_preservation_metadata,
+)
+from agent_runtime.section_filler import SectionFiller
+
+# Re-export fit helpers for test / L2 import compatibility.
+from agent_runtime.context_fit import fit_prompt_to_budget, fit_repair_user_prompt  # noqa: F401
 
 # Section token 预算分配（以 REF_TOTAL_BUDGET 为参考布局，随 prompt_budget 等比缩放）
 REF_TOTAL_BUDGET = 6000
@@ -74,94 +81,6 @@ class TokenBudget:
     def remaining(self, used: int) -> int:
         """返回剩余 token 预算。"""
         return max(0, self.total_limit - used)
-
-
-def fit_prompt_to_budget(
-    system_text: str,
-    user_text: str,
-    *,
-    model: str = "deepseek-v4-pro",
-    provider: str = "deepseek",
-    total_limit: int = TOTAL_BUDGET,
-    preserve_user: bool = True,
-) -> tuple[str, str, dict]:
-    """将 system + user 对 fit 到统一 token 预算内。
-
-    preserve_user=True 时 user 全文保留，仅裁剪 system。
-    """
-    budget = TokenBudget(model=model, total_limit=total_limit, provider=provider)
-    metadata: dict = {
-        "sections": {},
-        "cuts": [],
-        "budget": total_limit,
-        "tokenizer_backend": budget.backend,
-        "tokenizer_fallback": budget.tokenizer_fallback,
-        "tokenizer_id": budget.tokenizer_id,
-    }
-
-    system_text = system_text or ""
-    user_text = user_text or ""
-
-    user_tokens = budget.count(user_text)
-    metadata["sections"]["user"] = user_tokens
-
-    if preserve_user:
-        metadata.update(task_preservation_metadata(user_tokens, total_limit))
-        remaining = reserve_section_budget(total_limit, user_tokens)
-        sys_tokens = budget.count(system_text)
-        if sys_tokens > remaining:
-            if remaining <= 0:
-                system_text = ""
-                sys_tokens = 0
-                metadata["cuts"].append("丢弃 system（为保留 user 全文）")
-            else:
-                system_text = budget.fit(system_text, remaining)
-                sys_tokens = budget.count(system_text)
-                metadata["cuts"].append(
-                    f"裁剪 system 到 {sys_tokens} tokens（保留 user {user_tokens} tokens）"
-                )
-        metadata["sections"]["system"] = sys_tokens
-        metadata["total_tokens"] = sys_tokens + user_tokens
-        attach_fit_context_projection(metadata)
-        return system_text, user_text, metadata
-
-    sys_tokens = budget.count(system_text)
-    if sys_tokens >= total_limit:
-        sys_cap = max(256, total_limit // 2)
-        system_text = budget.fit(system_text, sys_cap)
-        sys_tokens = budget.count(system_text)
-        metadata["cuts"].append(f"裁剪 system 到 {sys_tokens} tokens")
-    metadata["sections"]["system"] = sys_tokens
-
-    remaining = budget.remaining(sys_tokens)
-    if user_tokens > remaining:
-        user_text = budget.fit(user_text, remaining)
-        user_tokens = budget.count(user_text)
-        metadata["cuts"].append(f"裁剪 user 到 {user_tokens} tokens（剩余预算 {remaining}）")
-    metadata["sections"]["user"] = user_tokens
-    metadata["total_tokens"] = sys_tokens + user_tokens
-    attach_fit_context_projection(metadata)
-    return system_text, user_text, metadata
-
-
-def fit_repair_user_prompt(
-    agent,
-    user_text: str,
-    system_text: str = "",
-) -> tuple[str, dict]:
-    """L2 repair：按 agent config 的 model/provider/budget fit 手工 user prompt。"""
-    config = getattr(agent, "config", None)
-    model = getattr(config, "model", "deepseek-v4-pro")
-    provider = getattr(config, "provider", "deepseek")
-    total_limit = getattr(config, "prompt_budget", None) or TOTAL_BUDGET
-    _, fitted_user, meta = fit_prompt_to_budget(
-        system_text,
-        user_text,
-        model=model,
-        provider=provider,
-        total_limit=total_limit,
-    )
-    return fitted_user, meta
 
 
 class ContextManager:
@@ -255,8 +174,6 @@ class ContextManager:
     ) -> dict[str, str]:
         """按预算填充各 section，返回 name → 文本。"""
         total = self.budget.total_limit
-        used = 0
-        sections: dict[str, str] = {}
         request_text = ""
         request_tokens = 0
         section_cap = total
@@ -273,64 +190,41 @@ class ContextManager:
             metadata.update(task_preservation_metadata(request_tokens, total))
             section_cap = reserve_section_budget(total, request_tokens)
 
-        def add_section(name: str, text: str, budget_limit: int):
-            nonlocal used
-            if not text:
-                return
-            if used + self.budget.count(text) > section_cap:
-                remaining = section_cap - used
-                if remaining <= 0:
-                    metadata["cuts"].append(f"跳过 {name}（task 预留后预算耗尽）")
-                    return
-                text = self.budget.fit(text, remaining)
-                metadata["cuts"].append(f"裁剪 {name} 到 {remaining} tokens")
-
-            tokens = self.budget.count(text)
-            used += tokens
-            metadata["sections"][name] = tokens
-            sections[name] = text
-
-        def add_stable_section(name: str, text: str, section_limit: int):
-            """stable 段：超 section cap 或总预算不足时整段丢弃（不 splice）。"""
-            nonlocal used
-            if not text:
-                return
-            tokens = self.budget.count(text)
-            cap = scaled_section_budget(section_limit, section_cap or total)
-            if tokens > cap:
-                metadata["cuts"].append(f"丢弃 {name}（{tokens} > section cap {cap}）")
-                return
-            if used + tokens > section_cap:
-                metadata["cuts"].append(f"丢弃 {name}（task 预留后预算不足）")
-                return
-            used += tokens
-            metadata["sections"][name] = tokens
-            sections[name] = text
+        filler = SectionFiller(
+            self.budget,
+            metadata,
+            section_cap=section_cap,
+            total_limit=total,
+            scaled_budget=scaled_section_budget,
+        )
 
         if include_system:
-            add_stable_section("system", self._get_system(), BUDGET_SYSTEM)
-            add_stable_section("tools", self._get_tools(), BUDGET_TOOLS)
-            add_stable_section("skills", self._get_skills(), BUDGET_SKILLS)
-        add_section(
+            filler.add_stable_section("system", self._get_system(), BUDGET_SYSTEM)
+            filler.add_stable_section("tools", self._get_tools(), BUDGET_TOOLS)
+            filler.add_stable_section("skills", self._get_skills(), BUDGET_SKILLS)
+        filler.add_section(
             "workspace",
             self._get_workspace(),
             scaled_section_budget(BUDGET_PREFIX, section_cap or total),
         )
-        add_section(
+        filler.add_section(
             "memory",
             self._get_memory(),
             scaled_section_budget(BUDGET_MEMORY, section_cap or total),
         )
-        add_section(
+        filler.add_section(
             "relevant",
             self._get_relevant(user_message),
             scaled_section_budget(BUDGET_RELEVANT, section_cap or total),
         )
-        add_section(
+        filler.add_section(
             "history",
             self._get_compressed_history(metadata),
             history_window_budget(section_cap or total),
         )
+
+        sections = dict(filler.sections)
+        used = filler.used
 
         if include_request:
             sections["request"] = request_text
@@ -366,31 +260,14 @@ class ContextManager:
     def _get_system(self) -> str:
         prefix = getattr(self.agent, "_prefix", None)
         if prefix is not None:
-            system = getattr(prefix, "stable_system_text", "") or ""
-            if system:
-                return system
-            stable = getattr(prefix, "stable_text", "")
-            if stable:
-                from agent_runtime.context_projection import split_stable_text
-
-                core, _, _ = split_stable_text(stable)
-                return core
+            return getattr(prefix, "stable_system_text", "") or ""
         return getattr(self.agent, "_system_prompt", "") or ""
 
     def _get_tools(self) -> str:
         prefix = getattr(self.agent, "_prefix", None)
         if prefix is None:
             return ""
-        tools = getattr(prefix, "stable_tools_text", "") or ""
-        if tools:
-            return tools
-        stable = getattr(prefix, "stable_text", "") or ""
-        if stable:
-            from agent_runtime.context_projection import split_stable_text
-
-            _, tools_text, _ = split_stable_text(stable)
-            return tools_text
-        return ""
+        return getattr(prefix, "stable_tools_text", "") or ""
 
     def _get_skills(self) -> str:
         prefix = getattr(self.agent, "_prefix", None)
@@ -400,20 +277,10 @@ class ContextManager:
         skills = getattr(prefix, "stable_skills_text", "") or ""
         if skills:
             parts.append(skills)
-        elif getattr(prefix, "stable_text", ""):
-            from agent_runtime.context_projection import split_stable_text
-
-            _, _, examples = split_stable_text(prefix.stable_text)
-            if examples:
-                parts.append(examples)
         role = getattr(prefix, "role_text", "") or ""
         if role:
             parts.append(role)
         return "\n\n".join(parts)
-
-    def _get_role(self) -> str:
-        """Deprecated：role 已并入 skills section。"""
-        return getattr(getattr(self.agent, "_prefix", None), "role_text", "") or ""
 
     def _get_workspace(self) -> str:
         workspace_text = getattr(self.agent._prefix, "workspace_text", "")

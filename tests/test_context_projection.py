@@ -90,6 +90,21 @@ class TestBuildContextSections:
         assert ctx["system"] == meta["sections"]["system"] + meta["sections"]["workspace"]
 
 
+    def test_discarded_stable_section_counts_zero(self, agent, monkeypatch):
+        """stable 段被丢弃时 impl sections 记 0，投影不 marker 回退高估。"""
+        cm = ContextManager(agent)
+        huge_tools = "tool " * 5000
+
+        def fake_get_tools():
+            return huge_tools
+
+        monkeypatch.setattr(cm, "_get_tools", fake_get_tools)
+        _, meta = cm.build("hello")
+        assert meta["sections"].get("tools", -1) == 0
+        assert meta["context_sections"]["tools"] == 0
+        assert any("丢弃 tools" in c for c in meta["cuts"])
+
+
 class TestAttachContextProjection:
     def test_metadata_dual_write(self, agent):
         cm = ContextManager(agent)

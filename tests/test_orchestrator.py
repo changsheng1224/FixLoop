@@ -78,7 +78,7 @@ class TestOrchestrator:
         orch = Orchestrator(None, None, None)
         orch._repo_root = str(temp_workspace)
         plan = RepairPlan(issue_type="import_error", suspect_files=["app.py"])
-        prompt = orch._patcher_prompt([], None, plan=plan, issue="ModuleNotFoundError at app.py:1")
+        prompt, _ = orch._patcher_prompt([], None, plan=plan, issue="ModuleNotFoundError at app.py:1")
         assert "test_app.py" in prompt
         assert "utils.helper" in prompt
 
@@ -212,7 +212,7 @@ class TestOrchestrator:
             ),
         ]
         plan = RepairPlan(issue_type="type_error")
-        prompt = orch._patcher_prompt(
+        prompt, _ = orch._patcher_prompt(
             suspects,
             None,
             plan=plan,
