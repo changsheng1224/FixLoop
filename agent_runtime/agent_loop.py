@@ -222,6 +222,8 @@ class AgentLoop:
                     "prefix_hashes": token_meta.get("prefix_hashes"),
                     "task_template_source": token_meta.get("task_template_source"),
                     "task_template_fingerprint": token_meta.get("task_template_fingerprint"),
+                    "request_preserved": token_meta.get("request_preserved"),
+                    "task_budget_overflow": token_meta.get("task_budget_overflow"),
                 },
             )
             ts.node_timings.setdefault("prompt_build_ms", 0)

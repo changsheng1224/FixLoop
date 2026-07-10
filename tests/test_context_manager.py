@@ -61,18 +61,21 @@ class TestTokenBudget:
 
 
 class TestFitPromptToBudget:
-    def test_fits_long_user_under_total(self):
+    def test_preserve_user_keeps_full_user_text(self):
         system = "system prompt " * 50
         user = "user content " * 5000
-        _, fitted_user, meta = fit_prompt_to_budget(system, user, total_limit=6000)
-        assert meta["total_tokens"] <= 6000
-        assert len(fitted_user) < len(user)
+        _, fitted_user, meta = fit_prompt_to_budget(
+            system, user, total_limit=6000, preserve_user=True
+        )
+        assert fitted_user == user
+        assert meta.get("request_preserved") is True
 
-    def test_agent_fit_user_message_uses_config_budget(self, agent):
+    def test_agent_fit_user_message_preserves_user(self, agent):
         agent.config.prompt_budget = 800
-        fitted, meta = agent.fit_user_message("word " * 5000)
-        assert meta["total_tokens"] <= 800
-        assert len(fitted) < len("word " * 5000)
+        original = "word " * 5000
+        fitted, meta = agent.fit_user_message(original)
+        assert fitted == original
+        assert meta.get("request_preserved") is True
 
 
 class TestContextManagerBuild:
@@ -88,9 +91,11 @@ class TestContextManagerBuild:
         assert "total_tokens" in meta
 
     def test_request_section_never_cut(self, agent):
-        cm = ContextManager(agent)
-        _, meta = cm.build("hello")
-        # request 在 sections 中有记录
+        issue = "hello preserved task marker"
+        cm = ContextManager(agent, total_budget=300)
+        prompt, meta = cm.build(issue)
+        assert meta.get("request_preserved") is True
+        assert issue in prompt
         assert "request" in meta["sections"]
 
     def test_prefix_included(self, agent):

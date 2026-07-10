@@ -110,7 +110,7 @@
 
 > 设计见 [DESIGN §3.5](bonus/DESIGN.md#35-上下文传递--压缩触发--user-保护)。
 
-- **[P1] [C:⭐ I:⭐⭐⭐⭐] user message 永不压缩 enforce**：`fit()` / L0–L5 单测断言 current user · issue 全文保留
+- **[P1] ✅ [C:⭐ I:⭐⭐⭐⭐] user message 永不压缩 enforce**：reserve-first task 预留 + `fit_repair` 只裁 system；`request_preserved` metadata
 - **[P1] [C:⭐ I:⭐⭐⭐⭐] 压缩触发 trace**：L2/L5 超阈值时 emit `compression_triggered{level,ratio,section}`；与 [§19.4](#194-核心运行时指标监控) 同源
 
 ---

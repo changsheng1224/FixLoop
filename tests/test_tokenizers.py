@@ -146,6 +146,6 @@ class TestFitRepairUserPrompt:
         ws = WorkspaceContext.build(str(temp_workspace))
         agent = Agent(config=config, model_client=FakeModelClient([]), workspace=ws)
         fitted, meta = fit_repair_user_prompt(agent, "word " * 5000)
-        assert meta["total_tokens"] <= 800
-        assert len(fitted) < len("word " * 5000)
+        assert meta.get("request_preserved") is True
+        assert len(fitted) == len("word " * 5000)
         assert meta["tokenizer_backend"].startswith("tiktoken:")

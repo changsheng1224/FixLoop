@@ -38,7 +38,7 @@ def render_template(template: str, variables: dict[str, str]) -> str:
     subs = {key: value or "" for key, value in variables.items()}
     text = Template(template).safe_substitute(subs)
     text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+    return text.strip("\n")
 
 
 def render_task_message(

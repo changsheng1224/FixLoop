@@ -20,6 +20,7 @@ from agent_runtime.tier_policy import TierPolicy, filter_relevant_results
 from agent_runtime.context_projection import attach_context_projection, attach_fit_context_projection
 from agent_runtime.tokenizers import resolve_token_counter, resolve_tokenizer_spec
 from agent_runtime.user_message_template import render_task_message
+from agent_runtime.task_preservation import reserve_section_budget, task_preservation_metadata
 
 # Section token 预算分配（以 REF_TOTAL_BUDGET 为参考布局，随 prompt_budget 等比缩放）
 REF_TOTAL_BUDGET = 6000
@@ -82,8 +83,12 @@ def fit_prompt_to_budget(
     model: str = "deepseek-v4-pro",
     provider: str = "deepseek",
     total_limit: int = TOTAL_BUDGET,
+    preserve_user: bool = True,
 ) -> tuple[str, str, dict]:
-    """将 system + user 对 fit 到统一 token 预算内。"""
+    """将 system + user 对 fit 到统一 token 预算内。
+
+    preserve_user=True 时 user 全文保留，仅裁剪 system。
+    """
     budget = TokenBudget(model=model, total_limit=total_limit, provider=provider)
     metadata: dict = {
         "sections": {},
@@ -97,6 +102,29 @@ def fit_prompt_to_budget(
     system_text = system_text or ""
     user_text = user_text or ""
 
+    user_tokens = budget.count(user_text)
+    metadata["sections"]["user"] = user_tokens
+
+    if preserve_user:
+        metadata.update(task_preservation_metadata(user_tokens, total_limit))
+        remaining = reserve_section_budget(total_limit, user_tokens)
+        sys_tokens = budget.count(system_text)
+        if sys_tokens > remaining:
+            if remaining <= 0:
+                system_text = ""
+                sys_tokens = 0
+                metadata["cuts"].append("丢弃 system（为保留 user 全文）")
+            else:
+                system_text = budget.fit(system_text, remaining)
+                sys_tokens = budget.count(system_text)
+                metadata["cuts"].append(
+                    f"裁剪 system 到 {sys_tokens} tokens（保留 user {user_tokens} tokens）"
+                )
+        metadata["sections"]["system"] = sys_tokens
+        metadata["total_tokens"] = sys_tokens + user_tokens
+        attach_fit_context_projection(metadata)
+        return system_text, user_text, metadata
+
     sys_tokens = budget.count(system_text)
     if sys_tokens >= total_limit:
         sys_cap = max(256, total_limit // 2)
@@ -106,7 +134,6 @@ def fit_prompt_to_budget(
     metadata["sections"]["system"] = sys_tokens
 
     remaining = budget.remaining(sys_tokens)
-    user_tokens = budget.count(user_text)
     if user_tokens > remaining:
         user_text = budget.fit(user_text, remaining)
         user_tokens = budget.count(user_text)
@@ -227,18 +254,33 @@ class ContextManager:
         include_request: bool = True,
     ) -> dict[str, str]:
         """按预算填充各 section，返回 name → 文本。"""
+        total = self.budget.total_limit
         used = 0
         sections: dict[str, str] = {}
-        total = self.budget.total_limit
+        request_text = ""
+        request_tokens = 0
+        section_cap = total
+
+        if include_request:
+            processed = apply_l1_to_request_text(user_message, self.budget)
+            request_text, tpl_meta = render_task_message(
+                processed,
+                repo_root=self._agent_repo_root(),
+            )
+            metadata.update(tpl_meta)
+            request_tokens = self.budget.count(request_text)
+            metadata["sections"]["request"] = request_tokens
+            metadata.update(task_preservation_metadata(request_tokens, total))
+            section_cap = reserve_section_budget(total, request_tokens)
 
         def add_section(name: str, text: str, budget_limit: int):
             nonlocal used
             if not text:
                 return
-            if used + self.budget.count(text) > self.budget.total_limit:
-                remaining = self.budget.total_limit - used
+            if used + self.budget.count(text) > section_cap:
+                remaining = section_cap - used
                 if remaining <= 0:
-                    metadata["cuts"].append(f"跳过 {name}（预算耗尽）")
+                    metadata["cuts"].append(f"跳过 {name}（task 预留后预算耗尽）")
                     return
                 text = self.budget.fit(text, remaining)
                 metadata["cuts"].append(f"裁剪 {name} 到 {remaining} tokens")
@@ -248,18 +290,18 @@ class ContextManager:
             metadata["sections"][name] = tokens
             sections[name] = text
 
-        def add_stable_section(name: str, text: str, section_cap: int):
+        def add_stable_section(name: str, text: str, section_limit: int):
             """stable 段：超 section cap 或总预算不足时整段丢弃（不 splice）。"""
             nonlocal used
             if not text:
                 return
             tokens = self.budget.count(text)
-            cap = scaled_section_budget(section_cap, total)
+            cap = scaled_section_budget(section_limit, section_cap or total)
             if tokens > cap:
                 metadata["cuts"].append(f"丢弃 {name}（{tokens} > section cap {cap}）")
                 return
-            if used + tokens > total:
-                metadata["cuts"].append(f"丢弃 {name}（总预算不足）")
+            if used + tokens > section_cap:
+                metadata["cuts"].append(f"丢弃 {name}（task 预留后预算不足）")
                 return
             used += tokens
             metadata["sections"][name] = tokens
@@ -269,38 +311,30 @@ class ContextManager:
             add_stable_section("system", self._get_system(), BUDGET_SYSTEM)
             add_stable_section("tools", self._get_tools(), BUDGET_TOOLS)
             add_stable_section("skills", self._get_skills(), BUDGET_SKILLS)
-        add_section("workspace", self._get_workspace(), scaled_section_budget(BUDGET_PREFIX, total))
-        add_section("memory", self._get_memory(), scaled_section_budget(BUDGET_MEMORY, total))
+        add_section(
+            "workspace",
+            self._get_workspace(),
+            scaled_section_budget(BUDGET_PREFIX, section_cap or total),
+        )
+        add_section(
+            "memory",
+            self._get_memory(),
+            scaled_section_budget(BUDGET_MEMORY, section_cap or total),
+        )
         add_section(
             "relevant",
             self._get_relevant(user_message),
-            scaled_section_budget(BUDGET_RELEVANT, total),
+            scaled_section_budget(BUDGET_RELEVANT, section_cap or total),
         )
         add_section(
             "history",
             self._get_compressed_history(metadata),
-            history_window_budget(total),
+            history_window_budget(section_cap or total),
         )
 
         if include_request:
-            user_message = apply_l1_to_request_text(user_message, self.budget)
-            rendered, tpl_meta = render_task_message(
-                user_message,
-                repo_root=self._agent_repo_root(),
-            )
-            metadata.update(tpl_meta)
-            request_tokens = self.budget.count(rendered)
+            sections["request"] = request_text
             used += request_tokens
-            metadata["sections"]["request"] = request_tokens
-            if used > self.budget.total_limit:
-                allowed_request = max(256, self.budget.total_limit - (used - request_tokens))
-                if request_tokens > allowed_request:
-                    rendered = self.budget.fit(rendered, allowed_request)
-                    request_tokens = self.budget.count(rendered)
-                    used = used - metadata["sections"]["request"] + request_tokens
-                    metadata["sections"]["request"] = request_tokens
-                    metadata["cuts"].append(f"裁剪 request 到 {request_tokens} tokens")
-            sections["request"] = rendered
 
         sys_tokens = metadata["sections"].get("system", 0)
         tools_tokens = metadata["sections"].get("tools", 0)
