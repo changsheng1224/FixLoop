@@ -65,6 +65,10 @@ class CircuitBreaker:
             self._on_success()
             return result
         except Exception as e:
+            from agent_runtime.providers.retry_policy import RateLimitExceededError
+
+            if isinstance(e, RateLimitExceededError):
+                raise
             self._on_failure()
             raise e
 

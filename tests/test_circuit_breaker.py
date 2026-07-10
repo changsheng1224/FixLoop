@@ -66,6 +66,20 @@ class TestCircuitBreaker:
             cb.call(lambda: (_ for _ in ()).throw(RuntimeError("fail again")))
         assert cb.state == "open"
 
+    def test_rate_limit_exhausted_does_not_trip_breaker(self):
+        from agent_runtime.providers.retry_policy import RateLimitExceededError
+
+        cb = CircuitBreaker(failure_threshold=2)
+        for _ in range(2):
+            with pytest.raises(RateLimitExceededError):
+                cb.call(
+                    lambda: (_ for _ in ()).throw(
+                        RateLimitExceededError("429 exhausted")
+                    )
+                )
+        assert cb.state == "closed"
+        assert cb.call(lambda: "ok") == "ok"
+
 
 class TestReplay:
     """ReplayRunner 测试。"""

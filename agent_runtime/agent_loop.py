@@ -237,6 +237,11 @@ class AgentLoop:
                     default_attempt=ts.attempts,
                 )
             except Exception as e:
+                from agent_runtime.providers.retry_policy import RateLimitExceededError
+
+                if isinstance(e, RateLimitExceededError):
+                    self.stop_reason = "rate_limited"
+                    return f"<final>API 限流：{e}</final>"
                 if "Circuit breaker is open" in str(e):
                     self.stop_reason = "circuit_breaker"
                     return f"<final>API 熔断：{e}</final>"
