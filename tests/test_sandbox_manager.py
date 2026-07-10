@@ -3,6 +3,8 @@
 import json
 from unittest.mock import MagicMock
 
+import pytest
+
 from src.harness.patch_applier import PatchApplier
 from src.harness.python_runner import PythonTestRunner
 from src.harness.sandbox_manager import (
@@ -84,6 +86,25 @@ class TestSandboxManager:
         assert "/code" in captured["tmpfs"]
         assert "/tmp" in captured["tmpfs"]
         fake_container.put_archive.assert_called_once()
+        assert sandbox.timings["tar_file_count"] == 1
+        assert sandbox.timings["tar_bytes"] > 0
+
+    def test_create_skips_docker_when_tar_too_large(self, tmp_path):
+        (tmp_path / "huge.bin").write_bytes(b"x" * 500)
+        mgr = SandboxManager()
+        mgr._docker = MagicMock()
+
+        import src.harness.sandbox_tar as sandbox_tar_mod
+
+        original_max = sandbox_tar_mod.sandbox_tar_max_bytes
+        sandbox_tar_mod.sandbox_tar_max_bytes = lambda: 100
+        try:
+            with pytest.raises(sandbox_tar_mod.SandboxArchiveError):
+                mgr.create(str(tmp_path))
+        finally:
+            sandbox_tar_mod.sandbox_tar_max_bytes = original_max
+
+        mgr._docker.containers.run.assert_not_called()
 
 
 class TestPatchApplier:

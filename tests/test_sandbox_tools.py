@@ -89,3 +89,13 @@ class TestSandboxToolsMocked:
         sandbox_build(ctx, {"repo_path": str(temp_workspace)})
         cmd = fake_mgr.execute.call_args[0][1]
         assert "pip install --user -e /code" in cmd
+
+    def test_run_sandbox_verification_tar_limit_returns_failure(self, monkeypatch, tmp_path):
+        (tmp_path / "big.bin").write_bytes(b"x" * 500)
+        import src.harness.sandbox_tar as sandbox_tar_mod
+
+        sandbox_tar_mod.sandbox_tar_max_bytes = lambda: 100
+        result, timings = run_sandbox_verification(str(tmp_path))
+        assert not result.all_passed
+        assert timings["tar_error_code"] == "tar_size_exceeded"
+        assert "tar 打包超限" in result.failure_logs[0]

@@ -93,6 +93,7 @@ def _run_test_in_sandbox(context, repo: str, test_path: str) -> tuple[Verificati
     """创建容器 → 可选 pip install → pytest → 销毁。"""
     from src.harness.python_runner import PythonTestRunner
     from src.harness.sandbox_manager import Sandbox, SandboxManager
+    from src.harness.sandbox_tar import SandboxArchiveError
 
     sandbox_id = getattr(context, "_sandbox_id", None)
     mgr = getattr(context, "_sandbox_mgr", None)
@@ -103,7 +104,10 @@ def _run_test_in_sandbox(context, repo: str, test_path: str) -> tuple[Verificati
     try:
         if sandbox_id is None or mgr is None:
             mgr = SandboxManager()
-            sandbox = mgr.create(repo)
+            try:
+                sandbox = mgr.create(repo)
+            except SandboxArchiveError as exc:
+                return _verification_result_for_tar_error(exc), _timings_for_tar_error(exc)
             created_here = True
             context._sandbox_id = sandbox.id
             context._sandbox_mgr = mgr
@@ -141,9 +145,13 @@ def _ensure_sandbox(context, repo_path: str) -> dict:
 
     if sandbox_id is None:
         from src.harness.sandbox_manager import SandboxManager
+        from src.harness.sandbox_tar import SandboxArchiveError
 
         mgr = SandboxManager()
-        sandbox = mgr.create(repo_path)
+        try:
+            sandbox = mgr.create(repo_path)
+        except SandboxArchiveError as exc:
+            return {"status": "error", "build_result": str(exc), "tar_error_code": exc.code}
         context._sandbox_id = sandbox.id
         context._sandbox_mgr = mgr
         context._sandbox_repo = repo_path
@@ -153,6 +161,19 @@ def _ensure_sandbox(context, repo_path: str) -> dict:
         return {"status": "created", "build_result": build_result}
 
     return {"status": "reused", "build_result": getattr(context, "_build_result", "")}
+
+
+def _verification_result_for_tar_error(exc) -> VerificationResult:
+    return VerificationResult(all_passed=False, failure_logs=[str(exc)])
+
+
+def _timings_for_tar_error(exc) -> dict:
+    return {
+        "tar_error_code": exc.code,
+        "tar_bytes": exc.total_bytes,
+        "tar_max_bytes": exc.max_bytes,
+        "tar_file_count": exc.file_count,
+    }
 
 
 def _maybe_pip_install(mgr, sandbox, repo_path: str) -> tuple[str, int]:
