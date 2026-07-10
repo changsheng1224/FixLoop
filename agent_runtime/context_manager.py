@@ -17,7 +17,7 @@ from agent_runtime.compression_pipeline import (
     truncate_tool_content as _truncate_tool_content,
 )
 from agent_runtime.tier_policy import TierPolicy, filter_relevant_results
-from agent_runtime.tokenizers import resolve_token_counter
+from agent_runtime.tokenizers import resolve_token_counter, resolve_tokenizer_spec
 
 # Section token 预算分配（以 REF_TOTAL_BUDGET 为参考布局，随 prompt_budget 等比缩放）
 REF_TOTAL_BUDGET = 6000
@@ -53,6 +53,9 @@ class TokenBudget:
         self.provider = provider
         self._counter = resolve_token_counter(model, provider)
         self.backend = self._counter.backend
+        self._spec = resolve_tokenizer_spec(model, provider)
+        self.tokenizer_fallback = self._spec.fallback
+        self.tokenizer_id = self._spec.tokenizer_id
 
     def count(self, text: str) -> int:
         """返回文本的 token 数。"""
@@ -82,6 +85,8 @@ def fit_prompt_to_budget(
         "cuts": [],
         "budget": total_limit,
         "tokenizer_backend": budget.backend,
+        "tokenizer_fallback": budget.tokenizer_fallback,
+        "tokenizer_id": budget.tokenizer_id,
     }
 
     system_text = system_text or ""
@@ -104,6 +109,26 @@ def fit_prompt_to_budget(
     metadata["sections"]["user"] = user_tokens
     metadata["total_tokens"] = sys_tokens + user_tokens
     return system_text, user_text, metadata
+
+
+def fit_repair_user_prompt(
+    agent,
+    user_text: str,
+    system_text: str = "",
+) -> tuple[str, dict]:
+    """L2 repair：按 agent config 的 model/provider/budget fit 手工 user prompt。"""
+    config = getattr(agent, "config", None)
+    model = getattr(config, "model", "deepseek-v4-pro")
+    provider = getattr(config, "provider", "deepseek")
+    total_limit = getattr(config, "prompt_budget", None) or TOTAL_BUDGET
+    _, fitted_user, meta = fit_prompt_to_budget(
+        system_text,
+        user_text,
+        model=model,
+        provider=provider,
+        total_limit=total_limit,
+    )
+    return fitted_user, meta
 
 
 class ContextManager:

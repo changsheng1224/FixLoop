@@ -276,6 +276,7 @@ class Orchestrator(RepairPipelineMixin):
 
     def _begin_repair_trace(self, state: RepairState) -> None:
         from agent_runtime.log_context import bind_run_id
+        from agent_runtime.tokenizers import resolve_tokenizer_spec
         from src.repair.run_trace import RepairRunTracer
 
         tracer = RepairRunTracer(self._repo_root)
@@ -284,6 +285,27 @@ class Orchestrator(RepairPipelineMixin):
         self._repair_tracer = tracer
         state.repair_run_id = run_id
         self._log_run_id_token = bind_run_id(run_id)
+
+        tokenizer_by_agent: dict[str, dict] = {}
+        for name, agent in (
+            ("localizer", self.localizer),
+            ("retriever", self.retriever),
+            ("patcher", self.patcher),
+        ):
+            if agent is None:
+                continue
+            config = getattr(agent, "config", None)
+            spec = resolve_tokenizer_spec(
+                getattr(config, "model", ""),
+                getattr(config, "provider", ""),
+            )
+            tokenizer_by_agent[name] = {
+                "rule_id": spec.rule_id,
+                "tokenizer_fallback": spec.fallback,
+                "tokenizer_id": spec.tokenizer_id,
+            }
+        if tokenizer_by_agent:
+            state.node_timings["tokenizer_by_agent"] = tokenizer_by_agent
 
     def _end_repair_trace(self, state: RepairState) -> None:
         from agent_runtime.log_context import reset_run_id
@@ -359,6 +381,14 @@ class Orchestrator(RepairPipelineMixin):
         issue_type = plan.issue_type if plan else ""
         patcher_system = self._patcher_system_prompt(plan)
 
+        from agent_runtime.context_manager import fit_repair_user_prompt
+
+        prompt, _pre_budget_meta = fit_repair_user_prompt(
+            self.patcher,
+            prompt,
+            patcher_system,
+        )
+
         t_start = time.time()
         t_model = time.time()
         tracer = self._repair_tracer
@@ -408,6 +438,7 @@ class Orchestrator(RepairPipelineMixin):
             usage_after = get_client_session_usage(self.patcher.model_client)
             delta = diff_client_usage(usage_before, usage_after)
             latency_fields = build_report_latency_fields(timings)
+            budget_meta = getattr(self.patcher, "_last_budget_meta", {}) or {}
             tracer.write_agent_token(
                 "patcher",
                 delta,
@@ -415,7 +446,10 @@ class Orchestrator(RepairPipelineMixin):
                     "tool_steps": 0,
                     "node_timings": {"model_call_ms": model_call_ms},
                     "prompt_budget": getattr(self.patcher.config, "prompt_budget", None),
-                    "budget_cuts": getattr(self.patcher, "_last_budget_meta", {}).get("cuts", []),
+                    "budget_cuts": budget_meta.get("cuts", []),
+                    "tokenizer_backend": budget_meta.get("tokenizer_backend"),
+                    "tokenizer_fallback": budget_meta.get("tokenizer_fallback"),
+                    "tokenizer_id": budget_meta.get("tokenizer_id"),
                     **latency_fields,
                 },
             )
