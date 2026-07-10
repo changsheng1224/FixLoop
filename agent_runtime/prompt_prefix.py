@@ -24,6 +24,7 @@ __all__ = [
     "PromptPrefix",
     "TOOL_EXAMPLES",
     "build_custom_system_prefix",
+    "build_prefix_hashes",
     "build_prompt_prefix",
     "build_repair_agent_prefix",
     "join_stable_parts",
@@ -42,6 +43,24 @@ def join_stable_parts(*parts: str) -> str:
 def cache_stable_text(stable_system_text: str, stable_tools_text: str) -> str:
     """参与 prompt_cache_key 的稳定段（system + tools）。"""
     return join_stable_parts(stable_system_text, stable_tools_text)
+
+
+def build_prefix_hashes(prefix: PromptPrefix) -> dict[str, str]:
+    """分段 hash 观测字段；cache_key 与 prompt_cache_key 一致。"""
+    system = prefix.stable_system_text or ""
+    tools = prefix.stable_tools_text or ""
+    skills = prefix.stable_skills_text or ""
+    role = prefix.role_text or ""
+    return {
+        "system": hash_stable_prefix(system) if system else "",
+        "tools": hash_stable_prefix(tools) if tools else "",
+        "skills": hash_stable_prefix(skills) if skills else "",
+        "cache_key": prefix.hash or "",
+        "role": hash_stable_prefix(role) if role else "",
+        "tool_signature": prefix.tool_signature or "",
+        "assets_fingerprint": prefix.assets_fingerprint or "",
+        "workspace_fingerprint": prefix.workspace_fingerprint or "",
+    }
 
 
 @dataclass

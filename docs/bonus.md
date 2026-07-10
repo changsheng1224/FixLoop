@@ -89,7 +89,7 @@
 - **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] Skills 索引 + 全文按需**：prefix/catalog 仅索引；命中后注入 **skills** 段（见 [§13.4](#134-海量-skill-加载)）
 - **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] tier_pins.yaml 接线 L0 + L2**：`orchestrator_pin_fields` 与 compression L0 共读 yaml（与 [§3.4](#34-l2-repair-与-memory-衔接) 联动）
 - **[P1] ✅ [C:⭐ I:⭐⭐⭐] 多模型 tokenizer 切换**：`tokenizer_registry` + fallback warn + L2 `fit_repair_user_prompt`（`5b7ea90`）
-- **[P2] 🔶 [C:⭐ I:⭐⭐⭐] prefix 分段 hash**：`hash(system+tools)` 已落地；`prefix_hashes` 观测字段待补（`e7bb398`）
+- **[P2] ✅ [C:⭐ I:⭐⭐⭐] prefix 分段 hash**：`prefix_hashes` 观测字段（system/tools/skills/cache_key + 指纹）进 metadata 与 `context_built` trace
 - **[P2] [C:⭐⭐ I:⭐⭐⭐] User Message 模板化**：Jinja 渲染任务/引用/格式；与 system 分离
 - **[P2] [C:⭐ I:⭐⭐⭐] fit 保护优先级单测矩阵**：request > prefix > memory > relevant > history 回归
 

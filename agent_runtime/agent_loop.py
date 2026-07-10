@@ -219,6 +219,7 @@ class AgentLoop:
                     "context_sections_total": token_meta.get("context_sections_total"),
                     "total_tokens": token_meta.get("total_tokens"),
                     "budget": token_meta.get("budget"),
+                    "prefix_hashes": token_meta.get("prefix_hashes"),
                 },
             )
             ts.node_timings.setdefault("prompt_build_ms", 0)

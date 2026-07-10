@@ -204,10 +204,15 @@ class ContextManager:
         return system_prompt, "\n\n".join(user_parts), metadata
 
     def _base_metadata(self) -> dict:
+        from agent_runtime.prompt_prefix import build_prefix_hashes
+
+        prefix = self.agent._prefix
+        prefix_hashes = build_prefix_hashes(prefix)
         return {
             "sections": {},
             "cuts": [],
-            "prompt_cache_key": getattr(self.agent._prefix, "hash", ""),
+            "prompt_cache_key": prefix_hashes["cache_key"],
+            "prefix_hashes": prefix_hashes,
         }
 
     def _fill_sections(

@@ -36,6 +36,18 @@ class TestPromptCache:
         _, meta2 = cm.build("q2")
         assert meta1["prompt_cache_key"] == meta2["prompt_cache_key"]
 
+    def test_prefix_hashes_in_metadata(self, agent):
+        from agent_runtime.context_manager import ContextManager
+        from agent_runtime.prompt_prefix import build_prefix_hashes
+
+        cm = ContextManager(agent)
+        _, meta = cm.build("hello")
+
+        assert "prefix_hashes" in meta
+        expected = build_prefix_hashes(agent._prefix)
+        assert meta["prefix_hashes"] == expected
+        assert meta["prompt_cache_key"] == meta["prefix_hashes"]["cache_key"]
+
     def test_client_supports_cache(self):
         from agent_runtime.providers.clients import (
             AnthropicCompatibleModelClient,
