@@ -7,6 +7,7 @@ Orchestrator 可直连 harness，避免 Verifier LLM 多轮 tool 调用开销。
 import json
 from dataclasses import dataclass
 
+from src.harness.sandbox_manager import ExecResult
 from src.state import VerificationResult
 
 
@@ -114,10 +115,22 @@ def _run_test_in_sandbox(context, repo: str, test_path: str) -> tuple[Verificati
             context._sandbox_repo = repo
             if sandbox.timings:
                 timings.update(sandbox.timings)
-            build_result, pip_ms = _maybe_pip_install(mgr, sandbox, repo)
+            build_result, pip_ms, pip_exec = _maybe_pip_install(mgr, sandbox, repo)
             timings["pip_ms"] = pip_ms
             timings["build_result"] = build_result
             context._build_result = build_result
+            if pip_exec is not None and pip_exec.exit_code == -1:
+                from src.harness.python_runner import verification_result_for_exec_timeout
+                from src.harness.sandbox_manager import BUILD_TIMEOUT_S
+
+                result = verification_result_for_exec_timeout(
+                    "pip install",
+                    BUILD_TIMEOUT_S,
+                    pip_exec,
+                )
+                result.build_log = build_result
+                timings["pytest_ms"] = 0
+                return result, timings
         else:
             sandbox = Sandbox(id=sandbox_id, profile="python")
             timings["build_result"] = getattr(context, "_build_result", "reused")
@@ -156,7 +169,7 @@ def _ensure_sandbox(context, repo_path: str) -> dict:
         context._sandbox_mgr = mgr
         context._sandbox_repo = repo_path
 
-        build_result, _pip_ms = _maybe_pip_install(mgr, sandbox, repo_path)
+        build_result, _pip_ms, _pip_exec = _maybe_pip_install(mgr, sandbox, repo_path)
         context._build_result = build_result
         return {"status": "created", "build_result": build_result}
 
@@ -176,7 +189,7 @@ def _timings_for_tar_error(exc) -> dict:
     }
 
 
-def _maybe_pip_install(mgr, sandbox, repo_path: str) -> tuple[str, int]:
+def _maybe_pip_install(mgr, sandbox, repo_path: str) -> tuple[str, int, ExecResult | None]:
     """仅在有声明依赖时 pip install -e /code。"""
     import time
     from pathlib import Path
@@ -191,7 +204,7 @@ def _maybe_pip_install(mgr, sandbox, repo_path: str) -> tuple[str, int]:
             break
 
     if not needs_install:
-        return "skipped (no project dependencies detected)", 0
+        return "skipped (no project dependencies detected)", 0, None
 
     from src.harness.sandbox_manager import BUILD_TIMEOUT_S, sandbox_pip_install_command
 
@@ -203,4 +216,4 @@ def _maybe_pip_install(mgr, sandbox, repo_path: str) -> tuple[str, int]:
     )
     pip_ms = int((time.time() - t0) * 1000)
     build_result = f"pip install: exit_code={result.exit_code}\n{result.stdout}"
-    return build_result, pip_ms
+    return build_result, pip_ms, result

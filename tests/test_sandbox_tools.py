@@ -99,3 +99,21 @@ class TestSandboxToolsMocked:
         assert not result.all_passed
         assert timings["tar_error_code"] == "tar_size_exceeded"
         assert "tar 打包超限" in result.failure_logs[0]
+
+    def test_pip_timeout_skips_pytest(self, monkeypatch, temp_workspace):
+        (temp_workspace / "pyproject.toml").write_text(
+            '[project]\nname="t"\ndependencies=["requests"]\n',
+            encoding="utf-8",
+        )
+        fake_mgr = MagicMock()
+        fake_mgr.create.return_value = Sandbox(id="sb-timeout", profile="python")
+        fake_mgr.execute.return_value = ExecResult(-1, "", "timeout after 600s")
+        monkeypatch.setattr(
+            "src.harness.sandbox_manager.SandboxManager",
+            lambda: fake_mgr,
+        )
+        result, timings = run_sandbox_verification(str(temp_workspace))
+        assert not result.all_passed
+        assert "sandbox pip install timeout after 600s" in result.failure_logs[0]
+        assert timings["pytest_ms"] == 0
+        assert fake_mgr.execute.call_count == 1

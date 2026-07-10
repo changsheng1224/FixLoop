@@ -156,17 +156,31 @@ class TestPythonRunner:
         assert not result.all_passed
 
     def test_pytest_timeout_not_passed(self):
-        """exec 超时时不应误判为通过。"""
+        """exec 超时时不应误判为通过，且 failure_logs 含明确超时文案。"""
         mgr = FakeManager(
             {
                 "pytest": ExecResult(-1, "", "timeout after 900s"),
+                "cat /code/.report.json": ExecResult(1, "", "No such file"),
             }
         )
         runner = PythonTestRunner(mgr)
         result = runner.run(FakeSandbox())
         assert not result.all_passed
         assert result.total_tests == 0
-        assert result.failure_logs
+        assert "sandbox pytest timeout after 900s" in result.failure_logs[0]
+        assert "timeout after 900s" in result.failure_logs[1]
+        assert len(mgr.calls) == 1
+        assert mgr.calls[0].startswith("/entrypoint.sh test")
+
+    def test_pytest_timeout_includes_partial_stdout(self):
+        mgr = FakeManager(
+            {
+                "pytest": ExecResult(-1, "partial output\n" * 20, "timeout after 900s"),
+            }
+        )
+        runner = PythonTestRunner(mgr)
+        result = runner.run(FakeSandbox())
+        assert any("partial output" in log for log in result.failure_logs)
 
     def test_pytest_exit_zero_without_report_not_passed(self):
         """pytest 0 退出但无 JSON 报告时 all_passed=False。"""

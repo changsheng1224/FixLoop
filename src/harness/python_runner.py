@@ -8,6 +8,30 @@ import json
 from src.harness.sandbox_manager import TEST_TIMEOUT_S
 from src.state import VerificationResult
 
+EXEC_TIMEOUT_EXIT_CODE = -1
+
+
+def verification_result_for_exec_timeout(
+    phase: str,
+    timeout_s: int,
+    result,
+) -> VerificationResult:
+    """``execute`` 线程超时时生成明确 failure_logs（供 Patcher 反馈）。"""
+    logs = [f"sandbox {phase} timeout after {timeout_s}s"]
+    if result.stderr:
+        logs.append(result.stderr.strip())
+    if result.stdout:
+        tail = result.stdout[-500:].strip()
+        if tail:
+            logs.append(tail)
+    return VerificationResult(
+        all_passed=False,
+        total_tests=0,
+        passed=0,
+        failed=1,
+        failure_logs=logs,
+    )
+
 
 class PythonTestRunner:
     """Python 测试运行器。"""
@@ -36,6 +60,9 @@ class PythonTestRunner:
             f"/entrypoint.sh test {test_cmd}",
             timeout=TEST_TIMEOUT_S,
         )
+
+        if test.exit_code == EXEC_TIMEOUT_EXIT_CODE:
+            return verification_result_for_exec_timeout("pytest", TEST_TIMEOUT_S, test)
 
         # 尝试解析 JSON 报告
         try:
