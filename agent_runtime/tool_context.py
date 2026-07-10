@@ -3,10 +3,11 @@
 所有工具函数通过 ToolContext 获取 workspace 信息，不直接访问 Agent 内部状态。
 """
 
-import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from agent_runtime.path_safety import resolve_under_root
 
 
 @dataclass
@@ -42,18 +43,5 @@ class ToolContext:
         return self.path_resolver(raw_path)
 
     def _default_resolve(self, raw_path: str) -> Path:
-        """默认路径解析器：基于 root 拼接 + commonpath 检测。"""
-        root = Path(self.root).resolve()
-        candidate = (root / raw_path).resolve()
-
-        # 路径逃逸检测
-        try:
-            common = os.path.commonpath([str(root), str(candidate)])
-        except ValueError:
-            # 跨盘符等无法比较的情况
-            raise ValueError(f"无法解析路径: {raw_path}")
-
-        if common != str(root):
-            raise ValueError(f"路径逃逸被拦截: {raw_path}（禁止访问 workspace 外路径）")
-
-        return candidate
+        """默认路径解析器：分量遍历 + symlink 校验 + canonical 边界检测。"""
+        return resolve_under_root(self.root, raw_path)
