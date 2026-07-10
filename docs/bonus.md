@@ -428,7 +428,7 @@
 
 ### 16.3 资源隔离
 
-- **[P1] [C:⭐ I:⭐⭐⭐] sandbox 健康探针**：`docker info` + 镜像 + `network_mode=none` 冒烟
+- **[P1] [C:⭐ I:⭐⭐⭐] sandbox 健康探针** ✅：`sandbox_health.probe`（docker info + 镜像 + `network_mode=none` 冒烟）；`try_create_verifier` + `--health`
 - **[P2] [C:⭐ I:⭐⭐⭐] 全局并发沙箱上限**：`FIXLOOP_MAX_SANDBOXES` 信号量
 - **[P2] [C:⭐ I:⭐⭐⭐] pytest 超时兜底**：`exit_code=-1` 仍生成明确 `failure_logs`
 

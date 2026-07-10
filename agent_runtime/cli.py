@@ -238,6 +238,13 @@ def _health_check() -> int:
         result["config"] = "error"
         result["status"] = "degraded"
 
+    from src.harness.sandbox_health import probe_sandbox_health
+
+    sandbox_report = probe_sandbox_health()
+    result["sandbox"] = sandbox_report.to_dict()
+    if not sandbox_report.ready:
+        result["status"] = "degraded"
+
     print(_json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
