@@ -130,6 +130,31 @@ class TestAgentLoopStopConditions:
         ]
         assert any("^" in m for m in system_msgs)
 
+    def test_invalid_tool_payload_emits_parse_retry(self, config, workspace, temp_workspace):
+        """tool payload 缺 name → parse_recovery + parse_retry trace。"""
+        import json
+
+        from agent_runtime.run_store import RunStore
+
+        outputs = [
+            '<tool>{"args":{"path":"."}}</tool>',
+            '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
+            "<final>修复成功</final>",
+        ]
+        agent = _make_agent(outputs, config, workspace)
+        agent.cwd = str(temp_workspace)
+        answer = agent.ask("测试 invalid tool")
+        assert "成功" in answer
+
+        run_dirs = list(RunStore(str(temp_workspace)).runs_dir.iterdir())
+        events = [
+            json.loads(line)
+            for line in (run_dirs[0] / "trace.jsonl").read_text(encoding="utf-8").strip().splitlines()
+        ]
+        retries = [e for e in events if e.get("event") == "parse_retry"]
+        assert len(retries) == 1
+        assert retries[0]["payload"]["kind"] == "invalid_tool_payload"
+
     def test_empty_model_response(self, config, workspace):
         """空响应被视为格式错误 → retry。"""
         outputs = [

@@ -151,7 +151,9 @@ class FakeNativeToolClient(FakeModelClient):
 
         self.last_call_usage = dict(call_usage)
         self.last_call_timings = call_timings
-        return "max_turns exceeded", call_usage
+        from agent_runtime.loop_limits import NATIVE_MAX_TURNS_MESSAGE
+
+        return NATIVE_MAX_TURNS_MESSAGE, call_usage
 
 
 class AnthropicCompatibleModelClient(SessionUsageMixin):
@@ -372,7 +374,9 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
 
         self.last_call_usage = dict(call_usage)
         self.last_call_timings = call_timings
-        return "max_turns exceeded", call_usage
+        from agent_runtime.loop_limits import NATIVE_MAX_TURNS_MESSAGE
+
+        return NATIVE_MAX_TURNS_MESSAGE, call_usage
 
     def _post_messages(self, body: bytes) -> tuple[dict, ModelCallTiming]:
         """POST /messages with retries; return parsed JSON and TTFB timing."""

@@ -9,6 +9,7 @@ from typing import Literal
 
 ParseFailureKind = Literal[
     "json_in_tool",
+    "invalid_tool_payload",
     "wrong_xml_tag",
     "unclosed_tag",
     "empty",
@@ -58,7 +59,7 @@ def build_recovery_prompt(failure: ParseFailure) -> str:
     if failure.error_message:
         lines.append(f"错误：{failure.error_message}")
     lines.append("")
-    if failure.kind == "json_in_tool":
+    if failure.kind in ("json_in_tool", "invalid_tool_payload"):
         lines.append("请仅修正上述 JSON 后重新输出完整 <tool>...</tool>。")
         lines.append('正确示例：<tool>{"name":"工具名","args":{...}}</tool>')
     elif failure.kind == "wrong_xml_tag":
@@ -91,15 +92,21 @@ def failure_from_json_in_tool(json_text: str, exc: json.JSONDecodeError) -> Pars
     )
 
 
-def _extract_json_between_tags(text: str, open_tag: str, close_tag: str) -> str:
-    start = text.find(open_tag)
-    if start == -1:
-        return ""
-    start += len(open_tag)
-    end = text.find(close_tag, start)
-    if end == -1:
-        return ""
-    return text[start:end].strip()
+def failure_invalid_tool_payload(payload: object) -> ParseFailure:
+    snippet = truncate_snippet(str(payload))
+    return ParseFailure(
+        kind="invalid_tool_payload",
+        snippet=snippet,
+        error_offset=None,
+        error_message="tool payload 缺少 name 字段或类型无效",
+        hint="<tool> JSON 必须包含 name 与 args",
+    )
+
+
+def _tool_inner_json(text: str) -> str:
+    from agent_runtime.text_tags import extract_between_tags
+
+    return extract_between_tags(text, "<tool>", "</tool>")
 
 
 def diagnose_parse_failure(raw: str) -> ParseFailure:
@@ -124,7 +131,7 @@ def diagnose_parse_failure(raw: str) -> ParseFailure:
             hint="<tool> 标签未闭合",
         )
 
-    json_match = _extract_json_between_tags(text, "<tool>", "</tool>")
+    json_match = _tool_inner_json(text)
     if json_match:
         try:
             json.loads(json_match)

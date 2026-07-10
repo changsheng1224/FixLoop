@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
-LoopPath = Literal["xml", "native"]
+from agent_runtime.react_phases import LoopPath
 
 __all__ = [
     "AGENTIC_LOOP_STAGES",
@@ -18,13 +16,14 @@ __all__ = [
 
 # Observe → Context → Model → Tool → Record
 AGENTIC_LOOP_STAGES: dict[str, list[str]] = {
-    "observe": ["run_started"],
+    "observe": ["run_started", "step_timeout?"],
     "context": ["context_built"],
     "model": [
         "react_phase:reasoning",
         "model_request_start",
         "model_first_token",
         "model_complete",
+        "parse_retry?",
     ],
     "tool": [
         "react_phase:acting",

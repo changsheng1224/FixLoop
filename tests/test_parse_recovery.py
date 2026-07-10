@@ -102,3 +102,21 @@ class TestAgentParseRecovery:
         kind, notice = Agent.parse("random text without any tags")
         assert kind == "retry"
         assert "解析失败" in str(notice)
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "",
+            "random text without any tags",
+            "<tool>{not valid json}</tool>",
+            '<tool>{"name":"test"',
+            "<read_file>x</read_file>",
+        ],
+    )
+    def test_retry_payload_is_parse_retry_with_failure(self, raw):
+        from agent_runtime.parse_recovery import ParseRetry, diagnose_parse_failure
+
+        kind, payload = Agent.parse(raw)
+        assert kind == "retry"
+        assert isinstance(payload, ParseRetry)
+        assert payload.failure.kind == diagnose_parse_failure(raw).kind

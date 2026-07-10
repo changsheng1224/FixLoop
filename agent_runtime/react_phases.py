@@ -6,8 +6,10 @@ from enum import StrEnum
 from typing import Literal
 
 ReactPath = Literal["xml", "native"]
+LoopPath = ReactPath
 
 __all__ = [
+    "LoopPath",
     "ReactPhase",
     "ReactPath",
     "build_react_phase_payload",

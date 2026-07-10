@@ -113,3 +113,25 @@ class TestAgentLoopStopReason:
 
         report = _latest_report(temp_workspace)
         assert report["stop_reason"] == StopReason.PARSE_FAIL.value
+
+    def test_native_max_turns_emits_step_limit(self, workspace, temp_workspace):
+        from agent_runtime.providers.clients import FakeNativeToolClient
+
+        config = AgentConfig(provider="fake", max_steps=2, step_timeout_s=0, tool_timeout_s=0)
+        client = FakeNativeToolClient(
+            [
+                '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
+                '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
+                '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
+            ]
+        )
+        agent = Agent(
+            config=config,
+            model_client=client,
+            workspace=workspace,
+            cwd=str(temp_workspace),
+        )
+        agent.ask("go")
+
+        report = _latest_report(temp_workspace)
+        assert report["stop_reason"] == StopReason.STEP_LIMIT.value
