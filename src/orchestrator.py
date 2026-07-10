@@ -385,6 +385,7 @@ class Orchestrator(RepairPipelineMixin):
                     "prompt_variant": issue_type or "default",
                 },
             )
+            tracer.emit("patcher", "model_request_start", {"step": 1, "attempt": 1})
         usage_before = {}
         if self.patcher is not None:
             from src.eval.token_usage import get_client_session_usage
@@ -411,10 +412,35 @@ class Orchestrator(RepairPipelineMixin):
             internal={"model_call_ms": elapsed_ms},
         )
         if tracer and self.patcher is not None:
+            from agent_runtime.model_timing import build_report_latency_fields
             from src.eval.token_usage import diff_client_usage, get_client_session_usage
 
             usage_after = get_client_session_usage(self.patcher.model_client)
             delta = diff_client_usage(usage_before, usage_after)
+            timings = getattr(self.patcher.model_client, "last_call_timings", None) or []
+            if not timings:
+                single = getattr(self.patcher.model_client, "last_call_timing", None)
+                if single is not None:
+                    timings = [single]
+            latency_fields = build_report_latency_fields(timings)
+            for index, timing in enumerate(timings):
+                fields = timing.to_dict() if hasattr(timing, "to_dict") else dict(timing)
+                step = int(fields.get("step", 0) or index + 1)
+                tracer.emit(
+                    "patcher",
+                    "model_first_token",
+                    {"ttft_ms": int(fields.get("ttft_ms", 0) or 0), "step": step, "attempt": 1},
+                )
+                tracer.emit(
+                    "patcher",
+                    "model_complete",
+                    {
+                        "total_ms": int(fields.get("total_ms", 0) or 0),
+                        "output_tokens": int(fields.get("output_tokens", 0) or 0),
+                        "step": step,
+                        "attempt": 1,
+                    },
+                )
             tracer.write_agent_token(
                 "patcher",
                 delta,
@@ -423,6 +449,7 @@ class Orchestrator(RepairPipelineMixin):
                     "node_timings": {"model_call_ms": elapsed_ms},
                     "prompt_budget": getattr(self.patcher.config, "prompt_budget", None),
                     "budget_cuts": getattr(self.patcher, "_last_budget_meta", {}).get("cuts", []),
+                    **latency_fields,
                 },
             )
             tracer.emit("patcher", "complete_once_finished", {"token_usage": delta})

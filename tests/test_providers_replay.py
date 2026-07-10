@@ -106,6 +106,32 @@ class TestOpenAICompatibleClient:
             os.chdir(old_cwd)
 
 
+class TestAnthropicClientTiming:
+    def test_complete_records_last_call_timing(self):
+        server, port = _fake_http_server(
+            status=200,
+            response_body={
+                "content": [{"type": "text", "text": "hello"}],
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+            },
+        )
+        try:
+            client = AnthropicCompatibleModelClient(
+                model="test",
+                base_url=f"http://127.0.0.1:{port}",
+                api_key="x",
+                timeout=2,
+            )
+            result = client.complete("hello", max_new_tokens=10)
+            assert result == "hello"
+            assert client.last_call_timing is not None
+            assert client.last_call_timing.ttft_ms <= client.last_call_timing.total_ms
+            assert client.last_call_timing.output_tokens == 5
+            assert len(client.last_call_timings) == 1
+        finally:
+            server.shutdown()
+
+
 class TestReplayRunner:
     """Replay 回放测试。"""
 

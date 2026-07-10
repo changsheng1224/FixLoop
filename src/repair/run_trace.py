@@ -88,9 +88,11 @@ class RepairRunTracer:
         tool_summary = summarize_agent_tool_usage(by_agent)
         from src.repair.rejection_aggregate import gateway_denial_count, summarize_repair_rejections
         from src.repair.timing_schema import phases_for_report
+        from src.repair.ttft_aggregate import summarize_repair_ttft
 
         run_dir = self.store.runs_dir / self.run_id
         rejection_summary = summarize_repair_rejections(run_dir)
+        ttft_summary = summarize_repair_ttft(run_dir)
         report = {
             "run_id": self.run_id,
             "status": state.status,
@@ -99,6 +101,7 @@ class RepairRunTracer:
             **tool_summary,
             **token_summary,
             **rejection_summary,
+            **ttft_summary,
         }
         self.store.write_report_by_id(self.run_id, report)
         finished_payload = {
