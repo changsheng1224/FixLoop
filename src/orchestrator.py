@@ -23,7 +23,14 @@ from src.repair.output_parsers import (
 )
 from src.repair.patch_applier import PatchApplier, apply_patch_to_text, parse_patches
 from src.repair.pipeline import RepairPipelineMixin
+from src.repair.prompt_router import (
+    apply_prompt_routing,
+    classify_exception,
+    fallback_suspect_uses_import_line,
+    patcher_variant_for,
+)
 from src.repair.repo_snapshot import restore_repo_snapshot, snapshot_repo
+from src.repair.language_detect import detect_repair_language
 from src.repair.verify import DockerVerifyStrategy, PytestVerifyStrategy, record_verify_timings
 from src.prompts.loader import load_role_prompt
 from src.prompts.patcher_task_builder import assemble_patcher_variables
@@ -127,7 +134,7 @@ class Orchestrator(RepairPipelineMixin):
             exc_match = re.search(r"(\w+(?:Error|Exception|Warning))", issue)
             if exc_match:
                 exc_type = exc_match.group(1)
-                plan.issue_type = self._classify_error(exc_type)
+                plan.issue_type = classify_exception(exc_type)
             if re.search(r"pyproject\.toml|\[tool\.", issue, re.IGNORECASE):
                 plan.issue_type = "config_error"
 
@@ -154,8 +161,6 @@ class Orchestrator(RepairPipelineMixin):
         else:
             plan.reasoning = issue[:200]
 
-        from src.repair.language_detect import detect_repair_language
-
         language, source = detect_repair_language(
             issue,
             suspect_files=plan.suspect_files,
@@ -163,6 +168,7 @@ class Orchestrator(RepairPipelineMixin):
         )
         plan.language = language
         plan.language_source = source
+        apply_prompt_routing(plan)
 
         return plan
 
@@ -189,7 +195,7 @@ class Orchestrator(RepairPipelineMixin):
         for file_path in plan.suspect_files:
             line = self._parse_file_line(issue, file_path) or 1
             reason = "RepairPlan 降级定位"
-            if plan.issue_type == "import_error":
+            if fallback_suspect_uses_import_line(plan.issue_type):
                 import_line = self._find_import_line_number(file_path)
                 if import_line:
                     line = import_line
@@ -241,16 +247,8 @@ class Orchestrator(RepairPipelineMixin):
         return None
 
     def _classify_error(self, exc_type: str) -> str:
-        mapping = {
-            "TypeError": "type_error",
-            "ImportError": "import_error",
-            "ModuleNotFoundError": "import_error",
-            "KeyError": "config_error",
-            "AttributeError": "attribute_error",
-            "ValueError": "value_error",
-            "SyntaxError": "syntax_error",
-        }
-        return mapping.get(exc_type, "unknown")
+        """兼容旧调用；新代码请用 ``classify_exception``。"""
+        return classify_exception(exc_type)
 
     def _verification_enabled(self) -> bool:
         return self.verifier is not None or self.use_pytest_verify
@@ -269,14 +267,7 @@ class Orchestrator(RepairPipelineMixin):
         completion 不调工具，经 ``complete_once(system_prompt=...)`` 注入，
         而非 ContextManager 的 role 段。
         """
-        variant = "default"
-        if plan:
-            variant = (plan.prompt_variants or {}).get("patcher", "")
-            if not variant:
-                from src.repair.prompt_router import resolve_prompt_routing
-
-                variant = resolve_prompt_routing(plan).patcher_variant
-        return load_role_prompt("patcher", variant)
+        return load_role_prompt("patcher", patcher_variant_for(plan))
 
     def _run_agent(
         self,
@@ -408,7 +399,7 @@ class Orchestrator(RepairPipelineMixin):
         )
 
         issue_type = plan.issue_type if plan else ""
-        patcher_variant = (plan.prompt_variants or {}).get("patcher", "default") if plan else "default"
+        patcher_variant = patcher_variant_for(plan)
         patcher_system = self._patcher_system_prompt(plan)
 
         from agent_runtime.context_manager import fit_repair_user_prompt

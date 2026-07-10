@@ -21,6 +21,7 @@ from src.repair.timing_schema import (
     set_phase_ms,
     set_repair_total_ms,
 )
+from src.repair.prompt_router import repair_plan_intent_snapshot
 from src.state import RepairState, RetrievedContext, SuspectLocation
 
 log = get_logger("repair.pipeline")
@@ -120,12 +121,13 @@ class RepairPipelineMixin:
         t0 = time.time()
         state.repair_plan = self._parse_issue(issue)
         if state.repair_plan:
-            from src.repair.prompt_router import apply_prompt_routing
-
-            routing = apply_prompt_routing(state.repair_plan)
             tracer = self._repair_tracer
             if tracer is not None:
-                tracer.emit("orchestrator", "prompt_routing", routing.to_trace_payload())
+                tracer.emit(
+                    "orchestrator",
+                    "prompt_routing",
+                    repair_plan_intent_snapshot(state.repair_plan),
+                )
         if state.repair_plan and state.repair_plan.language != "python":
             log.warning(
                 "检测到 language=%s（%s），当前 Verifier 仅支持 Python 修复",

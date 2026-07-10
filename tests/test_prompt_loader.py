@@ -75,6 +75,20 @@ class TestLoadLocalizerHints:
         text = load_localizer_hints("missing_key")
         assert "stack_parse" in text
 
+
+class TestLoadPatcherUserHints:
+    def test_cannot_import_name_hint(self):
+        from src.prompts.loader import load_patcher_user_hint
+
+        text = load_patcher_user_hint("cannot_import_name")
+        assert "错误符号名" in text
+
+    def test_composite_hint_format(self):
+        from src.prompts.loader import load_patcher_user_hint
+
+        text = load_patcher_user_hint("composite", file_count=3)
+        assert "3" in text
+
 class TestPatcherPromptDedup:
     def test_user_prompt_no_type_error_system_hints(self, temp_workspace):
         from src.orchestrator import Orchestrator

@@ -2,7 +2,13 @@
 
 import pytest
 
-from src.repair.prompt_router import apply_prompt_routing, resolve_prompt_routing
+from src.repair.prompt_router import (
+    ROUTED_ISSUE_TYPES,
+    apply_prompt_routing,
+    classify_exception,
+    collect_patcher_user_hints,
+    resolve_prompt_routing,
+)
 from src.state import RepairPlan
 
 
@@ -46,3 +52,33 @@ def test_trace_payload_shape():
     assert payload["issue_type"] == "type_error"
     assert payload["prompt_variants"]["patcher"] == "type_error"
     assert payload["prompt_variants"]["localizer"] == "stack_first"
+
+
+@pytest.mark.parametrize(
+    ("exc", "issue_type"),
+    [
+        ("TypeError", "type_error"),
+        ("ImportError", "import_error"),
+        ("ModuleNotFoundError", "import_error"),
+        ("KeyError", "config_error"),
+        ("AttributeError", "attribute_error"),
+        ("ValueError", "value_error"),
+        ("SyntaxError", "syntax_error"),
+        ("NotARealError", "unknown"),
+    ],
+)
+def test_classify_exception_outputs_are_routed(exc, issue_type):
+    assert classify_exception(exc) == issue_type
+    assert issue_type in ROUTED_ISSUE_TYPES
+
+
+def test_classify_exception_mapping():
+    assert classify_exception("TypeError") == "type_error"
+    assert classify_exception("NotARealError") == "unknown"
+
+
+def test_collect_patcher_user_hints_composite():
+    plan = RepairPlan(issue_type="composite", suspect_files=["a.py", "b.py"])
+    apply_prompt_routing(plan)
+    hints = collect_patcher_user_hints(plan, "composite failure")
+    assert "2" in hints[0]

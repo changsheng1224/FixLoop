@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from agent_runtime.template_render import render_template, template_metadata
+from src.prompts.loader import load_localizer_hints
+from src.repair.prompt_router import apply_prompt_routing, localizer_hints_key_for
 
 _TASKS_DIR = Path(__file__).parent / "tasks"
 
@@ -23,17 +25,13 @@ def render_repair_task(name: str, variables: dict[str, str]) -> tuple[str, dict]
 
 
 def build_localizer_variables(plan, issue: str = "") -> dict[str, str]:
-    from src.prompts.loader import load_localizer_hints
-    from src.repair.prompt_router import resolve_prompt_routing
-
+    if not plan.prompt_variants:
+        apply_prompt_routing(plan)
     issue_text = issue or plan.reasoning
     suspect_line = ""
     if plan.suspect_files:
         suspect_line = f"嫌疑文件: {', '.join(plan.suspect_files)}"
-    hints_key = (plan.prompt_variants or {}).get("localizer")
-    if not hints_key:
-        hints_key = resolve_prompt_routing(plan).localizer_hints_key
-    hints = load_localizer_hints(hints_key)
+    hints = load_localizer_hints(localizer_hints_key_for(plan))
     return {
         "issue": issue_text,
         "suspect_files_line": suspect_line,

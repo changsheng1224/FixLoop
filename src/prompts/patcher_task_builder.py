@@ -2,30 +2,17 @@
 
 from __future__ import annotations
 
-import re
 from typing import Callable
 
 from src.prompts.repair_tasks import build_patcher_variables
+from src.repair.prompt_router import collect_patcher_user_hints, is_composite_multi_file
 from src.state import RepairPlan, RetrievedContext, SuspectLocation
 
 __all__ = ["assemble_patcher_variables", "build_issue_hints"]
 
 
 def build_issue_hints(plan: RepairPlan | None, issue: str) -> list[str]:
-    hints: list[str] = []
-    if plan and re.search(r"cannot import name", issue, re.IGNORECASE):
-        hints.append(
-            "修复提示: 除 import 行外，须同步修改本文件内对错误符号名的所有调用。"
-        )
-    if plan and plan.issue_type == "composite":
-        hints.append(
-            f"至少修改 {len(plan.suspect_files or [])} 个相关文件中的每一处错误。"
-        )
-    if issue and "concatenate str" in issue.lower():
-        hints.append(
-            "Issue 表明 str 与 int 不能直接相加；修复后混合类型输入应得到数字运算结果。"
-        )
-    return hints
+    return collect_patcher_user_hints(plan, issue)
 
 
 def assemble_patcher_variables(
@@ -64,7 +51,8 @@ def assemble_patcher_variables(
                 suspects_lines.append(f"    ⚠ 文件不存在: {s.file_path}")
 
     extra_lines: list[str] = []
-    if plan and plan.issue_type == "composite" and plan.suspect_files:
+    if is_composite_multi_file(plan):
+        assert plan is not None
         seen_paths = {s.file_path for s in effective_suspects if s.file_path}
         extra = [fp for fp in plan.suspect_files if fp not in seen_paths]
         if extra:

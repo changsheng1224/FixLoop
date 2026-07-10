@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from src.repair.issue_paths import extract_paths_from_issue
+
 DEFAULT_LANGUAGE = "python"
 
 EXTENSION_LANGUAGE: dict[str, str] = {
@@ -46,10 +48,6 @@ SHEBANG_INTERPRETERS: list[tuple[str, str]] = [
 EXPLICIT_LANG_RE = re.compile(
     r"\[lang:(?P<lang>[\w+#]+)\]|language:\s*(?P<lang2>[\w+#]+)",
     re.IGNORECASE,
-)
-
-_PATH_IN_ISSUE_RE = re.compile(
-    r'File\s+"([^"]+)"|at\s+(\S+\.\w+)',
 )
 
 
@@ -113,11 +111,7 @@ def detect_repair_language(
         raw = explicit.group("lang") or explicit.group("lang2") or ""
         add(raw, 100, "explicit")
 
-    paths: list[str] = list(suspect_files or [])
-    for file_match, at_match in _PATH_IN_ISSUE_RE.findall(issue):
-        path = (file_match or at_match).replace("\\", "/")
-        if path and path not in paths:
-            paths.append(path)
+    paths = extract_paths_from_issue(issue, extra=suspect_files)
 
     for path in paths:
         lang = _language_from_extension(path)
