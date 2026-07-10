@@ -73,19 +73,31 @@ class TestResolveTokenCounter:
         assert spec.fallback is True
         assert spec.rule_id == "global-fallback"
 
-    def test_unknown_model_logs_warning(self, caplog):
-        import logging
+    def test_unknown_model_logs_warning(self, monkeypatch):
+        import agent_runtime.tokenizers as tokenizers_mod
 
-        with caplog.at_level(logging.WARNING, logger="fixloop.tokenizers"):
-            resolve_token_counter("some-model", "fake")
-        assert any("fallback cl100k_base" in r.message for r in caplog.records)
+        warnings: list[str] = []
+        monkeypatch.setattr(
+            tokenizers_mod.log,
+            "warning",
+            lambda msg, *args, **kwargs: warnings.append(msg % args if args else str(msg)),
+        )
+        clear_token_counter_cache()
+        resolve_token_counter("caplog-unknown-model-xyz", "fake-caplog")
+        assert any("fallback cl100k_base" in w for w in warnings)
 
-    def test_claude_logs_approximate_warning(self, caplog):
-        import logging
+    def test_claude_logs_approximate_warning(self, monkeypatch):
+        import agent_runtime.tokenizers as tokenizers_mod
 
-        with caplog.at_level(logging.WARNING, logger="fixloop.tokenizers"):
-            resolve_token_counter("claude-3-opus", "anthropic")
-        assert any("approximate_tokenizer" in r.message for r in caplog.records)
+        warnings: list[str] = []
+        monkeypatch.setattr(
+            tokenizers_mod.log,
+            "warning",
+            lambda msg, *args, **kwargs: warnings.append(msg % args if args else str(msg)),
+        )
+        clear_token_counter_cache()
+        resolve_token_counter("claude-3-opus-caplog-xyz", "anthropic")
+        assert any("approximate_tokenizer" in w for w in warnings)
 
     def test_deepseek_chinese_counts_fewer_than_cl100k(self):
         text = "你好世界 hello"

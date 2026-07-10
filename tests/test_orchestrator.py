@@ -201,8 +201,15 @@ class TestOrchestrator:
         assert "localizer" in tool_summary
         assert report.get("total_tool_steps") == sum(tool_summary.values())
 
-    def test_repair_warns_non_python_language(self, temp_workspace, caplog):
-        import logging
+    def test_repair_warns_non_python_language(self, temp_workspace, monkeypatch):
+        from src.repair import pipeline as pipeline_mod
+
+        warnings: list[str] = []
+
+        def capture(msg, *args, **kwargs):
+            warnings.append(msg % args if args else str(msg))
+
+        monkeypatch.setattr(pipeline_mod.log, "warning", capture)
 
         (temp_workspace / "Bar.java").write_text("class Bar {}\n", encoding="utf-8")
         ws = WorkspaceContext.build(str(temp_workspace))
@@ -211,9 +218,9 @@ class TestOrchestrator:
             None,
             None,
         )
-        with caplog.at_level(logging.WARNING, logger="repair.pipeline"):
-            orch.repair("java.lang.NullPointerException at Bar.java:10")
-        assert any("Verifier 仅支持 Python" in r.message for r in caplog.records)
+        state = orch.repair("java.lang.NullPointerException at Bar.java:10")
+        assert state.repair_plan.language == "java"
+        assert any("Verifier 仅支持 Python" in w for w in warnings)
 
     def test_retriever_prompt_from_plan(self):
         orch = Orchestrator(None, None, None)
