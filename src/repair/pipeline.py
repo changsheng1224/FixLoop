@@ -146,10 +146,17 @@ class RepairPipelineMixin:
         while state.retry_count < max_retries:
             repo_snapshot = self._snapshot_repo() if self._verification_enabled() else None
             log.info("Patcher 开始 (retry=%d)...", state.retry_count)
-            t0 = time.time()
-            state.candidate_patches = self._run_patcher(state)
-            ms = int((time.time() - t0) * 1000)
-            set_phase_ms(state.node_timings, "patch", ms)
+            state.candidate_patches, patch_timing = self._run_patcher(state)
+            set_phase_ms(
+                state.node_timings,
+                "patch",
+                patch_timing["total_ms"],
+                internal={
+                    "model_call_ms": patch_timing["model_call_ms"],
+                    "parse_apply_ms": patch_timing["parse_apply_ms"],
+                },
+            )
+            ms = patch_timing["total_ms"]
             n = len(state.candidate_patches)
             log.info("Patcher 完成: %dms, %d个补丁", ms, n)
 

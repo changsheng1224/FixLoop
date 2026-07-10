@@ -52,3 +52,15 @@ class TestTimingSchema:
         report_phases = phases_for_report(timings)
         assert report_phases["verify_ms"] == 42
         assert report_phases["repair_total_ms"] == 100
+
+    def test_patch_internal_breakdown(self):
+        timings: dict = {}
+        set_phase_ms(
+            timings,
+            "patch",
+            900,
+            internal={"model_call_ms": 700, "parse_apply_ms": 200},
+        )
+        assert timings["phases"]["patch_ms"] == 900
+        assert timings["phases_internal"]["patch"]["model_call_ms"] == 700
+        assert timings["phases_internal"]["patch"]["parse_apply_ms"] == 200

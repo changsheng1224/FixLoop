@@ -257,9 +257,13 @@ class Orchestrator(RepairPipelineMixin):
         state: RepairState | None = None,
     ) -> tuple[str, dict]:
         """执行 Agent 调用（Verifier 用，保留 Agent loop）。"""
+        from agent_runtime.log_context import log_context
+
         t0 = time.time()
+        run_id = getattr(agent, "shared_run_id", None)
         try:
-            answer = agent.ask(prompt)
+            with log_context(run_id=run_id, agent=agent_name):
+                answer = agent.ask(prompt)
         except Exception as e:
             if state is not None:
                 state.agent_errors[agent_name] = str(e)
@@ -267,30 +271,8 @@ class Orchestrator(RepairPipelineMixin):
             elapsed_ms = int((time.time() - t0) * 1000)
             return "", {"total_ms": elapsed_ms, "internal": {}}
         elapsed_ms = int((time.time() - t0) * 1000)
-        internal = self._read_agent_timings(agent)
-        return answer, {"total_ms": elapsed_ms, "internal": internal}
-
-    def _read_agent_timings(self, agent) -> dict:
-        """从 Agent 的最新 run 目录或共享 run 读取 node_timings。"""
-        import json as _json
-        from pathlib import Path as _Path
-
-        try:
-            runs_dir = _Path(agent.workspace.repo_root) / ".agent" / "runs"
-            if not runs_dir.exists():
-                return {}
-            shared = getattr(agent, "shared_run_id", None)
-            agent_name = getattr(agent, "_agent_name", "") or "agent"
-            if shared:
-                named = runs_dir / shared / f"task_state.{agent_name}.json"
-                if named.is_file():
-                    data = _json.loads(named.read_text(encoding="utf-8"))
-                    return data.get("node_timings", {})
-            latest = max(runs_dir.iterdir(), key=lambda p: p.stat().st_mtime)
-            data = _json.loads((latest / "task_state.json").read_text(encoding="utf-8"))
-            return data.get("node_timings", {})
-        except Exception:
-            return {}
+        internal = getattr(agent, "_last_run_node_timings", None) or {}
+        return answer, {"total_ms": elapsed_ms, "internal": dict(internal)}
 
     def _begin_repair_trace(self, state: RepairState) -> None:
         from agent_runtime.log_context import bind_run_id
@@ -355,11 +337,15 @@ class Orchestrator(RepairPipelineMixin):
         for key, value in summary.items():
             state.node_timings[key] = value
 
-    def _run_patcher(self, state: RepairState) -> list[CandidatePatch]:
+    def _run_patcher(self, state: RepairState) -> tuple[list[CandidatePatch], dict]:
         """Patcher：直接调模型生成 JSON，Orchestrator 自己应用补丁。
 
         不走 Agent loop，因为 DeepSeek 不遵守工具调用格式。
         1 次 API 调用 → 解析 JSON → 直接 patch 文件。
+
+        Returns:
+            (applied_patches, timing_meta) where timing_meta has
+            ``model_call_ms``, ``parse_apply_ms``, ``total_ms``.
         """
         plan = state.repair_plan
         prompt = self._patcher_prompt(
@@ -372,9 +358,9 @@ class Orchestrator(RepairPipelineMixin):
 
         issue_type = plan.issue_type if plan else ""
         patcher_system = self._patcher_system_prompt(plan)
-        from src.repair.timing_schema import set_phase_ms
 
-        t0 = time.time()
+        t_start = time.time()
+        t_model = time.time()
         tracer = self._repair_tracer
         if tracer:
             tracer.emit(
@@ -395,58 +381,39 @@ class Orchestrator(RepairPipelineMixin):
             raw = self.patcher.complete_once(prompt, system_prompt=patcher_system)
         except Exception as e:
             state.agent_errors["patcher"] = str(e)
-            elapsed_ms = int((time.time() - t0) * 1000)
-            set_phase_ms(
-                state.node_timings,
-                "patch",
-                elapsed_ms,
-                internal={"model_call_ms": elapsed_ms},
-            )
+            total_ms = int((time.time() - t_start) * 1000)
+            model_call_ms = int((time.time() - t_model) * 1000)
             log.warning("[patcher] 模型调用失败: %s", e)
-            return []
-        elapsed_ms = int((time.time() - t0) * 1000)
-        set_phase_ms(
-            state.node_timings,
-            "patch",
-            elapsed_ms,
-            internal={"model_call_ms": elapsed_ms},
-        )
+            return [], {
+                "model_call_ms": model_call_ms,
+                "parse_apply_ms": max(0, total_ms - model_call_ms),
+                "total_ms": total_ms,
+            }
+
+        model_call_ms = int((time.time() - t_model) * 1000)
         if tracer and self.patcher is not None:
-            from agent_runtime.model_timing import build_report_latency_fields
+            from agent_runtime.model_timing import (
+                build_report_latency_fields,
+                collect_client_timings,
+                emit_model_timing_events,
+            )
             from src.eval.token_usage import diff_client_usage, get_client_session_usage
 
+            timings = collect_client_timings(self.patcher.model_client)
+            emit_model_timing_events(
+                lambda event, payload: tracer.emit("patcher", event, payload),
+                timings,
+                default_attempt=1,
+            )
             usage_after = get_client_session_usage(self.patcher.model_client)
             delta = diff_client_usage(usage_before, usage_after)
-            timings = getattr(self.patcher.model_client, "last_call_timings", None) or []
-            if not timings:
-                single = getattr(self.patcher.model_client, "last_call_timing", None)
-                if single is not None:
-                    timings = [single]
             latency_fields = build_report_latency_fields(timings)
-            for index, timing in enumerate(timings):
-                fields = timing.to_dict() if hasattr(timing, "to_dict") else dict(timing)
-                step = int(fields.get("step", 0) or index + 1)
-                tracer.emit(
-                    "patcher",
-                    "model_first_token",
-                    {"ttft_ms": int(fields.get("ttft_ms", 0) or 0), "step": step, "attempt": 1},
-                )
-                tracer.emit(
-                    "patcher",
-                    "model_complete",
-                    {
-                        "total_ms": int(fields.get("total_ms", 0) or 0),
-                        "output_tokens": int(fields.get("output_tokens", 0) or 0),
-                        "step": step,
-                        "attempt": 1,
-                    },
-                )
             tracer.write_agent_token(
                 "patcher",
                 delta,
                 extra={
                     "tool_steps": 0,
-                    "node_timings": {"model_call_ms": elapsed_ms},
+                    "node_timings": {"model_call_ms": model_call_ms},
                     "prompt_budget": getattr(self.patcher.config, "prompt_budget", None),
                     "budget_cuts": getattr(self.patcher, "_last_budget_meta", {}).get("cuts", []),
                     **latency_fields,
@@ -454,7 +421,6 @@ class Orchestrator(RepairPipelineMixin):
             )
             tracer.emit("patcher", "complete_once_finished", {"token_usage": delta})
 
-        # 解析模型输出的 JSON → CandidatePatch 列表
         patches = self._parse_patches(raw)
         if not patches:
             log.debug("[patcher] 0 patches parsed, raw[:300]=%r", raw.strip()[:300])
@@ -464,7 +430,12 @@ class Orchestrator(RepairPipelineMixin):
             log.warning("[patcher] 补丁解析成功但未写入任何文件")
             state.agent_errors["patcher_apply"] = "apply_failed"
 
-        return applied_patches
+        total_ms = int((time.time() - t_start) * 1000)
+        return applied_patches, {
+            "model_call_ms": model_call_ms,
+            "parse_apply_ms": max(0, total_ms - model_call_ms),
+            "total_ms": total_ms,
+        }
 
     def _apply_patches_on_disk(self, patches: list[CandidatePatch]) -> list[CandidatePatch]:
         return self._patch_applier().apply_patches(patches)

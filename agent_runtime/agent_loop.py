@@ -7,6 +7,12 @@ import sys as _sys
 import time as _time
 
 from agent_runtime.compression_pipeline import truncate_tool_result_for_agent
+from agent_runtime.model_timing import (
+    ModelCallTiming,
+    build_report_latency_fields,
+    collect_client_timings,
+    emit_model_timing_events,
+)
 
 
 def _log_loop(msg: str) -> None:
@@ -64,47 +70,18 @@ class AgentLoop:
         self._store = None
         self._last_token_meta = {}
         self._retry_count = 0  # 最近一次 prompt 的 token 元数据
-        self._call_timings: list = []
-
-    def _collect_client_timings(self) -> list:
-        """Read per-call timings recorded by the model client."""
-        client = self.agent.model_client
-        timings = getattr(client, "last_call_timings", None) or []
-        if timings:
-            return list(timings)
-        single = getattr(client, "last_call_timing", None)
-        return [single] if single else []
+        self._call_timings: list[ModelCallTiming] = []
 
     def _record_model_timings(self, ts, timings: list, *, default_attempt: int = 1) -> None:
         """Merge timings into loop state and emit trace events."""
         if not timings:
             return
         self._call_timings.extend(timings)
-        ttft_total = 0
-        for index, timing in enumerate(timings):
-            if hasattr(timing, "to_dict"):
-                fields = timing.to_dict()
-            else:
-                fields = dict(timing)
-            step = int(fields.get("step", 0) or index + 1)
-            attempt = int(fields.get("attempt", 0) or default_attempt)
-            ttft_ms = int(fields.get("ttft_ms", 0) or 0)
-            total_ms = int(fields.get("total_ms", 0) or 0)
-            output_tokens = int(fields.get("output_tokens", 0) or 0)
-            ttft_total += ttft_ms
-            self._emit(
-                "model_first_token",
-                {"ttft_ms": ttft_ms, "step": step, "attempt": attempt},
-            )
-            self._emit(
-                "model_complete",
-                {
-                    "total_ms": total_ms,
-                    "output_tokens": output_tokens,
-                    "step": step,
-                    "attempt": attempt,
-                },
-            )
+        ttft_total = emit_model_timing_events(
+            lambda event, payload: self._emit(event, payload),
+            timings,
+            default_attempt=default_attempt,
+        )
         ts.node_timings["ttft_ms_total"] = int(ts.node_timings.get("ttft_ms_total", 0) or 0) + ttft_total
 
     def run(self, user_message: str, callback=None) -> str:
@@ -184,7 +161,7 @@ class AgentLoop:
                 answer = result
                 call_usage = getattr(self.agent.model_client, "last_call_usage", {}) or {}
             self._apply_call_usage_meta(call_usage)
-            self._record_model_timings(ts, self._collect_client_timings(), default_attempt=1)
+            self._record_model_timings(ts, collect_client_timings(self.agent.model_client), default_attempt=1)
         except Exception as e:
             self.stop_reason = f"error: {e}"
             return f"<final>API 错误: {e}</final>"
@@ -247,7 +224,7 @@ class AgentLoop:
                 ts.node_timings["model_call_ms"] += int((_time.time() - t1) * 1000)
                 self._record_model_timings(
                     ts,
-                    self._collect_client_timings(),
+                    collect_client_timings(self.agent.model_client),
                     default_attempt=ts.attempts,
                 )
             except Exception as e:
@@ -429,11 +406,12 @@ class AgentLoop:
             shared = getattr(self.agent, "shared_run_id", None)
             agent_name = getattr(self.agent, "_agent_name", "") or "agent"
             session_usage = getattr(self.agent.model_client, "session_usage", None) or {}
-            from agent_runtime.model_timing import build_report_latency_fields
             from agent_runtime.token_accounting import build_report_token_fields
 
             report_token = build_report_token_fields(session_usage, self._last_token_meta)
             report_latency = build_report_latency_fields(self._call_timings)
+            self.agent._last_run_node_timings = dict(ts.node_timings)
+            self.agent._last_call_timings = list(self._call_timings)
             if report_token.get("prompt_budget") is None:
                 report_token["prompt_budget"] = getattr(self.agent.config, "prompt_budget", 0)
             report_body = {

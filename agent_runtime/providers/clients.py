@@ -8,10 +8,12 @@ import time
 import urllib.error
 import urllib.request
 
-from agent_runtime.model_timing import ModelCallTiming, read_http_body_with_timing
+from agent_runtime.model_timing import ModelCallTiming
+from agent_runtime.providers.http_timing import read_http_body_with_timing
+from agent_runtime.providers.session_usage import SessionUsageMixin
 
 
-class FakeModelClient:
+class FakeModelClient(SessionUsageMixin):
     """模拟模型客户端：预设输出序列，用于单元测试。
 
     不调真实 API，按顺序弹出预设的字符串。
@@ -23,31 +25,7 @@ class FakeModelClient:
         self._index = 0
         self.supports_prompt_cache = False
         self.prompts: list[str] = []
-        self.last_usage: dict = {}
-        self.last_call_usage: dict = {}
-        self.last_call_timing: ModelCallTiming | None = None
-        self.last_call_timings: list[ModelCallTiming] = []
-        self.session_usage: dict = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cache_read_tokens": 0,
-            "cache_creation_tokens": 0,
-            "calls": 0,
-        }
-
-    def reset_session_usage(self) -> None:
-        """清零本次 session 的 token 与 API 调用计数。"""
-        self.last_usage = {}
-        self.last_call_usage = {}
-        self.last_call_timing = None
-        self.last_call_timings = []
-        self.session_usage = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cache_read_tokens": 0,
-            "cache_creation_tokens": 0,
-            "calls": 0,
-        }
+        self._init_usage_tracking()
 
     def _record_usage(self, prompt: str, result: str) -> None:
         inp = max(1, len(prompt) // 4)
@@ -159,7 +137,7 @@ class FakeNativeToolClient(FakeModelClient):
         return "max_turns exceeded", call_usage
 
 
-class AnthropicCompatibleModelClient:
+class AnthropicCompatibleModelClient(SessionUsageMixin):
     """Anthropic Messages API 兼容客户端。
 
     用纯 urllib 向兼容 Anthropic Messages API 的服务端（如 DeepSeek）发请求。
@@ -181,31 +159,7 @@ class AnthropicCompatibleModelClient:
         self.timeout = timeout
         self.supports_prompt_cache = True
         self._latencies: list[float] = []
-        self.last_usage: dict = {}
-        self.last_call_usage: dict = {}
-        self.last_call_timing: ModelCallTiming | None = None
-        self.last_call_timings: list[ModelCallTiming] = []
-        self.session_usage: dict = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cache_read_tokens": 0,
-            "cache_creation_tokens": 0,
-            "calls": 0,
-        }
-
-    def reset_session_usage(self) -> None:
-        """清零本次 session 的 token 与 API 调用计数。"""
-        self.last_usage = {}
-        self.last_call_usage = {}
-        self.last_call_timing = None
-        self.last_call_timings = []
-        self.session_usage = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cache_read_tokens": 0,
-            "cache_creation_tokens": 0,
-            "calls": 0,
-        }
+        self._init_usage_tracking()
 
     def _record_usage(self, usage: dict | None) -> None:
         from agent_runtime.token_accounting import parse_provider_usage
@@ -442,6 +396,8 @@ class AnthropicCompatibleModelClient:
 
     def latency_stats(self) -> dict:
         """返回响应延迟统计（秒）。"""
+        from agent_runtime.model_timing import percentile_values
+
         if not self._latencies:
             return {"count": 0, "avg": 0, "p50": 0, "p99": 0}
         sorted_l = sorted(self._latencies)
@@ -449,8 +405,8 @@ class AnthropicCompatibleModelClient:
         return {
             "count": n,
             "avg": round(sum(sorted_l) / n, 2),
-            "p50": round(sorted_l[n // 2], 2),
-            "p99": round(sorted_l[int(n * 0.99)], 2),
+            "p50": round(float(percentile_values(sorted_l, 0.5)), 2),
+            "p99": round(float(percentile_values(sorted_l, 0.99)), 2),
         }
 
     def _save_request(self, prompt: str, result: str):

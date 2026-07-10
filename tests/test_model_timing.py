@@ -6,10 +6,13 @@ import time
 from agent_runtime.model_timing import (
     ModelCallTiming,
     build_report_latency_fields,
+    collect_client_timings,
+    emit_model_timing_events,
     percentile_ms,
-    read_http_body_with_timing,
     summarize_ttft,
 )
+from agent_runtime.providers.clients import FakeModelClient
+from agent_runtime.providers.http_timing import read_http_body_with_timing
 
 
 class TestPercentileMs:
@@ -72,3 +75,24 @@ class TestReadHttpBodyWithTiming:
         assert body == b"part1part2"
         assert ttft_ms <= total_ms
         assert total_ms >= 20
+
+
+class TestModelTimingHelpers:
+    def test_collect_client_timings(self):
+        client = FakeModelClient(["ok"])
+        client.complete("hello")
+        timings = collect_client_timings(client)
+        assert len(timings) == 1
+
+    def test_emit_model_timing_events(self):
+        events: list[tuple[str, dict]] = []
+
+        def emit(event, payload):
+            events.append((event, payload))
+
+        total = emit_model_timing_events(
+            emit,
+            [ModelCallTiming(ttft_ms=10, total_ms=20, output_tokens=1, step=1)],
+        )
+        assert total == 10
+        assert [name for name, _ in events] == ["model_first_token", "model_complete"]

@@ -2,15 +2,9 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-REJECTION_SUMMARY_KEYS = (
-    "permission_denied_by_tool",
-    "tool_rejections_by_layer",
-    "tool_rejections_by_gate",
-    "permission_denied_by_agent",
-)
+from src.repair.agent_report_loader import load_agent_reports_from_run
 
 
 def merge_count_maps(*maps: dict | None) -> dict:
@@ -22,20 +16,6 @@ def merge_count_maps(*maps: dict | None) -> dict:
         for key, value in mapping.items():
             merged[key] = merged.get(key, 0) + int(value or 0)
     return merged
-
-
-def load_agent_reports_from_run(run_dir: Path) -> dict[str, dict]:
-    """Load full ``agent_report.{name}.json`` bodies from a shared run directory."""
-    if not run_dir.is_dir():
-        return {}
-    reports: dict[str, dict] = {}
-    for path in sorted(run_dir.glob("agent_report.*.json")):
-        agent = path.stem.removeprefix("agent_report.")
-        try:
-            reports[agent] = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-    return reports
 
 
 def aggregate_rejection_from_agent_reports(reports: dict[str, dict]) -> dict:

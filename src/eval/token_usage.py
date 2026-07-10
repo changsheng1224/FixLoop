@@ -98,27 +98,12 @@ def reset_clients_session_usage(*agents) -> None:
 
 def collect_agent_reports_from_run(run_dir: Path) -> dict:
     """从共享 run 目录读取 agent_report.*.json，按 Agent 名汇总 token。"""
-    if not run_dir.is_dir():
-        return {}
-    result: dict = {}
-    for path in sorted(run_dir.glob("agent_report.*.json")):
-        name = path.stem.removeprefix("agent_report.")
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        result[name] = {
-            "total_tokens": int(data.get("total_tokens", 0) or 0),
-            "input_tokens": int(data.get("input_tokens", 0) or 0),
-            "output_tokens": int(data.get("output_tokens", 0) or 0),
-            "cache_read_tokens": int(data.get("cache_read_tokens", 0) or 0),
-            "cache_creation_tokens": int(data.get("cache_creation_tokens", 0) or 0),
-            "cache_hit_rate": float(data.get("cache_hit_rate", 0) or 0),
-            "api_calls": int(data.get("api_calls", 0) or 0),
-            "token_usage": data.get("token_usage") or {},
-            "tool_steps": int(data.get("tool_steps", 0) or 0),
-        }
-    return result
+    from src.repair.agent_report_loader import (
+        load_agent_reports_from_run,
+        project_token_usage_by_agent,
+    )
+
+    return project_token_usage_by_agent(load_agent_reports_from_run(run_dir))
 
 
 def diff_client_usage(before: dict, after: dict) -> dict:

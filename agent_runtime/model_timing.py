@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from typing import Callable
 
 
 @dataclass
@@ -19,11 +20,11 @@ class ModelCallTiming:
         return asdict(self)
 
 
-def percentile_ms(values: list[int], percentile: float) -> int:
-    """Return *percentile* (0–1) of millisecond samples."""
+def percentile_values(values: list[float | int], percentile: float) -> float | int:
+    """Return *percentile* (0–1) of numeric samples (ms or seconds)."""
     if not values:
         return 0
-    ordered = sorted(int(v) for v in values)
+    ordered = sorted(values)
     n = len(ordered)
     if percentile <= 0.5:
         return ordered[n // 2]
@@ -31,7 +32,12 @@ def percentile_ms(values: list[int], percentile: float) -> int:
     return ordered[idx]
 
 
-def _normalize_call(entry: ModelCallTiming | dict) -> dict:
+def percentile_ms(values: list[int], percentile: float) -> int:
+    """Return *percentile* (0–1) of millisecond samples."""
+    return int(percentile_values(values, percentile))
+
+
+def normalize_timing_entry(entry: ModelCallTiming | dict) -> dict:
     if isinstance(entry, ModelCallTiming):
         return entry.to_dict()
     return {
@@ -41,6 +47,47 @@ def _normalize_call(entry: ModelCallTiming | dict) -> dict:
         "step": int(entry.get("step", 0) or 0),
         "attempt": int(entry.get("attempt", 0) or 0),
     }
+
+
+def collect_client_timings(client) -> list[ModelCallTiming]:
+    """Read per-call timings recorded on a model client."""
+    timings = getattr(client, "last_call_timings", None) or []
+    if timings:
+        return list(timings)
+    single = getattr(client, "last_call_timing", None)
+    return [single] if single else []
+
+
+def emit_model_timing_events(
+    emit_fn: Callable[[str, dict], None],
+    timings: list[ModelCallTiming | dict],
+    *,
+    default_attempt: int = 1,
+) -> int:
+    """Emit ``model_first_token`` / ``model_complete`` trace events; return ttft sum."""
+    ttft_total = 0
+    for index, raw in enumerate(timings):
+        fields = normalize_timing_entry(raw)
+        step = int(fields.get("step", 0) or index + 1)
+        attempt = int(fields.get("attempt", 0) or default_attempt)
+        ttft_ms = int(fields.get("ttft_ms", 0) or 0)
+        total_ms = int(fields.get("total_ms", 0) or 0)
+        output_tokens = int(fields.get("output_tokens", 0) or 0)
+        ttft_total += ttft_ms
+        emit_fn(
+            "model_first_token",
+            {"ttft_ms": ttft_ms, "step": step, "attempt": attempt},
+        )
+        emit_fn(
+            "model_complete",
+            {
+                "total_ms": total_ms,
+                "output_tokens": output_tokens,
+                "step": step,
+                "attempt": attempt,
+            },
+        )
+    return ttft_total
 
 
 def summarize_ttft(calls: list[ModelCallTiming | dict]) -> dict:
@@ -53,7 +100,7 @@ def summarize_ttft(calls: list[ModelCallTiming | dict]) -> dict:
     by_call: list[dict] = []
 
     for index, raw in enumerate(calls):
-        call = _normalize_call(raw)
+        call = normalize_timing_entry(raw)
         ttft = call["ttft_ms"]
         total = call["total_ms"]
         ttfts.append(ttft)
@@ -80,28 +127,3 @@ def summarize_ttft(calls: list[ModelCallTiming | dict]) -> dict:
 def build_report_latency_fields(calls: list[ModelCallTiming | dict] | None) -> dict:
     """Fields for report.json / agent_report.*.json (empty when no calls)."""
     return summarize_ttft(calls or [])
-
-
-def read_http_body_with_timing(resp, chunk_size: int = 8192) -> tuple[bytes, int, int]:
-    """Read an HTTP response body in chunks; return (body, ttft_ms, total_ms).
-
-    *ttft_ms* is time from first ``read`` to first non-empty chunk (TTFB).
-    """
-    import time
-
-    t0 = time.time()
-    t_first: float | None = None
-    chunks: list[bytes] = []
-    while True:
-        chunk = resp.read(chunk_size)
-        if not chunk:
-            break
-        if t_first is None:
-            t_first = time.time()
-        chunks.append(chunk)
-    t_end = time.time()
-    if t_first is None:
-        t_first = t_end
-    ttft_ms = int((t_first - t0) * 1000)
-    total_ms = int((t_end - t0) * 1000)
-    return b"".join(chunks), ttft_ms, total_ms

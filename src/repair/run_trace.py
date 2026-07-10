@@ -50,49 +50,48 @@ class RepairRunTracer:
         """写入/累加单个 Agent 的 token 摘要（如 Patcher complete_once）。"""
         import json
 
+        from src.repair.agent_report_loader import merge_agent_report
+
         run_dir = self.store.runs_dir / self.run_id
         existing_path = run_dir / f"agent_report.{agent_name}.json"
-        total = int(usage.get("total_tokens", 0) or 0)
-        inp = int(usage.get("input_tokens", 0) or 0)
-        out = int(usage.get("output_tokens", 0) or 0)
-        calls = int(usage.get("api_calls", 0) or 0)
-        tool_steps = int((extra or {}).get("tool_steps", 0) or 0)
+        existing: dict = {}
         if existing_path.is_file():
             try:
-                old = json.loads(existing_path.read_text(encoding="utf-8"))
-                total += int(old.get("total_tokens", 0) or 0)
-                inp += int(old.get("input_tokens", 0) or 0)
-                out += int(old.get("output_tokens", 0) or 0)
-                calls += int(old.get("api_calls", 0) or 0)
-                tool_steps += int(old.get("tool_steps", 0) or 0)
+                existing = json.loads(existing_path.read_text(encoding="utf-8"))
             except Exception:
-                pass
+                existing = {}
+
         body = {
             "agent": agent_name,
             "run_id": self.run_id,
-            "total_tokens": total,
-            "input_tokens": inp,
-            "output_tokens": out,
-            "api_calls": calls,
-            "tool_steps": tool_steps,
+            "total_tokens": int(usage.get("total_tokens", 0) or 0),
+            "input_tokens": int(usage.get("input_tokens", 0) or 0),
+            "output_tokens": int(usage.get("output_tokens", 0) or 0),
+            "api_calls": int(usage.get("api_calls", 0) or 0),
+            "tool_steps": int((extra or {}).get("tool_steps", 0) or 0),
             "token_usage": usage.get("sections") or usage.get("token_usage") or {},
         }
         if extra:
             body.update(extra)
+        body = merge_agent_report(existing, body)
         self.store.write_agent_report(self.run_id, agent_name, body)
 
     def finalize(self, state, token_summary: dict) -> None:
-        from src.eval.token_usage import collect_agent_reports_from_run, summarize_agent_tool_usage
-
-        by_agent = collect_agent_reports_from_run(self.store.runs_dir / self.run_id)
-        tool_summary = summarize_agent_tool_usage(by_agent)
-        from src.repair.rejection_aggregate import gateway_denial_count, summarize_repair_rejections
+        from src.eval.token_usage import summarize_agent_tool_usage
+        from src.repair.agent_report_loader import load_agent_reports_from_run, project_token_usage_by_agent
+        from src.repair.rejection_aggregate import (
+            aggregate_rejection_from_agent_reports,
+            gateway_denial_count,
+        )
         from src.repair.timing_schema import phases_for_report
-        from src.repair.ttft_aggregate import summarize_repair_ttft
+        from src.repair.ttft_aggregate import aggregate_ttft_from_agent_reports
 
         run_dir = self.store.runs_dir / self.run_id
-        rejection_summary = summarize_repair_rejections(run_dir)
-        ttft_summary = summarize_repair_ttft(run_dir)
+        reports = load_agent_reports_from_run(run_dir)
+        by_agent = project_token_usage_by_agent(reports)
+        tool_summary = summarize_agent_tool_usage(by_agent)
+        rejection_summary = aggregate_rejection_from_agent_reports(reports)
+        ttft_summary = aggregate_ttft_from_agent_reports(reports)
         report = {
             "run_id": self.run_id,
             "status": state.status,

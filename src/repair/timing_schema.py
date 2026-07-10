@@ -1,4 +1,9 @@
-"""Standardized repair phase timings (Bonus6 §19.2)."""
+"""Standardized repair phase timings (Bonus6 §19.2).
+
+Legacy top-level keys (``localizer_ms``, etc.) are dual-written for backward
+compatibility. New readers should use ``phases.{phase}_ms`` only; legacy keys
+are scheduled for removal after eval/CLI migration (target: post-Bonus6 PR).
+"""
 
 from __future__ import annotations
 

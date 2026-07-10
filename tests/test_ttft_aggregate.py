@@ -31,6 +31,16 @@ class TestAggregateTtft:
     def test_empty_reports(self):
         assert aggregate_ttft_from_agent_reports({}) == {}
 
+    def test_ignores_summary_without_by_call(self):
+        reports = {
+            "patcher": {
+                "ttft_ms_p50": 200,
+                "ttft_ms_max": 200,
+                "model_call_ms_total": 500,
+            }
+        }
+        assert aggregate_ttft_from_agent_reports(reports) == {}
+
 
 class TestSummarizeRepairTtft:
     def test_reads_agent_report_files(self, tmp_path):

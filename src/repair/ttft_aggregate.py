@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agent_runtime.model_timing import percentile_ms
-from src.repair.rejection_aggregate import load_agent_reports_from_run
+from src.repair.agent_report_loader import load_agent_reports_from_run
 
 
 def aggregate_ttft_from_agent_reports(reports: dict[str, dict]) -> dict:
@@ -18,19 +18,17 @@ def aggregate_ttft_from_agent_reports(reports: dict[str, dict]) -> dict:
     by_agent: dict[str, dict] = {}
 
     for agent, body in reports.items():
-        ttft_p50 = body.get("ttft_ms_p50")
-        if ttft_p50 is not None:
-            by_agent[agent] = {
-                "ttft_ms_p50": int(ttft_p50),
-                "ttft_ms_max": int(body.get("ttft_ms_max", 0) or 0),
-                "model_call_ms_total": int(body.get("model_call_ms_total", 0) or 0),
-            }
-        for entry in body.get("ttft_ms_by_call") or []:
+        calls = body.get("ttft_ms_by_call") or []
+        if not calls:
+            continue
+        by_agent[agent] = {
+            "ttft_ms_p50": int(body.get("ttft_ms_p50", 0) or 0),
+            "ttft_ms_max": int(body.get("ttft_ms_max", 0) or 0),
+            "model_call_ms_total": int(body.get("model_call_ms_total", 0) or 0),
+        }
+        for entry in calls:
             all_ttfts.append(int(entry.get("ttft_ms", 0) or 0))
             all_totals.append(int(entry.get("total_ms", 0) or 0))
-        if ttft_p50 is not None and not body.get("ttft_ms_by_call"):
-            all_ttfts.append(int(ttft_p50))
-            all_totals.append(int(body.get("model_call_ms_total", 0) or 0))
 
     if not all_ttfts:
         return {}
