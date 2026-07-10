@@ -119,7 +119,16 @@ class RepairPipelineMixin:
 
         t0 = time.time()
         state.repair_plan = self._parse_issue(issue)
-        skill = self._match_skill(issue)
+        if state.repair_plan and state.repair_plan.language != "python":
+            log.warning(
+                "检测到 language=%s（%s），当前 Verifier 仅支持 Python 修复",
+                state.repair_plan.language,
+                state.repair_plan.language_source,
+            )
+        skill = self._match_skill(
+            issue,
+            language=state.repair_plan.language if state.repair_plan else "python",
+        )
         if skill and state.repair_plan:
             state.repair_plan.estimated_impact = skill.get("suggested_tools", [])
         ms = int((time.time() - t0) * 1000)

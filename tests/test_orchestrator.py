@@ -21,6 +21,7 @@ class TestOrchestrator:
         )
         plan = orch._parse_issue("TypeError: unsupported operand at calculator.py:42")
         assert plan.issue_type == "type_error"
+        assert plan.language == "python"
         assert "calculator.py" in plan.suspect_files
 
     def test_parse_import_error(self):

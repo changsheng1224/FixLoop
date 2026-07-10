@@ -540,7 +540,7 @@
 
 - **[P1] [C:⭐ I:⭐⭐⭐⭐] `_parse_issue` 规则补全**：`test_failure` · `logic_error` 启发式 · 多文件 stack `suspect_files` + 行号
 - **[P2] [C:⭐⭐ I:⭐⭐⭐⭐] 歧义 issue LLM 分类 fallback**：规则 → `unknown` 时 light_client JSON；失败保持 unknown + warn
-- **[P2] [C:⭐ I:⭐⭐⭐] 语言检测**：`RepairPlan.language` 由 shebang / 扩展名 / 关键字推断
+- **[P2] [C:⭐ I:⭐⭐⭐] 语言检测** ✅：`language_detect`（shebang / 扩展名 / 关键字）；`RepairPlan.language` + `language_source`；Skill 按 language 过滤
 
 ### 22.3 意图 → 编排路由
 

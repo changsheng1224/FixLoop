@@ -154,6 +154,16 @@ class Orchestrator(RepairPipelineMixin):
         else:
             plan.reasoning = issue[:200]
 
+        from src.repair.language_detect import detect_repair_language
+
+        language, source = detect_repair_language(
+            issue,
+            suspect_files=plan.suspect_files,
+            repo_root=self._repo_root,
+        )
+        plan.language = language
+        plan.language_source = source
+
         return plan
 
     def _parse_file_line(self, issue: str, file_path: str) -> int:
@@ -212,7 +222,7 @@ class Orchestrator(RepairPipelineMixin):
     def _resolve_repo_file(self, file_path: str) -> Path | None:
         return self._patch_applier().resolve_repo_file(file_path)
 
-    def _match_skill(self, issue: str) -> dict | None:
+    def _match_skill(self, issue: str, *, language: str = "python") -> dict | None:
         """从 YAML Skill 文件中匹配 Issue 对应的修复策略。"""
         skills_dir = Path(__file__).parent / "skills"
         if not skills_dir.exists():
@@ -220,6 +230,9 @@ class Orchestrator(RepairPipelineMixin):
         for yaml_file in skills_dir.glob("*.yaml"):
             try:
                 data = yaml.safe_load(yaml_file.read_text(encoding="utf-8"))
+                skill_lang = data.get("language", "python")
+                if skill_lang != language:
+                    continue
                 pattern = data.get("trigger_pattern", "")
                 if pattern and re.search(pattern, issue):
                     return data
