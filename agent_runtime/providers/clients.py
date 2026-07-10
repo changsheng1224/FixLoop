@@ -342,9 +342,19 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
 
     def _post_messages(self, body: bytes) -> tuple[dict, ModelCallTiming]:
         """POST /messages with retries; return parsed JSON and TTFB timing."""
-        last_error = None
+        from agent_runtime.logging_setup import get_logger
+        from agent_runtime.providers.retry_policy import (
+            RateLimitExceededError,
+            compute_rate_limit_delay,
+            compute_server_error_delay,
+            parse_retry_after,
+        )
 
-        for attempt in range(3):
+        log = get_logger("model_client")
+        last_error = None
+        max_retries = 3
+
+        for attempt in range(max_retries):
             try:
                 request = urllib.request.Request(
                     f"{self.base_url}/messages",
@@ -372,17 +382,48 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
 
             except urllib.error.HTTPError as e:
                 last_error = e
+                if e.code == 429:
+                    if attempt < max_retries - 1:
+                        retry_after = parse_retry_after(e.headers)
+                        delay = compute_rate_limit_delay(attempt, retry_after)
+                        log.debug(
+                            "rate_limit_retry attempt=%s delay_s=%.2f retry_after=%s",
+                            attempt + 1,
+                            delay,
+                            retry_after,
+                        )
+                        time.sleep(delay)
+                        continue
+                    raise RateLimitExceededError(
+                        f"API 限流 (HTTP 429)，已重试 {max_retries} 次"
+                    ) from e
                 if e.code < 500:
                     raise RuntimeError(f"API 请求失败 (HTTP {e.code}): {e.reason}") from e
-                if attempt < 2:
-                    time.sleep((attempt + 1) * 2)
+                if attempt < max_retries - 1:
+                    delay = compute_server_error_delay(attempt)
+                    log.debug(
+                        "server_error_retry attempt=%s delay_s=%.2f code=%s",
+                        attempt + 1,
+                        delay,
+                        e.code,
+                    )
+                    time.sleep(delay)
+                    continue
 
             except (urllib.error.URLError, OSError) as e:
                 last_error = e
-                if attempt < 2:
-                    time.sleep((attempt + 1) * 2)
+                if attempt < max_retries - 1:
+                    delay = compute_server_error_delay(attempt)
+                    log.debug(
+                        "network_retry attempt=%s delay_s=%.2f error=%s",
+                        attempt + 1,
+                        delay,
+                        e,
+                    )
+                    time.sleep(delay)
+                    continue
 
-        raise RuntimeError(f"API 请求失败，已重试 3 次。最后错误: {last_error}")
+        raise RuntimeError(f"API 请求失败，已重试 {max_retries} 次。最后错误: {last_error}")
 
     def _call_api(self, payload: dict, prompt_for_log: str = "") -> str:
         """发送 API 请求并返回文本（单轮，无工具）。"""
