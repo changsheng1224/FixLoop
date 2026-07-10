@@ -3,9 +3,11 @@
 from src.repair.termination import (
     RepairTerminalStatus,
     apply_terminal_status,
+    finalize_repair_state,
     introduced_regression,
     is_terminal,
     is_repair_success,
+    regression_detected,
 )
 from src.state import CandidatePatch, RepairState
 
@@ -88,3 +90,24 @@ class TestIntroducedRegression:
         state.node_timings["baseline_pytest_code"] = 1
         state.node_timings["post_patch_pytest_code"] = 1
         assert introduced_regression(state) is False
+
+
+class TestRegressionDetected:
+    def test_green_to_red(self):
+        assert regression_detected(0, 1) is True
+
+    def test_already_red_not_regression(self):
+        assert regression_detected(1, 2) is False
+
+    def test_none_codes(self):
+        assert regression_detected(None, 0) is False
+
+
+class TestFinalizeRepairState:
+    def test_timeout_sets_failure_tag(self):
+        state = RepairState(issue_input="x", status=RepairTerminalStatus.TIMEOUT)
+        state.node_timings["repair_timeout"] = 60
+        state.agent_errors["orchestrator"] = "repair timeout (60s)"
+        finalize_repair_state(state)
+        assert state.status == RepairTerminalStatus.TIMEOUT
+        assert state.failure_tags == ["timeout"]

@@ -12,8 +12,16 @@ from src.state import CandidatePatch, RepairState
 
 
 class TestRepairExitCode:
-    def test_fixed_returns_ok(self):
+    def test_fixed_without_patches_returns_fail(self):
         state = RepairState(issue_input="x", status="fixed")
+        assert repair_exit_code(state) == REPAIR_EXIT_FAIL
+
+    def test_fixed_returns_ok(self):
+        state = RepairState(
+            issue_input="x",
+            status="fixed",
+            candidate_patches=[CandidatePatch(file_path="a.py")],
+        )
         assert repair_exit_code(state) == REPAIR_EXIT_OK
 
     def test_patched_with_patches_returns_ok(self):

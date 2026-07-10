@@ -10,9 +10,13 @@ __all__ = [
     "RepairTerminalStatus",
     "TERMINAL_STATUSES",
     "apply_terminal_status",
+    "finalize_repair_state",
+    "has_repair_timeout",
     "introduced_regression",
     "is_repair_success",
     "is_terminal",
+    "mark_fixed_skip_verify",
+    "regression_detected",
 ]
 
 
@@ -27,9 +31,6 @@ class RepairTerminalStatus(StrEnum):
 
 TERMINAL_STATUSES = frozenset(s.value for s in RepairTerminalStatus)
 
-# 进行中（非终态）
-_IN_PROGRESS = frozenset({"pending", "localizing", "retrieving", "patching", "verifying"})
-
 
 def is_terminal(status: str) -> bool:
     return status in TERMINAL_STATUSES or status == "patched"
@@ -42,11 +43,26 @@ def is_repair_success(state: RepairState) -> bool:
     return state.status == "patched" and bool(state.candidate_patches)
 
 
-def _has_timeout(state: RepairState) -> bool:
+def mark_fixed_skip_verify(state: RepairState) -> None:
+    """标记修复成功且跳过验证（--skip-verify / 无 Verifier）。"""
+    state.status = RepairTerminalStatus.FIXED
+    state.node_timings["verify_skipped"] = True
+
+
+def has_repair_timeout(state: RepairState) -> bool:
+    if state.status == RepairTerminalStatus.TIMEOUT:
+        return True
     if state.node_timings.get("repair_timeout"):
         return True
     orch_err = state.agent_errors.get("orchestrator", "")
     return "repair timeout" in orch_err
+
+
+def regression_detected(pre_code: int | None, post_code: int | None) -> bool:
+    """pytest 退出码语义：baseline 全绿后 patch 引入新失败。"""
+    if pre_code is None or post_code is None:
+        return False
+    return pre_code == 0 and post_code != 0
 
 
 def introduced_regression(state: RepairState) -> bool:
@@ -54,9 +70,7 @@ def introduced_regression(state: RepairState) -> bool:
         return True
     pre = state.node_timings.get("baseline_pytest_code")
     post = state.node_timings.get("post_patch_pytest_code")
-    if pre is None or post is None:
-        return False
-    return pre == 0 and post != 0
+    return regression_detected(pre, post)
 
 
 def apply_terminal_status(state: RepairState) -> None:
@@ -64,7 +78,7 @@ def apply_terminal_status(state: RepairState) -> None:
     if state.node_timings.get("user_cancel"):
         state.status = RepairTerminalStatus.USER_CANCEL
         return
-    if _has_timeout(state):
+    if has_repair_timeout(state):
         state.status = RepairTerminalStatus.TIMEOUT
         return
     if state.status == RepairTerminalStatus.FIXED:
@@ -79,3 +93,11 @@ def apply_terminal_status(state: RepairState) -> None:
     if state.status in TERMINAL_STATUSES:
         return
     state.status = RepairTerminalStatus.FAILED
+
+
+def finalize_repair_state(state: RepairState) -> None:
+    """统一收尾：终态 status + failure_tags。"""
+    from src.repair.failure_tags import apply_failure_tags
+
+    apply_terminal_status(state)
+    apply_failure_tags(state)

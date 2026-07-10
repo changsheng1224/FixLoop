@@ -13,6 +13,7 @@ from src.cli_exit_codes import (
 )
 from src.eval.cli_helpers import print_ablation_report, print_eval_report, run_ablation, run_eval
 from src.eval.runner import DEFAULT_CASES_DIR
+from src.repair.termination import is_repair_success
 from src.repair_factory import make_orchestrator_factory
 
 
@@ -265,10 +266,11 @@ def _print_repair_result(state, verbose: bool) -> None:
         if state.repair_run_id:
             print(f"--- Trace: .agent/runs/{state.repair_run_id}/trace.jsonl ---", file=sys.stderr)
 
-    if state.status in ("fixed", "patched") and state.candidate_patches:
-        verified = state.status == "fixed" and not state.node_timings.get("verify_skipped")
-        emoji = "✅" if verified or state.status == "fixed" else "⚠"
-        print(f"\n{emoji} 修复完成! 状态={state.status}")
+    if is_repair_success(state):
+        skipped = state.node_timings.get("verify_skipped")
+        suffix = " (未验证)" if skipped else ""
+        emoji = "⚠" if state.status == "patched" else "✅"
+        print(f"\n{emoji} 修复完成! 状态={state.status}{suffix}")
         for patch in state.candidate_patches:
             print(f"\n--- {patch.file_path} ---")
             if patch.diff:

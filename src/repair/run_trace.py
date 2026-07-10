@@ -95,7 +95,7 @@ class RepairRunTracer:
         report = {
             "run_id": self.run_id,
             "status": state.status,
-            "failure_tags": list(getattr(state, "failure_tags", []) or []),
+            "failure_tags": list(state.failure_tags),
             "phases": phases_for_report(state.node_timings),
             "token_usage_by_agent": by_agent,
             **tool_summary,
@@ -106,7 +106,7 @@ class RepairRunTracer:
         self.store.write_report_by_id(self.run_id, report)
         finished_payload = {
             "status": state.status,
-            "failure_tags": list(getattr(state, "failure_tags", []) or []),
+            "failure_tags": list(state.failure_tags),
             "total_tokens": token_summary.get("total_tokens", 0),
             "total_tool_steps": tool_summary.get("total_tool_steps", 0),
             "tool_usage_by_agent": tool_summary.get("tool_usage_by_agent", {}),

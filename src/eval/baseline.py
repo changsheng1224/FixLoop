@@ -13,6 +13,7 @@ from src.eval.runner import should_include_in_eval_diff
 from src.eval.token_usage import build_token_usage_summary, reset_client_session_usage
 from src.repair.patch_applier import PatchApplier, parse_patches
 from src.repair.repo_snapshot import repo_changed, snapshot_repo
+from src.repair.termination import finalize_repair_state, mark_fixed_skip_verify
 from src.repair_factory import create_model_client
 from src.state import RepairState
 
@@ -64,19 +65,15 @@ class SingleAgentOrchestrator:
             state.candidate_patches = patches
             if patches:
                 applied = applier.apply_patches(patches)
-                if applied:
-                    state.status = "fixed"
-                    state.node_timings["verify_skipped"] = True
-                elif _repo_sources_changed(repo, before):
-                    state.status = "fixed"
-                    state.node_timings["verify_skipped"] = True
+                if applied or _repo_sources_changed(repo, before):
+                    mark_fixed_skip_verify(state)
                 else:
                     state.status = "failed"
                     state.agent_errors["baseline"] = "patches parsed but not applied"
             elif _repo_sources_changed(repo, before):
-                state.status = "fixed"
-                state.node_timings["verify_skipped"] = True
+                mark_fixed_skip_verify(state)
             else:
+                state.node_timings["patcher_parse_failed"] = True
                 state.status = "failed"
                 state.agent_errors["baseline"] = "no patches in agent output"
         except Exception as exc:
@@ -90,6 +87,7 @@ class SingleAgentOrchestrator:
         state.node_timings["total_tokens"] = token_summary["total_tokens"]
         state.node_timings["token_usage"] = token_summary
         state.node_timings["baseline_ms"] = int((time.time() - t0) * 1000)
+        finalize_repair_state(state)
         return state
 
 

@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from src.repair.termination import RepairTerminalStatus, introduced_regression, is_repair_success
+from src.repair.termination import (
+    RepairTerminalStatus,
+    has_repair_timeout,
+    introduced_regression,
+    is_repair_success,
+)
 from src.state import RepairState
 
 __all__ = [
@@ -27,7 +32,10 @@ def _normalize_path(path: str) -> str:
 
 
 def allowed_patch_files(state: RepairState) -> set[str]:
-    """补丁允许落盘的文件集合（suspect + plan + related_tests）。"""
+    """补丁允许落盘的文件集合（suspect + plan + related_tests）。
+
+    与 bonus §24 faithfulness（patch ⊆ allowed）共用；勿重复实现第二套集合逻辑。
+    """
     allowed: set[str] = set()
     for suspect in state.suspect_locations:
         if suspect.file_path:
@@ -42,15 +50,6 @@ def allowed_patch_files(state: RepairState) -> set[str]:
             if file_part.endswith(".py"):
                 allowed.add(_normalize_path(file_part))
     return allowed
-
-
-def _is_timeout(state: RepairState) -> bool:
-    if state.status == RepairTerminalStatus.TIMEOUT:
-        return True
-    if state.node_timings.get("repair_timeout"):
-        return True
-    orch_err = state.agent_errors.get("orchestrator", "")
-    return "repair timeout" in orch_err
 
 
 def _is_parse_fail(state: RepairState) -> bool:
@@ -78,11 +77,11 @@ def _is_wrong_file(state: RepairState) -> bool:
     return patch_paths.isdisjoint(allowed)
 
 
-def classify_failure_tags(state: RepairState) -> list[str]:
+def classify_failure_tags(state: RepairState) -> list[FailureTag]:
     """按优先级推断主失败 tag；成功修复返回空列表。"""
     if is_repair_success(state):
         return []
-    if _is_timeout(state):
+    if has_repair_timeout(state):
         return [FailureTag.TIMEOUT]
     if state.status == RepairTerminalStatus.REGRESSION or introduced_regression(state):
         return [FailureTag.REGRESSION]
@@ -94,5 +93,5 @@ def classify_failure_tags(state: RepairState) -> list[str]:
 
 
 def apply_failure_tags(state: RepairState) -> None:
-    """将 classify 结果写入 RepairState.failure_tags。"""
-    state.failure_tags = classify_failure_tags(state)
+    """将 classify 结果写入 RepairState.failure_tags（字符串值）。"""
+    state.failure_tags = [tag.value for tag in classify_failure_tags(state)]

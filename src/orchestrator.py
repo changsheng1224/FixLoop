@@ -106,10 +106,13 @@ class Orchestrator(RepairPipelineMixin):
             try:
                 return fut.result(timeout=repair_timeout_s)
             except FuturesTimeoutError:
-                state.status = "timeout"
+                from src.repair.termination import RepairTerminalStatus, finalize_repair_state
+
+                state.status = RepairTerminalStatus.TIMEOUT
                 state.agent_errors["orchestrator"] = f"repair timeout ({repair_timeout_s}s)"
                 state.node_timings["repair_timeout"] = repair_timeout_s
                 log.warning("修复超时 (%ds)", repair_timeout_s)
+                finalize_repair_state(state)
                 return state
 
     def _parse_issue(self, issue: str) -> RepairPlan:

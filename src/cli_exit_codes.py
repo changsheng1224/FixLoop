@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from src.repair.termination import has_repair_timeout, is_repair_success
 from src.state import RepairState
 
 REPAIR_EXIT_OK = 0
@@ -34,15 +35,8 @@ def repair_config_error(repo: str, *, api_key: str | None = None) -> str | None:
 
 def repair_exit_code(state: RepairState) -> int:
     """根据 RepairState 计算 repair 子命令进程退出码。"""
-    if state.status == "timeout":
+    if has_repair_timeout(state):
         return REPAIR_EXIT_TIMEOUT
-    if state.node_timings.get("repair_timeout"):
-        return REPAIR_EXIT_TIMEOUT
-    orch_err = state.agent_errors.get("orchestrator", "")
-    if "repair timeout" in orch_err:
-        return REPAIR_EXIT_TIMEOUT
-    if state.status == "fixed":
-        return REPAIR_EXIT_OK
-    if state.status == "patched" and state.candidate_patches:
+    if is_repair_success(state):
         return REPAIR_EXIT_OK
     return REPAIR_EXIT_FAIL
