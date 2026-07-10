@@ -78,8 +78,9 @@ class PytestVerifyStrategy:
 
 def record_verify_timings(state, run: VerifyRun, *, log_sandbox: bool = False) -> None:
     """写入 RepairState.node_timings 并可选打印 sandbox 耗时。"""
-    state.node_timings["verifier_ms"] = run.elapsed_ms
-    state.node_timings["verifier_internal"] = run.internal
+    from src.repair.timing_schema import set_phase_ms
+
+    set_phase_ms(state.node_timings, "verify", run.elapsed_ms, internal=run.internal)
     if run.error:
         state.agent_errors["verifier"] = run.error
     if log_sandbox and run.internal:

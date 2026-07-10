@@ -6,13 +6,16 @@ from pathlib import Path
 import pytest
 
 from agent_runtime.config import AgentConfig
-from agent_runtime.providers.clients import FakeModelClient
+from agent_runtime.providers.clients import FakeModelClient, FakeNativeToolClient
 from agent_runtime.runtime import Agent
 from agent_runtime.task_state import TaskState
 from agent_runtime.tool_executor import QuotaEnforcer, ToolExecutor
 from agent_runtime.tool_rejection import build_executor_rejection_metadata
+from agent_runtime.workspace import WorkspaceContext
 from src.agents.factory import create_localizer, create_patcher
+from src.agents.retriever import create_retriever
 from src.middleware import ToolGateway
+from src.orchestrator import Orchestrator
 
 
 def _latest_report(repo_root: str) -> dict:
@@ -142,3 +145,45 @@ class TestReportIntegration:
 
         assert "tool_rejections_by_layer" not in report
         assert "permission_denied_by_tool" not in report
+
+
+class TestRepairRejectionAggregation:
+    def test_repair_report_aggregates_gateway_denials(self, temp_workspace):
+        (temp_workspace / "calc.py").write_text("old\n", encoding="utf-8")
+        ws = WorkspaceContext.build(str(temp_workspace))
+        loc_client = FakeNativeToolClient(
+            [
+                '<tool>{"name":"write_file","args":{"path":"x.py","content":"y"}}</tool>',
+                '<tool>{"name":"write_file","args":{"path":"x.py","content":"z"}}</tool>',
+                '<final>[{"file_path":"calc.py","start_line":1,"end_line":1,'
+                '"function_name":"","reason":"stack","confidence":0.9}]</final>',
+            ]
+        )
+        ret_client = FakeNativeToolClient(['<final>{"related_tests":[]}</final>'])
+        pat_client = FakeModelClient(
+            ['<final>[{"file_path":"calc.py","diff":"-old\\n+new","explanation":"fix"}]</final>']
+        )
+        orch = Orchestrator(
+            create_localizer(loc_client, ws),
+            create_retriever(ret_client, ws),
+            create_patcher(pat_client, ws),
+        )
+        state = orch.repair("TypeError at calc.py:1")
+        assert state.repair_run_id
+        assert state.node_timings["permission_denied_by_tool"]["write_file"] == 2
+        assert state.node_timings["permission_denied_by_agent"]["localizer"]["write_file"] == 2
+
+        report = json.loads(
+            (temp_workspace / ".agent" / "runs" / state.repair_run_id / "report.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert report["permission_denied_by_tool"]["write_file"] == 2
+        assert report["tool_rejections_by_layer"]["gateway"] == 2
+
+        trace_lines = (
+            temp_workspace / ".agent" / "runs" / state.repair_run_id / "trace.jsonl"
+        ).read_text(encoding="utf-8").strip().splitlines()
+        finished = json.loads(trace_lines[-1])
+        assert finished["event"] == "repair_finished"
+        assert finished["payload"]["gateway_denials"] == 2

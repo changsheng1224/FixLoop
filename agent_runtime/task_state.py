@@ -4,7 +4,8 @@
 """
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+
+from agent_runtime.run_ids import new_run_id
 
 
 @dataclass
@@ -47,8 +48,7 @@ class TaskState:
         Returns:
             初始状态为 "running" 的 TaskState 实例。
         """
-        ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-        rid = run_id or ts
+        rid = run_id or new_run_id()
         return cls(
             run_id=rid,
             task_id=task_id or rid,

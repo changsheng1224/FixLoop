@@ -7,6 +7,12 @@ import sys as _sys
 import time as _time
 
 from agent_runtime.compression_pipeline import truncate_tool_result_for_agent
+from agent_runtime.model_timing import (
+    ModelCallTiming,
+    build_report_latency_fields,
+    collect_client_timings,
+    emit_model_timing_events,
+)
 
 
 def _log_loop(msg: str) -> None:
@@ -64,6 +70,19 @@ class AgentLoop:
         self._store = None
         self._last_token_meta = {}
         self._retry_count = 0  # 最近一次 prompt 的 token 元数据
+        self._call_timings: list[ModelCallTiming] = []
+
+    def _record_model_timings(self, ts, timings: list, *, default_attempt: int = 1) -> None:
+        """Merge timings into loop state and emit trace events."""
+        if not timings:
+            return
+        self._call_timings.extend(timings)
+        ttft_total = emit_model_timing_events(
+            lambda event, payload: self._emit(event, payload),
+            timings,
+            default_attempt=default_attempt,
+        )
+        ts.node_timings["ttft_ms_total"] = int(ts.node_timings.get("ttft_ms_total", 0) or 0) + ttft_total
 
     def run(self, user_message: str, callback=None) -> str:
         """执行一次 Agent 任务：ReAct 循环直至 final answer 或 max_steps。
@@ -75,6 +94,7 @@ class AgentLoop:
         Returns:
             模型最终回答文本。
         """
+        from agent_runtime.log_context import log_context
         from agent_runtime.task_state import TaskState
 
         shared = getattr(self.agent, "shared_run_id", None)
@@ -83,17 +103,20 @@ class AgentLoop:
         if shared:
             ts.task_id = f"{shared}-{agent_name}"
         self._task_state = ts
-        self._emit("run_started")
+        self._call_timings = []
 
-        self.agent.record({"role": "user", "content": user_message})
-        self._gen_task_summary(user_message)
+        with log_context(run_id=ts.run_id, agent=agent_name):
+            self._emit("run_started")
 
-        # 如果模型客户端支持原生 tool_use，使用 API 原生协议（免文本解析）
-        if hasattr(self.agent.model_client, "chat_with_tools"):
-            return self._run_with_native_tools(user_message, ts, callback)
+            self.agent.record({"role": "user", "content": user_message})
+            self._gen_task_summary(user_message)
 
-        # 降级：传统文本解析模式
-        return self._run_with_text_parsing(user_message, ts, callback)
+            # 如果模型客户端支持原生 tool_use，使用 API 原生协议（免文本解析）
+            if hasattr(self.agent.model_client, "chat_with_tools"):
+                return self._run_with_native_tools(user_message, ts, callback)
+
+            # 降级：传统文本解析模式
+            return self._run_with_text_parsing(user_message, ts, callback)
 
     def _run_with_native_tools(self, user_message: str, ts, callback=None) -> str:
         """使用 API 原生 tool_use 协议（Anthropic 兼容）。"""
@@ -123,6 +146,7 @@ class AgentLoop:
             return result_text
 
         t0 = _time.time()
+        self._emit("model_request_start", {"step": 1, "attempt": 1})
         try:
             result = self.agent.model_client.chat_with_tools(
                 system_prompt=system_prompt,
@@ -137,6 +161,7 @@ class AgentLoop:
                 answer = result
                 call_usage = getattr(self.agent.model_client, "last_call_usage", {}) or {}
             self._apply_call_usage_meta(call_usage)
+            self._record_model_timings(ts, collect_client_timings(self.agent.model_client), default_attempt=1)
         except Exception as e:
             self.stop_reason = f"error: {e}"
             return f"<final>API 错误: {e}</final>"
@@ -185,6 +210,10 @@ class AgentLoop:
             # 2. 调用模型
             ts.record_attempt()
             t1 = _time.time()
+            self._emit(
+                "model_request_start",
+                {"step": ts.tool_steps + 1, "attempt": ts.attempts},
+            )
             try:
                 raw = self.agent.circuit_breaker.call(
                     self.agent.model_client.complete,
@@ -193,6 +222,11 @@ class AgentLoop:
                 )
                 ts.node_timings.setdefault("model_call_ms", 0)
                 ts.node_timings["model_call_ms"] += int((_time.time() - t1) * 1000)
+                self._record_model_timings(
+                    ts,
+                    collect_client_timings(self.agent.model_client),
+                    default_attempt=ts.attempts,
+                )
             except Exception as e:
                 if "Circuit breaker is open" in str(e):
                     self.stop_reason = "circuit_breaker"
@@ -348,8 +382,12 @@ class AgentLoop:
             payload = dict(payload or {})
             agent_name = getattr(self.agent, "_agent_name", "") or "agent"
             payload.setdefault("agent", agent_name)
-            store = self._get_store()
             shared = getattr(self.agent, "shared_run_id", None)
+            ts = self._task_state
+            run_id = shared or (ts.run_id if ts else "")
+            if run_id:
+                payload.setdefault("run_id", run_id)
+            store = self._get_store()
             if shared:
                 store.append_trace_event(shared, event, payload)
             elif self._task_state:
@@ -371,6 +409,9 @@ class AgentLoop:
             from agent_runtime.token_accounting import build_report_token_fields
 
             report_token = build_report_token_fields(session_usage, self._last_token_meta)
+            report_latency = build_report_latency_fields(self._call_timings)
+            self.agent._last_run_node_timings = dict(ts.node_timings)
+            self.agent._last_call_timings = list(self._call_timings)
             if report_token.get("prompt_budget") is None:
                 report_token["prompt_budget"] = getattr(self.agent.config, "prompt_budget", 0)
             report_body = {
@@ -383,6 +424,7 @@ class AgentLoop:
                 "prompt_cache_key": getattr(self.agent._prefix, "hash", ""),
                 "node_timings": ts.node_timings,
                 **report_token,
+                **report_latency,
                 **ts.rejection_report_fields(),
             }
             if shared:

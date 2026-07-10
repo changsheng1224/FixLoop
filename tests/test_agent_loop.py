@@ -216,3 +216,74 @@ class TestNativeToolsTokenUsage:
         assert data["cache_read_tokens"] == 0
         assert data["cache_creation_tokens"] == 0
         assert data["cache_hit_rate"] == 0.0
+
+
+class TestTtftObservability:
+    def test_native_tools_report_includes_ttft(self, config, workspace, temp_workspace):
+        import json
+
+        from agent_runtime.run_store import RunStore
+
+        client = FakeNativeToolClient(["<final>ok</final>"])
+        agent = Agent(
+            config=config,
+            model_client=client,
+            workspace=workspace,
+            cwd=str(temp_workspace),
+            agent_name="localizer",
+        )
+        agent.shared_run_id = "repair-ttft-test"
+        agent.ask("locate bug")
+
+        report_path = (
+            RunStore(str(temp_workspace)).runs_dir
+            / "repair-ttft-test"
+            / "agent_report.localizer.json"
+        )
+        data = json.loads(report_path.read_text(encoding="utf-8"))
+        assert data["ttft_ms_p50"] == 0
+        assert data["ttft_ms_last"] == 0
+        assert len(data["ttft_ms_by_call"]) == 1
+        assert data["ttft_ms_by_call"][0]["total_ms"] == 0
+
+    def test_trace_includes_model_first_token(self, config, workspace, temp_workspace):
+        import json
+
+        from agent_runtime.run_store import RunStore
+
+        client = FakeNativeToolClient(["<final>ok</final>"])
+        agent = Agent(
+            config=config,
+            model_client=client,
+            workspace=workspace,
+            cwd=str(temp_workspace),
+            agent_name="localizer",
+        )
+        agent.shared_run_id = "repair-ttft-trace"
+        agent.ask("go")
+
+        trace_path = (
+            RunStore(str(temp_workspace)).runs_dir / "repair-ttft-trace" / "trace.jsonl"
+        )
+        events = [
+            json.loads(line)["event"]
+            for line in trace_path.read_text(encoding="utf-8").strip().splitlines()
+        ]
+        assert "model_request_start" in events
+        assert "model_first_token" in events
+        assert "model_complete" in events
+
+    def test_text_parsing_report_includes_ttft(self, config, workspace, temp_workspace):
+        import json
+
+        from agent_runtime.run_store import RunStore
+
+        agent = _make_agent(["<final>done</final>"], config, workspace)
+        agent.cwd = str(temp_workspace)
+        agent.ask("hello")
+
+        run_dirs = list(RunStore(str(temp_workspace)).runs_dir.iterdir())
+        report_path = run_dirs[0] / "report.json"
+        data = json.loads(report_path.read_text(encoding="utf-8"))
+        assert "ttft_ms_p50" in data
+        assert data["ttft_ms_by_call"][0]["ttft_ms"] == 0

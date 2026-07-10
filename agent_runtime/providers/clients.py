@@ -8,8 +8,12 @@ import time
 import urllib.error
 import urllib.request
 
+from agent_runtime.model_timing import ModelCallTiming
+from agent_runtime.providers.http_timing import read_http_body_with_timing
+from agent_runtime.providers.session_usage import SessionUsageMixin
 
-class FakeModelClient:
+
+class FakeModelClient(SessionUsageMixin):
     """模拟模型客户端：预设输出序列，用于单元测试。
 
     不调真实 API，按顺序弹出预设的字符串。
@@ -21,27 +25,7 @@ class FakeModelClient:
         self._index = 0
         self.supports_prompt_cache = False
         self.prompts: list[str] = []
-        self.last_usage: dict = {}
-        self.last_call_usage: dict = {}
-        self.session_usage: dict = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cache_read_tokens": 0,
-            "cache_creation_tokens": 0,
-            "calls": 0,
-        }
-
-    def reset_session_usage(self) -> None:
-        """清零本次 session 的 token 与 API 调用计数。"""
-        self.last_usage = {}
-        self.last_call_usage = {}
-        self.session_usage = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cache_read_tokens": 0,
-            "cache_creation_tokens": 0,
-            "calls": 0,
-        }
+        self._init_usage_tracking()
 
     def _record_usage(self, prompt: str, result: str) -> None:
         inp = max(1, len(prompt) // 4)
@@ -72,6 +56,10 @@ class FakeModelClient:
         result = self._outputs[self._index]
         self._index += 1
         self._record_usage(prompt, result)
+        out_tokens = max(1, len(result) // 4)
+        timing = ModelCallTiming(ttft_ms=0, total_ms=0, output_tokens=out_tokens)
+        self.last_call_timing = timing
+        self.last_call_timings = [timing]
         return result
 
 
@@ -97,9 +85,10 @@ class FakeNativeToolClient(FakeModelClient):
             "cache_creation_tokens": 0,
             "calls": 0,
         }
+        call_timings: list[ModelCallTiming] = []
         user_msg = user_message
 
-        for _ in range(max_turns):
+        for turn in range(max_turns):
             full = f"{system_prompt}\n\n{user_msg}" if system_prompt else user_msg
             raw = self.complete(full)
             usage = dict(self.last_usage)
@@ -108,11 +97,21 @@ class FakeNativeToolClient(FakeModelClient):
             call_usage["cache_read_tokens"] += int(usage.get("cache_read_tokens", 0) or 0)
             call_usage["cache_creation_tokens"] += int(usage.get("cache_creation_tokens", 0) or 0)
             call_usage["calls"] += 1
+            if self.last_call_timing is not None:
+                timing = ModelCallTiming(
+                    ttft_ms=self.last_call_timing.ttft_ms,
+                    total_ms=self.last_call_timing.total_ms,
+                    output_tokens=self.last_call_timing.output_tokens,
+                    step=turn + 1,
+                )
+                call_timings.append(timing)
+                self.last_call_timing = timing
 
             final_match = re.search(r"<final>(.*?)</final>", raw, re.DOTALL)
             if final_match:
                 answer = final_match.group(1).strip()
                 self.last_call_usage = dict(call_usage)
+                self.last_call_timings = call_timings
                 return answer, call_usage
 
             tool_match = re.search(r"<tool>(.*?)</tool>", raw, re.DOTALL)
@@ -121,6 +120,7 @@ class FakeNativeToolClient(FakeModelClient):
                     payload = json.loads(tool_match.group(1))
                 except json.JSONDecodeError:
                     self.last_call_usage = dict(call_usage)
+                    self.last_call_timings = call_timings
                     return raw.strip(), call_usage
                 name = payload.get("name", "")
                 args = payload.get("args", {})
@@ -129,13 +129,15 @@ class FakeNativeToolClient(FakeModelClient):
                 continue
 
             self.last_call_usage = dict(call_usage)
+            self.last_call_timings = call_timings
             return raw.strip(), call_usage
 
         self.last_call_usage = dict(call_usage)
+        self.last_call_timings = call_timings
         return "max_turns exceeded", call_usage
 
 
-class AnthropicCompatibleModelClient:
+class AnthropicCompatibleModelClient(SessionUsageMixin):
     """Anthropic Messages API 兼容客户端。
 
     用纯 urllib 向兼容 Anthropic Messages API 的服务端（如 DeepSeek）发请求。
@@ -157,27 +159,7 @@ class AnthropicCompatibleModelClient:
         self.timeout = timeout
         self.supports_prompt_cache = True
         self._latencies: list[float] = []
-        self.last_usage: dict = {}
-        self.last_call_usage: dict = {}
-        self.session_usage: dict = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cache_read_tokens": 0,
-            "cache_creation_tokens": 0,
-            "calls": 0,
-        }
-
-    def reset_session_usage(self) -> None:
-        """清零本次 session 的 token 与 API 调用计数。"""
-        self.last_usage = {}
-        self.last_call_usage = {}
-        self.session_usage = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cache_read_tokens": 0,
-            "cache_creation_tokens": 0,
-            "calls": 0,
-        }
+        self._init_usage_tracking()
 
     def _record_usage(self, usage: dict | None) -> None:
         from agent_runtime.token_accounting import parse_provider_usage
@@ -258,6 +240,8 @@ class AnthropicCompatibleModelClient:
             "cache_creation_tokens": 0,
             "calls": 0,
         }
+        call_timings: list[ModelCallTiming] = []
+        self.last_call_timings = []
         # 系统提示词放在第一条消息中
         full_text = system_prompt + "\n\n" + user_message if system_prompt else user_message
         messages.append(
@@ -275,39 +259,15 @@ class AnthropicCompatibleModelClient:
             "tools": tools,
         }
 
-        for _ in range(max_turns):
+        for turn in range(max_turns):
             payload = dict(payload_base)
             payload["messages"] = list(messages)  # shallow copy
             body = json.dumps(payload).encode("utf-8")
-            data = None
-
-            for attempt in range(3):
-                try:
-                    request = urllib.request.Request(
-                        f"{self.base_url}/messages",
-                        data=body,
-                        headers={
-                            "Content-Type": "application/json",
-                            "x-api-key": self.api_key,
-                            "anthropic-version": "2023-06-01",
-                        },
-                    )
-                    with urllib.request.urlopen(request, timeout=self.timeout) as resp:
-                        data = json.loads(resp.read().decode("utf-8"))
-                    break
-                except urllib.error.HTTPError as e:
-                    if e.code >= 500 and attempt < 2:
-                        time.sleep((attempt + 1) * 2)
-                        continue
-                    raise RuntimeError(f"API 请求失败 (HTTP {e.code})") from e
-                except (urllib.error.URLError, OSError) as e:
-                    if attempt < 2:
-                        time.sleep((attempt + 1) * 2)
-                        continue
-                    raise RuntimeError("API 请求失败") from e
-
-            if data is None:
-                raise RuntimeError("API 请求失败，已重试 3 次")
+            data, timing = self._post_messages(body)
+            timing.step = turn + 1
+            call_timings.append(timing)
+            self.last_call_timing = timing
+            self.last_call_timings = list(call_timings)
 
             turn_usage = data.get("usage") or {}
             self._record_usage(turn_usage)
@@ -323,6 +283,8 @@ class AnthropicCompatibleModelClient:
             # 解析响应中的 content blocks
             content_blocks = data.get("content", [])
             if isinstance(content_blocks, str):
+                self.last_call_usage = dict(call_usage)
+                self.last_call_timings = call_timings
                 return content_blocks
 
             # 收集所有 content blocks
@@ -366,19 +328,20 @@ class AnthropicCompatibleModelClient:
                 answer = "".join(text_parts)
                 self._save_request(full_text, answer)
                 self.last_call_usage = dict(call_usage)
+                self.last_call_timings = call_timings
                 return answer, call_usage
 
             # 既没有文本也没有工具调用 → 空响应
             self.last_call_usage = dict(call_usage)
+            self.last_call_timings = call_timings
             return "", call_usage
 
         self.last_call_usage = dict(call_usage)
+        self.last_call_timings = call_timings
         return "max_turns exceeded", call_usage
 
-    def _call_api(self, payload: dict, prompt_for_log: str = "") -> str:
-        """发送 API 请求并返回文本（单轮，无工具）。"""
-        body = json.dumps(payload).encode("utf-8")
-        t0 = time.time()
+    def _post_messages(self, body: bytes) -> tuple[dict, ModelCallTiming]:
+        """POST /messages with retries; return parsed JSON and TTFB timing."""
         last_error = None
 
         for attempt in range(3):
@@ -393,12 +356,19 @@ class AnthropicCompatibleModelClient:
                     },
                 )
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                    data = json.loads(response.read().decode("utf-8"))
-                self._record_usage(data.get("usage"))
-                result = self._extract_text(data)
-                self._save_request(prompt_for_log, result)
-                self._latencies.append(time.time() - t0)
-                return result
+                    raw_bytes, ttft_ms, total_ms = read_http_body_with_timing(response)
+                data = json.loads(raw_bytes.decode("utf-8"))
+                from agent_runtime.token_accounting import parse_provider_usage
+
+                parsed = parse_provider_usage(data.get("usage"))
+                timing = ModelCallTiming(
+                    ttft_ms=ttft_ms,
+                    total_ms=total_ms,
+                    output_tokens=parsed["output_tokens"],
+                )
+                self.last_call_timing = timing
+                self._latencies.append(total_ms / 1000.0)
+                return data, timing
 
             except urllib.error.HTTPError as e:
                 last_error = e
@@ -414,8 +384,20 @@ class AnthropicCompatibleModelClient:
 
         raise RuntimeError(f"API 请求失败，已重试 3 次。最后错误: {last_error}")
 
+    def _call_api(self, payload: dict, prompt_for_log: str = "") -> str:
+        """发送 API 请求并返回文本（单轮，无工具）。"""
+        body = json.dumps(payload).encode("utf-8")
+        data, timing = self._post_messages(body)
+        self.last_call_timings = [timing]
+        self._record_usage(data.get("usage"))
+        result = self._extract_text(data)
+        self._save_request(prompt_for_log, result)
+        return result
+
     def latency_stats(self) -> dict:
         """返回响应延迟统计（秒）。"""
+        from agent_runtime.model_timing import percentile_values
+
         if not self._latencies:
             return {"count": 0, "avg": 0, "p50": 0, "p99": 0}
         sorted_l = sorted(self._latencies)
@@ -423,8 +405,8 @@ class AnthropicCompatibleModelClient:
         return {
             "count": n,
             "avg": round(sum(sorted_l) / n, 2),
-            "p50": round(sorted_l[n // 2], 2),
-            "p99": round(sorted_l[int(n * 0.99)], 2),
+            "p50": round(float(percentile_values(sorted_l, 0.5)), 2),
+            "p99": round(float(percentile_values(sorted_l, 0.99)), 2),
         }
 
     def _save_request(self, prompt: str, result: str):

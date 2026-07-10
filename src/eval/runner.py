@@ -96,16 +96,30 @@ def extract_agent_timings(node_timings: dict | None) -> dict:
     """从 RepairState.node_timings 提取评测关心的耗时字段。"""
     if not node_timings:
         return {}
-    keys = (
-        "parse_issue_ms",
-        "localize_retrieve_ms",
+    from src.repair.timing_schema import PHASES, get_phase_ms, phase_ms_key
+
+    result: dict = {}
+    for key in ("parse_issue_ms", "localize_retrieve_ms", "baseline_ms"):
+        if key in node_timings:
+            result[key] = node_timings[key]
+    parallel = node_timings.get("parallel_wall_ms") or {}
+    if "localize_retrieve_ms" in parallel and "localize_retrieve_ms" not in result:
+        result["localize_retrieve_ms"] = parallel["localize_retrieve_ms"]
+    for phase in PHASES:
+        canon = phase_ms_key(phase)
+        ms = get_phase_ms(node_timings, phase)
+        if ms or canon in (node_timings.get("phases") or {}):
+            result[canon] = ms
+    legacy_keys = (
         "localizer_ms",
         "retriever_ms",
         "patcher_ms",
         "verifier_ms",
-        "baseline_ms",
     )
-    return {k: node_timings[k] for k in keys if k in node_timings}
+    for key in legacy_keys:
+        if key in node_timings:
+            result[key] = node_timings[key]
+    return result
 
 
 class EvalRunner:
@@ -193,9 +207,11 @@ class EvalRunner:
             status = getattr(state, "status", "") if state else ""
             total_tokens = 0
             token_usage: dict = {}
+            permission_denied_by_tool: dict = {}
             if state and getattr(state, "node_timings", None):
                 node_timings = state.node_timings
                 token_usage = node_timings.get("token_usage") or {}
+                permission_denied_by_tool = dict(node_timings.get("permission_denied_by_tool") or {})
                 if isinstance(token_usage, dict):
                     total_tokens = int(
                         node_timings.get("total_tokens", 0) or token_usage.get("total_tokens", 0)
@@ -223,6 +239,7 @@ class EvalRunner:
                 status=status,
                 total_tokens=total_tokens,
                 token_usage=token_usage if isinstance(token_usage, dict) else {},
+                permission_denied_by_tool=permission_denied_by_tool,
             )
 
 

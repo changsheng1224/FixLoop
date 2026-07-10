@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import uuid
-from datetime import UTC, datetime
-
+from agent_runtime.run_ids import new_run_id
 from agent_runtime.run_store import RunStore
 
 
@@ -23,8 +21,7 @@ class RepairRunTracer:
         return self._store
 
     def begin(self, issue: str) -> str:
-        ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-        self.run_id = f"repair-{ts}-{uuid.uuid4().hex[:6]}"
+        self.run_id = new_run_id()
         self.store.start_run_by_id(self.run_id)
         self.emit(
             "orchestrator",
@@ -46,64 +43,80 @@ class RepairRunTracer:
     def emit(self, agent_name: str, event: str, payload: dict | None = None) -> None:
         data = dict(payload or {})
         data.setdefault("agent", agent_name)
+        data.setdefault("run_id", self.run_id)
         self.store.append_trace_event(self.run_id, event, data)
 
     def write_agent_token(self, agent_name: str, usage: dict, extra: dict | None = None) -> None:
         """写入/累加单个 Agent 的 token 摘要（如 Patcher complete_once）。"""
         import json
 
+        from src.repair.agent_report_loader import merge_agent_report
+
         run_dir = self.store.runs_dir / self.run_id
         existing_path = run_dir / f"agent_report.{agent_name}.json"
-        total = int(usage.get("total_tokens", 0) or 0)
-        inp = int(usage.get("input_tokens", 0) or 0)
-        out = int(usage.get("output_tokens", 0) or 0)
-        calls = int(usage.get("api_calls", 0) or 0)
-        tool_steps = int((extra or {}).get("tool_steps", 0) or 0)
+        existing: dict = {}
         if existing_path.is_file():
             try:
-                old = json.loads(existing_path.read_text(encoding="utf-8"))
-                total += int(old.get("total_tokens", 0) or 0)
-                inp += int(old.get("input_tokens", 0) or 0)
-                out += int(old.get("output_tokens", 0) or 0)
-                calls += int(old.get("api_calls", 0) or 0)
-                tool_steps += int(old.get("tool_steps", 0) or 0)
+                existing = json.loads(existing_path.read_text(encoding="utf-8"))
             except Exception:
-                pass
+                existing = {}
+
         body = {
             "agent": agent_name,
             "run_id": self.run_id,
-            "total_tokens": total,
-            "input_tokens": inp,
-            "output_tokens": out,
-            "api_calls": calls,
-            "tool_steps": tool_steps,
+            "total_tokens": int(usage.get("total_tokens", 0) or 0),
+            "input_tokens": int(usage.get("input_tokens", 0) or 0),
+            "output_tokens": int(usage.get("output_tokens", 0) or 0),
+            "api_calls": int(usage.get("api_calls", 0) or 0),
+            "tool_steps": int((extra or {}).get("tool_steps", 0) or 0),
             "token_usage": usage.get("sections") or usage.get("token_usage") or {},
         }
         if extra:
             body.update(extra)
+        body = merge_agent_report(existing, body)
         self.store.write_agent_report(self.run_id, agent_name, body)
 
     def finalize(self, state, token_summary: dict) -> None:
-        from src.eval.token_usage import collect_agent_reports_from_run, summarize_agent_tool_usage
+        from src.eval.token_usage import summarize_agent_tool_usage
+        from src.repair.agent_report_loader import load_agent_reports_from_run, project_token_usage_by_agent
+        from src.repair.rejection_aggregate import (
+            aggregate_rejection_from_agent_reports,
+            gateway_denial_count,
+        )
+        from src.repair.timing_schema import phases_for_report
+        from src.repair.ttft_aggregate import aggregate_ttft_from_agent_reports
 
-        by_agent = collect_agent_reports_from_run(self.store.runs_dir / self.run_id)
+        run_dir = self.store.runs_dir / self.run_id
+        reports = load_agent_reports_from_run(run_dir)
+        by_agent = project_token_usage_by_agent(reports)
         tool_summary = summarize_agent_tool_usage(by_agent)
+        rejection_summary = aggregate_rejection_from_agent_reports(reports)
+        ttft_summary = aggregate_ttft_from_agent_reports(reports)
         report = {
             "run_id": self.run_id,
             "status": state.status,
+            "phases": phases_for_report(state.node_timings),
             "token_usage_by_agent": by_agent,
             **tool_summary,
             **token_summary,
+            **rejection_summary,
+            **ttft_summary,
         }
         self.store.write_report_by_id(self.run_id, report)
+        finished_payload = {
+            "status": state.status,
+            "total_tokens": token_summary.get("total_tokens", 0),
+            "total_tool_steps": tool_summary.get("total_tool_steps", 0),
+            "tool_usage_by_agent": tool_summary.get("tool_usage_by_agent", {}),
+            "agents": list(by_agent.keys()),
+        }
+        if rejection_summary:
+            finished_payload["gateway_denials"] = gateway_denial_count(rejection_summary)
+            denied = rejection_summary.get("permission_denied_by_tool")
+            if denied:
+                finished_payload["permission_denied_by_tool"] = denied
         self.emit(
             "orchestrator",
             "repair_finished",
-            {
-                "status": state.status,
-                "total_tokens": token_summary.get("total_tokens", 0),
-                "total_tool_steps": tool_summary.get("total_tool_steps", 0),
-                "tool_usage_by_agent": tool_summary.get("tool_usage_by_agent", {}),
-                "agents": list(by_agent.keys()),
-            },
+            finished_payload,
         )
