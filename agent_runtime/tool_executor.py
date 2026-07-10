@@ -90,6 +90,10 @@ class ToolExecutor:
             except ValueError as e:
                 return self._rejected(3, "invalid_args", f"Error: 参数校验失败: {e}")
 
+        path_reject = self._validate_path_args(args)
+        if path_reject is not None:
+            return path_reject
+
         # ---- Gate 4: 配额检查 ----
         if self._quota is not None:
             if not self._quota.check(name):
@@ -197,6 +201,22 @@ class ToolExecutor:
             content=content,
             metadata=build_executor_rejection_metadata(gate_id, tool_error_code, **extra),
         )
+
+    def _validate_path_args(self, args) -> ToolExecutionResult | None:
+        """Gate 3 续：路径参数 resolve，拦截 workspace 逃逸与 symlink。"""
+        if isinstance(args, dict):
+            raw_path = args.get("path")
+        else:
+            raw_path = getattr(args, "path", None)
+        if not raw_path:
+            return None
+        try:
+            self.agent.tool_context.resolve(str(raw_path))
+        except ValueError as e:
+            msg = str(e)
+            code = "path_escape" if "逃逸" in msg else "invalid_args"
+            return self._rejected(3, code, f"Error: 路径校验失败: {e}")
+        return None
 
     def _collect_high_risk(self) -> set[str]:
         """收集所有标记为 risky=True 的工具名。"""

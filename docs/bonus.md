@@ -250,8 +250,8 @@
 - **[P1] [C:⭐ I:⭐⭐⭐] 审批时 diff 预览**：write_file / patch_file 审批时显示 patch 前后片段
 - **[P1] [C:⭐ I:⭐⭐⭐] Gate 5 语义 duplicate**：同 tool + 同 path 即使 text 不同也视为重复 read
 - **[P2] [C:⭐ I:⭐⭐⭐] Gate 7 分级审批**：write/patch 需 ask，read/search/grep auto
-- **[P2] [C:⭐ I:⭐⭐⭐] 符号链接逃逸检测**：`ToolContext.resolve` 二次 `resolve()` 校验
-- **[P2] [C:⭐ I:⭐⭐⭐] 闸口拒绝统计**：`tool_rejections_by_gate` 进 report
+- **[P2] [C:⭐ I:⭐⭐⭐] 符号链接逃逸检测** ✅：`path_safety.resolve_under_root` + `ToolContext.resolve` 分量遍历 + symlink 校验
+- **[P2] [C:⭐ I:⭐⭐⭐] 闸口拒绝统计** ✅：Gate 3 路径预检 + `tool_rejections_by_gate` / `tool_rejection_metrics` 进 report 与 trace（Grafana）
 
 ---
 

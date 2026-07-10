@@ -10,6 +10,7 @@ __all__ = [
     "build_executor_rejection_metadata",
     "build_gate7_pass_metadata",
     "build_gateway_rejection_metadata",
+    "build_rejection_observability_payload",
     "tool_trace_payload",
 ]
 
@@ -37,6 +38,51 @@ def build_gateway_rejection_metadata(**extra) -> dict:
     }
     meta.update(extra)
     return meta
+
+
+def build_rejection_observability_payload(summary: dict | None = None, **fields) -> dict:
+    """Trace/report 观测字段：map 计数 + Grafana 友好的扁平行。
+
+    ``tool_rejection_metrics`` 每行 ``{layer, gate_id, count}``，便于 Loki/JSON
+    管道按 label 展开为时序。
+    """
+    data = dict(summary or {})
+    for key, value in fields.items():
+        if value:
+            data[key] = value
+
+    layer = data.get("tool_rejections_by_layer") or {}
+    gate = data.get("tool_rejections_by_gate") or {}
+    denied = data.get("permission_denied_by_tool") or {}
+    if not layer and not gate and not denied:
+        return {}
+
+    payload: dict = {}
+    if layer:
+        payload["tool_rejections_by_layer"] = dict(layer)
+    if gate:
+        payload["tool_rejections_by_gate"] = dict(gate)
+    if denied:
+        payload["permission_denied_by_tool"] = dict(denied)
+
+    metrics = []
+    for gate_id, count in sorted(gate.items()):
+        layer_name = REJECTION_LAYER_GATEWAY if gate_id == "gateway" else REJECTION_LAYER_EXECUTOR
+        metrics.append(
+            {
+                "layer": layer_name,
+                "gate_id": gate_id,
+                "count": int(count or 0),
+            }
+        )
+    if metrics:
+        payload["tool_rejection_metrics"] = metrics
+
+    gateway_total = int(layer.get("gateway", 0) or 0)
+    if gateway_total:
+        payload["gateway_denials"] = gateway_total
+
+    return payload
 
 
 def build_executor_rejection_metadata(gate_id: int, tool_error_code: str, **extra) -> dict:
