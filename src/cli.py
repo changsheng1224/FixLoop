@@ -193,8 +193,15 @@ def _ablation(args) -> int:
 def _print_repair_result(state, verbose: bool) -> None:
     if verbose:
         plan = state.repair_plan
+        variants = ""
+        if plan and plan.prompt_variants:
+            variants = ", variants=" + ",".join(
+                f"{role}={key}" for role, key in sorted(plan.prompt_variants.items())
+            )
+        lang_source = f" ({plan.language_source})" if plan and plan.language_source else ""
         print(
-            f"[Orchestrator] 识别: {plan.language}, {plan.issue_type}, {plan.suspect_files}",
+            f"[Orchestrator] 识别: {plan.language}{lang_source}, "
+            f"{plan.issue_type}, {plan.suspect_files}{variants}",
             file=sys.stderr,
         )
         print(f"[Localizer] 定位 {len(state.suspect_locations)} 个嫌疑位置", file=sys.stderr)

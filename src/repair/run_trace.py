@@ -83,6 +83,7 @@ class RepairRunTracer:
             aggregate_rejection_from_agent_reports,
         )
         from agent_runtime.tool_rejection import build_rejection_observability_payload
+        from src.repair.prompt_router import repair_plan_intent_snapshot
         from src.repair.timing_schema import phases_for_report
         from src.repair.ttft_aggregate import aggregate_ttft_from_agent_reports
 
@@ -103,6 +104,8 @@ class RepairRunTracer:
             **rejection_summary,
             **ttft_summary,
         }
+        if state.repair_plan is not None:
+            report["repair_plan"] = repair_plan_intent_snapshot(state.repair_plan)
         self.store.write_report_by_id(self.run_id, report)
         finished_payload = {
             "status": state.status,
@@ -112,6 +115,8 @@ class RepairRunTracer:
             "tool_usage_by_agent": tool_summary.get("tool_usage_by_agent", {}),
             "agents": list(by_agent.keys()),
         }
+        if state.repair_plan is not None:
+            finished_payload["intent"] = repair_plan_intent_snapshot(state.repair_plan)
         obs = build_rejection_observability_payload(rejection_summary)
         if obs:
             finished_payload.update(obs)

@@ -21,7 +21,19 @@ class TestOrchestrator:
         )
         plan = orch._parse_issue("TypeError: unsupported operand at calculator.py:42")
         assert plan.issue_type == "type_error"
+        assert plan.language == "python"
+        assert plan.prompt_variants == {
+            "patcher": "type_error",
+            "localizer": "stack_first",
+        }
         assert "calculator.py" in plan.suspect_files
+
+    def test_parse_java_language(self):
+        orch = Orchestrator(None, None, None)
+        issue = "java.lang.NullPointerException at Bar.java:10"
+        plan = orch._parse_issue(issue)
+        assert plan.language == "java"
+        assert plan.prompt_variants["patcher"] == "default"
 
     def test_parse_import_error(self):
         orch = Orchestrator(None, None, None)
@@ -158,17 +170,22 @@ class TestOrchestrator:
         assert (runs_dir / "report.json").is_file()
 
         agents_seen = set()
+        events = []
         for line in (runs_dir / "trace.jsonl").read_text(encoding="utf-8").strip().splitlines():
             rec = json.loads(line)
+            events.append(rec)
             agent = rec.get("payload", {}).get("agent")
             if agent:
                 agents_seen.add(agent)
         assert "localizer" in agents_seen
         assert "retriever" in agents_seen
         assert "orchestrator" in agents_seen
+        assert any(e.get("event") == "prompt_routing" for e in events)
 
         report = json.loads((runs_dir / "report.json").read_text(encoding="utf-8"))
         assert report.get("phases", {}).get("repair_total_ms", 0) > 0
+        assert report.get("repair_plan", {}).get("issue_type") == "type_error"
+        assert report["repair_plan"]["prompt_variants"]["patcher"] == "type_error"
         by_agent = state.node_timings.get("token_usage_by_agent") or report.get(
             "token_usage_by_agent", {}
         )
@@ -183,6 +200,27 @@ class TestOrchestrator:
         )
         assert "localizer" in tool_summary
         assert report.get("total_tool_steps") == sum(tool_summary.values())
+
+    def test_repair_warns_non_python_language(self, temp_workspace, monkeypatch):
+        from src.repair import pipeline as pipeline_mod
+
+        warnings: list[str] = []
+
+        def capture(msg, *args, **kwargs):
+            warnings.append(msg % args if args else str(msg))
+
+        monkeypatch.setattr(pipeline_mod.log, "warning", capture)
+
+        (temp_workspace / "Bar.java").write_text("class Bar {}\n", encoding="utf-8")
+        ws = WorkspaceContext.build(str(temp_workspace))
+        orch = Orchestrator(
+            create_localizer(FakeModelClient(["<final>[]</final>"]), ws),
+            None,
+            None,
+        )
+        state = orch.repair("java.lang.NullPointerException at Bar.java:10")
+        assert state.repair_plan.language == "java"
+        assert any("Verifier 仅支持 Python" in w for w in warnings)
 
     def test_retriever_prompt_from_plan(self):
         orch = Orchestrator(None, None, None)

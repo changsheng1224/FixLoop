@@ -29,12 +29,19 @@ class TestRepairPlan:
     def test_json_roundtrip(self):
         p = RepairPlan(
             language="python",
+            language_source="extension:.py",
             issue_type="type_error",
             suspect_files=["calc.py"],
             reasoning="TypeError at line 42",
+            prompt_variants={"patcher": "type_error", "localizer": "stack_first"},
         )
         restored = RepairPlan.from_dict(p.to_dict())
         assert restored.issue_type == "type_error"
+        assert restored.language_source == "extension:.py"
+        assert restored.prompt_variants == {
+            "patcher": "type_error",
+            "localizer": "stack_first",
+        }
 
 
 class TestRetrievedContext:
