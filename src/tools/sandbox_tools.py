@@ -7,8 +7,12 @@ Orchestrator 可直连 harness，避免 Verifier LLM 多轮 tool 调用开销。
 import json
 from dataclasses import dataclass
 
-from src.harness.sandbox_manager import ExecResult
+from src.harness.sandbox_verify import ensure_sandbox, run_sandbox_verification_flow
 from src.state import VerificationResult
+
+# 兼容旧测试 / 内部引用
+_ensure_sandbox = ensure_sandbox
+_run_test_in_sandbox = run_sandbox_verification_flow
 
 
 @dataclass
@@ -24,7 +28,7 @@ class SandboxTestArgs:
 
 def sandbox_build(context, args: dict) -> str:
     """在 Docker 容器内执行 pip install -e /code，缓存容器 ID 供后续 test 复用。"""
-    return _ensure_sandbox(context, args.get("repo_path", ""))["build_result"]
+    return ensure_sandbox(context, args.get("repo_path", ""))["build_result"]
 
 
 def sandbox_test(context, args: dict) -> str:
@@ -86,134 +90,4 @@ def run_sandbox_verification(
 
         context = ToolContext(root=repo_path)
 
-    result, timings = _run_test_in_sandbox(context, repo_path, test_path)
-    return result, timings
-
-
-def _run_test_in_sandbox(context, repo: str, test_path: str) -> tuple[VerificationResult, dict]:
-    """创建容器 → 可选 pip install → pytest → 销毁。"""
-    from src.harness.python_runner import PythonTestRunner
-    from src.harness.sandbox_manager import Sandbox, SandboxManager
-    from src.harness.sandbox_tar import SandboxArchiveError
-
-    sandbox_id = getattr(context, "_sandbox_id", None)
-    mgr = getattr(context, "_sandbox_mgr", None)
-    timings: dict[str, int | str] = {}
-    sandbox = None
-    created_here = False
-
-    try:
-        if sandbox_id is None or mgr is None:
-            mgr = SandboxManager()
-            try:
-                sandbox = mgr.create(repo)
-            except SandboxArchiveError as exc:
-                return _verification_result_for_tar_error(exc), _timings_for_tar_error(exc)
-            created_here = True
-            context._sandbox_id = sandbox.id
-            context._sandbox_mgr = mgr
-            context._sandbox_repo = repo
-            if sandbox.timings:
-                timings.update(sandbox.timings)
-            build_result, pip_ms, pip_exec = _maybe_pip_install(mgr, sandbox, repo)
-            timings["pip_ms"] = pip_ms
-            timings["build_result"] = build_result
-            context._build_result = build_result
-            if pip_exec is not None and pip_exec.exit_code == -1:
-                from src.harness.python_runner import verification_result_for_exec_timeout
-                from src.harness.sandbox_manager import BUILD_TIMEOUT_S
-
-                result = verification_result_for_exec_timeout(
-                    "pip install",
-                    BUILD_TIMEOUT_S,
-                    pip_exec,
-                )
-                result.build_log = build_result
-                timings["pytest_ms"] = 0
-                return result, timings
-        else:
-            sandbox = Sandbox(id=sandbox_id, profile="python")
-            timings["build_result"] = getattr(context, "_build_result", "reused")
-
-        runner = PythonTestRunner(mgr)
-        import time
-
-        t0 = time.time()
-        result = runner.run(sandbox, test_path)
-        timings["pytest_ms"] = int((time.time() - t0) * 1000)
-        return result, timings
-    finally:
-        if sandbox is not None and mgr is not None and created_here:
-            try:
-                mgr.destroy(sandbox)
-            except Exception:
-                pass
-            context._sandbox_id = None
-            context._sandbox_mgr = None
-
-
-def _ensure_sandbox(context, repo_path: str) -> dict:
-    """确保容器已创建并完成构建（幂等）。"""
-    sandbox_id = getattr(context, "_sandbox_id", None)
-
-    if sandbox_id is None:
-        from src.harness.sandbox_manager import SandboxManager
-        from src.harness.sandbox_tar import SandboxArchiveError
-
-        mgr = SandboxManager()
-        try:
-            sandbox = mgr.create(repo_path)
-        except SandboxArchiveError as exc:
-            return {"status": "error", "build_result": str(exc), "tar_error_code": exc.code}
-        context._sandbox_id = sandbox.id
-        context._sandbox_mgr = mgr
-        context._sandbox_repo = repo_path
-
-        build_result, _pip_ms, _pip_exec = _maybe_pip_install(mgr, sandbox, repo_path)
-        context._build_result = build_result
-        return {"status": "created", "build_result": build_result}
-
-    return {"status": "reused", "build_result": getattr(context, "_build_result", "")}
-
-
-def _verification_result_for_tar_error(exc) -> VerificationResult:
-    return VerificationResult(all_passed=False, failure_logs=[str(exc)])
-
-
-def _timings_for_tar_error(exc) -> dict:
-    return {
-        "tar_error_code": exc.code,
-        "tar_bytes": exc.total_bytes,
-        "tar_max_bytes": exc.max_bytes,
-        "tar_file_count": exc.file_count,
-    }
-
-
-def _maybe_pip_install(mgr, sandbox, repo_path: str) -> tuple[str, int, ExecResult | None]:
-    """仅在有声明依赖时 pip install -e /code。"""
-    import time
-    from pathlib import Path
-
-    repo = Path(repo_path)
-    needs_install = False
-    for cfg in ("pyproject.toml", "setup.py", "setup.cfg"):
-        if (repo / cfg).exists():
-            txt = (repo / cfg).read_text(encoding="utf-8", errors="ignore")
-            if "install_requires" in txt or "dependencies" in txt:
-                needs_install = True
-            break
-
-    if not needs_install:
-        return "skipped (no project dependencies detected)", 0, None
-
-    from src.harness.sandbox_manager import BUILD_TIMEOUT_S, sandbox_pip_install_command
-
-    t0 = time.time()
-    result = mgr.execute(
-        sandbox,
-        sandbox_pip_install_command(),
-        timeout=BUILD_TIMEOUT_S,
-    )
-    pip_ms = int((time.time() - t0) * 1000)
-    build_result = f"pip install: exit_code={result.exit_code}\n{result.stdout}"
-    return build_result, pip_ms, result
+    return _run_test_in_sandbox(context, repo_path, test_path)

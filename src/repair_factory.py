@@ -31,7 +31,7 @@ def try_create_verifier(client, ws, repo: str):
 
     from src.harness.sandbox_health import probe_sandbox_health
 
-    report = probe_sandbox_health()
+    report = probe_sandbox_health(run_smoke=False)
     if not report.ready:
         detail = "; ".join(report.errors) or "sandbox not ready"
         print(f"[repair_factory] sandbox health probe failed: {detail}", file=sys.stderr)

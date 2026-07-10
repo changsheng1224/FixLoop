@@ -83,7 +83,7 @@ class TestTryCreateVerifier:
 
         monkeypatch.setattr(
             "src.harness.sandbox_health.probe_sandbox_health",
-            lambda: FakeReport(),
+            lambda **_kwargs: FakeReport(),
         )
         assert try_create_verifier(None, workspace, workspace.repo_root) is None
 
@@ -95,12 +95,19 @@ class TestTryCreateVerifier:
             errors = []
 
         fake_verifier = object()
+        calls: list[dict] = []
+
+        def fake_probe(**kwargs):
+            calls.append(kwargs)
+            return FakeReport()
+
         monkeypatch.setattr(
             "src.harness.sandbox_health.probe_sandbox_health",
-            lambda: FakeReport(),
+            fake_probe,
         )
         monkeypatch.setattr(
             "src.repair_factory.create_verifier",
             lambda *_a, **_k: fake_verifier,
         )
         assert try_create_verifier(None, workspace, workspace.repo_root) is fake_verifier
+        assert calls == [{"run_smoke": False}]

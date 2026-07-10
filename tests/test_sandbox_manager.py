@@ -1,6 +1,7 @@
 """SandboxManager + PatchApplier + TestRunner 单测（Mock docker）。"""
 
 import json
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -8,7 +9,9 @@ import pytest
 from src.harness.patch_applier import PatchApplier
 from src.harness.python_runner import PythonTestRunner
 from src.harness.sandbox_manager import (
+    EXEC_TIMEOUT_EXIT_CODE,
     ExecResult,
+    Sandbox,
     SandboxManager,
     sandbox_container_run_kwargs,
     sandbox_pip_install_command,
@@ -105,6 +108,41 @@ class TestSandboxManager:
             sandbox_tar_mod.sandbox_tar_max_bytes = original_max
 
         mgr._docker.containers.run.assert_not_called()
+
+    def test_create_kills_container_when_put_archive_fails(self, tmp_path):
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "main.py").write_text("x = 1\n", encoding="utf-8")
+
+        fake_container = MagicMock()
+        fake_container.id = "container-fail"
+        fake_container.put_archive.side_effect = RuntimeError("upload failed")
+
+        mgr = SandboxManager()
+        mgr._docker = MagicMock()
+        mgr._docker.containers.run.return_value = fake_container
+
+        with pytest.raises(RuntimeError, match="upload failed"):
+            mgr.create(str(repo))
+        fake_container.kill.assert_called_once()
+
+    def test_execute_timeout_kills_container(self):
+        mgr = SandboxManager()
+        fake_container = MagicMock()
+
+        def slow_exec(*_args, **_kwargs):
+            time.sleep(2)
+            return (0, b"done")
+
+        fake_container.exec_run = slow_exec
+        mgr._docker = MagicMock()
+        mgr._docker.containers.get.return_value = fake_container
+
+        result = mgr.execute(Sandbox(id="sb-1", profile="python"), "sleep 2", timeout=1)
+
+        assert result.exit_code == EXEC_TIMEOUT_EXIT_CODE
+        assert "timeout after 1s" in result.stderr
+        fake_container.kill.assert_called_once()
 
 
 class TestPatchApplier:

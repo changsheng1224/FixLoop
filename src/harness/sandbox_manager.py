@@ -15,6 +15,7 @@ from src.harness.sandbox_tar import build_sandbox_tar
 
 BUILD_TIMEOUT_S = 600
 TEST_TIMEOUT_S = 900
+EXEC_TIMEOUT_EXIT_CODE = -1
 
 # 可写面仅 /code + /tmp（read_only rootfs + tmpfs）；大小可通过环境变量调节。
 DEFAULT_TMPFS_TMP = "size=512m"
@@ -109,7 +110,7 @@ class SandboxManager:
         import time
 
         repo = Path(repo_path).resolve()
-        image = f"{self.IMAGE}" if profile == "python" else self.IMAGE
+        image = self.IMAGE
         timings: dict[str, int] = {}
 
         t_pack = time.time()
@@ -126,8 +127,15 @@ class SandboxManager:
         timings["container_create_ms"] = int((time.time() - t0) * 1000)
 
         t1 = time.time()
-        tar_stream.seek(0)
-        container.put_archive("/", tar_stream)
+        try:
+            tar_stream.seek(0)
+            container.put_archive("/", tar_stream)
+        except Exception:
+            try:
+                container.kill()
+            except Exception:
+                pass
+            raise
         timings["tar_copy_ms"] = int((time.time() - t1) * 1000)
 
         return Sandbox(id=container.id, profile=profile, timings=timings)
@@ -149,8 +157,12 @@ class SandboxManager:
             try:
                 exit_code, output = fut.result(timeout=timeout)
             except FuturesTimeoutError:
+                try:
+                    container.kill()
+                except Exception:
+                    pass
                 return ExecResult(
-                    exit_code=-1,
+                    exit_code=EXEC_TIMEOUT_EXIT_CODE,
                     stdout="",
                     stderr=f"timeout after {timeout}s",
                 )

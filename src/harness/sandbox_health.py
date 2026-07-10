@@ -74,6 +74,28 @@ def _run_network_smoke(client, image_ref: str) -> str:
         return f"error:{exc}"
 
 
+def _fail_report(
+    t0: float,
+    errors: list[str],
+    *,
+    docker_ping: str,
+    docker_info: str = "skipped",
+    image: str = "skipped",
+    network_smoke: str = "skipped",
+    image_ref: str = "",
+) -> SandboxHealthReport:
+    return SandboxHealthReport(
+        ready=False,
+        docker_ping=docker_ping,
+        docker_info=docker_info,
+        image=image,
+        network_smoke=network_smoke,
+        image_ref=image_ref,
+        checks_ms=int((time.time() - t0) * 1000),
+        errors=errors,
+    )
+
+
 def probe_sandbox_health(*, run_smoke: bool = True, client=None) -> SandboxHealthReport:
     """执行 sandbox 就绪检查；``ready=False`` 时 Verifier 应降级。"""
     t0 = time.time()
@@ -90,15 +112,7 @@ def probe_sandbox_health(*, run_smoke: bool = True, client=None) -> SandboxHealt
         docker_ping = "ok"
     except Exception as exc:
         errors.append(f"docker ping: {exc}")
-        return SandboxHealthReport(
-            ready=False,
-            docker_ping=docker_ping,
-            docker_info="skipped",
-            image="skipped",
-            network_smoke="skipped",
-            checks_ms=int((time.time() - t0) * 1000),
-            errors=errors,
-        )
+        return _fail_report(t0, errors, docker_ping=docker_ping)
 
     try:
         info = docker.info()
@@ -108,43 +122,37 @@ def probe_sandbox_health(*, run_smoke: bool = True, client=None) -> SandboxHealt
     except Exception as exc:
         docker_info = f"error:{exc}"
         errors.append(f"docker info: {exc}")
-        return SandboxHealthReport(
-            ready=False,
+        return _fail_report(
+            t0,
+            errors,
             docker_ping=docker_ping,
             docker_info=docker_info,
-            image="skipped",
-            network_smoke="skipped",
-            checks_ms=int((time.time() - t0) * 1000),
-            errors=errors,
         )
 
     image_ref, image_status = _resolve_image(docker, SandboxManager.IMAGE)
     if image_status != "ok":
         errors.append(f"image: {image_status}")
-        return SandboxHealthReport(
-            ready=False,
+        return _fail_report(
+            t0,
+            errors,
             docker_ping=docker_ping,
             docker_info=docker_info,
             image=image_status,
-            network_smoke="skipped",
             image_ref=image_ref,
-            checks_ms=int((time.time() - t0) * 1000),
-            errors=errors,
         )
 
     if run_smoke:
         network_smoke = _run_network_smoke(docker, image_ref)
         if network_smoke != "ok":
             errors.append(f"network_smoke: {network_smoke}")
-            return SandboxHealthReport(
-                ready=False,
+            return _fail_report(
+                t0,
+                errors,
                 docker_ping=docker_ping,
                 docker_info=docker_info,
                 image=image_status,
                 network_smoke=network_smoke,
                 image_ref=image_ref,
-                checks_ms=int((time.time() - t0) * 1000),
-                errors=errors,
             )
     else:
         network_smoke = "skipped"
