@@ -58,7 +58,7 @@
 - **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] 死循环检测**：相同 `(tool_name, args_hash)` 连续 **K** 次 → `stop_reason=circuit_breaker` · trace `loop_detected`
 - **[P1] [C:⭐ I:⭐⭐⭐⭐] 目标漂移 / stall 终止**：连续 N 步无 `affected_paths` 且无 final → `stop_reason=stall` · task_summary 锚定 · 提示 replan
 - **[P1] [C:⭐⭐⭐ I:⭐⭐⭐⭐] 显式 ReAct 阶段 trace** ✅：每步 `react_phase: reasoning|acting|observation|recording`（native/XML 双路径）
-- **[P2] 🔶 [C:⭐ I:⭐⭐⭐] Agentic Loop trace 事件表**：Observe→Context→Model→Tool→Record 与 `context_built` · `tool_executed` 单测快照 — `context_built` 已 emit（`3c67e15`）；事件表单测快照待补
+- **[P2] 🔶 [C:⭐ I:⭐⭐⭐] Agentic Loop trace 事件表** ✅：`loop_trace_schema.py` 五段映射 + XML/Native 快照单测；Native 补齐 `context_built`
 
 ### 2.4 ReAct 步进 · 超时 · 解析
 

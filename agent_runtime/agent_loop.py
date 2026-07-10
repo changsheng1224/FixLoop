@@ -147,6 +147,7 @@ class AgentLoop:
 
         system_prompt, user_message, budget_meta = self.agent.build_for_native(user_message)
         self._last_budget_meta = budget_meta
+        self._emit("context_built", build_trace_payload(budget_meta))
         # 构建 Anthropic 格式的工具定义
         tools_def = _build_anthropic_tools(self.agent.tools)
 
