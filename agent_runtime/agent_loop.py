@@ -87,10 +87,13 @@ class AgentLoop:
         self.stop_reason = ts.stop_reason or self.stop_reason
 
     def _run_finished_payload(self, ts) -> dict:
+        from agent_runtime.tool_rejection import build_rejection_observability_payload
+
         payload = {"stop_reason": ts.stop_reason or self.stop_reason}
         detail = ts.node_timings.get("stop_reason_detail", "")
         if detail:
             payload["stop_reason_detail"] = detail
+        payload.update(build_rejection_observability_payload(ts.rejection_report_fields()))
         return payload
 
     def _emit_run_finished(self, ts) -> None:

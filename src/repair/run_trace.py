@@ -81,8 +81,8 @@ class RepairRunTracer:
         from src.repair.agent_report_loader import load_agent_reports_from_run, project_token_usage_by_agent
         from src.repair.rejection_aggregate import (
             aggregate_rejection_from_agent_reports,
-            gateway_denial_count,
         )
+        from agent_runtime.tool_rejection import build_rejection_observability_payload
         from src.repair.timing_schema import phases_for_report
         from src.repair.ttft_aggregate import aggregate_ttft_from_agent_reports
 
@@ -112,11 +112,9 @@ class RepairRunTracer:
             "tool_usage_by_agent": tool_summary.get("tool_usage_by_agent", {}),
             "agents": list(by_agent.keys()),
         }
-        if rejection_summary:
-            finished_payload["gateway_denials"] = gateway_denial_count(rejection_summary)
-            denied = rejection_summary.get("permission_denied_by_tool")
-            if denied:
-                finished_payload["permission_denied_by_tool"] = denied
+        obs = build_rejection_observability_payload(rejection_summary)
+        if obs:
+            finished_payload.update(obs)
         self.emit(
             "orchestrator",
             "repair_finished",

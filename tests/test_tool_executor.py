@@ -112,6 +112,12 @@ class TestToolExecutorGates:
         assert "affected_paths" in result.metadata
         assert "new.txt" in result.metadata["affected_paths"]
 
+    def test_gate3_path_escape_rejected(self, executor):
+        result = executor.execute("read_file", {"path": "../outside.txt"})
+        assert result.metadata["gate_id"] == 3
+        assert result.metadata["tool_error_code"] == "path_escape"
+        assert result.metadata["tool_status"] == "rejected"
+
     def test_readonly_tool_no_snapshot(self, agent):
         executor = ToolExecutor(agent=agent, approval_policy="auto")
         result = executor.execute("list_files", {"path": "."})

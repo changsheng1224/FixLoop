@@ -24,6 +24,13 @@ def _latest_report(repo_root: str) -> dict:
     return json.loads((run_dirs[-1] / "report.json").read_text(encoding="utf-8"))
 
 
+def _latest_trace_events(repo_root: str) -> list[dict]:
+    runs_dir = Path(repo_root) / ".agent" / "runs"
+    run_dirs = sorted(runs_dir.iterdir(), key=lambda p: p.stat().st_mtime)
+    lines = (run_dirs[-1] / "trace.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    return [json.loads(line) for line in lines if line.strip()]
+
+
 class TestExecutorRejectionMetadata:
     def test_gate1_has_executor_layer(self, workspace):
         config = AgentConfig(provider="fake", max_steps=4, approval="auto")
@@ -146,6 +153,39 @@ class TestReportIntegration:
         assert "tool_rejections_by_layer" not in report
         assert "permission_denied_by_tool" not in report
 
+    def test_path_escape_counts_gate3_in_report(self, workspace):
+        outputs = [
+            '<tool>{"name":"read_file","args":{"path":"../outside.txt"}}</tool>',
+            "<final>done</final>",
+        ]
+        config = AgentConfig(provider="fake", max_steps=4, approval="auto")
+        agent = Agent(
+            config=config,
+            model_client=FakeModelClient(outputs),
+            workspace=workspace,
+        )
+        agent.ask("escape")
+        report = _latest_report(workspace.repo_root)
+
+        assert report["tool_rejections_by_layer"]["executor"] == 1
+        assert report["tool_rejections_by_gate"]["3"] == 1
+
+    def test_run_finished_includes_grafana_metrics(self, workspace):
+        outputs = [
+            '<tool>{"name":"write_file","args":{"path":"x.py","content":"y"}}</tool>',
+            "<final>done</final>",
+        ]
+        agent = create_localizer(FakeModelClient(outputs), workspace)
+        agent.ask("gateway deny")
+        events = _latest_trace_events(workspace.repo_root)
+        finished = next(e for e in events if e.get("event") == "run_finished")
+
+        assert finished["payload"]["gateway_denials"] == 1
+        assert finished["payload"]["tool_rejections_by_gate"]["gateway"] == 1
+        assert finished["payload"]["tool_rejection_metrics"] == [
+            {"layer": "gateway", "gate_id": "gateway", "count": 1},
+        ]
+
 
 class TestRepairRejectionAggregation:
     def test_repair_report_aggregates_gateway_denials(self, temp_workspace):
@@ -180,6 +220,7 @@ class TestRepairRejectionAggregation:
         )
         assert report["permission_denied_by_tool"]["write_file"] == 2
         assert report["tool_rejections_by_layer"]["gateway"] == 2
+        assert report["tool_rejections_by_gate"]["gateway"] == 2
 
         trace_lines = (
             temp_workspace / ".agent" / "runs" / state.repair_run_id / "trace.jsonl"
@@ -187,3 +228,7 @@ class TestRepairRejectionAggregation:
         finished = json.loads(trace_lines[-1])
         assert finished["event"] == "repair_finished"
         assert finished["payload"]["gateway_denials"] == 2
+        assert finished["payload"]["tool_rejections_by_gate"]["gateway"] == 2
+        assert finished["payload"]["tool_rejection_metrics"] == [
+            {"layer": "gateway", "gate_id": "gateway", "count": 2},
+        ]
