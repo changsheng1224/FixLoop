@@ -46,7 +46,8 @@ class TestSingleAgentBaseline:
         orch = SingleAgentOrchestrator(agent, str(temp_workspace))
         state = orch.repair("TypeError in calc.py")
         assert state.candidate_patches
-        assert state.status == "patched"
+        assert state.status == "fixed"
+        assert state.node_timings.get("verify_skipped") is True
         assert "return a + b" in (temp_workspace / "calc.py").read_text()
 
     def test_factory_returns_orchestrator(self, temp_workspace):
@@ -71,5 +72,6 @@ class TestSingleAgentBaseline:
 
         monkeypatch.setattr(agent, "ask", ask_and_patch)
         state = orch.repair("fix calc")
-        assert state.status == "patched"
+        assert state.status == "fixed"
+        assert state.node_timings.get("verify_skipped") is True
         assert not state.agent_errors

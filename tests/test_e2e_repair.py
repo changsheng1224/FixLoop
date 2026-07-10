@@ -64,7 +64,7 @@ class TestSelfHealing:
 
 class TestEdgeCases:
     def test_no_verifier_fallback(self, ws, temp_workspace):
-        """无 Verifier 且补丁成功应用时 status=patched。"""
+        """无 Verifier 且补丁成功应用时 status=fixed + verify_skipped。"""
         (temp_workspace / "calc.py").write_text("x = 1\n", encoding="utf-8")
         loc = FakeModelClient(
             [
@@ -88,7 +88,8 @@ class TestEdgeCases:
         )
         orch._repo_root = str(temp_workspace)
         state = orch.repair("test")
-        assert state.status == "patched"
+        assert state.status == "fixed"
+        assert state.node_timings.get("verify_skipped") is True
 
     def test_build_feedback_format(self):
         """_build_feedback 格式化失败日志。"""

@@ -48,7 +48,7 @@ class TestCliRepair:
 
         assert main() == 0
         out = capsys.readouterr().out
-        assert "patched" in out or "修复完成" in out
+        assert "fixed" in out or "修复完成" in out
 
     def test_main_without_subcommand_returns_1(self, monkeypatch):
         monkeypatch.setattr(sys, "argv", ["src.cli"])

@@ -402,14 +402,14 @@
 > 设计见 [DESIGN §15](bonus/DESIGN.md#15-自愈闭环)。
 
 - **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] 反馈环增强**：失败测试 + 上轮改动 + 回滚提示 + build_log → `state.feedback`
-- **[P1] [C:⭐⭐ I:⭐⭐⭐] 终止条件枚举**：`fixed|exhausted|regression|timeout|user_cancel` → `RepairState.status`
+- **[P1] [C:⭐⭐ I:⭐⭐⭐] 终止条件枚举** ✅：`fixed|exhausted|regression|timeout|user_cancel` → `RepairState.status`
 
 ### 15.1 Bad Case 闭环
 
 > 设计见 [DESIGN §15.1](bonus/DESIGN.md#151-bad-case-采集--回归闭环)。
 
 - **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] badcase → 新 eval Case 晋升**：标注 `expected_patch` · 进 `src/eval/cases/` · CI 回归
-- **[P2] [C:⭐ I:⭐⭐⭐] 失败分类 tag**：`parse_fail|wrong_file|regression|timeout` 进 badcase metadata
+- **[P2] [C:⭐ I:⭐⭐⭐] 失败分类 tag** ✅：`parse_fail|wrong_file|regression|timeout` 进 badcase metadata
 
 ---
 

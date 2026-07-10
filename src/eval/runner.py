@@ -16,6 +16,7 @@ import yaml
 
 from src.eval.models import CaseResult, EvalReport
 from src.eval.patch_utils import apply_unified_patch
+from src.repair.termination import introduced_regression, regression_detected
 
 DEFAULT_CASES_DIR = Path(__file__).resolve().parent / "cases"
 
@@ -177,7 +178,6 @@ class EvalRunner:
             shutil.copytree(case_dir / "repo", tmp_repo)
 
             pre_code, _pre_out = run_pytest(tmp_repo)
-            pre_passing = pre_code == 0
 
             t0 = time.time()
             error = ""
@@ -199,12 +199,13 @@ class EvalRunner:
             actual_patch = collect_repo_diff(original_snapshot, tmp_repo)
             actual_lines = count_changed_lines(actual_patch)
 
-            introduced_regression = False
-            if not pre_passing and not fixed and post_code != pre_code:
-                introduced_regression = post_code != 0 and pre_code != 0
+            introduced_regression_flag = regression_detected(pre_code, post_code)
+            if state and introduced_regression(state):
+                introduced_regression_flag = True
 
-            retry_count = getattr(state, "retry_count", 0) if state else 0
-            status = getattr(state, "status", "") if state else ""
+            retry_count = state.retry_count if state else 0
+            status = state.status if state else ""
+            failure_tags = list(state.failure_tags) if state else []
             total_tokens = 0
             token_usage: dict = {}
             permission_denied_by_tool: dict = {}
@@ -235,8 +236,9 @@ class EvalRunner:
                 duration_ms=duration_ms,
                 agent_timings=extract_agent_timings(getattr(state, "node_timings", None)),
                 error=error,
-                introduced_regression=introduced_regression,
+                introduced_regression=introduced_regression_flag,
                 status=status,
+                failure_tags=failure_tags,
                 total_tokens=total_tokens,
                 token_usage=token_usage if isinstance(token_usage, dict) else {},
                 permission_denied_by_tool=permission_denied_by_tool,

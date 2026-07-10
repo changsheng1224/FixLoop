@@ -70,7 +70,8 @@ class TestOrchestratorRobustness:
         assert "retriever" in state.agent_errors
         assert state.retrieved_context is not None
         assert len(state.candidate_patches) == 1
-        assert state.status == "patched"
+        assert state.status == "fixed"
+        assert state.node_timings.get("verify_skipped") is True
 
     def test_sandbox_destroy_on_exception(self):
         """pytest 异常时仍销毁沙箱容器。"""
