@@ -7,6 +7,7 @@ from typing import Protocol
 
 from agent_runtime.logging_setup import get_logger
 from agent_runtime.tokenizer_assets import local_tokenizer_json
+from agent_runtime.tokenizer_registry import TokenizerSpec, build_tokenizer_spec
 
 log = get_logger("tokenizers")
 
@@ -15,6 +16,8 @@ DEFAULT_DEEPSEEK_TOKENIZER = "deepseek-ai/deepseek-llm-7b-chat"
 DEEPSEEK_TOKENIZER_ENV = "DEEPSEEK_TOKENIZER_ID"
 
 _COUNTER_CACHE: dict[tuple[str, str], TokenCounter] = {}
+_SPEC_CACHE: dict[tuple[str, str], TokenizerSpec] = {}
+_WARNED_KEYS: set[tuple[str, str]] = set()
 
 
 class TokenCounter(Protocol):
@@ -114,22 +117,51 @@ def resolve_deepseek_tokenizer_id(model: str = "") -> str:
     return DEFAULT_DEEPSEEK_TOKENIZER
 
 
+def resolve_tokenizer_spec(model: str = "", provider: str = "") -> TokenizerSpec:
+    """按 model + provider 返回 tokenizer 解析规格（含 fallback/warn 标记）。"""
+    key = (model.lower(), provider.lower())
+    if key not in _SPEC_CACHE:
+        _SPEC_CACHE[key] = build_tokenizer_spec(
+            model,
+            provider,
+            resolve_deepseek_id=resolve_deepseek_tokenizer_id,
+        )
+    return _SPEC_CACHE[key]
+
+
+def _maybe_warn_spec(model: str, provider: str, spec: TokenizerSpec) -> None:
+    key = (model.lower(), provider.lower())
+    if key in _WARNED_KEYS:
+        return
+    if spec.fallback:
+        log.warning(
+            "unknown model %r (provider=%r), fallback cl100k_base",
+            model or "(empty)",
+            provider or "(empty)",
+        )
+        _WARNED_KEYS.add(key)
+        return
+    if spec.warn:
+        log.warning(
+            "tokenizer %s for model %r (provider=%r): %s",
+            spec.rule_id,
+            model or "(empty)",
+            provider or "(empty)",
+            spec.warn,
+        )
+        _WARNED_KEYS.add(key)
+
+
 def _build_counter(model: str, provider: str) -> TokenCounter:
-    model_lower = (model or "").lower()
-    provider_lower = (provider or "").lower()
+    spec = resolve_tokenizer_spec(model, provider)
+    _maybe_warn_spec(model, provider, spec)
 
-    if provider_lower == "openai" or model_lower.startswith("gpt-"):
-        return TiktokenCounter(model or "gpt-4")
+    if spec.backend_kind == "huggingface":
+        assert spec.tokenizer_id is not None
+        return HuggingFaceTokenizerCounter(spec.tokenizer_id)
 
-    if provider_lower in ("deepseek", "anthropic_compat", "") or model_lower.startswith("deepseek"):
-        tok_id = resolve_deepseek_tokenizer_id(model)
-        return HuggingFaceTokenizerCounter(tok_id)
-
-    if provider_lower == "ollama":
-        if "qwen" in model_lower:
-            return HuggingFaceTokenizerCounter("Qwen/Qwen2.5-0.5B-Instruct")
-        return TiktokenCounter(model or "gpt-4")
-
+    if spec.encoding:
+        return TiktokenCounter(model or "gpt-4", encoding_name=spec.encoding)
     return TiktokenCounter(model or "gpt-4")
 
 
@@ -142,5 +174,7 @@ def resolve_token_counter(model: str = "", provider: str = "") -> TokenCounter:
 
 
 def clear_token_counter_cache() -> None:
-    """测试用：清空 counter 缓存。"""
+    """测试用：清空 counter 与 spec 缓存。"""
     _COUNTER_CACHE.clear()
+    _SPEC_CACHE.clear()
+    _WARNED_KEYS.clear()

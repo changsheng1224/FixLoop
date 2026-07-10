@@ -1,7 +1,7 @@
 """System Prompt 构建：组装发送给模型的系统提示词。
 
 包含：规则 → 工具列表（含签名和风险标记）→ 调用示例 → Workspace 快照。
-稳定段（persona/rules/tools/examples）参与 prompt cache hash；workspace 可变段不参与。
+稳定段（persona/rules/tools）参与 prompt cache hash；examples/skills 与 workspace 不参与 hash。
 rules / examples 可外置至 `.agent/rules.md`、`.agent/examples.md`（见 prompt_external）。
 """
 
@@ -24,12 +24,43 @@ __all__ = [
     "PromptPrefix",
     "TOOL_EXAMPLES",
     "build_custom_system_prefix",
+    "build_prefix_hashes",
     "build_prompt_prefix",
     "build_repair_agent_prefix",
+    "join_stable_parts",
+    "cache_stable_text",
 ]
 
 # 向后兼容：few-shot 内置条目
 TOOL_EXAMPLES = BUILTIN_TOOL_EXAMPLES
+
+
+def join_stable_parts(*parts: str) -> str:
+    """拼接非空 stable 段。"""
+    return "\n\n".join(p.strip() for p in parts if p and p.strip())
+
+
+def cache_stable_text(stable_system_text: str, stable_tools_text: str) -> str:
+    """参与 prompt_cache_key 的稳定段（system + tools）。"""
+    return join_stable_parts(stable_system_text, stable_tools_text)
+
+
+def build_prefix_hashes(prefix: PromptPrefix) -> dict[str, str]:
+    """分段 hash 观测字段；cache_key 与 prompt_cache_key 一致。"""
+    system = prefix.stable_system_text or ""
+    tools = prefix.stable_tools_text or ""
+    skills = prefix.stable_skills_text or ""
+    role = prefix.role_text or ""
+    return {
+        "system": hash_stable_prefix(system) if system else "",
+        "tools": hash_stable_prefix(tools) if tools else "",
+        "skills": hash_stable_prefix(skills) if skills else "",
+        "cache_key": prefix.hash or "",
+        "role": hash_stable_prefix(role) if role else "",
+        "tool_signature": prefix.tool_signature or "",
+        "assets_fingerprint": prefix.assets_fingerprint or "",
+        "workspace_fingerprint": prefix.workspace_fingerprint or "",
+    }
 
 
 @dataclass
@@ -39,10 +70,13 @@ class PromptPrefix:
     text: str
     stable_text: str
     workspace_text: str
-    hash: str  # stable_text 的 SHA256（prompt cache key）
+    hash: str  # cache_stable_text 的 SHA256
     workspace_fingerprint: str
     tool_signature: str  # 工具 schema 的 SHA256
-    role_text: str = ""  # L2 角色 prompt（不进 hash）
+    stable_system_text: str = ""
+    stable_tools_text: str = ""
+    stable_skills_text: str = ""
+    role_text: str = ""  # L2 角色 prompt（不进 hash，fill 时并入 skills）
     assets_fingerprint: str = ""  # 外置 rules+examples 内容 hash
 
 
@@ -73,14 +107,24 @@ def _filter_tools(
 
 
 def _make_prompt_prefix(
-    stable_text: str,
+    stable_system_text: str,
+    stable_tools_text: str,
+    stable_skills_text: str,
     workspace,
     tool_signature: str,
     assets_fingerprint: str = "",
     *,
     role_text: str = "",
 ) -> PromptPrefix:
-    assert_stable_prefix_clean(stable_text)
+    for part in (stable_system_text, stable_tools_text, stable_skills_text, role_text):
+        if part:
+            assert_stable_prefix_clean(part)
+
+    cache_text = cache_stable_text(stable_system_text, stable_tools_text)
+    if not cache_text:
+        cache_text = stable_system_text.strip()
+
+    stable_text = join_stable_parts(stable_system_text, stable_tools_text, stable_skills_text)
     workspace_text = workspace.text()
     parts = [stable_text]
     if role_text:
@@ -91,8 +135,11 @@ def _make_prompt_prefix(
     return PromptPrefix(
         text=text,
         stable_text=stable_text,
+        stable_system_text=stable_system_text.strip(),
+        stable_tools_text=stable_tools_text.strip(),
+        stable_skills_text=stable_skills_text.strip(),
         workspace_text=workspace_text,
-        hash=hash_stable_prefix(stable_text),
+        hash=hash_stable_prefix(cache_text),
         workspace_fingerprint=workspace.fingerprint(),
         tool_signature=tool_signature,
         role_text=role_text,
@@ -116,16 +163,20 @@ def build_prompt_prefix(
     """
     tools_registry = _filter_tools(tools_registry, tool_names)
     prompt_assets = _resolve_assets(workspace, repo_root, assets)
-    stable_sections = [
+    stable_system_text = join_stable_parts(
         _system_persona(),
         compose_rules(prompt_assets, dry_run=dry_run, approval=approval),
-        _tools_section(tools_registry),
-        compose_examples(prompt_assets),
-    ]
-    stable_text = "\n\n".join(stable_sections)
+    )
+    stable_tools_text = _tools_section(tools_registry)
+    stable_skills_text = compose_examples(prompt_assets)
     tool_sig = _tool_signature(tools_registry)
     return _make_prompt_prefix(
-        stable_text, workspace, tool_sig, prompt_assets.fingerprint
+        stable_system_text,
+        stable_tools_text,
+        stable_skills_text,
+        workspace,
+        tool_sig,
+        prompt_assets.fingerprint,
     )
 
 
@@ -143,19 +194,18 @@ def build_repair_agent_prefix(
     """Repair 双层 prefix：L1 stable（rules+tools+examples）+ L2 role（不进 hash）。"""
     tools_registry = _filter_tools(tools_registry, tool_names)
     prompt_assets = _resolve_assets(workspace, repo_root, assets)
-    stable_sections = [
+    stable_system_text = join_stable_parts(
         compose_rules(prompt_assets, dry_run=dry_run, approval=approval),
         _repair_tool_gateway_note(),
-        _tools_section(tools_registry),
-        compose_examples(prompt_assets),
-    ]
-    stable_text = "\n\n".join(stable_sections)
+    )
+    stable_tools_text = _tools_section(tools_registry)
+    stable_skills_text = compose_examples(prompt_assets)
     role_text = l2_role_prompt.strip()
-    if role_text:
-        assert_stable_prefix_clean(role_text)
     tool_sig = _tool_signature(tools_registry)
     return _make_prompt_prefix(
-        stable_text,
+        stable_system_text,
+        stable_tools_text,
+        stable_skills_text,
         workspace,
         tool_sig,
         prompt_assets.fingerprint,
@@ -165,8 +215,14 @@ def build_repair_agent_prefix(
 
 def build_custom_system_prefix(system_prompt: str, workspace) -> PromptPrefix:
     """L2 角色 system prompt + workspace；稳定段仅为 system_prompt。"""
-    stable_text = system_prompt.strip()
-    return _make_prompt_prefix(stable_text, workspace, tool_signature="")
+    stable_system_text = system_prompt.strip()
+    return _make_prompt_prefix(
+        stable_system_text,
+        "",
+        "",
+        workspace,
+        tool_signature="",
+    )
 
 
 def _system_persona() -> str:

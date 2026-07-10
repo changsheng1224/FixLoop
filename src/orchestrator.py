@@ -26,6 +26,13 @@ from src.repair.pipeline import RepairPipelineMixin
 from src.repair.repo_snapshot import restore_repo_snapshot, snapshot_repo
 from src.repair.verify import DockerVerifyStrategy, PytestVerifyStrategy, record_verify_timings
 from src.prompts.loader import load_role_prompt
+from src.prompts.patcher_task_builder import assemble_patcher_variables
+from src.prompts.repair_tasks import (
+    build_localizer_variables,
+    build_retriever_template_and_variables,
+    build_verifier_variables,
+    render_repair_task,
+)
 from src.state import (
     CandidatePatch,
     RepairPlan,
@@ -276,6 +283,7 @@ class Orchestrator(RepairPipelineMixin):
 
     def _begin_repair_trace(self, state: RepairState) -> None:
         from agent_runtime.log_context import bind_run_id
+        from agent_runtime.tokenizers import resolve_tokenizer_spec
         from src.repair.run_trace import RepairRunTracer
 
         tracer = RepairRunTracer(self._repo_root)
@@ -284,6 +292,27 @@ class Orchestrator(RepairPipelineMixin):
         self._repair_tracer = tracer
         state.repair_run_id = run_id
         self._log_run_id_token = bind_run_id(run_id)
+
+        tokenizer_by_agent: dict[str, dict] = {}
+        for name, agent in (
+            ("localizer", self.localizer),
+            ("retriever", self.retriever),
+            ("patcher", self.patcher),
+        ):
+            if agent is None:
+                continue
+            config = getattr(agent, "config", None)
+            spec = resolve_tokenizer_spec(
+                getattr(config, "model", ""),
+                getattr(config, "provider", ""),
+            )
+            tokenizer_by_agent[name] = {
+                "rule_id": spec.rule_id,
+                "tokenizer_fallback": spec.fallback,
+                "tokenizer_id": spec.tokenizer_id,
+            }
+        if tokenizer_by_agent:
+            state.node_timings["tokenizer_by_agent"] = tokenizer_by_agent
 
     def _end_repair_trace(self, state: RepairState) -> None:
         from agent_runtime.log_context import reset_run_id
@@ -348,7 +377,7 @@ class Orchestrator(RepairPipelineMixin):
             ``model_call_ms``, ``parse_apply_ms``, ``total_ms``.
         """
         plan = state.repair_plan
-        prompt = self._patcher_prompt(
+        prompt, tpl_meta = self._patcher_prompt(
             state.suspect_locations,
             state.retrieved_context,
             state.feedback,
@@ -358,6 +387,15 @@ class Orchestrator(RepairPipelineMixin):
 
         issue_type = plan.issue_type if plan else ""
         patcher_system = self._patcher_system_prompt(plan)
+
+        from agent_runtime.context_manager import fit_repair_user_prompt
+
+        prompt, pre_budget_meta = fit_repair_user_prompt(
+            self.patcher,
+            prompt,
+            patcher_system,
+            template_meta=tpl_meta,
+        )
 
         t_start = time.time()
         t_model = time.time()
@@ -408,6 +446,7 @@ class Orchestrator(RepairPipelineMixin):
             usage_after = get_client_session_usage(self.patcher.model_client)
             delta = diff_client_usage(usage_before, usage_after)
             latency_fields = build_report_latency_fields(timings)
+            budget_meta = getattr(self.patcher, "_last_budget_meta", {}) or {}
             tracer.write_agent_token(
                 "patcher",
                 delta,
@@ -415,7 +454,14 @@ class Orchestrator(RepairPipelineMixin):
                     "tool_steps": 0,
                     "node_timings": {"model_call_ms": model_call_ms},
                     "prompt_budget": getattr(self.patcher.config, "prompt_budget", None),
-                    "budget_cuts": getattr(self.patcher, "_last_budget_meta", {}).get("cuts", []),
+                    "budget_cuts": budget_meta.get("cuts", []),
+                    "tokenizer_backend": budget_meta.get("tokenizer_backend"),
+                    "tokenizer_fallback": budget_meta.get("tokenizer_fallback"),
+                    "tokenizer_id": budget_meta.get("tokenizer_id"),
+                    "task_template_source": pre_budget_meta.get("task_template_source"),
+                    "task_template_fingerprint": pre_budget_meta.get(
+                        "task_template_fingerprint"
+                    ),
                     **latency_fields,
                 },
             )
@@ -507,21 +553,11 @@ class Orchestrator(RepairPipelineMixin):
     # ---- Prompt 构建 ----
 
     def _localizer_prompt(self, plan: RepairPlan, issue: str = "") -> str:
-        parts = [f"定位以下问题：\n{issue or plan.reasoning}"]
-        if plan.suspect_files:
-            parts.append(f"嫌疑文件: {', '.join(plan.suspect_files)}")
-        if plan.issue_type == "import_error":
-            parts.append(
-                "这是 import 错误（ModuleNotFoundError/ImportError）。"
-                "优先 read_file 读取嫌疑文件的 import 行；无完整 traceback 时可跳过 stack_parse。"
-                "最后输出 SuspectList JSON，指向错误的 import 语句行。"
-            )
-        else:
-            parts.append(
-                "请用 stack_parse 解析堆栈，再用 ast_parse 分析文件结构，"
-                "最后输出 SuspectList JSON。"
-            )
-        return "\n".join(parts)
+        text, _ = render_repair_task(
+            "localizer",
+            build_localizer_variables(plan, issue),
+        )
+        return text
 
     def _retriever_prompt(
         self,
@@ -529,23 +565,11 @@ class Orchestrator(RepairPipelineMixin):
         plan: RepairPlan | None = None,
         issue: str = "",
     ) -> str:
-        if suspects:
-            parts = ["根据以下嫌疑位置搜索相关代码："]
-            for s in suspects:
-                parts.append(f"  - {s.file_path}:{s.start_line} {s.function_name or ''}")
-            parts.append("请用 find_test 和 search 收集上下文，输出 RetrievedContext JSON。")
-            return "\n".join(parts)
-
-        if plan and plan.suspect_files:
-            parts = [f"根据 Issue 和嫌疑文件搜索相关代码：\n{issue or plan.reasoning}"]
-            parts.append(f"嫌疑文件: {', '.join(plan.suspect_files)}")
-            parts.append("请用 find_test 和 search 收集上下文，输出 RetrievedContext JSON。")
-            return "\n".join(parts)
-
-        return (
-            "搜索与该 Issue 相关的代码上下文。"
-            "请用 search 和 find_test 搜索后输出 RetrievedContext JSON。"
+        template_name, variables = build_retriever_template_and_variables(
+            suspects, plan, issue
         )
+        text, _ = render_repair_task(template_name, variables)
+        return text
 
     def _patcher_prompt(
         self,
@@ -554,60 +578,18 @@ class Orchestrator(RepairPipelineMixin):
         feedback: str = "",
         plan: RepairPlan | None = None,
         issue: str = "",
-    ) -> str:
-        parts = []
-        if feedback:
-            parts.append(f"[上一轮验证反馈]\n{feedback}\n")
-        parts.append("基于以下信息生成修复补丁：")
-
-        if plan and re.search(r"cannot import name", issue, re.IGNORECASE):
-            parts.append("修复提示: 除 import 行外，须同步修改本文件内对错误符号名的所有调用。")
-        if plan and plan.issue_type == "composite":
-            parts.append(
-                f"至少修改 {len(plan.suspect_files or [])} 个相关文件中的每一处错误。"
-            )
-        if issue and "concatenate str" in issue.lower():
-            parts.append(
-                "Issue 表明 str 与 int 不能直接相加；修复后混合类型输入应得到数字运算结果。"
-            )
-
-        effective_suspects = suspects or (
-            self._fallback_suspects_from_plan(plan, issue) if plan else []
+    ) -> tuple[str, dict]:
+        variables = assemble_patcher_variables(
+            suspects=suspects,
+            context=context,
+            feedback=feedback,
+            plan=plan,
+            issue=issue,
+            read_snippet=self._read_code_snippet,
+            read_test_context=self._read_test_context,
+            fallback_suspects=self._fallback_suspects_from_plan,
         )
-
-        if plan and plan.suspect_files:
-            parts.append(f"只允许修改以下文件: {', '.join(plan.suspect_files)}")
-
-        if effective_suspects:
-            parts.append("嫌疑位置（代码已预读，无需再调用 read_file）:")
-            for s in effective_suspects:
-                if not s.file_path:
-                    continue
-                parts.append(f"  - {s.file_path}:{s.start_line} ({s.reason})")
-                snippet = self._read_code_snippet(s.file_path, s.start_line, s.end_line)
-                if snippet:
-                    parts.append(snippet)
-                else:
-                    parts.append(f"    ⚠ 文件不存在: {s.file_path}")
-
-        if plan and plan.issue_type == "composite" and plan.suspect_files:
-            seen_paths = {s.file_path for s in effective_suspects if s.file_path}
-            extra = [fp for fp in plan.suspect_files if fp not in seen_paths]
-            if extra:
-                parts.append("其他相关源文件（代码已预读）:")
-                for fp in extra:
-                    snippet = self._read_code_snippet(fp, 1, 80)
-                    if snippet:
-                        parts.append(f"  - {fp}")
-                        parts.append(snippet)
-
-        test_blocks = self._read_test_context(context, effective_suspects, plan)
-        if test_blocks:
-            parts.append("相关测试文件（补丁必须通过这些 assert）:")
-            parts.extend(test_blocks)
-
-        parts.append("直接输出 CandidatePatch JSON 列表，不要调用任何工具。")
-        return "\n".join(parts)
+        return render_repair_task("patcher", variables)
 
     def _read_code_snippet(self, file_path: str, start_line: int, end_line: int) -> str:
         """预读嫌疑文件上下文。"""
@@ -712,12 +694,11 @@ class Orchestrator(RepairPipelineMixin):
         return parse_retrieved_context(answer)
 
     def _verifier_prompt(self, patches: list[CandidatePatch], plan: RepairPlan | None) -> str:
-        parts = ["验证以下补丁："]
-        for p in patches:
-            parts.append(f"  - {p.file_path}: {p.explanation or p.diff[:80]}")
-        repo = self._repo_root
-        parts.append(f"请用 sandbox_build({repo!r}) 构建，再用 sandbox_test({repo!r}) 测试。")
-        return "\n".join(parts)
+        text, _ = render_repair_task(
+            "verifier",
+            build_verifier_variables(patches, self._repo_root),
+        )
+        return text
 
     def _parse_verification(self, answer: str) -> "VerificationResult":
         return parse_verification(answer)

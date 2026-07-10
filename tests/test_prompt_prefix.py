@@ -1,9 +1,13 @@
 """prompt_prefix 单测：System Prompt 构建、缓存 key、工具签名。"""
 
+import hashlib
+
+from agent_runtime.prefix_stable import hash_stable_prefix
 from agent_runtime.prompt_prefix import (
     PromptPrefix,
     _tool_signature,
     build_prompt_prefix,
+    cache_stable_text,
 )
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.tools import build_tool_registry
@@ -76,8 +80,29 @@ class TestBuildPromptPrefix:
 
         prefix = build_prompt_prefix(ws, registry, tool_names=enabled)
 
-        tools_section = prefix.text.split("## 调用示例", 1)[0]
-        assert "### read_file" in tools_section
-        assert "### search" in tools_section
-        assert "### write_file" not in tools_section
-        assert "### list_files" not in tools_section
+        assert "### read_file" in prefix.stable_tools_text
+        assert "### search" in prefix.stable_tools_text
+        assert "### write_file" not in prefix.stable_tools_text
+        assert "### list_files" not in prefix.stable_tools_text
+
+    def test_physical_split_fields(self, temp_workspace):
+        from agent_runtime.workspace import WorkspaceContext
+
+        ws = WorkspaceContext.build(str(temp_workspace))
+        ctx = ToolContext(root=str(temp_workspace))
+        registry = build_tool_registry(ctx)
+        prefix = build_prompt_prefix(ws, registry)
+
+        assert prefix.stable_system_text
+        assert prefix.stable_tools_text
+        assert prefix.stable_skills_text
+        assert "可用工具" in prefix.stable_tools_text
+        assert "调用示例" in prefix.stable_skills_text
+        assert "可用工具" not in prefix.stable_system_text
+        assert prefix.stable_text == (
+            f"{prefix.stable_system_text}\n\n{prefix.stable_tools_text}\n\n"
+            f"{prefix.stable_skills_text}"
+        )
+        assert prefix.hash == hash_stable_prefix(
+            cache_stable_text(prefix.stable_system_text, prefix.stable_tools_text)
+        )

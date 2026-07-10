@@ -17,12 +17,25 @@ from agent_runtime.compression_pipeline import (
     truncate_tool_content as _truncate_tool_content,
 )
 from agent_runtime.tier_policy import TierPolicy, filter_relevant_results
-from agent_runtime.tokenizers import resolve_token_counter
+from agent_runtime.context_projection import attach_context_projection
+from agent_runtime.tokenizers import resolve_token_counter, resolve_tokenizer_spec
+from agent_runtime.task_section import (
+    render_task_message,
+    reserve_section_budget,
+    task_preservation_metadata,
+)
+from agent_runtime.section_filler import SectionFiller
+
+# Re-export fit helpers for test / L2 import compatibility.
+from agent_runtime.context_fit import fit_prompt_to_budget, fit_repair_user_prompt  # noqa: F401
 
 # Section token 预算分配（以 REF_TOTAL_BUDGET 为参考布局，随 prompt_budget 等比缩放）
 REF_TOTAL_BUDGET = 6000
 TOTAL_BUDGET = 100_000
 BUDGET_PREFIX = 2000
+BUDGET_SYSTEM = 700
+BUDGET_TOOLS = 900
+BUDGET_SKILLS = 400
 BUDGET_MEMORY = 800
 BUDGET_RELEVANT = 600
 BUDGET_HISTORY = 2600
@@ -53,6 +66,9 @@ class TokenBudget:
         self.provider = provider
         self._counter = resolve_token_counter(model, provider)
         self.backend = self._counter.backend
+        self._spec = resolve_tokenizer_spec(model, provider)
+        self.tokenizer_fallback = self._spec.fallback
+        self.tokenizer_id = self._spec.tokenizer_id
 
     def count(self, text: str) -> int:
         """返回文本的 token 数。"""
@@ -67,59 +83,31 @@ class TokenBudget:
         return max(0, self.total_limit - used)
 
 
-def fit_prompt_to_budget(
-    system_text: str,
-    user_text: str,
-    *,
-    model: str = "deepseek-v4-pro",
-    provider: str = "deepseek",
-    total_limit: int = TOTAL_BUDGET,
-) -> tuple[str, str, dict]:
-    """将 system + user 对 fit 到统一 token 预算内。"""
-    budget = TokenBudget(model=model, total_limit=total_limit, provider=provider)
-    metadata: dict = {
-        "sections": {},
-        "cuts": [],
-        "budget": total_limit,
-        "tokenizer_backend": budget.backend,
-    }
-
-    system_text = system_text or ""
-    user_text = user_text or ""
-
-    sys_tokens = budget.count(system_text)
-    if sys_tokens >= total_limit:
-        sys_cap = max(256, total_limit // 2)
-        system_text = budget.fit(system_text, sys_cap)
-        sys_tokens = budget.count(system_text)
-        metadata["cuts"].append(f"裁剪 system 到 {sys_tokens} tokens")
-    metadata["sections"]["system"] = sys_tokens
-
-    remaining = budget.remaining(sys_tokens)
-    user_tokens = budget.count(user_text)
-    if user_tokens > remaining:
-        user_text = budget.fit(user_text, remaining)
-        user_tokens = budget.count(user_text)
-        metadata["cuts"].append(f"裁剪 user 到 {user_tokens} tokens（剩余预算 {remaining}）")
-    metadata["sections"]["user"] = user_tokens
-    metadata["total_tokens"] = sys_tokens + user_tokens
-    return system_text, user_text, metadata
-
-
 class ContextManager:
     """Prompt 组装器：按预算拼接 section，超限时自动裁剪。
 
     Sections（填充顺序）:
-    1. system     — 稳定段（persona / rules / tools / examples）
-    2. workspace  — Workspace 快照（可变）
-    3. memory     (~800 tokens)  — 工作记忆
-    4. relevant   (~600 tokens)  — 相关记忆条目
-    5. history    — 对话/工具调用历史（预算随 prompt_budget 缩放）
-    6. request    — 当前用户输入（L1 截断后）
+    1. system     — persona / rules（stable，可缓存）
+    2. tools      — 工具签名（stable，可缓存）
+    3. skills     — 调用示例 + L2 role
+    4. workspace  — Workspace 快照（可变）
+    5. memory     (~800 tokens)  — 工作记忆
+    6. relevant   (~600 tokens)  — 相关记忆条目
+    7. history    — 对话/工具调用历史（预算随 prompt_budget 缩放）
+    8. request    — 当前用户输入（L1 截断后）
     """
 
-    SECTION_ORDER = ("system", "role", "workspace", "memory", "relevant", "history")
-    DYNAMIC_ORDER = ("role", "workspace", "memory", "relevant", "history")
+    SECTION_ORDER = (
+        "system",
+        "tools",
+        "skills",
+        "workspace",
+        "memory",
+        "relevant",
+        "history",
+    )
+    NATIVE_SYSTEM_ORDER = ("system", "tools")
+    DYNAMIC_ORDER = ("skills", "workspace", "memory", "relevant", "history")
 
     def __init__(self, agent, total_budget: int | None = None):
         self.agent = agent
@@ -140,7 +128,8 @@ class ContextManager:
         metadata = self._base_metadata()
         sections = self._fill_sections(user_message, metadata)
         result_parts = [sections[name] for name in self.SECTION_ORDER if sections.get(name)]
-        result_parts.append(f"\n## 当前任务\n\n{sections['request']}")
+        if sections.get("request"):
+            result_parts.append(sections["request"])
         return "\n".join(result_parts), metadata
 
     def build_dynamic_context(self, user_message: str) -> tuple[str, dict]:
@@ -153,19 +142,26 @@ class ContextManager:
         return "\n\n".join(parts), metadata
 
     def build_for_native(self, user_message: str) -> tuple[str, str, dict]:
-        """Native API：stable system + 动态 user 上下文（含 task）。"""
+        """Native API：stable system+tools + 动态 user 上下文（含 skills/task）。"""
         metadata = self._base_metadata()
         sections = self._fill_sections(user_message, metadata)
-        system_prompt = sections.get("system", "")
+        system_parts = [sections[name] for name in self.NATIVE_SYSTEM_ORDER if sections.get(name)]
+        system_prompt = "\n\n".join(system_parts)
         user_parts = [sections[name] for name in self.DYNAMIC_ORDER if sections.get(name)]
-        user_parts.append(f"## 当前任务\n\n{sections['request']}")
+        if sections.get("request"):
+            user_parts.append(sections["request"])
         return system_prompt, "\n\n".join(user_parts), metadata
 
     def _base_metadata(self) -> dict:
+        from agent_runtime.prompt_prefix import build_prefix_hashes
+
+        prefix = self.agent._prefix
+        prefix_hashes = build_prefix_hashes(prefix)
         return {
             "sections": {},
             "cuts": [],
-            "prompt_cache_key": getattr(self.agent._prefix, "hash", ""),
+            "prompt_cache_key": prefix_hashes["cache_key"],
+            "prefix_hashes": prefix_hashes,
         }
 
     def _fill_sections(
@@ -177,78 +173,114 @@ class ContextManager:
         include_request: bool = True,
     ) -> dict[str, str]:
         """按预算填充各 section，返回 name → 文本。"""
-        used = 0
-        sections: dict[str, str] = {}
         total = self.budget.total_limit
-
-        def add_section(name: str, text: str, budget_limit: int):
-            nonlocal used
-            if not text:
-                return
-            if used + self.budget.count(text) > self.budget.total_limit:
-                remaining = self.budget.total_limit - used
-                if remaining <= 0:
-                    metadata["cuts"].append(f"跳过 {name}（预算耗尽）")
-                    return
-                text = self.budget.fit(text, remaining)
-                metadata["cuts"].append(f"裁剪 {name} 到 {remaining} tokens")
-
-            tokens = self.budget.count(text)
-            used += tokens
-            metadata["sections"][name] = tokens
-            sections[name] = text
-
-        if include_system:
-            add_section("system", self._get_system(), scaled_section_budget(BUDGET_PREFIX, total))
-        add_section("role", self._get_role(), scaled_section_budget(BUDGET_PREFIX, total))
-        add_section("workspace", self._get_workspace(), scaled_section_budget(BUDGET_PREFIX, total))
-        add_section("memory", self._get_memory(), scaled_section_budget(BUDGET_MEMORY, total))
-        add_section(
-            "relevant",
-            self._get_relevant(user_message),
-            scaled_section_budget(BUDGET_RELEVANT, total),
-        )
-        add_section(
-            "history",
-            self._get_compressed_history(metadata),
-            history_window_budget(total),
-        )
+        request_text = ""
+        request_tokens = 0
+        section_cap = total
 
         if include_request:
-            user_message = apply_l1_to_request_text(user_message, self.budget)
-            request_tokens = self.budget.count(user_message)
-            used += request_tokens
+            processed = apply_l1_to_request_text(user_message, self.budget)
+            request_text, tpl_meta = render_task_message(
+                processed,
+                repo_root=self._agent_repo_root(),
+            )
+            metadata.update(tpl_meta)
+            request_tokens = self.budget.count(request_text)
             metadata["sections"]["request"] = request_tokens
-            if used > self.budget.total_limit:
-                allowed_request = max(256, self.budget.total_limit - (used - request_tokens))
-                if request_tokens > allowed_request:
-                    user_message = self.budget.fit(user_message, allowed_request)
-                    request_tokens = self.budget.count(user_message)
-                    used = used - metadata["sections"]["request"] + request_tokens
-                    metadata["sections"]["request"] = request_tokens
-                    metadata["cuts"].append(f"裁剪 request 到 {request_tokens} tokens")
-            sections["request"] = user_message
+            metadata.update(task_preservation_metadata(request_tokens, total))
+            section_cap = reserve_section_budget(total, request_tokens)
+
+        filler = SectionFiller(
+            self.budget,
+            metadata,
+            section_cap=section_cap,
+            total_limit=total,
+            scaled_budget=scaled_section_budget,
+        )
+
+        if include_system:
+            filler.add_stable_section("system", self._get_system(), BUDGET_SYSTEM)
+            filler.add_stable_section("tools", self._get_tools(), BUDGET_TOOLS)
+            filler.add_stable_section("skills", self._get_skills(), BUDGET_SKILLS)
+        filler.add_section(
+            "workspace",
+            self._get_workspace(),
+            scaled_section_budget(BUDGET_PREFIX, section_cap or total),
+        )
+        filler.add_section(
+            "memory",
+            self._get_memory(),
+            scaled_section_budget(BUDGET_MEMORY, section_cap or total),
+        )
+        filler.add_section(
+            "relevant",
+            self._get_relevant(user_message),
+            scaled_section_budget(BUDGET_RELEVANT, section_cap or total),
+        )
+        filler.add_section(
+            "history",
+            self._get_compressed_history(metadata),
+            history_window_budget(section_cap or total),
+        )
+
+        sections = dict(filler.sections)
+        used = filler.used
+
+        if include_request:
+            sections["request"] = request_text
+            used += request_tokens
 
         sys_tokens = metadata["sections"].get("system", 0)
+        tools_tokens = metadata["sections"].get("tools", 0)
+        skills_tokens = metadata["sections"].get("skills", 0)
         ws_tokens = metadata["sections"].get("workspace", 0)
-        if sys_tokens or ws_tokens:
-            metadata["sections"]["prefix"] = sys_tokens + ws_tokens
+        if sys_tokens or tools_tokens or skills_tokens or ws_tokens:
+            metadata["sections"]["prefix"] = (
+                sys_tokens + tools_tokens + skills_tokens + ws_tokens
+            )
 
         metadata["total_tokens"] = used
         metadata["budget"] = self.budget.total_limit
         metadata["tokenizer_backend"] = self.budget.backend
+        attach_context_projection(metadata, agent=self.agent, budget=self.budget)
         return sections
+
+    def _agent_repo_root(self) -> str | None:
+        agent = self.agent
+        cwd = getattr(agent, "_cwd", "") or ""
+        if cwd:
+            return cwd
+        workspace = getattr(agent, "workspace", None)
+        if workspace is None:
+            return None
+        return getattr(workspace, "repo_root", "") or getattr(workspace, "cwd", "") or None
 
     # ---- Section 收集 ----
 
     def _get_system(self) -> str:
-        stable = getattr(self.agent._prefix, "stable_text", "")
-        if stable:
-            return stable
+        prefix = getattr(self.agent, "_prefix", None)
+        if prefix is not None:
+            return getattr(prefix, "stable_system_text", "") or ""
         return getattr(self.agent, "_system_prompt", "") or ""
 
-    def _get_role(self) -> str:
-        return getattr(self.agent._prefix, "role_text", "") or ""
+    def _get_tools(self) -> str:
+        prefix = getattr(self.agent, "_prefix", None)
+        if prefix is None:
+            return ""
+        return getattr(prefix, "stable_tools_text", "") or ""
+
+    def _get_skills(self) -> str:
+        prefix = getattr(self.agent, "_prefix", None)
+        if prefix is None:
+            return ""
+        parts = []
+        skills = getattr(prefix, "stable_skills_text", "") or ""
+        if skills:
+            parts.append(skills)
+        role = getattr(prefix, "role_text", "") or ""
+        if role:
+            parts.append(role)
+        return "\n\n".join(parts)
 
     def _get_workspace(self) -> str:
         workspace_text = getattr(self.agent._prefix, "workspace_text", "")

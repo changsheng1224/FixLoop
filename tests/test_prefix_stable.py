@@ -9,7 +9,11 @@ from agent_runtime.prefix_stable import (
     assert_stable_prefix_clean,
     hash_stable_prefix,
 )
-from agent_runtime.prompt_prefix import build_custom_system_prefix, build_prompt_prefix
+from agent_runtime.prompt_prefix import (
+    build_custom_system_prefix,
+    build_prompt_prefix,
+    cache_stable_text,
+)
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.tools import build_tool_registry
 
@@ -92,7 +96,9 @@ class TestBuildPromptPrefixStableHash:
         registry = build_tool_registry(ctx)
         prefix = build_prompt_prefix(ws, registry)
 
-        assert prefix.hash == hash_stable_prefix(prefix.stable_text)
+        assert prefix.hash == hash_stable_prefix(
+            cache_stable_text(prefix.stable_system_text, prefix.stable_tools_text)
+        )
 
     def test_no_built_at_field(self, temp_workspace):
         from agent_runtime.workspace import WorkspaceContext
@@ -119,3 +125,98 @@ class TestBuildCustomSystemPrefix:
         ws = _FakeWorkspace("clean")
         with pytest.raises(PrefixStableError):
             build_custom_system_prefix("rules\nrun_id: x", ws)
+
+
+class TestBuildPrefixHashes:
+    def test_returns_segment_keys(self, temp_workspace):
+        from agent_runtime.prompt_prefix import build_prefix_hashes
+        from agent_runtime.workspace import WorkspaceContext
+
+        ws = WorkspaceContext.build(str(temp_workspace))
+        ctx = ToolContext(root=str(temp_workspace))
+        registry = build_tool_registry(ctx)
+        prefix = build_prompt_prefix(ws, registry)
+
+        hashes = build_prefix_hashes(prefix)
+        for key in (
+            "system",
+            "tools",
+            "skills",
+            "cache_key",
+            "role",
+            "tool_signature",
+            "assets_fingerprint",
+            "workspace_fingerprint",
+        ):
+            assert key in hashes
+
+    def test_cache_key_matches_prefix_hash(self, temp_workspace):
+        from agent_runtime.prompt_prefix import build_prefix_hashes
+        from agent_runtime.workspace import WorkspaceContext
+
+        ws = WorkspaceContext.build(str(temp_workspace))
+        ctx = ToolContext(root=str(temp_workspace))
+        registry = build_tool_registry(ctx)
+        prefix = build_prompt_prefix(ws, registry)
+
+        hashes = build_prefix_hashes(prefix)
+        assert hashes["cache_key"] == prefix.hash
+        assert hashes["cache_key"] == hash_stable_prefix(
+            cache_stable_text(prefix.stable_system_text, prefix.stable_tools_text)
+        )
+
+    def test_segment_hashes_match_stable_text(self, temp_workspace):
+        from agent_runtime.prompt_prefix import build_prefix_hashes
+        from agent_runtime.workspace import WorkspaceContext
+
+        ws = WorkspaceContext.build(str(temp_workspace))
+        ctx = ToolContext(root=str(temp_workspace))
+        registry = build_tool_registry(ctx)
+        prefix = build_prompt_prefix(ws, registry)
+
+        hashes = build_prefix_hashes(prefix)
+        assert hashes["system"] == hash_stable_prefix(prefix.stable_system_text)
+        assert hashes["tools"] == hash_stable_prefix(prefix.stable_tools_text)
+        assert hashes["skills"] == hash_stable_prefix(prefix.stable_skills_text)
+
+    def test_workspace_change_does_not_change_cache_segments(self):
+        from agent_runtime.prompt_prefix import build_prefix_hashes
+
+        ws1 = _FakeWorkspace(" M foo.py")
+        ws2 = _FakeWorkspace(" M bar.py")
+        ctx = ToolContext(root=".")
+        registry = build_tool_registry(ctx)
+        p1 = build_prompt_prefix(ws1, registry)
+        p2 = build_prompt_prefix(ws2, registry)
+
+        h1 = build_prefix_hashes(p1)
+        h2 = build_prefix_hashes(p2)
+        assert h1["cache_key"] == h2["cache_key"]
+        assert h1["system"] == h2["system"]
+        assert h1["tools"] == h2["tools"]
+        assert h1["skills"] == h2["skills"]
+        assert h1["workspace_fingerprint"] != h2["workspace_fingerprint"]
+
+    def test_examples_change_updates_skills_not_cache_key(self, temp_workspace):
+        from agent_runtime.prompt_prefix import build_prefix_hashes
+        from agent_runtime.workspace import WorkspaceContext
+
+        agent_dir = temp_workspace / ".agent"
+        agent_dir.mkdir()
+        ws = WorkspaceContext.build(str(temp_workspace))
+        ctx = ToolContext(root=str(temp_workspace))
+        registry = build_tool_registry(ctx)
+
+        base = build_prompt_prefix(ws, registry, repo_root=str(temp_workspace))
+        base_hashes = build_prefix_hashes(base)
+
+        (agent_dir / "examples.md").write_text(
+            "### 示例 1: Custom\n```\n<final>ok</final>\n```",
+            encoding="utf-8",
+        )
+        updated = build_prompt_prefix(ws, registry, repo_root=str(temp_workspace))
+        updated_hashes = build_prefix_hashes(updated)
+
+        assert base_hashes["cache_key"] == updated_hashes["cache_key"]
+        assert base_hashes["skills"] != updated_hashes["skills"]
+        assert base_hashes["assets_fingerprint"] != updated_hashes["assets_fingerprint"]

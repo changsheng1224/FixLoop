@@ -132,10 +132,20 @@ class Agent:
         return fitted_user, meta
 
     def _system_text_for_budget(self) -> str:
-        """预算计算用的 system 文本（仅 stable 段，不含 workspace）。"""
-        stable = getattr(self._prefix, "stable_text", "") or ""
-        if stable:
-            return stable
+        """预算计算用的 system 文本（cache 段：system + tools，不含 skills/workspace）。"""
+        from agent_runtime.prompt_prefix import cache_stable_text
+
+        prefix = getattr(self, "_prefix", None)
+        if prefix is not None:
+            cache = cache_stable_text(
+                getattr(prefix, "stable_system_text", "") or "",
+                getattr(prefix, "stable_tools_text", "") or "",
+            )
+            if cache:
+                return cache
+            stable = getattr(prefix, "stable_text", "") or ""
+            if stable:
+                return stable
         return self._system_prompt or ""
 
     def build_dynamic_context(self, user_message: str) -> tuple[str, dict]:

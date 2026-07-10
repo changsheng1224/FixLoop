@@ -2,7 +2,8 @@
 
 > **仅 backlog**；设计思路见 [docs/bonus/DESIGN.md](bonus/DESIGN.md) · 产品边界与 Web 归档见 [OUT_OF_SCOPE.md](bonus/OUT_OF_SCOPE.md)。  
 > **产品边界**：本地 CLI / REPL + `src.cli repair`；不实现 Web / HTTP / 多租户。  
-> 基线：`master` @ PR #87 · **558 tests**。格式：**[P?] [C:复杂度 I:面试价值] 标题**：方案摘要。  
+> 基线：`master` @ PR #93 · **755+ tests**。格式：**[P?] [C:复杂度 I:面试价值] 标题**：方案摘要。  
+> **完成标记**：`✅` 已完成 · `🔶` 部分完成（条目均保留）。本分支 `V1.1-Bonus6-Context工程` 见 §3。  
 > **排序**：章内 **P1 → P2 → P3**；同优先级按 **依赖先后**（schema/主路径 → 观测/增强）。小节号与 [DESIGN](bonus/DESIGN.md) 对齐时，**阅读顺序**可为先 P1 块（如 §6.2 grep、§12.2–12.8、§13.5 在 §13.4 前）。
 
 ---
@@ -57,7 +58,7 @@
 - **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] 死循环检测**：相同 `(tool_name, args_hash)` 连续 **K** 次 → `stop_reason=circuit_breaker` · trace `loop_detected`
 - **[P1] [C:⭐ I:⭐⭐⭐⭐] 目标漂移 / stall 终止**：连续 N 步无 `affected_paths` 且无 final → `stop_reason=stall` · task_summary 锚定 · 提示 replan
 - **[P1] [C:⭐⭐⭐ I:⭐⭐⭐⭐] 显式 ReAct 阶段 trace**：每步 `react_phase: reasoning|acting|observation|recording`（native/XML 双路径）
-- **[P2] [C:⭐ I:⭐⭐⭐] Agentic Loop trace 事件表**：Observe→Context→Model→Tool→Record 与 `context_built` · `tool_executed` 单测快照
+- **[P2] 🔶 [C:⭐ I:⭐⭐⭐] Agentic Loop trace 事件表**：Observe→Context→Model→Tool→Record 与 `context_built` · `tool_executed` 单测快照 — `context_built` 已 emit（`3c67e15`）；事件表单测快照待补
 
 ### 2.4 ReAct 步进 · 超时 · 解析
 
@@ -75,26 +76,26 @@
 ### 3.1 设计原则
 
 - **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] history canonical JSONL**：`.agent/history.jsonl` 只追加；`build()` 只读投影
-- **[P1] [C:⭐⭐⭐ I:⭐⭐⭐⭐] 八段 Context 投影 schema**：`metadata.sections` 增加 system/task/state/knowledge/tools/skills/memory/history 语义键（五 section 实现层映射）
-- **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] state section 注入**：`plan_todos` · `TaskState.phase` · repair 摘要进 build（交叉 [§2.2](#22-执行前-plan--todolist)）
+- **[P1] ✅ [C:⭐⭐⭐ I:⭐⭐⭐⭐] 八段 Context 投影 schema**：`metadata.context_sections` 八段语义键 + legacy `sections` 双写；`context_built` trace（`3c67e15`）
+- **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] state section 注入**：`plan_todos` · `TaskState.phase` · repair 摘要进 build（交叉 [§2.2](#22-执行前-plan--todolist)）— `plan_todos` 仅计数进 `context_sections.state`，未注入 prompt
 - **[P2] [C:⭐⭐ I:⭐⭐⭐] knowledge 与 memory 分工**：`relevant` 重命名为 knowledge 语义；working 留 memory section
-- **[P2] [C:⭐ I:⭐⭐⭐] system/tools/skills 拆 prefix**：三段独立 budget + 分段 cache hash
+- **[P2] ✅ [C:⭐ I:⭐⭐⭐] system/tools/skills 拆 prefix**：`PromptPrefix` 三段 + 独立 budget + `hash(system+tools)`（`e7bb398`）
 
 ### 3.2 五 Section 组装与 Token 预算
 
 - **[P1] [C:⭐ I:⭐⭐⭐⭐] 五 Section 独立硬顶 enforce**：`add_section` 超 `BUDGET_*` 即 fit，不单靠 TOTAL 双限（DESIGN Gap）
-- **[P1] [C:⭐ I:⭐⭐⭐⭐] fit 裁剪不 splice prefix**：超 budget 时 system/tools 段 **整块保留或整块丢弃**；动态内容只从 memory/relevant/history 裁
-- **[P1] [C:⭐ I:⭐⭐⭐] Tools 仅注入启用集**：prefix 只含本轮 `_tool_names` 签名（独立 **tools** 段，见 [§3.1](#31-设计原则)）
+- **[P1] ✅ [C:⭐ I:⭐⭐⭐⭐] fit 裁剪不 splice prefix**：system/tools/skills `add_stable_section` 整段丢弃（`e7bb398`）
+- **[P1] ✅ [C:⭐ I:⭐⭐⭐] Tools 仅注入启用集**：`tool_names` L0 过滤 + 独立 **tools** 段（`e7bb398`）
 - **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] Skills 索引 + 全文按需**：prefix/catalog 仅索引；命中后注入 **skills** 段（见 [§13.4](#134-海量-skill-加载)）
 - **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] tier_pins.yaml 接线 L0 + L2**：`orchestrator_pin_fields` 与 compression L0 共读 yaml（与 [§3.4](#34-l2-repair-与-memory-衔接) 联动）
-- **[P1] [C:⭐ I:⭐⭐⭐] 多模型 tokenizer 切换**：`encoding_for_model(model)`；未知 fallback + warn
-- **[P2] [C:⭐ I:⭐⭐⭐] prefix 分段 hash**：tools 段与 rules 段分开 cache
-- **[P2] [C:⭐⭐ I:⭐⭐⭐] User Message 模板化**：Jinja 渲染任务/引用/格式；与 system 分离
+- **[P1] ✅ [C:⭐ I:⭐⭐⭐] 多模型 tokenizer 切换**：`tokenizer_registry` + fallback warn + L2 `fit_repair_user_prompt`（`5b7ea90`）
+- **[P2] ✅ [C:⭐ I:⭐⭐⭐] prefix 分段 hash**：`prefix_hashes` 观测字段（system/tools/skills/cache_key + 指纹）进 metadata 与 `context_built` trace
+- **[P2] ✅ [C:⭐⭐ I:⭐⭐⭐] User Message 模板化**：stdlib Template + `.agent/task_template.md` / `src/prompts/tasks/*.md`；L1 metadata + L2 repair user 模板
 - **[P2] [C:⭐ I:⭐⭐⭐] fit 保护优先级单测矩阵**：request > prefix > memory > relevant > history 回归
 
 ### 3.3 压缩管线 L0–L5
 
-- **[P1] [C:⭐ I:⭐⭐⭐⭐] L5 摘要不污染 prefix hash**：compact 只替换 **history section**；`prompt_cache_key` 仍只 hash system+tools（交叉 [§5.1](#51-prefix--cache--rules)）
+- **[P1] ✅ [C:⭐ I:⭐⭐⭐⭐] L5 摘要不污染 prefix hash**：`prompt_cache_key` = `hash(system+tools)`；skills/examples 变更不 bust（`e7bb398`）
 - **[P1] [C:⭐ I:⭐⭐⭐] native 路径接入全管线**：`chat_with_native_tools` history 走 L0–L5
 - **[P1] [C:⭐ I:⭐⭐⭐] 摘要缓存持久化**：`_summary_cache` 落盘 `.agent/summary_cache/`（现状内存 dict）
 - **[P2] [C:⭐⭐ I:⭐⭐⭐] 增量摘要**：在 `[Earlier summary]` 上追加，避免每轮全量重摘要
@@ -102,14 +103,14 @@
 ### 3.4 L2 Repair 与 Memory 衔接
 
 - **[P1] [C:⭐ I:⭐⭐⭐⭐] 钉扎区 enforce**：issue/stack/suspect.file_path 永不裁剪；L5 摘要不得覆盖（`tier_pins.yaml` + [§3.5](#35-上下文传递--压缩触发--user-保护) 单测）
-- **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] 共享 TokenBudget 库**：L2 调 `fit()` / tiktoken（现状 L2 未接入，P1 目标）
+- **[P1] 🔶 [C:⭐⭐ I:⭐⭐⭐⭐] 共享 TokenBudget 库**：L2 patcher `fit_repair_user_prompt` + `tokenizer_by_agent`；localizer/retriever 经 `ask()`→CM（`5b7ea90`）
 - **[P2] [C:⭐ I:⭐⭐⭐] 分 Agent 预算表**：Localizer 2k / Retriever 3k / Patcher 4k / Verifier 1k
 
 ### 3.5 上下文传递 · 压缩触发 · user 保护
 
 > 设计见 [DESIGN §3.5](bonus/DESIGN.md#35-上下文传递--压缩触发--user-保护)。
 
-- **[P1] [C:⭐ I:⭐⭐⭐⭐] user message 永不压缩 enforce**：`fit()` / L0–L5 单测断言 current user · issue 全文保留
+- **[P1] ✅ [C:⭐ I:⭐⭐⭐⭐] user message 永不压缩 enforce**：reserve-first task 预留 + `fit_repair` 只裁 system；`request_preserved` metadata
 - **[P1] [C:⭐ I:⭐⭐⭐⭐] 压缩触发 trace**：L2/L5 超阈值时 emit `compression_triggered{level,ratio,section}`；与 [§19.4](#194-核心运行时指标监控) 同源
 
 ---
@@ -491,8 +492,8 @@
 
 > 设计见 [DESIGN §19.4](bonus/DESIGN.md#194-核心运行时指标监控)。
 
-- **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] Context + cache 指标进 report/trace**：`context_sections` · `sections`/`cuts[]` · Provider cache 归一化 → `cache_hit_rate` · `cache_usage{hit,miss,step}`
-- **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] TTFT / 首字延迟**：streaming `ttft_ms`；非 streaming `time_to_first_byte`；trace `model_first_token`
+- **[P1] 🔶 [C:⭐⭐ I:⭐⭐⭐⭐] Context + cache 指标进 report/trace**：`context_sections`/`context_built` trace 已接线；`report.json` 聚合与 `cache_hit_rate` 待补（`3c67e15`）
+- **[P1] ✅ [C:⭐⭐ I:⭐⭐⭐⭐] TTFT / 首字延迟**：streaming `ttft_ms`；非 streaming `time_to_first_byte`；trace `model_first_token`（`master` PR #93）
 - **[P1] [C:⭐ I:⭐⭐⭐⭐] Retry 指标统一**：`parse_retry_count` · `attempts` vs `tool_steps` · L2 `retry_count`
 - **[P1] [C:⭐ I:⭐⭐⭐⭐] Tool 步数 + 配额利用率**：`tool_steps` · `writes_used`/`shell_used` vs 硬顶（[§9](#9-硬上限与工具配额)）
 
@@ -585,4 +586,4 @@
 
 ---
 
-*待办清单 · 不含已标 ✅ 的已完成项 · 设计见 [bonus/DESIGN.md](bonus/DESIGN.md)*
+*待办清单 · `✅`/`🔶` 标记完成情况（保留全部条目）· 设计见 [bonus/DESIGN.md](bonus/DESIGN.md)*
