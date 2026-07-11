@@ -1129,10 +1129,24 @@ eval run fail → --record-failures → .agent/badcases/
 
 ### 16.4 权限降级
 
-
+| 约束 | 配置 |
+|------|------|
+| 禁止特权 | `privileged=False`（默认） |
+| 禁止 Docker-in-Docker | 不挂载 `/var/run/docker.sock` |
 
 ### 16.5 开销与逃逸回归
 
+**逃逸向量矩阵**（`tests/test_sandbox_escape.py`，Docker 不可用时 skip）：
+
+| # | 向量 | 命令 | 隔离维度 |
+|---|------|------|:--:|
+| 1 | 写保护 | `touch /etc/evil` | `read_only=True` rootfs |
+| 2 | 网络隔离 | `curl http://example.com` | `network_mode=none` |
+| 3 | 资源限制 | fork 炸弹 | `cpu_quota=200000` `mem_limit=4g` |
+| 4 | 特权禁止 | `mount -t tmpfs tmpfs /tmp` | 非特权容器 |
+| 5 | 设备访问 | `dd if=/dev/sda` | 设备隔离 |
+
+**已知限制**：不防逻辑错误、不声称绝对安全、不防容器逃逸 0-day。
 
 
 
