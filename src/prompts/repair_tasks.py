@@ -91,7 +91,11 @@ def build_patcher_variables(
     }
 
 
-def build_verifier_variables(patches, repo_root: str) -> dict[str, str]:
+def build_verifier_variables(
+    patches,
+    repo_root: str,
+    plan=None,
+) -> dict[str, str]:
     lines = []
     for p in patches:
         lines.append(f"  - {p.file_path}: {p.explanation or p.diff[:80]}")
@@ -99,4 +103,5 @@ def build_verifier_variables(patches, repo_root: str) -> dict[str, str]:
     return {
         "patches_list": "\n".join(lines),
         "repo": repo,
+        "skill_hint_block": format_skill_hint_for_plan(plan, "verifier") if plan else "",
     }

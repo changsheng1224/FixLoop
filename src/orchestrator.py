@@ -660,7 +660,17 @@ class Orchestrator(RepairPipelineMixin):
 
     # ---- Prompt 构建 ----
 
+    def _trace_skill_hint_rendered(self, agent: str, plan, role: str) -> None:
+        from src.skills.skill_block import render_skill_hint_for_plan, skill_hint_rendered_trace
+
+        rendered = render_skill_hint_for_plan(plan, role)
+        tracer = self._repair_tracer
+        if tracer is None or not rendered.text:
+            return
+        tracer.emit(agent, "skill_hint_rendered", skill_hint_rendered_trace(rendered))
+
     def _localizer_prompt(self, plan: RepairPlan, issue: str = "") -> str:
+        self._trace_skill_hint_rendered("localizer", plan, "localizer")
         text, _ = render_repair_task(
             "localizer",
             build_localizer_variables(plan, issue),
@@ -673,6 +683,7 @@ class Orchestrator(RepairPipelineMixin):
         plan: RepairPlan | None = None,
         issue: str = "",
     ) -> str:
+        self._trace_skill_hint_rendered("retriever", plan, "retriever")
         template_name, variables = build_retriever_template_and_variables(
             suspects, plan, issue
         )
@@ -687,6 +698,7 @@ class Orchestrator(RepairPipelineMixin):
         plan: RepairPlan | None = None,
         issue: str = "",
     ) -> tuple[str, dict]:
+        self._trace_skill_hint_rendered("patcher", plan, "patcher")
         variables = assemble_patcher_variables(
             suspects=suspects,
             context=context,
@@ -802,9 +814,10 @@ class Orchestrator(RepairPipelineMixin):
         return parse_retrieved_context(answer)
 
     def _verifier_prompt(self, patches: list[CandidatePatch], plan: RepairPlan | None) -> str:
+        self._trace_skill_hint_rendered("verifier", plan, "verifier")
         text, _ = render_repair_task(
             "verifier",
-            build_verifier_variables(patches, self._repo_root),
+            build_verifier_variables(patches, self._repo_root, plan=plan),
         )
         return text
 

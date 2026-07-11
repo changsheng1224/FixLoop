@@ -111,7 +111,8 @@ class TestSkillMissHints:
             skill=SkillContext(fallback_strategy="issue_type_routing"),
         )
         block = format_skill_hint_for_plan(plan, "localizer")
-        assert "[Skill 提示·通用]" in block
+        assert "[Skill 提示]" in block
+        assert "策略: generic" in block
 
     def test_format_skill_hint_for_plan_hit_uses_skill_block(self):
         plan = RepairPlan(

@@ -32,14 +32,17 @@ def _sample_plan() -> RepairPlan:
 class TestFormatSkillHintRoles:
     def test_localizer_is_tools_focused(self):
         block = format_skill_hint(_sample_plan(), "localizer")
-        assert "[Skill 工具序]" in block
+        assert "[Skill 提示]" in block
+        assert "角色: Localizer" in block
+        assert "工具序:" in block
         assert "stack_parse" in block
         assert "修复原则:" not in block
         assert "示例修复:" not in block
 
     def test_retriever_includes_limited_guidance(self):
         block = format_skill_hint(_sample_plan(), "retriever")
-        assert "[Skill 提示·检索]" in block
+        assert "[Skill 提示]" in block
+        assert "角色: Retriever" in block
         assert "convert operands" in block
         assert "third line trimmed" not in block
         assert "避免:" not in block
@@ -47,6 +50,7 @@ class TestFormatSkillHintRoles:
     def test_patcher_is_full_block(self):
         block = format_skill_hint(_sample_plan(), "patcher")
         assert "[Skill 提示]" in block
+        assert "角色: Patcher" in block
         assert "修复原则:" in block
         assert "避免:" in block
         assert "示例修复:" in block
@@ -58,8 +62,10 @@ class TestFormatSkillHintRoles:
 class TestSkillHintInTaskVariables:
     def test_localizer_variables_include_skill_block(self):
         variables = build_localizer_variables(_sample_plan(), issue="TypeError")
-        assert "[Skill 工具序]" in variables["skill_hint_block"]
+        assert "[Skill 提示]" in variables["skill_hint_block"]
+        assert "角色: Localizer" in variables["skill_hint_block"]
 
     def test_retriever_variables_include_skill_block(self):
         _, variables = build_retriever_template_and_variables([], plan=_sample_plan())
-        assert "[Skill 提示·检索]" in variables["skill_hint_block"]
+        assert "[Skill 提示]" in variables["skill_hint_block"]
+        assert "角色: Retriever" in variables["skill_hint_block"]

@@ -181,7 +181,7 @@
 
 ### 5.3 模板 · Skill 块
 
-- **[P1] ✅ [C:⭐ I:⭐⭐⭐] Skill 块注入 Prompt 统一**：Localizer/Retriever/Patcher 分角色 `[Skill 提示]`（见 [§13.3](#133-注入)）
+- **[P1] ✅ [C:⭐ I:⭐⭐⭐] Skill 块注入 Prompt 统一**：Canonical `SkillBlockRenderer`；四角色统一 `[Skill 提示]` + `角色:` schema；trace `skill_hint_rendered`
 
 ### 5.2 L2 角色 Prompt
 
