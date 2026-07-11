@@ -16,6 +16,7 @@ REPAIR_TRACE_EVENTS = frozenset(
         "agent_ask_finished",
         "blackboard_written",
         "blackboard_merged",
+        "blackboard_merge_for_patch",
         "blackboard_snapshot",
         "blackboard_conflicts",
     }

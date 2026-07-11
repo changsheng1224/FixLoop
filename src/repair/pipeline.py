@@ -18,7 +18,8 @@ from src.repair.termination import (
 from src.repair.output_parsers import parse_retrieved_context, parse_suspect_list
 from src.repair.blackboard_merge import (
     BLACKBOARD_SCHEMA_VERSION,
-    merge_blackboard_to_repair_state,
+    merge_blackboard_for_patch,
+    write_feedback_to_blackboard,
     write_localize_phase_to_blackboard,
 )
 from src.repair.l2_binding import (
@@ -223,21 +224,20 @@ class RepairPipelineMixin:
 
         self._blackboard = Blackboard()
 
-    def _sync_localize_phase_via_blackboard(
+    def _write_localize_phase_to_blackboard(
         self,
         state: RepairState,
         suspects: list[SuspectLocation],
         context: RetrievedContext | None,
-    ) -> None:
-        """Write localize/retrieve outputs to Blackboard and merge into RepairState."""
+    ) -> dict:
+        """Write localize/retrieve outputs to Blackboard (merge deferred to patch)."""
         bb = getattr(self, "_blackboard", None)
         if bb is None:
             state.suspect_locations = suspects
             state.retrieved_context = context or RetrievedContext()
-            return
+            return {"suspects_written": len(suspects), "context_keys_written": 0}
 
         write_stats = write_localize_phase_to_blackboard(bb, suspects, context)
-        merge_meta = merge_blackboard_to_repair_state(state, bb)
         tracer = self._repair_tracer
         if tracer is not None:
             tracer.emit(
@@ -247,11 +247,30 @@ class RepairPipelineMixin:
             )
             tracer.emit(
                 "orchestrator",
-                "blackboard_merged",
+                "blackboard_snapshot",
+                bb.snapshot(),
+            )
+        return write_stats
+
+    def _merge_blackboard_for_patch(self, state: RepairState) -> dict:
+        """Read Blackboard at patch boundary and materialize into RepairState."""
+        bb = getattr(self, "_blackboard", None)
+        if bb is None:
+            return {}
+
+        merge_meta = merge_blackboard_for_patch(state, bb)
+        tracer = self._repair_tracer
+        if tracer is not None:
+            tracer.emit(
+                "orchestrator",
+                "blackboard_merge_for_patch",
                 {
                     "suspect_count": merge_meta["suspect_count"],
                     "context_keys": merge_meta["context_keys"],
                     "conflict_count": len(merge_meta["conflicts"]),
+                    "conflicts_resolved": merge_meta["conflicts_resolved"],
+                    "scratch_feedback_applied": merge_meta["scratch_feedback_applied"],
+                    "retry_count": merge_meta["retry_count"],
                     "blackboard_schema_version": BLACKBOARD_SCHEMA_VERSION,
                 },
             )
@@ -266,6 +285,21 @@ class RepairPipelineMixin:
                 "blackboard_snapshot",
                 merge_meta["snapshot"],
             )
+        return merge_meta
+
+    def _write_feedback_to_blackboard(self, feedback: str) -> None:
+        bb = getattr(self, "_blackboard", None)
+        if bb is not None:
+            write_feedback_to_blackboard(bb, feedback)
+
+    def _sync_localize_phase_via_blackboard(
+        self,
+        state: RepairState,
+        suspects: list[SuspectLocation],
+        context: RetrievedContext | None,
+    ) -> dict:
+        """Write-only blackboard sync after localize (patch merge reads BB later)."""
+        return self._write_localize_phase_to_blackboard(state, suspects, context)
 
     def _run_localizer_only(
         self,
@@ -432,13 +466,9 @@ class RepairPipelineMixin:
                     ret_timing["total_ms"],
                     internal=ret_timing["internal"],
                 )
-                self._sync_localize_phase_via_blackboard(state, suspects, context)
-                n = len(state.suspect_locations)
-                n_tests = (
-                    len(state.retrieved_context.related_tests)
-                    if state.retrieved_context
-                    else 0
-                )
+                write_stats = self._sync_localize_phase_via_blackboard(state, suspects, context)
+                n = write_stats.get("suspects_written", len(suspects))
+                n_tests = len(context.related_tests) if context else 0
                 log.info(
                     "Localizer+Retriever 完成: 墙钟%dms (L=%dms, R=%dms), %d suspect, %d tests",
                     wall_ms,
@@ -498,6 +528,7 @@ class RepairPipelineMixin:
                             )
                         else:
                             state.feedback = "补丁生成失败（模型返回无法解析的 JSON）。请重新生成。"
+                        self._write_feedback_to_blackboard(state.feedback)
                         state.retry_count += 1
                         continue
 
@@ -537,6 +568,7 @@ class RepairPipelineMixin:
                     else:
                         self._revert_changes(state)
                     state.feedback = self._build_feedback(state.verification_result)
+                    self._write_feedback_to_blackboard(state.feedback)
                     state.retry_count += 1
 
                 if (

@@ -530,6 +530,7 @@ class Orchestrator(RepairPipelineMixin):
             ``model_call_ms``, ``parse_apply_ms``, ``total_ms``.
         """
         plan = state.repair_plan
+        self._merge_blackboard_for_patch(state)
         prompt, tpl_meta = self._patcher_prompt(
             state.suspect_locations,
             state.retrieved_context,

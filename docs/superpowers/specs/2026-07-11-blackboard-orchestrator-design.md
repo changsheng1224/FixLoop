@@ -8,15 +8,15 @@
 - **Acceptance:** `pytest tests/test_blackboard_merge.py tests/test_orchestrator.py -v`
 - **Branch:** `V1.2-Bonus6-Multi-Agent`
 
-## 方案 A（已实现）
+## 方案 A（已实现，localize write）
 
-Orchestrator 代理写入 + merge 物化：
+Orchestrator 代理写入：
 
 1. 每 repair 创建 `Blackboard()` 实例
 2. Localize∥Retrieve 解析后 `write_localize_phase_to_blackboard`
-3. `merge_blackboard_to_repair_state` → `RepairState.suspect_locations` / `retrieved_context`
-4. trace：`blackboard_written` · `blackboard_merged` · `blackboard_snapshot`
-5. `RepairState.blackboard_snapshot` 供 checkpoint / report
+3. trace：`blackboard_written` · `blackboard_snapshot`
+
+**Patch 边界 merge** 见 `2026-07-11-blackboard-merge-for-patch-design.md`。
 
 ## Key 命名空间
 

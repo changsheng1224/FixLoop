@@ -102,6 +102,15 @@ class Blackboard:
         """手动仲裁冲突——保留 winner_source 的版本。"""
         self._conflicts = [c for c in self._conflicts if c["key"] != key]
 
+    def apply_conflict_winner(self, key: str, value, winner_source: str) -> None:
+        """仲裁后强制写入 winner 版本并清除该 key 的冲突记录。"""
+        self._entries[key] = BlackboardEntry(
+            key=key,
+            value=value,
+            source_agent=winner_source,
+        )
+        self.resolve_conflict(key, winner_source)
+
     @property
     def conflicts(self) -> list[dict]:
         """当前未仲裁的写入冲突列表。"""
