@@ -27,6 +27,7 @@ def apply_baseline_answer(
     state: RepairState,
     *,
     repo_before_apply: dict[str, str] | None = None,
+    mark_fixed_on_apply: bool = True,
 ) -> dict[str, str]:
     """Single-Agent ask → 解析补丁 → 写盘，结果写入 *state*。"""
     repo = Path(repo_root)
@@ -39,12 +40,14 @@ def apply_baseline_answer(
             applier = PatchApplier(repo_root)
             applied = applier.apply_patches(patches)
             if applied or baseline_sources_changed(repo, before):
-                mark_fixed_skip_verify(state)
+                if mark_fixed_on_apply:
+                    mark_fixed_skip_verify(state)
             else:
                 state.status = "failed"
                 state.agent_errors["baseline"] = "patches parsed but not applied"
         elif baseline_sources_changed(repo, before):
-            mark_fixed_skip_verify(state)
+            if mark_fixed_on_apply:
+                mark_fixed_skip_verify(state)
         else:
             state.node_timings["patcher_parse_failed"] = True
             state.status = "failed"

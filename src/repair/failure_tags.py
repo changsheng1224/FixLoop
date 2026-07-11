@@ -27,6 +27,10 @@ class FailureTag(StrEnum):
     TIMEOUT = "timeout"
 
 
+# 非失败根因、仅描述修复路径的 metadata tag（成功时仍保留）
+REPAIR_METADATA_TAGS = frozenset({"degraded_baseline"})
+
+
 def _normalize_path(path: str) -> str:
     return path.replace("\\", "/").lstrip("./")
 
@@ -94,4 +98,5 @@ def classify_failure_tags(state: RepairState) -> list[FailureTag]:
 
 def apply_failure_tags(state: RepairState) -> None:
     """将 classify 结果写入 RepairState.failure_tags（字符串值）。"""
-    state.failure_tags = [tag.value for tag in classify_failure_tags(state)]
+    preserved = [tag for tag in state.failure_tags if tag in REPAIR_METADATA_TAGS]
+    state.failure_tags = [tag.value for tag in classify_failure_tags(state)] + preserved

@@ -124,3 +124,13 @@ class TestApplyFailureTags:
         )
         apply_failure_tags(state)
         assert state.failure_tags == []
+
+    def test_preserves_degraded_metadata_on_success(self):
+        state = RepairState(
+            issue_input="x",
+            status=RepairTerminalStatus.FIXED,
+            candidate_patches=[CandidatePatch(file_path="a.py")],
+            failure_tags=["degraded_baseline"],
+        )
+        apply_failure_tags(state)
+        assert state.failure_tags == ["degraded_baseline"]

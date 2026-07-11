@@ -118,6 +118,7 @@ class Orchestrator(RepairPipelineMixin):
         repair_timeout_s: int = DEFAULT_REPAIR_TIMEOUT_S,
         phase_timeouts: PhaseTimeoutConfig | None = None,
         cancel_token=None,
+        allow_baseline_degrade: bool = True,
     ) -> RepairState:
         """执行修复流水线。
 
@@ -127,6 +128,7 @@ class Orchestrator(RepairPipelineMixin):
             repair_timeout_s: 全流程超时秒数（≤0 表示不限制）。
             phase_timeouts: 分阶段超时；默认由 ``repair_timeout_s`` 推导。
             cancel_token: 可选协作式取消 token（CLI Ctrl+C 注入）。
+            allow_baseline_degrade: 是否在 verify 耗尽后 Single-Agent 最后一搏。
 
         Returns:
             RepairState 实例。
@@ -141,6 +143,7 @@ class Orchestrator(RepairPipelineMixin):
         initial_snapshot = self._snapshot_repo()
 
         self._phase_timeout_config = phase_timeouts
+        self._allow_baseline_degrade = allow_baseline_degrade
         try:
             with self._repair_cancel_scope(token):
                 if repair_timeout_s <= 0:
@@ -165,6 +168,7 @@ class Orchestrator(RepairPipelineMixin):
                         return state
         finally:
             self._phase_timeout_config = None
+            self._allow_baseline_degrade = True
 
     @contextmanager
     def _repair_cancel_scope(self, token):

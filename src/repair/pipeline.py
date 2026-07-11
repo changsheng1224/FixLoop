@@ -578,6 +578,7 @@ class RepairPipelineMixin:
                         state,
                         verification_enabled=self._verification_enabled(),
                         cancelled=cancelled,
+                        allow=getattr(self, "_allow_baseline_degrade", True),
                     )
                 ):
                     run_baseline_fallback(self, state, initial_snapshot=initial_snapshot)
