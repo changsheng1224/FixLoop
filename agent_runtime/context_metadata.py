@@ -19,6 +19,10 @@ CONTEXT_TRACE_KEYS = (
     "task_template_fingerprint",
     "request_preserved",
     "task_budget_overflow",
+    "projection_step",
+    "sealed_history_count",
+    "prefix_aligned",
+    "prefix_fingerprint",
 )
 
 

@@ -50,6 +50,45 @@ class TestAgentAsk:
         answer = agent.ask("全面分析")
         assert "搜索" in answer
 
+    def test_xml_loop_passes_prompt_cache_key_each_step(self, config, workspace):
+        """XML 路径每 step 向 ModelClient 传递 prompt_cache_key。"""
+        outputs = [
+            '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
+            "<final>done</final>",
+        ]
+        client = FakeModelClient(outputs)
+        agent = Agent(config=config, model_client=client, workspace=workspace)
+        agent.ask("scan files")
+        assert len(client.cache_keys) == 2
+        assert client.cache_keys[0]
+        assert client.cache_keys[0] == client.cache_keys[1]
+
+    def test_xml_loop_context_prefix_aligned_in_trace(self, config, workspace, temp_workspace):
+        """多 step build 时 trace context_built 报告 prefix_aligned。"""
+        import json
+
+        from agent_runtime.run_store import RunStore
+
+        outputs = [
+            '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
+            "<final>done</final>",
+        ]
+        agent = _make_agent(outputs, config, workspace)
+        agent.cwd = str(temp_workspace)
+        agent.ask("scan")
+
+        run_dirs = list(RunStore(str(temp_workspace)).runs_dir.iterdir())
+        trace_path = run_dirs[0] / "trace.jsonl"
+        built = [
+            json.loads(line)
+            for line in trace_path.read_text(encoding="utf-8").strip().splitlines()
+            if json.loads(line).get("event") == "context_built"
+        ]
+        assert len(built) >= 2
+        second = built[1].get("payload", {})
+        assert second.get("prefix_aligned") is True
+        assert second.get("projection_step") == 2
+
     def test_final_only_no_tools(self, config, workspace):
         """Agent 直接返回 final，不调任何工具。"""
         agent = _make_agent(
