@@ -3,7 +3,52 @@
 Agent 间通过结构化 dataclass 通信，不靠自然语言。
 """
 
-from dataclasses import dataclass, field
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, field
+
+__all__ = [
+    "AgentAskRef",
+    "CandidatePatch",
+    "RepairPlan",
+    "RepairState",
+    "RetrievedContext",
+    "SkillContext",
+    "SuspectLocation",
+    "VerificationResult",
+]
+
+
+@dataclass
+class AgentAskRef:
+    """单次 L2 phase 内 Agent 调用（ask 或 synthetic complete_once）。"""
+
+    agent: str
+    phase: str
+    attempt: int
+    task_id: str
+    run_id: str
+    started_ms: int = 0
+    finished_ms: int = 0
+    stop_reason: str = ""
+    tool_steps: int = 0
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> AgentAskRef:
+        return cls(
+            agent=str(data.get("agent", "")),
+            phase=str(data.get("phase", "")),
+            attempt=int(data.get("attempt", 0) or 0),
+            task_id=str(data.get("task_id", "")),
+            run_id=str(data.get("run_id", "")),
+            started_ms=int(data.get("started_ms", 0) or 0),
+            finished_ms=int(data.get("finished_ms", 0) or 0),
+            stop_reason=str(data.get("stop_reason", "")),
+            tool_steps=int(data.get("tool_steps", 0) or 0),
+        )
 
 
 @dataclass
@@ -311,6 +356,8 @@ class RepairState:
     node_timings: dict = field(default_factory=dict)
     agent_errors: dict = field(default_factory=dict)
     repair_run_id: str = ""
+    agent_asks: list[AgentAskRef] = field(default_factory=list)
+    blackboard_snapshot: dict = field(default_factory=dict)
     degraded_mode: bool = False
     schema_version: str = "1.0"
 
@@ -335,6 +382,8 @@ class RepairState:
             "node_timings": self.node_timings,
             "agent_errors": self.agent_errors,
             "repair_run_id": self.repair_run_id,
+            "agent_asks": [ref.to_dict() for ref in self.agent_asks],
+            "blackboard_snapshot": dict(self.blackboard_snapshot),
             "degraded_mode": self.degraded_mode,
             "schema_version": self.schema_version,
         }
@@ -371,6 +420,10 @@ class RepairState:
             node_timings=data.get("node_timings", {}),
             agent_errors=data.get("agent_errors", {}),
             repair_run_id=data.get("repair_run_id", ""),
+            agent_asks=[
+                AgentAskRef.from_dict(item) for item in data.get("agent_asks", [])
+            ],
+            blackboard_snapshot=dict(data.get("blackboard_snapshot") or {}),
             degraded_mode=data.get("degraded_mode", False),
             schema_version=data.get("schema_version", "1.0"),
         )

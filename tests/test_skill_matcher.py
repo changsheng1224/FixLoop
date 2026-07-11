@@ -184,7 +184,7 @@ class TestSkillIntegration:
                 example_patch="cast operands",
             ),
         )
-        variables, _ = assemble_patcher_variables(
+        variables, _, _ = assemble_patcher_variables(
             suspects=[],
             context=None,
             feedback="",

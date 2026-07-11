@@ -54,6 +54,13 @@ class TestApplyTerminalStatus:
         apply_terminal_status(state)
         assert state.status == RepairTerminalStatus.TIMEOUT
 
+    def test_phase_timeout_flag(self):
+        state = RepairState(issue_input="x", status="failed")
+        state.node_timings["phase_timeout"] = "localize"
+        state.agent_errors["orchestrator"] = "phase timeout (localize, 60s budget, consumed 61.0s)"
+        apply_terminal_status(state)
+        assert state.status == RepairTerminalStatus.TIMEOUT
+
     def test_exhausted(self):
         state = RepairState(issue_input="x", status="pending", retry_count=3, max_retries=3)
         apply_terminal_status(state)

@@ -35,6 +35,10 @@ class TaskState:
     tool_rejections_by_layer: dict = field(default_factory=dict)
     tool_rejections_by_gate: dict = field(default_factory=dict)
     permission_denied_by_tool: dict = field(default_factory=dict)
+    l2_repair_run_id: str = ""
+    l2_agent: str = ""
+    l2_phase: str = ""
+    l2_attempt: int = 0
 
     @classmethod
     def create(
@@ -188,6 +192,10 @@ class TaskState:
             "checkpoint_id": self.checkpoint_id,
             "resume_status": self.resume_status,
             "node_timings": self.node_timings,
+            "l2_repair_run_id": self.l2_repair_run_id,
+            "l2_agent": self.l2_agent,
+            "l2_phase": self.l2_phase,
+            "l2_attempt": self.l2_attempt,
         }
 
     @classmethod
@@ -211,4 +219,11 @@ class TaskState:
             checkpoint_id=data.get("checkpoint_id", ""),
             resume_status=data.get("resume_status", ""),
             node_timings=node_timings,
+            tool_rejections_by_layer=dict(data.get("tool_rejections_by_layer", {})),
+            tool_rejections_by_gate=dict(data.get("tool_rejections_by_gate", {})),
+            permission_denied_by_tool=dict(data.get("permission_denied_by_tool", {})),
+            l2_repair_run_id=data.get("l2_repair_run_id", ""),
+            l2_agent=data.get("l2_agent", ""),
+            l2_phase=data.get("l2_phase", ""),
+            l2_attempt=int(data.get("l2_attempt", 0) or 0),
         )

@@ -47,3 +47,12 @@ class TestBlackboardReadWrite:
         snap = bb.snapshot()
         assert snap["entries"]["k"] == "v"
         assert snap["conflicts"] == []
+
+    def test_apply_conflict_winner(self):
+        bb = Blackboard()
+        bb.write("k", "v1", source_agent="localizer")
+        bb.write("k", "v2", source_agent="retriever")
+        assert len(bb.conflicts) == 1
+        bb.apply_conflict_winner("k", "v1", "localizer")
+        assert bb.read("k") == "v1"
+        assert bb.conflicts == []

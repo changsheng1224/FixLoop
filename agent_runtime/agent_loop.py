@@ -426,9 +426,16 @@ class AgentLoop:
         from agent_runtime.task_state import TaskState
 
         shared = getattr(self.agent, "shared_run_id", None)
-        ts = TaskState.create(user_request=user_message, run_id=shared)
         agent_name = getattr(self.agent, "_agent_name", "") or "agent"
-        if shared:
+        ts = TaskState.create(user_request=user_message, run_id=shared)
+        l2_agent = getattr(self.agent, "_l2_agent", "") or ""
+        if shared and l2_agent:
+            ts.task_id = getattr(self.agent, "_l2_task_id", "") or f"{shared}-{agent_name}"
+            ts.l2_repair_run_id = getattr(self.agent, "_l2_repair_run_id", "") or shared
+            ts.l2_agent = l2_agent
+            ts.l2_phase = getattr(self.agent, "_l2_phase", "") or ""
+            ts.l2_attempt = int(getattr(self.agent, "_l2_attempt", 0) or 0)
+        elif shared:
             ts.task_id = f"{shared}-{agent_name}"
         self._task_state = ts
         self._call_timings = []
@@ -723,11 +730,16 @@ class AgentLoop:
 
     def _emit(self, event: str, payload: dict | None = None):
         try:
+            from agent_runtime.l2_context import l2_payload_from_agent, l2_payload_from_task_state
+
             payload = dict(payload or {})
             agent_name = getattr(self.agent, "_agent_name", "") or "agent"
             payload.setdefault("agent", agent_name)
-            shared = getattr(self.agent, "shared_run_id", None)
             ts = self._task_state
+            l2_extra = l2_payload_from_task_state(ts) or l2_payload_from_agent(self.agent)
+            for key, value in l2_extra.items():
+                payload.setdefault(key, value)
+            shared = getattr(self.agent, "shared_run_id", None)
             run_id = shared or (ts.run_id if ts else "")
             if run_id:
                 payload.setdefault("run_id", run_id)
@@ -770,6 +782,17 @@ class AgentLoop:
                 **report_latency,
                 **ts.rejection_report_fields(),
             }
+            if ts.l2_agent:
+                report_body.update(
+                    {
+                        "task_id": ts.task_id,
+                        "l2_repair_run_id": ts.l2_repair_run_id,
+                        "l2_agent": ts.l2_agent,
+                        "l2_phase": ts.l2_phase,
+                        "l2_attempt": ts.l2_attempt,
+                    }
+                )
+            self.agent._last_task_state = ts
             if shared:
                 store.write_task_state_named(shared, f"task_state.{agent_name}.json", ts)
                 store.write_agent_report(shared, agent_name, report_body)

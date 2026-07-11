@@ -220,6 +220,7 @@ class TestPatcherCompleteOnceCancel:
     def test_run_patcher_returns_empty_on_cancel(self, temp_workspace):
         from src.agents.patcher import create_patcher
         from src.orchestrator import Orchestrator
+        from src.repair.run_context import RepairRunContext
         from src.state import RepairPlan, RepairState, SuspectLocation
 
         token = CancellationToken()
@@ -234,7 +235,7 @@ class TestPatcherCompleteOnceCancel:
         ).WorkspaceContext.build(str(temp_workspace))
         pat = create_patcher(SlowClient(["[]"]), ws_ctx)
         orch = Orchestrator(None, None, pat, use_pytest_verify=False)
-        orch._cancel_token = token
+        orch._repair_ctx = RepairRunContext(cancel_token=token)
         orch._bind_cancel_token(token)
 
         state = RepairState(issue_input="TypeError")

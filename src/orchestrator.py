@@ -28,7 +28,9 @@ from src.repair.prompt_router import (
     fallback_suspect_uses_import_line,
     patcher_variant_for,
 )
+from src.repair.phase_clock import PhaseTimeoutConfig
 from src.repair.repo_snapshot import restore_repo_snapshot, snapshot_repo
+from src.repair.run_context import RepairRunContext
 from src.repair.language_detect import detect_repair_language
 from src.repair.verify import DockerVerifyStrategy, PytestVerifyStrategy, record_verify_timings
 from src.prompts.loader import load_role_prompt
@@ -77,7 +79,7 @@ class Orchestrator(RepairPipelineMixin):
         self.verifier = verifier
         self.use_pytest_verify = use_pytest_verify
         self.l1_prompt_cache_key = l1_prompt_cache_key or self._resolve_l1_prompt_cache_key()
-        self._repair_tracer = None
+        self._repair_ctx: RepairRunContext | None = None
         self._log_run_id_token = None
         # 修复目标目录：优先 --repo / Agent cwd，而非 git 顶层仓库
         self._repo_root = str(Path.cwd())
@@ -115,7 +117,9 @@ class Orchestrator(RepairPipelineMixin):
         issue: str,
         max_retries: int = 3,
         repair_timeout_s: int = DEFAULT_REPAIR_TIMEOUT_S,
+        phase_timeouts: PhaseTimeoutConfig | None = None,
         cancel_token=None,
+        allow_baseline_degrade: bool = True,
     ) -> RepairState:
         """执行修复流水线。
 
@@ -123,49 +127,63 @@ class Orchestrator(RepairPipelineMixin):
             issue: Issue 描述（含堆栈和错误信息）。
             max_retries: 最大重试次数。
             repair_timeout_s: 全流程超时秒数（≤0 表示不限制）。
+            phase_timeouts: 分阶段超时；默认由 ``repair_timeout_s`` 推导。
             cancel_token: 可选协作式取消 token（CLI Ctrl+C 注入）。
+            allow_baseline_degrade: 是否在 verify 耗尽后 Single-Agent 最后一搏。
 
         Returns:
             RepairState 实例。
         """
         from agent_runtime.cancellation import CancellationToken
 
+        if phase_timeouts is None:
+            phase_timeouts = PhaseTimeoutConfig.with_repair_total_cap(repair_timeout_s)
+
         state = RepairState(issue_input=issue, max_retries=max_retries)
         token = cancel_token or CancellationToken()
         initial_snapshot = self._snapshot_repo()
 
-        with self._repair_cancel_scope(token):
-            if repair_timeout_s <= 0:
-                return self._repair_impl(state, initial_snapshot=initial_snapshot)
+        self._repair_ctx = RepairRunContext(
+            phase_timeout_config=phase_timeouts,
+            allow_baseline_degrade=allow_baseline_degrade,
+            cancel_token=token,
+        )
+        try:
+            with self._repair_cancel_scope(token):
+                if repair_timeout_s <= 0:
+                    return self._repair_impl(state, initial_snapshot=initial_snapshot)
 
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                fut = pool.submit(self._repair_impl, state, initial_snapshot)
-                try:
-                    return fut.result(timeout=repair_timeout_s)
-                except FuturesTimeoutError:
-                    from src.repair.termination import RepairTerminalStatus, finalize_repair_state
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    fut = pool.submit(self._repair_impl, state, initial_snapshot)
+                    try:
+                        return fut.result(timeout=repair_timeout_s)
+                    except FuturesTimeoutError:
+                        from src.repair.termination import RepairTerminalStatus, finalize_repair_state
 
-                    token.cancel("timeout")
-                    self._restore_repo_snapshot(initial_snapshot)
-                    state.status = RepairTerminalStatus.TIMEOUT
-                    state.agent_errors["orchestrator"] = (
-                        f"repair timeout ({repair_timeout_s}s)"
-                    )
-                    state.node_timings["repair_timeout"] = repair_timeout_s
-                    log.warning("修复超时 (%ds)", repair_timeout_s)
-                    finalize_repair_state(state)
-                    return state
+                        token.cancel("timeout")
+                        self._restore_repo_snapshot(initial_snapshot)
+                        state.status = RepairTerminalStatus.TIMEOUT
+                        state.agent_errors["orchestrator"] = (
+                            f"repair timeout ({repair_timeout_s}s)"
+                        )
+                        state.node_timings["repair_timeout"] = repair_timeout_s
+                        log.warning("修复超时 (%ds)", repair_timeout_s)
+                        finalize_repair_state(state)
+                        return state
+        finally:
+            self._repair_ctx = None
 
     @contextmanager
     def _repair_cancel_scope(self, token):
         """绑定 cancel token 到子 Agent，退出时解绑。"""
-        self._cancel_token = token
+        ctx = self._repair_ctx
+        if ctx is not None:
+            ctx.cancel_token = token
         self._bind_cancel_token(token)
         try:
             yield
         finally:
             self._unbind_cancel_token()
-            self._cancel_token = None
 
     def _abort_repair_if_cancelled(self, state: RepairState) -> bool:
         """若用户已 cancel 则返回 True（由 pipeline finally 负责 restore）。"""
@@ -182,11 +200,13 @@ class Orchestrator(RepairPipelineMixin):
                 agent.cancel_token = None
 
     def _is_repair_cancelled(self) -> bool:
-        token = getattr(self, "_cancel_token", None)
+        ctx = self._repair_ctx
+        token = ctx.cancel_token if ctx is not None else None
         return token is not None and token.is_cancelled
 
     def _emit_repair_cancelled(self, state: RepairState) -> None:
-        tracer = self._repair_tracer
+        ctx = self._repair_ctx
+        tracer = ctx.repair_tracer if ctx is not None else None
         if tracer is None:
             return
         tracer.emit(
@@ -339,12 +359,24 @@ class Orchestrator(RepairPipelineMixin):
         prompt: str,
         agent_name: str,
         state: RepairState | None = None,
+        *,
+        l2_phase: str = "",
+        l2_attempt: int = 0,
     ) -> tuple[str, dict]:
         """执行 Agent 调用（Verifier 用，保留 Agent loop）。"""
         from agent_runtime.log_context import log_context
 
         t0 = time.time()
         run_id = getattr(agent, "shared_run_id", None)
+        task_id = ""
+        if state is not None and l2_phase:
+            task_id = self._begin_l2_agent_ask(
+                state,
+                agent,
+                agent_name=agent_name,
+                phase=l2_phase,
+                attempt=l2_attempt,
+            )
         try:
             with log_context(run_id=run_id, agent=agent_name):
                 answer = agent.ask(prompt)
@@ -353,9 +385,33 @@ class Orchestrator(RepairPipelineMixin):
                 state.agent_errors[agent_name] = str(e)
             log.warning("[%s] Agent 失败: %s", agent_name, e)
             elapsed_ms = int((time.time() - t0) * 1000)
+            if state is not None and task_id:
+                self._finish_l2_agent_ask(
+                    state,
+                    agent,
+                    agent_name=agent_name,
+                    phase=l2_phase,
+                    attempt=l2_attempt,
+                    task_id=task_id,
+                    elapsed_ms=elapsed_ms,
+                    stop_reason="error",
+                )
             return "", {"total_ms": elapsed_ms, "internal": {}}
         elapsed_ms = int((time.time() - t0) * 1000)
         internal = getattr(agent, "_last_run_node_timings", None) or {}
+        last_ts = getattr(agent, "_last_task_state", None)
+        if state is not None and task_id:
+            self._finish_l2_agent_ask(
+                state,
+                agent,
+                agent_name=agent_name,
+                phase=l2_phase,
+                attempt=l2_attempt,
+                task_id=task_id,
+                elapsed_ms=elapsed_ms,
+                stop_reason=getattr(last_ts, "stop_reason", "") if last_ts else "",
+                tool_steps=getattr(last_ts, "tool_steps", 0) if last_ts else 0,
+            )
         return answer, {"total_ms": elapsed_ms, "internal": dict(internal)}
 
     def _begin_repair_trace(self, state: RepairState) -> None:
@@ -374,6 +430,9 @@ class Orchestrator(RepairPipelineMixin):
                     l1_meta["tool_signature"] = prefix.tool_signature
                 if prefix.workspace_fingerprint:
                     l1_meta["workspace_fingerprint"] = prefix.workspace_fingerprint
+        phase_cfg = self._repair_ctx.phase_timeout_config if self._repair_ctx else None
+        if phase_cfg is not None and phase_cfg.any_enabled():
+            l1_meta["phase_timeout_budgets"] = phase_cfg.budget_dict()
         run_id = tracer.begin(state.issue_input, **l1_meta)
         tracer.bind_agents(
             self.localizer,
@@ -381,9 +440,11 @@ class Orchestrator(RepairPipelineMixin):
             self.patcher,
             self.verifier,
         )
-        self._repair_tracer = tracer
+        if self._repair_ctx is not None:
+            self._repair_ctx.repair_tracer = tracer
         state.repair_run_id = run_id
-        self._log_run_id_token = bind_run_id(run_id)
+        if self._repair_ctx is not None:
+            self._repair_ctx.log_run_id_token = bind_run_id(run_id)
 
         tokenizer_by_agent: dict[str, dict] = {}
         for name, agent in (
@@ -409,7 +470,8 @@ class Orchestrator(RepairPipelineMixin):
     def _end_repair_trace(self, state: RepairState) -> None:
         from agent_runtime.log_context import reset_run_id
 
-        tracer = self._repair_tracer
+        ctx = self._repair_ctx
+        tracer = ctx.repair_tracer if ctx is not None else None
         if tracer is None:
             return
         token_summary = state.node_timings.get("token_usage") or {}
@@ -420,11 +482,13 @@ class Orchestrator(RepairPipelineMixin):
             self.patcher,
             self.verifier,
         )
-        self._repair_tracer = None
-        token = getattr(self, "_log_run_id_token", None)
+        if ctx is not None:
+            ctx.repair_tracer = None
+        token = ctx.log_run_id_token if ctx is not None else None
         if token is not None:
             reset_run_id(token)
-            self._log_run_id_token = None
+            if ctx is not None:
+                ctx.log_run_id_token = None
 
     def _reset_token_tracking(self) -> None:
         from src.eval.token_usage import reset_clients_session_usage
@@ -440,7 +504,7 @@ class Orchestrator(RepairPipelineMixin):
         summary = build_repair_token_usage(
             clients,
             Path(self._repo_root),
-            since_ts=getattr(self, "_repair_started_at", None),
+            since_ts=self._repair_ctx.repair_started_at if self._repair_ctx else None,
             repair_run_id=state.repair_run_id or None,
         )
         state.node_timings["total_tokens"] = summary["total_tokens"]
@@ -481,6 +545,7 @@ class Orchestrator(RepairPipelineMixin):
             ``model_call_ms``, ``parse_apply_ms``, ``total_ms``.
         """
         plan = state.repair_plan
+        self._merge_blackboard_for_patch(state)
         prompt, tpl_meta = self._patcher_prompt(
             state.suspect_locations,
             state.retrieved_context,
@@ -504,7 +569,29 @@ class Orchestrator(RepairPipelineMixin):
 
         t_start = time.time()
         t_model = time.time()
-        tracer = self._repair_tracer
+        tracer = self._repair_ctx.repair_tracer if self._repair_ctx else None
+        patch_attempt = state.retry_count
+        patch_task_id = self._begin_l2_agent_ask(
+            state,
+            self.patcher,
+            agent_name="patcher",
+            phase="patch",
+            attempt=patch_attempt,
+        )
+
+        def _finish_patch_ask(total_ms: int, stop_reason: str) -> None:
+            if patch_task_id:
+                self._finish_l2_agent_ask(
+                    state,
+                    self.patcher,
+                    agent_name="patcher",
+                    phase="patch",
+                    attempt=patch_attempt,
+                    task_id=patch_task_id,
+                    elapsed_ms=total_ms,
+                    stop_reason=stop_reason,
+                )
+
         if tracer:
             tracer.emit(
                 "patcher",
@@ -527,6 +614,7 @@ class Orchestrator(RepairPipelineMixin):
         except CancelledError:
             total_ms = int((time.time() - t_start) * 1000)
             model_call_ms = int((time.time() - t_model) * 1000)
+            _finish_patch_ask(total_ms, "user_cancel")
             return [], {
                 "model_call_ms": model_call_ms,
                 "parse_apply_ms": max(0, total_ms - model_call_ms),
@@ -538,6 +626,7 @@ class Orchestrator(RepairPipelineMixin):
             total_ms = int((time.time() - t_start) * 1000)
             model_call_ms = int((time.time() - t_model) * 1000)
             log.warning("[patcher] 模型调用失败: %s", e)
+            _finish_patch_ask(total_ms, "error")
             return [], {
                 "model_call_ms": model_call_ms,
                 "parse_apply_ms": max(0, total_ms - model_call_ms),
@@ -593,6 +682,7 @@ class Orchestrator(RepairPipelineMixin):
             state.agent_errors["patcher_apply"] = "apply_failed"
 
         total_ms = int((time.time() - t_start) * 1000)
+        _finish_patch_ask(total_ms, "complete_once")
         return applied_patches, {
             "model_call_ms": model_call_ms,
             "parse_apply_ms": max(0, total_ms - model_call_ms),
@@ -604,7 +694,7 @@ class Orchestrator(RepairPipelineMixin):
 
     def _run_verifier(self, state: RepairState) -> "VerificationResult":
         """Docker 沙箱或本地 pytest 验证（不走 LLM Agent loop）。"""
-        cancel_token = getattr(self, "_cancel_token", None)
+        cancel_token = self._repair_ctx.cancel_token if self._repair_ctx else None
         if self.verifier is not None:
             run = DockerVerifyStrategy().run(
                 self._repo_root,
@@ -673,7 +763,7 @@ class Orchestrator(RepairPipelineMixin):
     def _emit_skill_hint_trace(self, agent: str, render) -> None:
         from src.skills.skill_block import skill_hint_rendered_trace
 
-        tracer = self._repair_tracer
+        tracer = self._repair_ctx.repair_tracer if self._repair_ctx else None
         if tracer is None or not render.text:
             return
         tracer.emit(agent, "skill_hint_rendered", skill_hint_rendered_trace(render))
@@ -705,7 +795,9 @@ class Orchestrator(RepairPipelineMixin):
         plan: RepairPlan | None = None,
         issue: str = "",
     ) -> tuple[str, dict]:
-        variables, render = assemble_patcher_variables(
+        ctx = self._repair_ctx
+        blackboard = ctx.blackboard if ctx is not None else None
+        variables, render, subscribe_meta = assemble_patcher_variables(
             suspects=suspects,
             context=context,
             feedback=feedback,
@@ -714,7 +806,15 @@ class Orchestrator(RepairPipelineMixin):
             read_snippet=self._read_code_snippet,
             read_test_context=self._read_test_context,
             fallback_suspects=self._fallback_suspects_from_plan,
+            blackboard=blackboard,
         )
+        tracer = ctx.repair_tracer if ctx is not None else None
+        if subscribe_meta and tracer is not None:
+            tracer.emit(
+                "orchestrator",
+                "blackboard_prefix_subscribed",
+                subscribe_meta,
+            )
         self._emit_skill_hint_trace("patcher", render)
         return render_repair_task("patcher", variables)
 

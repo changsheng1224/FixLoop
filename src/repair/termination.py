@@ -54,8 +54,11 @@ def has_repair_timeout(state: RepairState) -> bool:
         return True
     if state.node_timings.get("repair_timeout"):
         return True
+    if state.node_timings.get("phase_timeout"):
+        return True
     orch_err = state.agent_errors.get("orchestrator", "")
-    return "repair timeout" in orch_err
+    lowered = orch_err.lower()
+    return "repair timeout" in lowered or "phase timeout" in lowered
 
 
 def regression_detected(pre_code: int | None, post_code: int | None) -> bool:

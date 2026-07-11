@@ -65,6 +65,11 @@ def main() -> int:
     p_repair.add_argument("--verbose", action="store_true", help="详细输出")
     p_repair.add_argument("--dry-run", action="store_true", help="演习模式")
     p_repair.add_argument("--skip-verify", action="store_true", help="跳过 Docker 验证")
+    p_repair.add_argument(
+        "--no-degrade",
+        action="store_true",
+        help="禁用 verify 耗尽后的 Single-Agent 最后一搏",
+    )
 
     p_eval = sub.add_parser("eval", help="运行评测 Case")
     p_eval_sub = p_eval.add_subparsers(dest="eval_command")
@@ -195,7 +200,11 @@ def _repair(args) -> int:
         cancel_token,
         first_message="[Orchestrator] 取消中…",
     ):
-        state = orch.repair(args.issue, cancel_token=cancel_token)
+        state = orch.repair(
+            args.issue,
+            cancel_token=cancel_token,
+            allow_baseline_degrade=not args.no_degrade,
+        )
 
     _print_repair_result(state, verbose=args.verbose)
     return repair_exit_code(state)

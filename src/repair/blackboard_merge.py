@@ -1,0 +1,213 @@
+"""Blackboard ↔ RepairState merge：Orchestrator 代理写入与物化。"""
+
+from __future__ import annotations
+
+from src.blackboard import Blackboard
+from src.state import RepairState, RetrievedContext, SuspectLocation
+
+SUSPECT_PREFIX = "suspect:"
+CONTEXT_PREFIX = "context:"
+SCRATCH_PREFIX = "scratch:"
+LOCALIZER_SOURCE = "localizer"
+RETRIEVER_SOURCE = "retriever"
+ORCHESTRATOR_SOURCE = "orchestrator"
+BLACKBOARD_SCHEMA_VERSION = 1
+
+_CONTEXT_FIELDS = (
+    "related_tests",
+    "similar_snippets",
+    "caller_locations",
+    "similar_fixes",
+)
+
+
+def suspect_key(suspect: SuspectLocation) -> str:
+    """Blackboard key for a suspect location."""
+    return f"{SUSPECT_PREFIX}{suspect.file_path}:{suspect.start_line}"
+
+
+def context_key(field: str) -> str:
+    """Blackboard key for a RetrievedContext field."""
+    return f"{CONTEXT_PREFIX}{field}"
+
+
+def scratch_key(field: str) -> str:
+    """Blackboard key for scratch / TTL entries."""
+    return f"{SCRATCH_PREFIX}{field}"
+
+
+def write_localize_phase_to_blackboard(
+    bb: Blackboard,
+    suspects: list[SuspectLocation],
+    context: RetrievedContext | None,
+) -> dict:
+    """Write parsed localize/retrieve outputs to the blackboard."""
+    stats = {
+        "suspects_written": 0,
+        "context_keys_written": 0,
+        "write_conflicts": 0,
+    }
+    for suspect in suspects:
+        ok = bb.write(
+            suspect_key(suspect),
+            suspect.to_dict(),
+            source_agent=LOCALIZER_SOURCE,
+        )
+        if ok:
+            stats["suspects_written"] += 1
+        else:
+            stats["write_conflicts"] += 1
+
+    ctx = context or RetrievedContext()
+    for field in _CONTEXT_FIELDS:
+        value = getattr(ctx, field, None)
+        if not value:
+            continue
+        ok = bb.write(context_key(field), value, source_agent=RETRIEVER_SOURCE)
+        if ok:
+            stats["context_keys_written"] += 1
+        else:
+            stats["write_conflicts"] += 1
+    return stats
+
+
+def write_feedback_to_blackboard(bb: Blackboard, feedback: str, *, ttl: float = 300) -> bool:
+    """Write verify feedback to scratch namespace for next patch merge."""
+    if not feedback:
+        return False
+    return bb.write(
+        scratch_key("feedback"),
+        feedback,
+        source_agent=ORCHESTRATOR_SOURCE,
+        ttl=ttl,
+    )
+
+
+def _dedupe_suspects(suspects: list[SuspectLocation]) -> list[SuspectLocation]:
+    """Merge duplicate file+line suspects, keeping highest confidence."""
+    by_location: dict[tuple[str, int], SuspectLocation] = {}
+    for suspect in suspects:
+        loc = (suspect.file_path, suspect.start_line)
+        existing = by_location.get(loc)
+        if existing is None or suspect.confidence > existing.confidence:
+            by_location[loc] = suspect
+    return sorted(
+        by_location.values(),
+        key=lambda s: (-s.confidence, s.file_path, s.start_line),
+    )
+
+
+def read_suspects_from_blackboard(bb: Blackboard) -> list[SuspectLocation]:
+    """Read and dedupe suspects via ``read_related("suspect:")``."""
+    suspects: list[SuspectLocation] = []
+    for _key, value in bb.read_related(SUSPECT_PREFIX).items():
+        if isinstance(value, dict):
+            suspects.append(SuspectLocation.from_dict(value))
+    return _dedupe_suspects(suspects)
+
+
+def read_context_from_blackboard(bb: Blackboard) -> RetrievedContext:
+    """Read retrieved context via ``read_related("context:")``."""
+    context = RetrievedContext()
+    for key, value in bb.read_related(CONTEXT_PREFIX).items():
+        field = key[len(CONTEXT_PREFIX) :]
+        if field in _CONTEXT_FIELDS and isinstance(value, list):
+            setattr(context, field, list(value))
+    return context
+
+
+def _pick_conflict_winner(
+    key: str,
+    sources: list[str],
+    values: list,
+    strategy: str,
+) -> tuple[str, object]:
+    source_to_value = dict(zip(sources, values, strict=False))
+    if strategy == "prefer_localizer":
+        if LOCALIZER_SOURCE in source_to_value:
+            return LOCALIZER_SOURCE, source_to_value[LOCALIZER_SOURCE]
+        if RETRIEVER_SOURCE in source_to_value:
+            return RETRIEVER_SOURCE, source_to_value[RETRIEVER_SOURCE]
+    if strategy == "highest_confidence" and key.startswith(SUSPECT_PREFIX):
+        best_source = sources[0]
+        best_value = values[0]
+        best_conf = -1.0
+        for source, value in source_to_value.items():
+            if not isinstance(value, dict):
+                continue
+            conf = float(value.get("confidence", 0) or 0)
+            if conf > best_conf:
+                best_conf = conf
+                best_source = source
+                best_value = value
+        return best_source, best_value
+    return sources[0], values[0]
+
+
+def resolve_blackboard_conflicts(
+    bb: Blackboard,
+    *,
+    strategy: str = "prefer_localizer",
+) -> list[dict]:
+    """Arbitrate pending write conflicts and apply winners to the blackboard."""
+    resolved: list[dict] = []
+    for conflict in list(bb.conflicts):
+        key = conflict["key"]
+        sources = conflict["sources"]
+        values = conflict["values"]
+        winner_source, winner_value = _pick_conflict_winner(key, sources, values, strategy)
+        bb.apply_conflict_winner(key, winner_value, winner_source)
+        resolved.append(
+            {
+                "key": key,
+                "strategy": strategy,
+                "winner_source": winner_source,
+            }
+        )
+    return resolved
+
+
+def _apply_scratch_feedback(state: RepairState, bb: Blackboard) -> bool:
+    scratch_feedback = bb.read(scratch_key("feedback"))
+    if isinstance(scratch_feedback, str) and scratch_feedback.strip():
+        if not state.feedback:
+            state.feedback = scratch_feedback
+        return True
+    return False
+
+
+def merge_blackboard_for_patch(
+    state: RepairState,
+    bb: Blackboard,
+    *,
+    conflict_strategy: str = "prefer_localizer",
+) -> dict:
+    """Merge blackboard into RepairState at patch boundary (read_related + resolve)."""
+    conflicts_resolved = resolve_blackboard_conflicts(bb, strategy=conflict_strategy)
+    suspects = read_suspects_from_blackboard(bb)
+    context = read_context_from_blackboard(bb)
+
+    state.suspect_locations = suspects
+    state.retrieved_context = context
+    scratch_applied = _apply_scratch_feedback(state, bb)
+
+    snapshot = bb.snapshot()
+    state.blackboard_snapshot = snapshot
+
+    return {
+        "suspect_count": len(suspects),
+        "context_keys": len(bb.read_related(CONTEXT_PREFIX)),
+        "conflicts_resolved": conflicts_resolved,
+        "conflicts": list(bb.conflicts),
+        "scratch_feedback_applied": scratch_applied,
+        "snapshot": snapshot,
+        "retry_count": state.retry_count,
+    }
+
+
+def restore_blackboard_from_snapshot(bb: Blackboard, snapshot: dict | None) -> None:
+    """Restore blackboard entries from a prior snapshot (checkpoint resume)."""
+    if not snapshot:
+        return
+    for key, value in (snapshot.get("entries") or {}).items():
+        bb.write(key, value, source_agent="restored")
