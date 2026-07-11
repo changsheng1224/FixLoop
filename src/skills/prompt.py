@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
+from src.prompts.loader import load_skill_miss_hint
 from src.state import RepairPlan
 
 SkillHintRole = Literal["localizer", "retriever", "patcher"]
@@ -90,6 +91,24 @@ def format_skill_hint(plan: RepairPlan | None, role: SkillHintRole) -> str:
     return _format_patcher_hint(plan)
 
 
+def format_skill_miss_hint(role: SkillHintRole) -> str:
+    """Render generic Skill miss hint for *role* when match_skill returns None."""
+    text = load_skill_miss_hint(role)
+    limit = _ROLE_CHAR_LIMITS[role]
+    return _truncate(text, limit)
+
+
+def format_skill_hint_for_plan(plan: RepairPlan | None, role: SkillHintRole) -> str:
+    """Render matched Skill hint or generic miss hint based on plan fallback state."""
+    if not plan:
+        return ""
+    if plan.matched_skill:
+        return format_skill_hint(plan, role)
+    if plan.skill_fallback_strategy in ("issue_type_routing", "generic_patcher"):
+        return format_skill_miss_hint(role)
+    return ""
+
+
 def format_skill_hint_block(plan: RepairPlan | None) -> str:
     """Render full ``[Skill 提示]`` block for patcher (backward compatible)."""
-    return format_skill_hint(plan, "patcher")
+    return format_skill_hint_for_plan(plan, "patcher")

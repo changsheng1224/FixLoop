@@ -286,6 +286,15 @@ def _print_repair_result(state, verbose: bool) -> None:
             f"{plan.issue_type}, {plan.suspect_files}{variants}",
             file=sys.stderr,
         )
+        if plan.matched_skill:
+            print(f"[Orchestrator] Skill: {plan.matched_skill}", file=sys.stderr)
+        elif plan.skill_fallback_strategy:
+            patcher = plan.prompt_variants.get("patcher", "default")
+            print(
+                f"[Orchestrator] Skill: 未命中 → fallback={plan.skill_fallback_strategy} "
+                f"(patcher={patcher})",
+                file=sys.stderr,
+            )
         print(f"[Localizer] 定位 {len(state.suspect_locations)} 个嫌疑位置", file=sys.stderr)
         if state.retrieved_context:
             print(

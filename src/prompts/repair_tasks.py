@@ -7,7 +7,7 @@ from pathlib import Path
 from agent_runtime.template_render import render_template, template_metadata
 from src.prompts.loader import load_localizer_hints
 from src.repair.prompt_router import apply_prompt_routing, localizer_hints_key_for
-from src.skills.prompt import format_skill_hint
+from src.skills.prompt import format_skill_hint_for_plan
 
 _TASKS_DIR = Path(__file__).parent / "tasks"
 
@@ -37,7 +37,7 @@ def build_localizer_variables(plan, issue: str = "") -> dict[str, str]:
         "issue": issue_text,
         "suspect_files_line": suspect_line,
         "issue_type_hints": hints,
-        "skill_hint_block": format_skill_hint(plan, "localizer"),
+        "skill_hint_block": format_skill_hint_for_plan(plan, "localizer"),
     }
 
 
@@ -46,7 +46,7 @@ def build_retriever_template_and_variables(
     plan=None,
     issue: str = "",
 ) -> tuple[str, dict[str, str]]:
-    skill_hint_block = format_skill_hint(plan, "retriever") if plan else ""
+    skill_hint_block = format_skill_hint_for_plan(plan, "retriever") if plan else ""
     if suspects:
         lines = ["根据以下嫌疑位置搜索相关代码："]
         for s in suspects:

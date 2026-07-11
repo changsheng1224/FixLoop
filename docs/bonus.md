@@ -374,7 +374,7 @@
 ### 13.6 Skill 与 tool 联动
 
 - **[P1] [C:⭐ I:⭐⭐⭐⭐] matched skill → suggested_tools 约束 Gateway**：未在白名单的工具 warn/deny（可选 strict）
-- **[P2] [C:⭐ I:⭐⭐⭐] skill 未命中 default 策略**：trace `matched_skill=null` · generic patcher 后缀
+- **[P2] [C:⭐ I:⭐⭐⭐] skill 未命中 default 策略** ✅：`fallback_strategy` trace · `format_skill_miss_hint` · `generic_patcher` → `default.txt`
 
 ### 13.4 海量 Skill 加载
 

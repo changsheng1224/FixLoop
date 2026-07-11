@@ -152,12 +152,22 @@ class RepairPipelineMixin:
                 )
                 if matched and state.repair_plan:
                     matched.apply_to_plan(state.repair_plan)
+                from src.skills.fallback import apply_skill_fallback, skill_matched_trace_payload
+
+                skill_fallback = (
+                    apply_skill_fallback(state.repair_plan, matched=matched)
+                    if state.repair_plan
+                    else None
+                )
                 if tracer is not None:
                     tracer.emit(
                         "orchestrator",
                         "skill_matched",
-                        matched.to_trace_payload()
-                        if matched
+                        skill_matched_trace_payload(
+                            matched,
+                            skill_fallback,
+                        )
+                        if skill_fallback is not None
                         else {"matched_skill": None},
                     )
                 ms = int((time.time() - t0) * 1000)

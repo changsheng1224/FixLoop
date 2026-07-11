@@ -73,6 +73,8 @@ class RepairPlan:
         skill_avoid: Skill 反模式列表。
         skill_example_patch: Skill 示例修复文案。
         reasoning: 判定依据。
+        prompt_variants: 各 Agent prompt 变体键（patcher / localizer）。
+        skill_fallback_strategy: Skill 未命中时的 fallback 策略（hit / issue_type_routing / generic_patcher）。
     """
 
     language: str = "python"
@@ -88,6 +90,7 @@ class RepairPlan:
     skill_example_patch: str = ""
     reasoning: str = ""
     prompt_variants: dict[str, str] = field(default_factory=dict)
+    skill_fallback_strategy: str = ""
     schema_version: str = "1.0"
 
     def to_dict(self) -> dict:
@@ -106,6 +109,7 @@ class RepairPlan:
             "skill_example_patch": self.skill_example_patch,
             "reasoning": self.reasoning,
             "prompt_variants": dict(self.prompt_variants),
+            "skill_fallback_strategy": self.skill_fallback_strategy,
             "schema_version": self.schema_version,
         }
 
@@ -126,6 +130,7 @@ class RepairPlan:
             skill_example_patch=data.get("skill_example_patch", ""),
             reasoning=data.get("reasoning", ""),
             prompt_variants=dict(data.get("prompt_variants") or {}),
+            skill_fallback_strategy=str(data.get("skill_fallback_strategy") or ""),
             schema_version=data.get("schema_version", "1.0"),
         )
 

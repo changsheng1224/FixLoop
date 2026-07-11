@@ -108,6 +108,7 @@ def repair_plan_intent_snapshot(plan: RepairPlan) -> dict:
         "suspect_files": list(plan.suspect_files),
         "matched_skill": plan.matched_skill,
         "suggested_tools": list(plan.suggested_tools),
+        "skill_fallback_strategy": plan.skill_fallback_strategy,
     }
 
 
