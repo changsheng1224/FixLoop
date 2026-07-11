@@ -102,6 +102,7 @@ class TestJsonLogging:
 class TestConfigureLogging:
     def test_configure_json_via_env(self, monkeypatch):
         monkeypatch.setenv("FIXLOOP_LOG", "json")
+        reset_logging_for_tests()
         configure_logging("INFO")
         root = logging.getLogger("fixloop")
         assert root.handlers
