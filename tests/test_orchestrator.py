@@ -216,6 +216,46 @@ class TestOrchestrator:
         assert "localizer" in tool_summary
         assert report.get("total_tool_steps") == sum(tool_summary.values())
 
+    def test_repair_blackboard_trace_and_report(self, temp_workspace):
+        import json
+
+        (temp_workspace / "calc.py").write_text("old\n", encoding="utf-8")
+        ws = WorkspaceContext.build(str(temp_workspace))
+        loc_client = FakeModelClient(
+            [
+                '<final>[{"file_path":"calc.py","start_line":42,"end_line":44,'
+                '"confidence":0.95}]</final>',
+            ]
+        )
+        ret_client = FakeModelClient(
+            ['<final>{"related_tests":["test_calc.py::test_add"]}</final>']
+        )
+        pat_client = FakeModelClient(
+            ['<final>[{"file_path":"calc.py","diff":"-old\\n+new","explanation":"fix"}]</final>']
+        )
+        orch = Orchestrator(
+            create_localizer(loc_client, ws),
+            create_retriever(ret_client, ws),
+            create_patcher(pat_client, ws),
+        )
+        state = orch.repair("TypeError at calc.py:42")
+        assert state.blackboard_snapshot.get("entries")
+        assert "suspect:calc.py:42" in state.blackboard_snapshot["entries"]
+
+        runs_dir = temp_workspace / ".agent" / "runs" / state.repair_run_id
+        events = [
+            json.loads(line)
+            for line in (runs_dir / "trace.jsonl").read_text(encoding="utf-8").strip().splitlines()
+        ]
+        event_names = {e.get("event") for e in events}
+        assert "blackboard_written" in event_names
+        assert "blackboard_merged" in event_names
+        assert "blackboard_snapshot" in event_names
+
+        report = json.loads((runs_dir / "report.json").read_text(encoding="utf-8"))
+        assert report.get("blackboard_schema_version") == 1
+        assert report.get("blackboard", {}).get("entries")
+
     def test_repair_warns_non_python_language(self, temp_workspace, monkeypatch):
         from src.repair import pipeline as pipeline_mod
 

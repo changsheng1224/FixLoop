@@ -16,6 +16,11 @@ from src.repair.termination import (
     mark_fixed_skip_verify,
 )
 from src.repair.output_parsers import parse_retrieved_context, parse_suspect_list
+from src.repair.blackboard_merge import (
+    BLACKBOARD_SCHEMA_VERSION,
+    merge_blackboard_to_repair_state,
+    write_localize_phase_to_blackboard,
+)
 from src.repair.l2_binding import (
     AgentAskRef,
     bind_l2_context,
@@ -213,6 +218,55 @@ class RepairPipelineMixin:
         state.agent_asks.append(ref)
         return task_id
 
+    def _init_repair_blackboard(self) -> None:
+        from src.blackboard import Blackboard
+
+        self._blackboard = Blackboard()
+
+    def _sync_localize_phase_via_blackboard(
+        self,
+        state: RepairState,
+        suspects: list[SuspectLocation],
+        context: RetrievedContext | None,
+    ) -> None:
+        """Write localize/retrieve outputs to Blackboard and merge into RepairState."""
+        bb = getattr(self, "_blackboard", None)
+        if bb is None:
+            state.suspect_locations = suspects
+            state.retrieved_context = context or RetrievedContext()
+            return
+
+        write_stats = write_localize_phase_to_blackboard(bb, suspects, context)
+        merge_meta = merge_blackboard_to_repair_state(state, bb)
+        tracer = self._repair_tracer
+        if tracer is not None:
+            tracer.emit(
+                "orchestrator",
+                "blackboard_written",
+                {**write_stats, "phase": "localize"},
+            )
+            tracer.emit(
+                "orchestrator",
+                "blackboard_merged",
+                {
+                    "suspect_count": merge_meta["suspect_count"],
+                    "context_keys": merge_meta["context_keys"],
+                    "conflict_count": len(merge_meta["conflicts"]),
+                    "blackboard_schema_version": BLACKBOARD_SCHEMA_VERSION,
+                },
+            )
+            if merge_meta["conflicts"]:
+                tracer.emit(
+                    "orchestrator",
+                    "blackboard_conflicts",
+                    {"conflicts": merge_meta["conflicts"]},
+                )
+            tracer.emit(
+                "orchestrator",
+                "blackboard_snapshot",
+                merge_meta["snapshot"],
+            )
+
     def _run_localizer_only(
         self,
         state: RepairState,
@@ -307,6 +361,7 @@ class RepairPipelineMixin:
         self._repair_started_at = t_start
         self._reset_token_tracking()
         self._begin_repair_trace(state)
+        self._init_repair_blackboard()
         log.info("Orchestrator 开始")
 
         cancelled = False
@@ -377,10 +432,13 @@ class RepairPipelineMixin:
                     ret_timing["total_ms"],
                     internal=ret_timing["internal"],
                 )
-                state.suspect_locations = suspects
-                state.retrieved_context = context
-                n = len(suspects)
-                n_tests = len(context.related_tests) if context else 0
+                self._sync_localize_phase_via_blackboard(state, suspects, context)
+                n = len(state.suspect_locations)
+                n_tests = (
+                    len(state.retrieved_context.related_tests)
+                    if state.retrieved_context
+                    else 0
+                )
                 log.info(
                     "Localizer+Retriever 完成: 墙钟%dms (L=%dms, R=%dms), %d suspect, %d tests",
                     wall_ms,

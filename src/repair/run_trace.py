@@ -14,6 +14,10 @@ REPAIR_TRACE_EVENTS = frozenset(
         "phase_timeout",
         "agent_ask_started",
         "agent_ask_finished",
+        "blackboard_written",
+        "blackboard_merged",
+        "blackboard_snapshot",
+        "blackboard_conflicts",
     }
 )
 
@@ -98,6 +102,7 @@ class RepairRunTracer:
         )
         from agent_runtime.tool_rejection import build_rejection_observability_payload
         from src.repair.l2_binding import L2_BINDING_SCHEMA_VERSION
+        from src.repair.blackboard_merge import BLACKBOARD_SCHEMA_VERSION
         from src.repair.prompt_router import repair_plan_intent_snapshot
         from src.repair.timing_schema import phases_for_report
         from src.repair.ttft_aggregate import aggregate_ttft_from_agent_reports
@@ -115,6 +120,8 @@ class RepairRunTracer:
             "phases": phases_for_report(state.node_timings),
             "l2_binding_schema_version": L2_BINDING_SCHEMA_VERSION,
             "agent_asks": [ref.to_dict() for ref in state.agent_asks],
+            "blackboard_schema_version": BLACKBOARD_SCHEMA_VERSION,
+            "blackboard": state.blackboard_snapshot or {},
             "token_usage_by_agent": by_agent,
             **tool_summary,
             **token_summary,
