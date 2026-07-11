@@ -63,3 +63,68 @@ class TestPatcherPrompt:
     def test_forbids_tool_calls(self):
         text = _read("patcher.txt")
         assert "只输出上面的 JSON" in text
+
+class TestIntentParserSnapshot:
+    def test_intent_parser_in_snapshot(self):
+        from src.repair.prompt_router import repair_plan_intent_snapshot
+        from src.state import RepairPlan
+
+        plan = RepairPlan(issue_type="type_error", intent_parser="rule")
+        snap = repair_plan_intent_snapshot(plan)
+        assert snap["intent_parser"] == "rule"
+        assert snap["issue_type"] == "type_error"
+
+    def test_intent_parser_defaults_to_rule(self):
+        from src.repair.prompt_router import repair_plan_intent_snapshot
+        from src.state import RepairPlan
+
+        plan = RepairPlan(issue_type="unknown")
+        snap = repair_plan_intent_snapshot(plan)
+        assert snap["intent_parser"] == "rule"
+
+class TestSkillConfidence:
+    def test_confidence_high_priority_single_candidate(self):
+        from src.skills.models import MatchedSkill
+
+        m = MatchedSkill(
+            name="python_type_error_fix", language="python",
+            trigger_pattern="TypeError", priority=10,
+            candidates_count=1,
+        )
+        assert m.confidence == 0.1
+        assert "confidence" in m.to_trace_payload()
+
+    def test_confidence_low_priority_many_candidates(self):
+        from src.skills.models import MatchedSkill
+
+        m = MatchedSkill(
+            name="generic_fix", language="python",
+            trigger_pattern="Error", priority=5,
+            candidates_count=4,
+        )
+        assert m.confidence == round(0.05 / 4, 2)
+
+    def test_confidence_in_intent_snapshot_with_match(self):
+        from src.repair.prompt_router import repair_plan_intent_snapshot
+        from src.state import RepairPlan
+        from src.skills.models import MatchedSkill
+
+        plan = RepairPlan(issue_type="type_error", intent_parser="rule")
+        m = MatchedSkill(
+            name="python_type_error_fix", language="python",
+            trigger_pattern="TypeError", priority=10,
+        )
+        m.apply_to_plan(plan)
+        snap = repair_plan_intent_snapshot(plan)
+        assert snap["matched_skill"] == "python_type_error_fix"
+        assert snap["skill_confidence"] == 0.1
+
+    def test_confidence_zero_for_no_match(self):
+        from src.repair.prompt_router import repair_plan_intent_snapshot
+        from src.state import RepairPlan
+
+        plan = RepairPlan(issue_type="unknown", intent_parser="rule")
+        # skill context 默认 matched_skill=""
+        snap = repair_plan_intent_snapshot(plan)
+        assert snap["matched_skill"] is None
+        assert snap["skill_confidence"] == 0.0

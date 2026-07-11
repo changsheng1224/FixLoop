@@ -62,6 +62,7 @@ class SkillContext:
     avoid: list[str] = field(default_factory=list)
     example_patch: str = ""
     fallback_strategy: str = ""
+    confidence: float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -72,6 +73,7 @@ class SkillContext:
             "avoid": list(self.avoid),
             "example_patch": self.example_patch,
             "fallback_strategy": self.fallback_strategy,
+            "confidence": self.confidence,
         }
 
     @classmethod
@@ -87,6 +89,7 @@ class SkillContext:
             fallback_strategy=str(
                 raw.get("fallback_strategy") or raw.get("skill_fallback_strategy") or ""
             ),
+            confidence=float(raw.get("confidence", 0.0)),
         )
 
 
@@ -163,6 +166,7 @@ class RepairPlan:
     skill: SkillContext = field(default_factory=SkillContext)
     reasoning: str = ""
     prompt_variants: dict[str, str] = field(default_factory=dict)
+    intent_parser: str = ""
     schema_version: str = "1.0"
 
     def to_dict(self) -> dict:
@@ -176,6 +180,7 @@ class RepairPlan:
             "skill": self.skill.to_dict(),
             "reasoning": self.reasoning,
             "prompt_variants": dict(self.prompt_variants),
+            "intent_parser": self.intent_parser,
             "schema_version": self.schema_version,
         }
 
@@ -194,6 +199,7 @@ class RepairPlan:
             skill=skill,
             reasoning=data.get("reasoning", ""),
             prompt_variants=dict(data.get("prompt_variants") or {}),
+            intent_parser=data.get("intent_parser", ""),
             schema_version=data.get("schema_version", "1.0"),
         )
 

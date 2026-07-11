@@ -127,7 +127,15 @@ class MatchedSkill:
             "priority": self.priority,
             "suggested_tools": list(self.suggested_tools),
             "candidates_count": self.candidates_count,
+            "confidence": self.confidence,
         }
+
+    @property
+    def confidence(self) -> float:
+        """匹配置信度：priority × 竞争者稀释（0.0–1.0）。"""
+        base = self.priority / 100.0
+        diversity = 1.0 / max(self.candidates_count, 1)
+        return round(base * diversity, 2)
 
     def apply_to_plan(self, plan) -> None:
         """Write matched skill fields onto a ``RepairPlan`` (in-place)."""
@@ -137,3 +145,4 @@ class MatchedSkill:
         plan.skill.guidance = list(self.guidance)
         plan.skill.avoid = list(self.avoid)
         plan.skill.example_patch = self.example_patch
+        plan.skill.confidence = self.confidence
