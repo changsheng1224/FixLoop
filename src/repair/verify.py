@@ -56,28 +56,51 @@ class DockerVerifyStrategy:
     """Docker sandbox build + pytest。"""
 
     def run(self, repo_root: str, test_path: str = "", cancel_token=None) -> VerifyRun:
+        from src.harness.sandbox_verify import SandboxNotAvailableError, assert_sandbox_available
         from src.tools.sandbox_tools import run_sandbox_verification
 
         t0 = time.time()
+        try:
+            assert_sandbox_available()
+        except SandboxNotAvailableError as exc:
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return VerifyRun(
+                result=VerificationResult(
+                    all_passed=False,
+                    failure_logs=[f"Docker sandbox 不可用，请使用 --pytest 降级: {exc}"],
+                ),
+                elapsed_ms=elapsed_ms,
+                internal={"execution_tier": "host", "sandbox_unavailable": True, "error": str(exc)},
+                error="sandbox_unavailable",
+            )
         try:
             result, internal = run_sandbox_verification(
                 repo_root,
                 test_path=test_path,
                 cancel_token=cancel_token,
             )
+            internal["execution_tier"] = "container"
             return _verify_from_sandbox_result(result, internal, t0)
+        except SandboxNotAvailableError:
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return VerifyRun(
+                result=VerificationResult(all_passed=False, failure_logs=["Docker sandbox 不可用"]),
+                elapsed_ms=elapsed_ms,
+                internal={"execution_tier": "host", "sandbox_unavailable": True},
+                error="sandbox_unavailable",
+            )
         except Exception as exc:
             elapsed_ms = int((time.time() - t0) * 1000)
             return VerifyRun(
                 result=VerificationResult(all_passed=False, failure_logs=[str(exc)]),
                 elapsed_ms=elapsed_ms,
-                internal={},
+                internal={"execution_tier": "container"},
                 error=str(exc),
             )
 
 
 class PytestVerifyStrategy:
-    """宿主机 subprocess pytest。"""
+    """宿主机 subprocess pytest（execution_tier=host）。"""
 
     def run(self, repo_root: str, test_path: str = "", cancel_token=None) -> VerifyRun:
         from agent_runtime.cancellation import CancelledError, run_with_cancellation
@@ -111,7 +134,7 @@ class PytestVerifyStrategy:
                 failure_logs=[out[-2000:]] if out and not passed else [],
             ),
             elapsed_ms=elapsed_ms,
-            internal={"pytest_ms": elapsed_ms},
+            internal={"pytest_ms": elapsed_ms, "execution_tier": "host"},
         )
 
 

@@ -18,6 +18,29 @@ from src.harness.sandbox_tar import SandboxArchiveError
 from src.state import VerificationResult
 
 
+class SandboxNotAvailableError(Exception):
+    """Docker 不可用时抛出，供 Orchestrator 降级到 host pytest。"""
+
+    def __init__(self, reason: str = ""):
+        super().__init__(f"Docker sandbox 不可用: {reason}" if reason else "Docker sandbox 不可用")
+        self.reason = reason
+
+
+def assert_sandbox_available() -> None:
+    """快速体检：Docker daemon 是否可达。
+
+    Raises:
+        SandboxNotAvailableError: Docker 不可达时抛出。
+    """
+    try:
+        import docker
+
+        client = docker.from_env()
+        client.ping()
+    except Exception as exc:
+        raise SandboxNotAvailableError(str(exc)) from exc
+
+
 def run_sandbox_verification_flow(
     context,
     repo: str,
@@ -35,6 +58,10 @@ def run_sandbox_verification_flow(
     timings: dict[str, int | str] = {}
     sandbox = None
     created_here = False
+
+    # container tier 体检：首次创建容器前验证 Docker 可达
+    if sandbox_id is None:
+        assert_sandbox_available()
 
     def _abort_if_cancelled() -> tuple[VerificationResult, dict] | None:
         if cancel_token is not None and cancel_token.is_cancelled:

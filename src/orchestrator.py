@@ -703,6 +703,14 @@ class Orchestrator(RepairPipelineMixin):
             )
             if run.error:
                 log.warning("[verifier] 沙箱验证失败: %s", run.error)
+                # Docker 不可用时自动降级到 host pytest
+                if run.error == "sandbox_unavailable" and self.use_pytest_verify:
+                    log.info("[verifier] 沙箱不可用，降级到宿主机 pytest（execution_tier=host）")
+                    run = PytestVerifyStrategy().run(
+                        self._repo_root, cancel_token=cancel_token
+                    )
+                    record_verify_timings(state, run)
+                    return run.result
             record_verify_timings(state, run, log_sandbox=True)
             return run.result
         if self.use_pytest_verify:

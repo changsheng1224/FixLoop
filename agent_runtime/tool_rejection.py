@@ -30,6 +30,7 @@ TOOL_TRACE_PUBLIC_KEYS = (
     "gate_id",
     "approval_policy",
     "approval_result",
+    "execution_tier",
 )
 
 

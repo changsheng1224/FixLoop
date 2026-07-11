@@ -168,3 +168,42 @@ class TestApproval:
     def test_approve_never(self, agent):
         executor = ToolExecutor(agent=agent, approval_policy="never")
         assert executor._approve("write_file", {}) is False
+
+
+class TestExecutionTier:
+    """execution_tier 注入与透传测试。"""
+
+    def test_host_tool_has_tier_in_metadata(self, agent):
+        executor = ToolExecutor(agent=agent, approval_policy="auto")
+        result = executor.execute("list_files", {"path": "."})
+        assert result.metadata["tool_status"] == "success"
+        assert result.metadata.get("execution_tier") == "host"
+
+    def test_run_shell_is_host_tier(self, agent):
+        executor = ToolExecutor(agent=agent, approval_policy="auto")
+        result = executor.execute("run_shell", {"command": "echo hello", "timeout": 5})
+        assert result.metadata["tool_status"] == "success"
+        assert result.metadata.get("execution_tier") == "host"
+
+    def test_write_file_is_host_tier(self, agent):
+        executor = ToolExecutor(agent=agent, approval_policy="auto")
+        result = executor.execute("write_file", {"path": "t.txt", "content": "x"})
+        assert result.metadata["tool_status"] == "success"
+        assert result.metadata.get("execution_tier") == "host"
+
+    def test_tool_spec_has_execution_tier(self, agent):
+        for name in ("list_files", "read_file", "search", "write_file", "patch_file", "run_shell"):
+            spec = agent.tools.get(name)
+            assert spec is not None, f"missing tool: {name}"
+            assert spec.get("execution_tier") == "host", f"{name} should be host tier"
+
+    def test_rejected_tool_has_no_tier_in_metadata(self, executor):
+        """被 Gate 拒绝的工具不执行，metadata 中不含 execution_tier。"""
+        result = executor.execute("non_existent_tool", {})
+        assert result.metadata["tool_status"] == "rejected"
+        assert "execution_tier" not in result.metadata
+
+    def test_execution_tier_in_trace_public_keys(self):
+        from agent_runtime.tool_rejection import TOOL_TRACE_PUBLIC_KEYS
+
+        assert "execution_tier" in TOOL_TRACE_PUBLIC_KEYS

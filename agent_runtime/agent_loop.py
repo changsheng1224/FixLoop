@@ -82,6 +82,8 @@ class AgentLoop:
         self._retry_count = 0
         self._call_timings: list[ModelCallTiming] = []
         self._in_flight_tool = ""
+        self._tier_counts: dict[str, int] = {}
+        self._tier_tools: dict[str, dict[str, int]] = {"host": {}, "container": {}}
 
     @property
     def _cancel_token(self):
@@ -723,6 +725,11 @@ class AgentLoop:
         from agent_runtime.tool_rejection import tool_trace_payload
 
         meta = getattr(result, "metadata", None) or {}
+        tier = meta.get("execution_tier", "host")
+        self._tier_counts[tier] = self._tier_counts.get(tier, 0) + 1
+        self._tier_tools.setdefault(tier, {})[tool_name] = (
+            self._tier_tools[tier].get(tool_name, 0) + 1
+        )
         preview = meta.get("patch_preview")
         if preview:
             self._emit("tool_preview", {"tool": tool_name, **preview})
@@ -778,6 +785,12 @@ class AgentLoop:
                 "status": ts.status,
                 "prompt_cache_key": getattr(self.agent._prefix, "hash", ""),
                 "node_timings": ts.node_timings,
+                "tier_summary": {
+                    "host_calls": self._tier_counts.get("host", 0),
+                    "container_calls": self._tier_counts.get("container", 0),
+                    "host_tools": self._tier_tools.get("host", {}),
+                    "container_tools": self._tier_tools.get("container", {}),
+                },
                 **report_token,
                 **report_latency,
                 **ts.rejection_report_fields(),
