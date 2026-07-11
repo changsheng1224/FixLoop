@@ -133,29 +133,43 @@ class RepairPipelineMixin:
             else:
                 t0 = time.time()
                 state.repair_plan = self._parse_issue(issue)
-                if state.repair_plan:
-                    tracer = self._repair_tracer
-                    if tracer is not None:
-                        tracer.emit(
-                            "orchestrator",
-                            "prompt_routing",
-                            repair_plan_intent_snapshot(state.repair_plan),
-                        )
+                parse_ms = int((time.time() - t0) * 1000)
                 if state.repair_plan and state.repair_plan.language != "python":
                     log.warning(
                         "检测到 language=%s（%s），当前 Verifier 仅支持 Python 修复",
                         state.repair_plan.language,
                         state.repair_plan.language_source,
                     )
-                skill = self._match_skill(
-                    issue,
-                    language=state.repair_plan.language if state.repair_plan else "python",
-                )
-                if skill and state.repair_plan:
-                    state.repair_plan.estimated_impact = skill.get("suggested_tools", [])
-                ms = int((time.time() - t0) * 1000)
-                state.node_timings["parse_issue_ms"] = ms
-                log.info("parse_issue: %dms", ms)
+                t_skill = time.time()
+                from src.skills.resolve import resolve_skill_for_plan, skill_matched_trace_payload
+
+                matched = None
+                skill_fallback = None
+                if state.repair_plan:
+                    matched, skill_fallback = resolve_skill_for_plan(
+                        state.repair_plan,
+                        issue,
+                        language=state.repair_plan.language,
+                        match_skill_fn=self._match_skill,
+                    )
+                skill_ms = int((time.time() - t_skill) * 1000)
+                tracer = self._repair_tracer
+                if state.repair_plan and tracer is not None:
+                    tracer.emit(
+                        "orchestrator",
+                        "prompt_routing",
+                        repair_plan_intent_snapshot(state.repair_plan),
+                    )
+                    tracer.emit(
+                        "orchestrator",
+                        "skill_matched",
+                        skill_matched_trace_payload(matched, skill_fallback)
+                        if skill_fallback is not None
+                        else {"matched_skill": None},
+                    )
+                state.node_timings["parse_issue_ms"] = parse_ms
+                state.node_timings["skill_resolve_ms"] = skill_ms
+                log.info("parse_issue: %dms, skill_resolve: %dms", parse_ms, skill_ms)
 
                 log.info("Localizer + Retriever 并行开始...")
                 t0 = time.time()

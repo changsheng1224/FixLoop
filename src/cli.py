@@ -11,10 +11,47 @@ from src.cli_exit_codes import (
     repair_config_error,
     repair_exit_code,
 )
-from src.eval.cli_helpers import print_ablation_report, print_eval_report, run_ablation, run_eval
+from src.eval.cli_helpers import (
+    print_ablation_report,
+    print_eval_report,
+    print_skill_eval_report,
+    run_ablation,
+    run_eval,
+    run_skill_eval_cmd,
+)
 from src.eval.runner import DEFAULT_CASES_DIR
 from src.repair.termination import is_repair_success
 from src.repair_factory import make_orchestrator_factory
+
+
+def _add_eval_run_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--all", action="store_true", help="运行全部 Case")
+    parser.add_argument("--case", action="append", dest="cases", help="指定 case_id")
+    parser.add_argument("--cases-dir", default=str(DEFAULT_CASES_DIR), help="Case 目录")
+    parser.add_argument("--output", default="eval_results", help="报告目录或 .json 路径")
+    parser.add_argument("--verbose", action="store_true", help="打印每个 Case 详情")
+    parser.add_argument(
+        "--fake",
+        action="store_true",
+        help="Fake Orchestrator（应用 expected_patch，无需 API）",
+    )
+    parser.add_argument(
+        "--skip-verify",
+        action="store_true",
+        help="禁用 Verifier 重试（默认启用 pytest/Docker 验证）",
+    )
+    parser.add_argument(
+        "--with-verify",
+        action="store_true",
+        help="（已默认启用）显式开启 Verifier 重试",
+    )
+    parser.add_argument(
+        "--markdown",
+        nargs="?",
+        const="report.md",
+        metavar="PATH",
+        help="生成 Markdown 指标报告（默认 output/report.md）",
+    )
 
 
 def main() -> int:
@@ -30,32 +67,27 @@ def main() -> int:
     p_repair.add_argument("--skip-verify", action="store_true", help="跳过 Docker 验证")
 
     p_eval = sub.add_parser("eval", help="运行评测 Case")
-    p_eval.add_argument("--all", action="store_true", help="运行全部 Case")
-    p_eval.add_argument("--case", action="append", dest="cases", help="指定 case_id")
-    p_eval.add_argument("--cases-dir", default=str(DEFAULT_CASES_DIR), help="Case 目录")
-    p_eval.add_argument("--output", default="eval_results", help="报告目录或 .json 路径")
-    p_eval.add_argument("--verbose", action="store_true", help="打印每个 Case 详情")
-    p_eval.add_argument(
-        "--fake",
-        action="store_true",
-        help="Fake Orchestrator（应用 expected_patch，无需 API）",
+    p_eval_sub = p_eval.add_subparsers(dest="eval_command")
+    _add_eval_run_args(p_eval)
+    p_eval_run = p_eval_sub.add_parser("run", help="运行 repair eval（默认，同 eval --all）")
+    _add_eval_run_args(p_eval_run)
+
+    p_eval_skills = p_eval_sub.add_parser("skills", help="Skill 召回率 eval（离线 match_skill）")
+    p_eval_skills.add_argument("--all", action="store_true", help="评测全部已标注 Case")
+    p_eval_skills.add_argument("--case", action="append", dest="cases", help="指定 case_id")
+    p_eval_skills.add_argument("--cases-dir", default=str(DEFAULT_CASES_DIR), help="Case 目录")
+    p_eval_skills.add_argument(
+        "--output",
+        default="eval_results/skill_eval_report.json",
+        help="报告 .json 路径",
     )
-    p_eval.add_argument(
-        "--skip-verify",
-        action="store_true",
-        help="禁用 Verifier 重试（默认启用 pytest/Docker 验证）",
-    )
-    p_eval.add_argument(
-        "--with-verify",
-        action="store_true",
-        help="（已默认启用）显式开启 Verifier 重试",
-    )
-    p_eval.add_argument(
+    p_eval_skills.add_argument("--verbose", action="store_true", help="打印每个 Case 详情")
+    p_eval_skills.add_argument(
         "--markdown",
         nargs="?",
-        const="report.md",
+        const="skill_eval_report.md",
         metavar="PATH",
-        help="生成 Markdown 指标报告（默认 output/report.md）",
+        help="生成 Markdown 报告",
     )
 
     p_ablation = sub.add_parser("ablation", help="运行消融实验")
@@ -105,14 +137,27 @@ def main() -> int:
         help="生成 Markdown 指标报告（默认 output/report.md）",
     )
 
+    p_skills = sub.add_parser("skills", help="Skill YAML 管理")
+    p_skills_sub = p_skills.add_subparsers(dest="skills_command")
+    p_skills_validate = p_skills_sub.add_parser("validate", help="校验 Skill YAML schema")
+    p_skills_validate.add_argument(
+        "--path",
+        default=str(Path(__file__).resolve().parent / "skills"),
+        help="Skill YAML 目录（默认 src/skills）",
+    )
+
     args = parser.parse_args()
     setup_logging_from_args(args)
     if args.command == "repair":
         return _repair(args)
     if args.command == "eval":
+        if getattr(args, "eval_command", None) == "skills":
+            return _eval_skills(args)
         return _eval(args)
     if args.command == "ablation":
         return _ablation(args)
+    if args.command == "skills":
+        return _skills(args)
     parser.print_help()
     return 1
 
@@ -176,6 +221,23 @@ def _eval(args) -> int:
     return code
 
 
+def _eval_skills(args) -> int:
+    if not args.all and not args.cases:
+        print("错误: 请指定 --all 或 --case case_XXX", file=sys.stderr)
+        return 2
+
+    case_ids = None if args.all else args.cases
+    report, report_path, code = run_skill_eval_cmd(
+        case_ids=case_ids,
+        cases_dir=args.cases_dir,
+        output=args.output,
+        verbose=args.verbose,
+        markdown=getattr(args, "markdown", None),
+    )
+    print_skill_eval_report(report, verbose=args.verbose, report_path=report_path)
+    return code
+
+
 def _ablation(args) -> int:
     if not args.all and not args.cases:
         print("错误: 请指定 --all 或 --case case_XXX", file=sys.stderr)
@@ -200,6 +262,22 @@ def _ablation(args) -> int:
     return code
 
 
+def _skills(args) -> int:
+    if args.skills_command == "validate":
+        return _skills_validate(args)
+    print("错误: 请指定 skills 子命令，例如: skills validate", file=sys.stderr)
+    return 2
+
+
+def _skills_validate(args) -> int:
+    from src.skills.validate import format_report, validate_directory
+
+    directory = Path(args.path).resolve()
+    report = validate_directory(directory)
+    print(format_report(report, directory=directory))
+    return 0 if report.ok else 1
+
+
 def _print_repair_result(state, verbose: bool) -> None:
     if verbose:
         plan = state.repair_plan
@@ -214,6 +292,15 @@ def _print_repair_result(state, verbose: bool) -> None:
             f"{plan.issue_type}, {plan.suspect_files}{variants}",
             file=sys.stderr,
         )
+        if plan.skill.matched_skill:
+            print(f"[Orchestrator] Skill: {plan.skill.matched_skill}", file=sys.stderr)
+        elif plan.skill.fallback_strategy:
+            patcher = plan.prompt_variants.get("patcher", "default")
+            print(
+                f"[Orchestrator] Skill: 未命中 → fallback={plan.skill.fallback_strategy} "
+                f"(patcher={patcher})",
+                file=sys.stderr,
+            )
         print(f"[Localizer] 定位 {len(state.suspect_locations)} 个嫌疑位置", file=sys.stderr)
         if state.retrieved_context:
             print(

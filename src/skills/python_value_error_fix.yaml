@@ -1,0 +1,22 @@
+name: python_value_error_fix
+language: python
+trigger_pattern: "ValueError"
+priority: 10
+suggested_tools: [stack_parse, read_file, search, patch_file]
+
+example_issue: |
+  ValueError: invalid literal for int() with base 10: 'not-a-number'
+  at parser.py during conversion or validation
+
+guidance:
+  - 定位抛出 ValueError 的表达式，确认输入来源与合法取值范围
+  - 在转换前校验/清洗输入，或修正传入的错误值
+  - 若 API 契约要求特定格式，在边界处做显式校验并给出合理默认或早返回
+  - 优先局部修复，勿改变 unrelated 函数的对外契约
+
+avoid:
+  - 勿用 bare except 吞掉 ValueError
+  - 勿通过删除校验逻辑来“修复”
+  - 勿修改测试输入使其绕过校验
+
+example_patch: "if not text.isdigit(): raise ValueError('expected digits')"

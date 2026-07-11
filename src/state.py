@@ -7,6 +7,45 @@ from dataclasses import dataclass, field
 
 
 @dataclass
+class SkillContext:
+    """Skill 匹配结果与 fallback 策略（嵌套于 RepairPlan）。"""
+
+    matched_skill: str | None = None
+    suggested_tools: list[str] = field(default_factory=list)
+    example_issue: str = ""
+    guidance: list[str] = field(default_factory=list)
+    avoid: list[str] = field(default_factory=list)
+    example_patch: str = ""
+    fallback_strategy: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "matched_skill": self.matched_skill,
+            "suggested_tools": list(self.suggested_tools),
+            "example_issue": self.example_issue,
+            "guidance": list(self.guidance),
+            "avoid": list(self.avoid),
+            "example_patch": self.example_patch,
+            "fallback_strategy": self.fallback_strategy,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> "SkillContext":
+        raw = data or {}
+        return cls(
+            matched_skill=raw.get("matched_skill"),
+            suggested_tools=list(raw.get("suggested_tools") or []),
+            example_issue=str(raw.get("example_issue") or raw.get("skill_example_issue") or ""),
+            guidance=list(raw.get("guidance") or raw.get("skill_guidance") or []),
+            avoid=list(raw.get("avoid") or raw.get("skill_avoid") or []),
+            example_patch=str(raw.get("example_patch") or raw.get("skill_example_patch") or ""),
+            fallback_strategy=str(
+                raw.get("fallback_strategy") or raw.get("skill_fallback_strategy") or ""
+            ),
+        )
+
+
+@dataclass
 class SuspectLocation:
     """代码定位结果——由 Localizer 产出。
 
@@ -66,7 +105,9 @@ class RepairPlan:
         issue_type: 问题类型（"type_error" / "import_error" / "test_failure" 等）。
         suspect_files: 嫌疑文件列表。
         estimated_impact: 预估影响的文件列表。
+        skill: Skill 匹配上下文（matched_skill · tools · guidance · fallback）。
         reasoning: 判定依据。
+        prompt_variants: 各 Agent prompt 变体键（patcher / localizer）。
     """
 
     language: str = "python"
@@ -74,6 +115,7 @@ class RepairPlan:
     issue_type: str = ""
     suspect_files: list[str] = field(default_factory=list)
     estimated_impact: list[str] = field(default_factory=list)
+    skill: SkillContext = field(default_factory=SkillContext)
     reasoning: str = ""
     prompt_variants: dict[str, str] = field(default_factory=dict)
     schema_version: str = "1.0"
@@ -86,6 +128,7 @@ class RepairPlan:
             "issue_type": self.issue_type,
             "suspect_files": self.suspect_files,
             "estimated_impact": self.estimated_impact,
+            "skill": self.skill.to_dict(),
             "reasoning": self.reasoning,
             "prompt_variants": dict(self.prompt_variants),
             "schema_version": self.schema_version,
@@ -94,12 +137,16 @@ class RepairPlan:
     @classmethod
     def from_dict(cls, data: dict) -> "RepairPlan":
         """从 dict 反序列化。"""
+        skill = SkillContext.from_dict(data.get("skill"))
+        if "skill" not in data:
+            skill = SkillContext.from_dict(data)
         return cls(
             language=data.get("language", "python"),
             language_source=data.get("language_source", ""),
             issue_type=data.get("issue_type", ""),
             suspect_files=data.get("suspect_files", []),
             estimated_impact=data.get("estimated_impact", []),
+            skill=skill,
             reasoning=data.get("reasoning", ""),
             prompt_variants=dict(data.get("prompt_variants") or {}),
             schema_version=data.get("schema_version", "1.0"),

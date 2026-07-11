@@ -1,0 +1,22 @@
+name: python_syntax_error_fix
+language: python
+trigger_pattern: "SyntaxError"
+priority: 10
+suggested_tools: [read_file, ast_parse, patch_file]
+
+example_issue: |
+  SyntaxError: invalid syntax
+  at module.py:14 — often missing bracket, quote, or colon
+
+guidance:
+  - 定位语法错误行，检查括号/引号/冒号/缩进是否配对
+  - 用 ast_parse 验证修复后文件可解析
+  - 最小 diff 修复语法，勿借机重构整段逻辑
+  - 若错误由上一行未闭合引起，检查相邻行
+
+avoid:
+  - 勿删除大段代码来消除语法错误
+  - 勿引入与语法修复无关的行为变更
+  - 勿修改多个无关文件的格式
+
+example_patch: "    return result)  →  return result)"

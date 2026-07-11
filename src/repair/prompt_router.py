@@ -36,6 +36,9 @@ _ISSUE_TYPE_ROUTES: dict[str, dict[str, str]] = {
 
 ROUTED_ISSUE_TYPES = frozenset(_ISSUE_TYPE_ROUTES)
 
+# Skill 未命中时走 generic patcher（与 test_failure / unknown 路由一致）
+GENERIC_FALLBACK_ISSUE_TYPES = frozenset({"unknown", "", "test_failure"})
+
 
 def classify_exception(exc_type: str) -> str:
     """将异常类名映射为 ``issue_type``。"""
@@ -99,13 +102,18 @@ def localizer_hints_key_for(plan: RepairPlan) -> str:
 
 
 def repair_plan_intent_snapshot(plan: RepairPlan) -> dict:
-    """trace / report 用的意图快照。"""
+    """trace / report 用的意图快照（skill 解析完成后调用）。"""
+    skill = plan.skill.to_dict()
     return {
         "issue_type": plan.issue_type,
         "language": plan.language,
         "language_source": plan.language_source,
         "prompt_variants": dict(plan.prompt_variants),
         "suspect_files": list(plan.suspect_files),
+        "skill": skill,
+        "matched_skill": skill["matched_skill"],
+        "suggested_tools": skill["suggested_tools"],
+        "skill_fallback_strategy": skill["fallback_strategy"],
     }
 
 

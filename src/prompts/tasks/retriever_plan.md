@@ -1,3 +1,4 @@
+$skill_hint_block
 根据 Issue 和嫌疑文件搜索相关代码：
 $issue
 

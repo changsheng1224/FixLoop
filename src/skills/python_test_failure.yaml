@@ -1,6 +1,0 @@
-name: python_test_failure_fix
-language: python
-trigger_pattern: "FAILED|assert|AssertionError"
-suggested_tools: [read_file, search, find_test, git_blame, patch_file]
-example_issue: "FAILED test_calculator.py::test_add - AssertionError: assert 3 == 5"
-example_patch: "读取测试理解预期行为，定位源码修复逻辑错误"

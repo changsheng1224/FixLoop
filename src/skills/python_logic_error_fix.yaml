@@ -1,0 +1,22 @@
+name: python_logic_error_fix
+language: python
+trigger_pattern: "off-by-one|inclusive_range|closed interval|逻辑错误"
+priority: 8
+suggested_tools: [read_file, find_test, search, patch_file]
+
+example_issue: |
+  Test failure: implementation output length or boundary differs from expected
+  often range/slice/loop boundary or wrong comparison operator
+
+guidance:
+  - 以测试 assert 的期望行为为准，找出实现与预期的最小差异
+  - 常见模式：循环/切片 off-by-one、闭开区间混淆、条件分支遗漏、返回值错误
+  - 先读测试理解边界条件，再改实现，勿改测试
+  - 只改逻辑相关代码，保持 diff 尽量小
+
+avoid:
+  - 勿扩大改动范围做无关重构
+  - 勿通过修改测试或放宽 assert 来“修复”
+  - 勿假设具体变量名；以当前 repo 代码为准
+
+example_patch: "for i in range(start, end + 1):  # 闭区间应包含 end"

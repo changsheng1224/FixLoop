@@ -1,6 +1,7 @@
 case_id: case_007
 language: python
 issue_type: attribute_error
+expected_skill: python_attribute_error_fix
 difficulty: medium
 status: verified
 estimated_duration_s: 40

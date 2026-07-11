@@ -1,3 +1,4 @@
+$skill_hint_block
 定位以下问题：
 $issue
 

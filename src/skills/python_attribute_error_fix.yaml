@@ -1,0 +1,22 @@
+name: python_attribute_error_fix
+language: python
+trigger_pattern: "AttributeError"
+priority: 10
+suggested_tools: [ast_parse, search, read_file, patch_file]
+
+example_issue: |
+  AttributeError: 'NoneType' object has no attribute 'field'
+  at models.py:18 in accessor
+
+guidance:
+  - 检查对象为 None 或未初始化的情况，在访问前添加 guard 或默认值
+  - 核对属性/方法名拼写，或改用对象实际拥有的 API
+  - 若链式访问中间环节可能为空，对中间对象判空或短路
+  - 以测试 assert 期望行为为准，做最小修复
+
+avoid:
+  - 勿引入与 issue 无关的新依赖或大范围重构
+  - 勿用 getattr 吞掉所有错误而掩盖真实 bug（除非测试明确要求 fallback）
+  - 勿修改无关模块的属性定义
+
+example_patch: "if obj is not None:\n    return obj.field"

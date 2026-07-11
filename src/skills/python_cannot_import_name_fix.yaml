@@ -1,0 +1,22 @@
+name: python_cannot_import_name_fix
+language: python
+trigger_pattern: "cannot import name"
+priority: 15
+suggested_tools: [search, read_file, ast_parse, patch_file]
+
+example_issue: |
+  ImportError: cannot import name 'Symbol' from 'pkg.module'
+  at service.py:5
+
+guidance:
+  - 在定义处确认符号是否已导出、是否被重命名或移至其他模块
+  - 修正 import 中的符号名，并同步本文件内所有对该符号的引用
+  - 若符号应在 __init__.py  re-export，优先改 import 路径而非重复定义
+  - 用 search/ast_parse 查找符号的真实定义位置
+
+avoid:
+  - 勿只改 import 行而遗漏同文件内的调用点
+  - 勿创建与现有 API 冲突的重复定义
+  - 勿修改测试文件来掩盖 import 错误
+
+example_patch: "from pkg.module import RenamedSymbol as Symbol"

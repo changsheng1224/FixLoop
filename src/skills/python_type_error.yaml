@@ -1,6 +1,0 @@
-name: python_type_error_fix
-language: python
-trigger_pattern: "TypeError"
-suggested_tools: [stack_parse, ast_parse, search, patch_file]
-example_issue: "TypeError: unsupported operand type(s) for +: 'int' and 'str' at calculator.py:42"
-example_patch: "将 return a + b 改为 return int(a) + int(b)"

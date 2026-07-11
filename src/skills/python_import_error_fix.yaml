@@ -1,0 +1,22 @@
+name: python_import_error_fix
+language: python
+trigger_pattern: "ImportError|ModuleNotFoundError"
+priority: 10
+suggested_tools: [search, read_file, patch_file]
+
+example_issue: |
+  ModuleNotFoundError: No module named 'pkg.submodule'
+  at app.py:3 during import
+
+guidance:
+  - 核对模块路径、包目录是否缺少 __init__.py
+  - 修正 import 语句中的模块名或相对/绝对路径
+  - 若实现文件名与 import 不一致（单复数、别名），改 import 指向实际模块
+  - 同一文件 import 与后续调用都需一致时，可输出多条补丁
+
+avoid:
+  - 勿输出 repo 外或不存在的 file_path
+  - 勿为绕过 import 而删除合法业务逻辑
+  - 勿安装第三方包代替修正项目内路径（除非 issue 明确要求）
+
+example_patch: "from pkg.submodules import helper  # 修正为实际包路径"

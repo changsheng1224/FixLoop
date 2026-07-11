@@ -1,6 +1,7 @@
 case_id: case_003
 language: python
 issue_type: type_error
+expected_skill: python_type_error_fix
 difficulty: medium
 status: verified
 estimated_duration_s: 35

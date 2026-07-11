@@ -1,6 +1,7 @@
 case_id: case_005
 language: python
 issue_type: import_error
+expected_skill: python_cannot_import_name_fix
 difficulty: medium
 status: verified
 estimated_duration_s: 40

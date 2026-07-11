@@ -1,6 +1,7 @@
 case_id: case_010
 language: python
 issue_type: composite
+expected_skill: python_composite_fix
 difficulty: hard
 status: verified
 estimated_duration_s: 75

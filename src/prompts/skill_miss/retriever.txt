@@ -1,0 +1,2 @@
+[Skill 提示·通用]
+未命中专用 Skill；优先 find_test / read_file 收集断言与实现上下文。

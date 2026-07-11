@@ -181,7 +181,7 @@
 
 ### 5.3 模板 · Skill 块
 
-- **[P1] [C:⭐ I:⭐⭐⭐] Skill 块注入 Prompt 统一**：`[Skill 提示]` = `suggested_tools` + `example_patch`（见 [§13.3](#133-注入)）
+- **[P1] ✅ [C:⭐ I:⭐⭐⭐] Skill 块注入 Prompt 统一**：Localizer/Retriever/Patcher 分角色 `[Skill 提示]`（见 [§13.3](#133-注入)）
 
 ### 5.2 L2 角色 Prompt
 
@@ -354,27 +354,27 @@
 
 ### 13.1 YAML Schema
 
-- **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] Skill YAML schema 校验**：pydantic 校验 `name` · `language` · `trigger_pattern` · `priority`
+- **[P1] ✅ [C:⭐⭐ I:⭐⭐⭐⭐] Skill YAML schema 校验**：pydantic 校验 `name` · `language` · `trigger_pattern` · `priority`；L2 语义校验 + `python -m src.cli skills validate`
 
 ### 13.2 匹配算法
 
-- **[P1] [C:⭐ I:⭐⭐⭐⭐] priority + 最长 pattern 优先**：多 skill 命中时 deterministic 选最高 priority
+- **[P1] ✅ [C:⭐ I:⭐⭐⭐⭐] priority + 最长 pattern 优先**：多 skill 命中时 deterministic 选最高 priority
 
 ### 13.3 注入
 
-- **[P1] [C:⭐ I:⭐⭐⭐] Skill 注入 Prompt**：`example_patch` / `suggested_tools` → `[Skill 提示]`（[§5.3](#53-模板--skill-块)）
+- **[P1] ✅ [C:⭐ I:⭐⭐⭐] Skill 注入 Prompt**：`example_patch` / `suggested_tools` → `[Skill 提示]`（[§5.3](#53-模板--skill-块)）
 
 ### 13.5 Skill 召回率 · 版本
 
 > 设计见 [DESIGN §13.5](bonus/DESIGN.md#135-skill-召回率--版本--质量-rubric)。
 
-- **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] Skill 召回率 eval**：`matched_skill` × `case_id` → precision/recall · `eval_report.skill_metrics`（[§20.3](#203-agent-性能量化--judge--检索质量)）
+- ✅ **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] Skill 召回率 eval**：`matched_skill` × `case_id` → precision/recall · `eval_report.skill_metrics` · `python -m src.cli eval skills --all`（[§20.3](#203-agent-性能量化--judge--检索质量)）
 - **[P2] [C:⭐⭐ I:⭐⭐⭐] Skill content_hash + 原子 swap**：索引 rebuild 写 temp → rename
 
 ### 13.6 Skill 与 tool 联动
 
 - **[P1] [C:⭐ I:⭐⭐⭐⭐] matched skill → suggested_tools 约束 Gateway**：未在白名单的工具 warn/deny（可选 strict）
-- **[P2] [C:⭐ I:⭐⭐⭐] skill 未命中 default 策略**：trace `matched_skill=null` · generic patcher 后缀
+- **[P2] [C:⭐ I:⭐⭐⭐] skill 未命中 default 策略** ✅：`fallback_strategy` trace · `format_skill_miss_hint` · `generic_patcher` → `default.txt`
 
 ### 13.4 海量 Skill 加载
 
@@ -568,7 +568,7 @@
 ## 23. 演示 · 文档 · 测试
 
 - **[P1] [C:⭐ I:⭐⭐⭐] CLI 退出码单测**
-- **[P2] [C:⭐ I:⭐⭐] Skill 匹配 / Skill 命中单测**
+- **[P2] [C:⭐ I:⭐⭐] Skill 匹配 / Skill 命中单测** ✅
 
 ---
 

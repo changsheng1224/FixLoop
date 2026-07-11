@@ -1,6 +1,0 @@
-name: python_attribute_error_fix
-language: python
-trigger_pattern: "AttributeError"
-suggested_tools: [ast_parse, search, read_file, patch_file]
-example_issue: "AttributeError: 'NoneType' object has no attribute 'name' at user.py:15"
-example_patch: "在访问属性前添加 None 检查"

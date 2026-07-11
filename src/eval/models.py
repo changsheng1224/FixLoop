@@ -28,6 +28,10 @@ class CaseResult:
     total_tokens: int = 0
     token_usage: dict = field(default_factory=dict)
     permission_denied_by_tool: dict = field(default_factory=dict)
+    expected_skill: str | None = None
+    matched_skill: str | None = None
+    skill_match: bool = False
+    skill_labeled: bool = False
 
     def to_dict(self) -> dict:
         """序列化为 JSON 可写 dict。"""
@@ -53,6 +57,10 @@ class CaseResult:
         }
         if self.permission_denied_by_tool:
             data["permission_denied_by_tool"] = self.permission_denied_by_tool
+        if self.expected_skill is not None or self.matched_skill is not None:
+            data["expected_skill"] = self.expected_skill
+            data["matched_skill"] = self.matched_skill
+            data["skill_match"] = self.skill_match
         return data
 
 
@@ -65,6 +73,7 @@ class EvalReport:
     by_type: dict = field(default_factory=dict)
     by_difficulty: dict = field(default_factory=dict)
     by_variant: dict = field(default_factory=dict)
+    skill_metrics: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """序列化为 JSON 可写 dict（含 summary 与 cases 列表）。"""
@@ -76,4 +85,6 @@ class EvalReport:
         }
         if self.by_variant:
             data["by_variant"] = self.by_variant
+        if self.skill_metrics:
+            data["skill_metrics"] = self.skill_metrics
         return data

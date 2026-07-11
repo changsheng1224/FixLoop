@@ -12,13 +12,10 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-import yaml
-
+from src.eval.case_io import DEFAULT_CASES_DIR, build_case_issue, load_case_metadata
 from src.eval.models import CaseResult, EvalReport
 from src.eval.patch_utils import apply_unified_patch
 from src.repair.termination import introduced_regression, regression_detected
-
-DEFAULT_CASES_DIR = Path(__file__).resolve().parent / "cases"
 
 # Agent 运行时会在 repo 内写入的目录，不计入评测 patch diff
 EVAL_DIFF_SKIP_DIRS = frozenset({".agent", ".pytest_cache", "__pycache__", ".git"})
@@ -32,14 +29,6 @@ def should_include_in_eval_diff(rel_path: str) -> bool:
     if parts and parts[0].startswith("."):
         return False
     return True
-
-
-def load_case_metadata(case_dir: Path) -> dict:
-    """读取 Case 目录下的 metadata.yaml，缺失时返回空 dict。"""
-    meta_path = case_dir / "metadata.yaml"
-    if not meta_path.is_file():
-        return {}
-    return yaml.safe_load(meta_path.read_text(encoding="utf-8")) or {}
 
 
 def run_pytest(repo: Path) -> tuple[int, str]:
@@ -167,10 +156,7 @@ class EvalRunner:
             return CaseResult(case_id=case_id, error=f"unknown case: {case_id}")
 
         meta = load_case_metadata(case_dir)
-        issue = (case_dir / "issue.txt").read_text(encoding="utf-8").strip()
-        source_files = meta.get("source_files") or []
-        if source_files:
-            issue = f"{issue}\n\nCandidate source files: {', '.join(source_files)}"
+        issue = build_case_issue(case_dir, metadata=meta)
         minimal_lines = _read_min_lines(case_dir)
 
         with tempfile.TemporaryDirectory(prefix=f"fixloop_eval_{case_id}_") as tmp:
@@ -224,10 +210,21 @@ class EvalRunner:
                 if errs:
                     error = "; ".join(f"{k}: {v}" for k, v in errs.items())
 
+            from src.eval.skill_metrics import skill_result_fields_from_plan
+
+            plan = getattr(state, "repair_plan", None) if state else None
+            expected_skill, matched_skill, skill_match, skill_labeled = (
+                skill_result_fields_from_plan(plan, meta)
+            )
+
             return CaseResult(
                 case_id=case_id,
                 issue_type=str(meta.get("issue_type", "")),
                 difficulty=str(meta.get("difficulty", "")),
+                expected_skill=expected_skill,
+                matched_skill=matched_skill,
+                skill_match=skill_match,
+                skill_labeled=skill_labeled,
                 fixed=fixed,
                 retry_count=retry_count,
                 actual_patch=actual_patch,
