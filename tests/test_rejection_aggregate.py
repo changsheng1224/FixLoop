@@ -4,7 +4,10 @@ import json
 from pathlib import Path
 
 from src.repair.rejection_aggregate import (
+    GATEWAY_AGENT_ERROR_PREFIX,
     aggregate_rejection_from_agent_reports,
+    apply_gateway_denials_to_agent_errors,
+    format_gateway_denial_summary,
     gateway_denial_count,
     merge_count_maps,
     summarize_repair_rejections,
@@ -51,6 +54,50 @@ class TestAggregateRejection:
 
     def test_empty_reports(self):
         assert aggregate_rejection_from_agent_reports({}) == {}
+
+
+class TestGatewayAgentErrors:
+    def test_format_summary(self):
+        assert format_gateway_denial_summary({"write_file": 2}) == (
+            f"{GATEWAY_AGENT_ERROR_PREFIX} write_file×2"
+        )
+        assert format_gateway_denial_summary({"run_shell": 1, "write_file": 2}) == (
+            f"{GATEWAY_AGENT_ERROR_PREFIX} run_shell×1, write_file×2"
+        )
+
+    def test_apply_sets_agent_errors(self):
+        errors: dict = {}
+        apply_gateway_denials_to_agent_errors(
+            errors,
+            {"localizer": {"write_file": 2}},
+        )
+        assert errors["localizer"] == f"{GATEWAY_AGENT_ERROR_PREFIX} write_file×2"
+
+    def test_apply_merges_with_existing_error(self):
+        errors = {"localizer": "parse failed"}
+        apply_gateway_denials_to_agent_errors(
+            errors,
+            {"localizer": {"write_file": 1}},
+        )
+        assert errors["localizer"] == (
+            f"parse failed; {GATEWAY_AGENT_ERROR_PREFIX} write_file×1"
+        )
+
+    def test_apply_skips_duplicate_gateway_suffix(self):
+        errors = {
+            "localizer": f"{GATEWAY_AGENT_ERROR_PREFIX} write_file×2",
+        }
+        apply_gateway_denials_to_agent_errors(
+            errors,
+            {"localizer": {"write_file": 3}},
+        )
+        assert errors["localizer"] == f"{GATEWAY_AGENT_ERROR_PREFIX} write_file×2"
+
+    def test_apply_no_op_when_empty(self):
+        errors = {"patcher": "apply_failed"}
+        apply_gateway_denials_to_agent_errors(errors, None)
+        apply_gateway_denials_to_agent_errors(errors, {})
+        assert errors == {"patcher": "apply_failed"}
 
 
 class TestSummarizeRepairRejections:

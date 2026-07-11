@@ -239,8 +239,8 @@
 
 ### 7.2 调度 · 审计
 
-- **[P2] [C:⭐ I:⭐⭐⭐] ToolGateway 越权审计**：`permission_denied` → trace / agent_errors / [§19.3](#193-工具--gateway-指标)
-- **[P2] [C:⭐ I:⭐⭐⭐] 双层拒绝语义**：Gateway=角色不允许；Executor=参数/配额不允许
+- **[P2] ✅ [C:⭐ I:⭐⭐⭐] ToolGateway 越权审计**：`permission_denied` → trace / `agent_errors` / [§19.3](#193-工具--gateway-指标)
+- **[P2] ✅ [C:⭐ I:⭐⭐⭐] 双层拒绝语义**：Gateway=角色不允许；Executor=参数/配额不允许
 
 
 ---
@@ -486,7 +486,7 @@
 
 ### 19.3 工具 · Gateway 指标
 
-- **[P2] [C:⭐ I:⭐⭐⭐] Gateway 拒绝计数**：`permission_denied_by_tool`（[§7.2](#72-调度--审计)）
+- **[P2] ✅ [C:⭐ I:⭐⭐⭐] Gateway 拒绝计数**：`permission_denied_by_tool`（[§7.2](#72-调度--审计)）
 
 ### 19.4 核心运行时指标监控
 
