@@ -1,4 +1,4 @@
-"""Deterministic Replay：从 trace.jsonl 回放工具执行，对比结果差异。
+"""Deterministic Replay：从 trace.jsonl（或 .gz）回放工具执行，对比结果差异。
 
 不重新调模型（结果不确定），只回放工具执行（结果确定）。
 """
@@ -23,6 +23,22 @@ class ReplayResult:
         return len(self.diffs) == 0 and len(self.errors) == 0
 
 
+def _read_trace_lines(trace_path: Path) -> list[str]:
+    """透明读取 trace 文件（支持 .jsonl 和 .jsonl.gz）。"""
+    import gzip
+
+    if not trace_path.exists():
+        gz = trace_path.with_suffix(".jsonl.gz")
+        if gz.is_file():
+            with gzip.open(gz, "rt", encoding="utf-8") as f:
+                return [line.rstrip("\n") for line in f]
+        return []
+    if trace_path.suffix == ".gz":
+        with gzip.open(trace_path, "rt", encoding="utf-8") as f:
+            return [line.rstrip("\n") for line in f]
+    return trace_path.read_text(encoding="utf-8").strip().splitlines()
+
+
 class ReplayRunner:
     """从 trace 文件回放工具执行并对比结果。"""
 
@@ -40,14 +56,9 @@ class ReplayRunner:
         """
         result = ReplayResult()
 
-        if not self.trace_path.exists():
+        lines = _read_trace_lines(self.trace_path)
+        if not lines:
             result.errors.append(f"Trace file not found: {self.trace_path}")
-            return result
-
-        try:
-            lines = self.trace_path.read_text(encoding="utf-8").strip().splitlines()
-        except OSError as e:
-            result.errors.append(f"Cannot read trace: {e}")
             return result
 
         for line in lines:

@@ -818,6 +818,10 @@ class AgentLoop:
                 cp = create_checkpoint(self.agent, ts, ts.user_request, trigger=trigger)
                 ts.checkpoint_id = cp.get("run_id", "") if cp else ""
                 store.write_task_state(ts)
+                compress_stats = store.compress_trace_if_needed(ts.run_id)
+                if compress_stats:
+                    report_body["trace_compressed"] = True
+                    report_body["trace_compression"] = compress_stats
                 store.write_report(ts, report_body)
             promote_durable_memory(
                 ts.user_request,
