@@ -5,6 +5,8 @@ Agent 间通过结构化 dataclass 通信，不靠自然语言。
 
 from dataclasses import dataclass, field
 
+from src.repair.l2_binding import AgentAskRef
+
 
 @dataclass
 class SkillContext:
@@ -311,6 +313,7 @@ class RepairState:
     node_timings: dict = field(default_factory=dict)
     agent_errors: dict = field(default_factory=dict)
     repair_run_id: str = ""
+    agent_asks: list[AgentAskRef] = field(default_factory=list)
     degraded_mode: bool = False
     schema_version: str = "1.0"
 
@@ -335,6 +338,7 @@ class RepairState:
             "node_timings": self.node_timings,
             "agent_errors": self.agent_errors,
             "repair_run_id": self.repair_run_id,
+            "agent_asks": [ref.to_dict() for ref in self.agent_asks],
             "degraded_mode": self.degraded_mode,
             "schema_version": self.schema_version,
         }
@@ -371,6 +375,9 @@ class RepairState:
             node_timings=data.get("node_timings", {}),
             agent_errors=data.get("agent_errors", {}),
             repair_run_id=data.get("repair_run_id", ""),
+            agent_asks=[
+                AgentAskRef.from_dict(item) for item in data.get("agent_asks", [])
+            ],
             degraded_mode=data.get("degraded_mode", False),
             schema_version=data.get("schema_version", "1.0"),
         )

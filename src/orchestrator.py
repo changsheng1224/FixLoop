@@ -349,12 +349,24 @@ class Orchestrator(RepairPipelineMixin):
         prompt: str,
         agent_name: str,
         state: RepairState | None = None,
+        *,
+        l2_phase: str = "",
+        l2_attempt: int = 0,
     ) -> tuple[str, dict]:
         """执行 Agent 调用（Verifier 用，保留 Agent loop）。"""
         from agent_runtime.log_context import log_context
 
         t0 = time.time()
         run_id = getattr(agent, "shared_run_id", None)
+        task_id = ""
+        if state is not None and l2_phase:
+            task_id = self._begin_l2_agent_ask(
+                state,
+                agent,
+                agent_name=agent_name,
+                phase=l2_phase,
+                attempt=l2_attempt,
+            )
         try:
             with log_context(run_id=run_id, agent=agent_name):
                 answer = agent.ask(prompt)
@@ -363,9 +375,33 @@ class Orchestrator(RepairPipelineMixin):
                 state.agent_errors[agent_name] = str(e)
             log.warning("[%s] Agent 失败: %s", agent_name, e)
             elapsed_ms = int((time.time() - t0) * 1000)
+            if state is not None and task_id:
+                self._finish_l2_agent_ask(
+                    state,
+                    agent,
+                    agent_name=agent_name,
+                    phase=l2_phase,
+                    attempt=l2_attempt,
+                    task_id=task_id,
+                    elapsed_ms=elapsed_ms,
+                    stop_reason="error",
+                )
             return "", {"total_ms": elapsed_ms, "internal": {}}
         elapsed_ms = int((time.time() - t0) * 1000)
         internal = getattr(agent, "_last_run_node_timings", None) or {}
+        last_ts = getattr(agent, "_last_task_state", None)
+        if state is not None and task_id:
+            self._finish_l2_agent_ask(
+                state,
+                agent,
+                agent_name=agent_name,
+                phase=l2_phase,
+                attempt=l2_attempt,
+                task_id=task_id,
+                elapsed_ms=elapsed_ms,
+                stop_reason=getattr(last_ts, "stop_reason", "") if last_ts else "",
+                tool_steps=getattr(last_ts, "tool_steps", 0) if last_ts else 0,
+            )
         return answer, {"total_ms": elapsed_ms, "internal": dict(internal)}
 
     def _begin_repair_trace(self, state: RepairState) -> None:
@@ -518,6 +554,28 @@ class Orchestrator(RepairPipelineMixin):
         t_start = time.time()
         t_model = time.time()
         tracer = self._repair_tracer
+        patch_attempt = state.retry_count
+        patch_task_id = self._begin_l2_agent_ask(
+            state,
+            self.patcher,
+            agent_name="patcher",
+            phase="patch",
+            attempt=patch_attempt,
+        )
+
+        def _finish_patch_ask(total_ms: int, stop_reason: str) -> None:
+            if patch_task_id:
+                self._finish_l2_agent_ask(
+                    state,
+                    self.patcher,
+                    agent_name="patcher",
+                    phase="patch",
+                    attempt=patch_attempt,
+                    task_id=patch_task_id,
+                    elapsed_ms=total_ms,
+                    stop_reason=stop_reason,
+                )
+
         if tracer:
             tracer.emit(
                 "patcher",
@@ -540,6 +598,7 @@ class Orchestrator(RepairPipelineMixin):
         except CancelledError:
             total_ms = int((time.time() - t_start) * 1000)
             model_call_ms = int((time.time() - t_model) * 1000)
+            _finish_patch_ask(total_ms, "user_cancel")
             return [], {
                 "model_call_ms": model_call_ms,
                 "parse_apply_ms": max(0, total_ms - model_call_ms),
@@ -551,6 +610,7 @@ class Orchestrator(RepairPipelineMixin):
             total_ms = int((time.time() - t_start) * 1000)
             model_call_ms = int((time.time() - t_model) * 1000)
             log.warning("[patcher] 模型调用失败: %s", e)
+            _finish_patch_ask(total_ms, "error")
             return [], {
                 "model_call_ms": model_call_ms,
                 "parse_apply_ms": max(0, total_ms - model_call_ms),
@@ -606,6 +666,7 @@ class Orchestrator(RepairPipelineMixin):
             state.agent_errors["patcher_apply"] = "apply_failed"
 
         total_ms = int((time.time() - t_start) * 1000)
+        _finish_patch_ask(total_ms, "complete_once")
         return applied_patches, {
             "model_call_ms": model_call_ms,
             "parse_apply_ms": max(0, total_ms - model_call_ms),
