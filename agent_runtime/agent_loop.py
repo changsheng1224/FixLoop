@@ -193,10 +193,15 @@ class AgentLoop:
         if isinstance(error, RateLimitExceededError):
             ts.stop_with_reason(StopReason.RATE_LIMITED, "stopped", detail=str(error))
             return self._complete_run(ts, f"<final>API 限流：{error}</final>")
-        if "Circuit breaker is open" in str(error):
+        from agent_runtime.providers.circuit_breaker import CircuitBreakerOpenError
+
+        if isinstance(error, CircuitBreakerOpenError):
             ts.stop_with_reason(StopReason.CIRCUIT_BREAKER, "stopped", detail=str(error))
             return self._complete_run(ts, f"<final>API 熔断：{error}</final>")
         return None
+
+    def _circuit_trace_listener(self, event: str, payload: dict) -> None:
+        self._emit(event, payload)
 
     # ---- ReAct / 计时 ----
 
@@ -419,14 +424,19 @@ class AgentLoop:
         self._call_timings = []
         self._retry_count = 0
 
-        with log_context(run_id=ts.run_id, agent=agent_name):
-            self._emit("run_started")
-            self.agent.record({"role": "user", "content": user_message})
-            self._gen_task_summary(user_message)
+        cb = self.agent.circuit_breaker
+        cb.add_listener(self._circuit_trace_listener)
+        try:
+            with log_context(run_id=ts.run_id, agent=agent_name):
+                self._emit("run_started")
+                self.agent.record({"role": "user", "content": user_message})
+                self._gen_task_summary(user_message)
 
-            if hasattr(self.agent.model_client, "chat_with_tools"):
-                return self._run_with_native_tools(user_message, ts, callback)
-            return self._run_with_text_parsing(user_message, ts, callback)
+                if hasattr(self.agent.model_client, "chat_with_tools"):
+                    return self._run_with_native_tools(user_message, ts, callback)
+                return self._run_with_text_parsing(user_message, ts, callback)
+        finally:
+            cb.remove_listener(self._circuit_trace_listener)
 
     def _run_with_native_tools(self, user_message: str, ts, callback=None) -> str:
         step_timeout_s = self._step_timeout_limit_s()

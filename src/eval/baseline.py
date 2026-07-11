@@ -9,11 +9,9 @@ from pathlib import Path
 from agent_runtime.runtime import Agent
 from agent_runtime.workspace import WorkspaceContext
 from src.agents.factory import create_baseline_agent
-from src.eval.runner import should_include_in_eval_diff
 from src.eval.token_usage import build_token_usage_summary, reset_client_session_usage
-from src.repair.patch_applier import PatchApplier, parse_patches
-from src.repair.repo_snapshot import repo_changed, snapshot_repo
-from src.repair.termination import finalize_repair_state, mark_fixed_skip_verify
+from src.repair.baseline_apply import apply_baseline_answer, snapshot_baseline_sources
+from src.repair.termination import finalize_repair_state
 from src.repair_factory import create_model_client
 from src.state import RepairState
 
@@ -21,15 +19,6 @@ from src.state import RepairState
 def create_single_agent_baseline(model_client, workspace, cwd: str = "") -> Agent:
     """创建持有全部 Tool 的 Single-Agent Baseline。"""
     return create_baseline_agent(model_client, workspace, cwd=cwd)
-
-
-def _snapshot_source_tree(repo: Path) -> dict[str, str]:
-    """读取 repo 内参与评测 diff 的源码快照。"""
-    return snapshot_repo(repo, include=should_include_in_eval_diff)
-
-
-def _repo_sources_changed(repo: Path, before: dict[str, str]) -> bool:
-    return repo_changed(repo, before, include=should_include_in_eval_diff)
 
 
 class SingleAgentOrchestrator:
@@ -54,31 +43,11 @@ class SingleAgentOrchestrator:
         state = RepairState(issue_input=issue, max_retries=max_retries)
         t0 = time.time()
         repo = Path(self._repo_root)
-        before = _snapshot_source_tree(repo)
+        before = snapshot_baseline_sources(repo)
         reset_client_session_usage(self.agent.model_client)
         repair_started_at = time.time()
-        try:
-            prompt = f"请修复以下 issue，可使用全部工具完成定位、修补与验证：\n\n{issue}"
-            answer = self.agent.ask(prompt)
-            applier = PatchApplier(self._repo_root)
-            patches = parse_patches(answer)
-            state.candidate_patches = patches
-            if patches:
-                applied = applier.apply_patches(patches)
-                if applied or _repo_sources_changed(repo, before):
-                    mark_fixed_skip_verify(state)
-                else:
-                    state.status = "failed"
-                    state.agent_errors["baseline"] = "patches parsed but not applied"
-            elif _repo_sources_changed(repo, before):
-                mark_fixed_skip_verify(state)
-            else:
-                state.node_timings["patcher_parse_failed"] = True
-                state.status = "failed"
-                state.agent_errors["baseline"] = "no patches in agent output"
-        except Exception as exc:
-            state.status = "failed"
-            state.agent_errors["baseline"] = str(exc)
+        prompt = f"请修复以下 issue，可使用全部工具完成定位、修补与验证：\n\n{issue}"
+        apply_baseline_answer(self.agent, self._repo_root, prompt, state, repo_before_apply=before)
         token_summary = build_token_usage_summary(
             self.agent.model_client,
             repo,

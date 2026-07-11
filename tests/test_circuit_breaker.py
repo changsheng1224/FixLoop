@@ -107,6 +107,66 @@ class TestCircuitBreaker:
         assert cb.call(lambda: "ok") == "ok"
 
 
+class TestCircuitBreakerTraceEvents:
+    """熔断状态迁移 listener 事件。"""
+
+    def test_emits_circuit_opened_on_threshold(self):
+        events: list[tuple[str, dict]] = []
+        cb = CircuitBreaker(failure_threshold=2, recovery_timeout=30)
+        cb.add_listener(lambda event, payload: events.append((event, payload)))
+        fail = lambda: (_ for _ in ()).throw(RuntimeError("fail"))
+
+        with pytest.raises(RuntimeError):
+            cb.call(fail)
+        assert not events
+
+        with pytest.raises(RuntimeError):
+            cb.call(fail)
+        assert events[-1][0] == "circuit_opened"
+        assert events[-1][1]["reason"] == "consecutive_failures"
+        assert events[-1][1]["failure_count"] == 2
+
+    def test_emits_half_open_probe_and_circuit_closed(self):
+        events: list[tuple[str, dict]] = []
+        cb = CircuitBreaker(failure_threshold=2, recovery_timeout=0.05, half_open_success_threshold=2)
+        cb.add_listener(lambda event, payload: events.append((event, payload)))
+        fail = lambda: (_ for _ in ()).throw(RuntimeError("fail"))
+
+        for _ in range(2):
+            with pytest.raises(RuntimeError):
+                cb.call(fail)
+
+        time.sleep(0.1)
+        cb.call(lambda: "probe-1")
+        half_open = [p for e, p in events if e == "half_open_probe"]
+        assert len(half_open) == 1
+        assert half_open[0]["half_open_success_threshold"] == 2
+
+        cb.call(lambda: "probe-2")
+        closed = [p for e, p in events if e == "circuit_closed"]
+        assert len(closed) == 1
+        assert closed[0]["probes_required"] == 2
+        assert cb.state == "closed"
+
+    def test_half_open_failure_reopens_with_reason(self):
+        events: list[tuple[str, dict]] = []
+        cb = CircuitBreaker(failure_threshold=2, recovery_timeout=0.05)
+        cb.add_listener(lambda event, payload: events.append((event, payload)))
+        fail = lambda: (_ for _ in ()).throw(RuntimeError("fail"))
+
+        for _ in range(2):
+            with pytest.raises(RuntimeError):
+                cb.call(fail)
+        time.sleep(0.1)
+        cb.call(lambda: "probe")
+        with pytest.raises(RuntimeError):
+            cb.call(fail)
+
+        opened = [p for e, p in events if e == "circuit_opened"]
+        assert len(opened) == 2
+        assert opened[-1]["reason"] == "half_open_probe_failed"
+
+
 class TestReplay:
     """ReplayRunner 测试。"""
 

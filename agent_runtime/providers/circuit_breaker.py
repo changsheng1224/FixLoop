@@ -7,7 +7,10 @@
 """
 
 import time
+from collections.abc import Callable
 from enum import Enum
+
+Listener = Callable[[str, dict], None]
 
 
 class State(Enum):
@@ -39,6 +42,29 @@ class CircuitBreaker:
         self._last_failure_time = 0.0
         self._opened_at = 0.0
         self._half_open_success_count = 0
+        self._listeners: list[Listener] = []
+
+    def add_listener(self, listener: Listener) -> None:
+        """Register a trace/observability callback: ``listener(event, payload)``."""
+        if listener not in self._listeners:
+            self._listeners.append(listener)
+
+    def remove_listener(self, listener: Listener) -> None:
+        """Remove a listener registered via :meth:`add_listener`."""
+        try:
+            self._listeners.remove(listener)
+        except ValueError:
+            pass
+
+    def _notify(self, event: str, **payload) -> None:
+        if not self._listeners:
+            return
+        body = dict(payload)
+        for listener in list(self._listeners):
+            try:
+                listener(event, body)
+            except Exception:
+                pass
 
     @property
     def state(self) -> str:
@@ -53,6 +79,22 @@ class CircuitBreaker:
     def _enter_half_open(self) -> None:
         self._state = State.HALF_OPEN
         self._half_open_success_count = 0
+        self._notify(
+            "half_open_probe",
+            recovery_timeout_s=self.recovery_timeout,
+            half_open_success_threshold=self.half_open_success_threshold,
+        )
+
+    def _open_circuit(self, *, reason: str, failure_count: int | None = None) -> None:
+        self._state = State.OPEN
+        self._opened_at = time.time()
+        self._notify(
+            "circuit_opened",
+            reason=reason,
+            failure_count=failure_count if failure_count is not None else self._failure_count,
+            failure_threshold=self.failure_threshold,
+            recovery_timeout_s=self.recovery_timeout,
+        )
 
     def call(self, fn, *args, **kwargs):
         """包裹执行函数，熔断时直接拒绝。
@@ -92,22 +134,26 @@ class CircuitBreaker:
         if self._state == State.HALF_OPEN:
             self._half_open_success_count += 1
             if self._half_open_success_count >= self.half_open_success_threshold:
+                probes = self.half_open_success_threshold
                 self._state = State.CLOSED
                 self._half_open_success_count = 0
+                self._notify(
+                    "circuit_closed",
+                    probes_required=probes,
+                    probes_succeeded=probes,
+                )
         self._failure_count = 0
 
     def _on_failure(self):
         if self._state == State.HALF_OPEN:
-            self._state = State.OPEN
-            self._opened_at = time.time()
             self._half_open_success_count = 0
+            self._open_circuit(reason="half_open_probe_failed", failure_count=self._failure_count)
             return
 
         self._failure_count += 1
         self._last_failure_time = time.time()
         if self._failure_count >= self.failure_threshold:
-            self._state = State.OPEN
-            self._opened_at = time.time()
+            self._open_circuit(reason="consecutive_failures")
 
 
 class CircuitBreakerOpenError(Exception):

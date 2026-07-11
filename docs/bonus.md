@@ -267,7 +267,7 @@
 ### 10.1 模型 API
 
 - **[P1] [C:⭐⭐⭐ I:⭐⭐⭐] Ollama / OpenAI streaming**：SSE/chunk 增量解析，REPL 实时输出
-- **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] 熔断事件进 trace**：`circuit_opened` / `half_open_probe` / `circuit_closed`
+- **[P1] ✅ [C:⭐⭐ I:⭐⭐⭐⭐] 熔断事件进 trace**：`circuit_opened` / `half_open_probe` / `circuit_closed`
 - **[P2] ✅ [C:⭐ I:⭐⭐⭐] Retry-After + jitter**：429 退避加随机抖动（`retry_policy` + Anthropic client）
 - **[P2] ✅ [C:⭐ I:⭐⭐⭐] 半开成功阈值**：连续 2 次 probe 成功才 CLOSED（`half_open_success_threshold`）
 - **[P3] [C:⭐⭐ I:⭐⭐] HTTP keep-alive**：同 session 连接复用
@@ -275,7 +275,7 @@
 ### 10.2 修复流水线降级
 
 - **[P1] [C:⭐ I:⭐⭐⭐] Retriever 降级规则检索**：LLM 超时 → 堆栈文件名 + **grep**；补 `related_tests`（路径见 [§6.2](#62-grep-工具rg-封装)）
-- **[P2] [C:⭐⭐ I:⭐⭐⭐] Multi-Agent 降级 Single-Agent**：verify 连续失败后 `degraded_mode` + baseline
+- **[P2] ✅ [C:⭐⭐ I:⭐⭐⭐] Multi-Agent 降级 Single-Agent**：verify 连续失败后 `degraded_mode` + baseline
 
 ---
 
@@ -326,7 +326,7 @@
 - **[P1] [C:⭐⭐ I:⭐⭐⭐] Orchestrator 冲突仲裁 API**：`resolve_conflict(key, strategy=...)`
 - **[P2] [C:⭐ I:⭐⭐⭐] Localizer∥Retriever 去重**：同 file_path + 行号合并
 - **[P2] [C:⭐ I:⭐⭐] 冲突进 trace/report**：`blackboard_conflicts[]`
-- **[P2] [C:⭐⭐ I:⭐⭐⭐] 降级 Single-Agent 最后一搏**：见 [§10.2](#102-修复流水线降级)
+- **[P2] ✅ [C:⭐⭐ I:⭐⭐⭐] 降级 Single-Agent 最后一搏**：见 [§10.2](#102-修复流水线降级)
 
 
 ### 12.7 角色与机制
