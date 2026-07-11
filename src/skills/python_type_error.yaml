@@ -1,6 +1,22 @@
 name: python_type_error_fix
 language: python
 trigger_pattern: "TypeError"
+priority: 10
 suggested_tools: [stack_parse, ast_parse, search, patch_file]
-example_issue: "TypeError: unsupported operand type(s) for +: 'int' and 'str' at calculator.py:42"
-example_patch: "将 return a + b 改为 return int(a) + int(b)"
+
+example_issue: |
+  TypeError: unsupported operand type(s) for +: 'str' and 'int'
+  at module.py:42 in compute_total
+
+guidance:
+  - 从堆栈定位出错表达式，确认参与运算的操作数类型
+  - 若测试或调用方期望数值结果，在运算前对操作数做 int()/float() 转换
+  - 若期望字符串拼接，则对双方做 str() 转换，勿混用数值运算
+  - 优先最小单行 diff；必要时用 ast_parse 核对函数签名与调用方式
+
+avoid:
+  - 勿用 str(a) + str(b) 冒充数值加法
+  - 勿用 isinstance 分支把算术改成无关的字符串拼接
+  - 勿修改与堆栈无关的文件或测试
+
+example_patch: "return int(price) + quantity  # 期望数值结果时转换操作数"

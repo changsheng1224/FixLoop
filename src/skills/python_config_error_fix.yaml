@@ -1,0 +1,25 @@
+name: python_config_error_fix
+language: python
+trigger_pattern: "KeyError|pyproject\\.toml|missing.*\\[tool"
+priority: 10
+suggested_tools: [read_file, search, patch_file]
+
+example_issue: |
+  KeyError: 'section' when reading config mapping
+  config loader expects nested keys under pyproject.toml
+
+guidance:
+  - 定位缺失的配置键或 TOML 段，在配置文件中追加而非改业务逻辑硬编码
+  - 修改 pyproject.toml 时保持现有段结构，只补缺失项
+  - 优先单行 diff（-/+），避免 multiline original_lines 导致 JSON 截断
+  - 若 loader 有默认值分支，确认是补配置还是修正键名
+
+avoid:
+  - 勿修改与 issue 无关的配置项
+  - 勿在 Python 中硬编码本应在配置文件中的值（除非 issue 明确要求）
+  - 勿删除已有合法配置段
+
+example_patch: |
+  # pyproject.toml 追加
+  [tool.app]
+  option = true

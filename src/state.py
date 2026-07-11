@@ -66,6 +66,12 @@ class RepairPlan:
         issue_type: 问题类型（"type_error" / "import_error" / "test_failure" 等）。
         suspect_files: 嫌疑文件列表。
         estimated_impact: 预估影响的文件列表。
+        matched_skill: 命中的 Skill 名称（无命中为 None）。
+        suggested_tools: Skill 建议的工具链。
+        skill_example_issue: Skill 参考 issue 摘要。
+        skill_guidance: Skill 修复原则列表。
+        skill_avoid: Skill 反模式列表。
+        skill_example_patch: Skill 示例修复文案。
         reasoning: 判定依据。
     """
 
@@ -74,6 +80,12 @@ class RepairPlan:
     issue_type: str = ""
     suspect_files: list[str] = field(default_factory=list)
     estimated_impact: list[str] = field(default_factory=list)
+    matched_skill: str | None = None
+    suggested_tools: list[str] = field(default_factory=list)
+    skill_example_issue: str = ""
+    skill_guidance: list[str] = field(default_factory=list)
+    skill_avoid: list[str] = field(default_factory=list)
+    skill_example_patch: str = ""
     reasoning: str = ""
     prompt_variants: dict[str, str] = field(default_factory=dict)
     schema_version: str = "1.0"
@@ -86,6 +98,12 @@ class RepairPlan:
             "issue_type": self.issue_type,
             "suspect_files": self.suspect_files,
             "estimated_impact": self.estimated_impact,
+            "matched_skill": self.matched_skill,
+            "suggested_tools": self.suggested_tools,
+            "skill_example_issue": self.skill_example_issue,
+            "skill_guidance": list(self.skill_guidance),
+            "skill_avoid": list(self.skill_avoid),
+            "skill_example_patch": self.skill_example_patch,
             "reasoning": self.reasoning,
             "prompt_variants": dict(self.prompt_variants),
             "schema_version": self.schema_version,
@@ -100,6 +118,12 @@ class RepairPlan:
             issue_type=data.get("issue_type", ""),
             suspect_files=data.get("suspect_files", []),
             estimated_impact=data.get("estimated_impact", []),
+            matched_skill=data.get("matched_skill"),
+            suggested_tools=data.get("suggested_tools", []),
+            skill_example_issue=data.get("skill_example_issue", ""),
+            skill_guidance=list(data.get("skill_guidance") or []),
+            skill_avoid=list(data.get("skill_avoid") or []),
+            skill_example_patch=data.get("skill_example_patch", ""),
             reasoning=data.get("reasoning", ""),
             prompt_variants=dict(data.get("prompt_variants") or {}),
             schema_version=data.get("schema_version", "1.0"),

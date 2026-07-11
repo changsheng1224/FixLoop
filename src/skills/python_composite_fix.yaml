@@ -1,0 +1,22 @@
+name: python_composite_fix
+language: python
+trigger_pattern: "(ModuleNotFoundError|ImportError).*(TypeError|Type Error)|composite|两个文件"
+priority: 12
+suggested_tools: [search, read_file, ast_parse, patch_file]
+
+example_issue: |
+  Multiple errors across files: import/path failure followed by type mismatch
+  in callee after import is corrected
+
+guidance:
+  - 按依赖顺序修复：先 import/路径，再被调用函数内的类型或逻辑
+  - 每个需修改的源文件输出一条补丁（JSON 数组可含多项）
+  - 测试期望数值结果时，在运算处做 int()/float() 转换，禁止 str 拼接冒充加法
+  - 一次性输出所有相关文件补丁，勿只改其中一个
+
+avoid:
+  - 勿只修首个错误而忽略后续 TypeError/逻辑问题
+  - 勿把 composite 问题简化为单文件 patch
+  - 勿引用 repo 中不存在的 file_path
+
+example_patch: "File A: fix import path; File B: return int(a) + int(b)"

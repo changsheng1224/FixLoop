@@ -106,6 +106,8 @@ def repair_plan_intent_snapshot(plan: RepairPlan) -> dict:
         "language_source": plan.language_source,
         "prompt_variants": dict(plan.prompt_variants),
         "suspect_files": list(plan.suspect_files),
+        "matched_skill": plan.matched_skill,
+        "suggested_tools": list(plan.suggested_tools),
     }
 
 

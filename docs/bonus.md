@@ -354,15 +354,15 @@
 
 ### 13.1 YAML Schema
 
-- **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] Skill YAML schema 校验**：pydantic 校验 `name` · `language` · `trigger_pattern` · `priority`
+- **[P1] ✅ [C:⭐⭐ I:⭐⭐⭐⭐] Skill YAML schema 校验**：pydantic 校验 `name` · `language` · `trigger_pattern` · `priority`
 
 ### 13.2 匹配算法
 
-- **[P1] [C:⭐ I:⭐⭐⭐⭐] priority + 最长 pattern 优先**：多 skill 命中时 deterministic 选最高 priority
+- **[P1] ✅ [C:⭐ I:⭐⭐⭐⭐] priority + 最长 pattern 优先**：多 skill 命中时 deterministic 选最高 priority
 
 ### 13.3 注入
 
-- **[P1] [C:⭐ I:⭐⭐⭐] Skill 注入 Prompt**：`example_patch` / `suggested_tools` → `[Skill 提示]`（[§5.3](#53-模板--skill-块)）
+- **[P1] ✅ [C:⭐ I:⭐⭐⭐] Skill 注入 Prompt**：`example_patch` / `suggested_tools` → `[Skill 提示]`（[§5.3](#53-模板--skill-块)）
 
 ### 13.5 Skill 召回率 · 版本
 
@@ -568,7 +568,7 @@
 ## 23. 演示 · 文档 · 测试
 
 - **[P1] [C:⭐ I:⭐⭐⭐] CLI 退出码单测**
-- **[P2] [C:⭐ I:⭐⭐] Skill 匹配 / Skill 命中单测**
+- **[P2] [C:⭐ I:⭐⭐] Skill 匹配 / Skill 命中单测** ✅
 
 ---
 

@@ -6,6 +6,7 @@ from typing import Callable
 
 from src.prompts.repair_tasks import build_patcher_variables
 from src.repair.prompt_router import collect_patcher_user_hints, is_composite_multi_file
+from src.skills.prompt import format_skill_hint_block
 from src.state import RepairPlan, RetrievedContext, SuspectLocation
 
 __all__ = ["assemble_patcher_variables", "build_issue_hints"]
@@ -71,6 +72,7 @@ def assemble_patcher_variables(
     return build_patcher_variables(
         feedback=feedback,
         issue_hints_block="\n".join(build_issue_hints(plan, issue)),
+        skill_hint_block=format_skill_hint_block(plan),
         allowed_files_line=allowed_files_line,
         suspects_block="\n".join(suspects_lines),
         extra_files_block="\n".join(extra_lines),

@@ -66,6 +66,7 @@ def build_patcher_variables(
     *,
     feedback: str = "",
     issue_hints_block: str = "",
+    skill_hint_block: str = "",
     allowed_files_line: str = "",
     suspects_block: str = "",
     extra_files_block: str = "",
@@ -77,6 +78,7 @@ def build_patcher_variables(
     return {
         "feedback_block": feedback_block,
         "issue_hints_block": issue_hints_block,
+        "skill_hint_block": skill_hint_block,
         "allowed_files_line": allowed_files_line,
         "suspects_block": suspects_block,
         "extra_files_block": extra_files_block,

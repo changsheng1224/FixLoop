@@ -14,8 +14,6 @@ from concurrent.futures import TimeoutError as FuturesTimeoutError
 from contextlib import contextmanager
 from pathlib import Path
 
-import yaml
-
 from agent_runtime.logging_setup import get_logger
 from src.repair.output_parsers import (
     parse_retrieved_context,
@@ -283,23 +281,11 @@ class Orchestrator(RepairPipelineMixin):
     def _resolve_repo_file(self, file_path: str) -> Path | None:
         return self._patch_applier().resolve_repo_file(file_path)
 
-    def _match_skill(self, issue: str, *, language: str = "python") -> dict | None:
+    def _match_skill(self, issue: str, *, language: str = "python"):
         """从 YAML Skill 文件中匹配 Issue 对应的修复策略。"""
-        skills_dir = Path(__file__).parent / "skills"
-        if not skills_dir.exists():
-            return None
-        for yaml_file in skills_dir.glob("*.yaml"):
-            try:
-                data = yaml.safe_load(yaml_file.read_text(encoding="utf-8"))
-                skill_lang = data.get("language", "python")
-                if skill_lang != language:
-                    continue
-                pattern = data.get("trigger_pattern", "")
-                if pattern and re.search(pattern, issue):
-                    return data
-            except Exception:
-                pass
-        return None
+        from src.skills.matcher import match_skill
+
+        return match_skill(issue, language=language)
 
     def _classify_error(self, exc_type: str) -> str:
         """兼容旧调用；新代码请用 ``classify_exception``。"""

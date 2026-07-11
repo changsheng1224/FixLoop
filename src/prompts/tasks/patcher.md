@@ -1,3 +1,4 @@
+$skill_hint_block
 $feedback_block
 基于以下信息生成修复补丁：
 $issue_hints_block

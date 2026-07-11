@@ -133,26 +133,33 @@ class RepairPipelineMixin:
             else:
                 t0 = time.time()
                 state.repair_plan = self._parse_issue(issue)
-                if state.repair_plan:
-                    tracer = self._repair_tracer
-                    if tracer is not None:
-                        tracer.emit(
-                            "orchestrator",
-                            "prompt_routing",
-                            repair_plan_intent_snapshot(state.repair_plan),
-                        )
+                tracer = self._repair_tracer
+                if state.repair_plan and tracer is not None:
+                    tracer.emit(
+                        "orchestrator",
+                        "prompt_routing",
+                        repair_plan_intent_snapshot(state.repair_plan),
+                    )
                 if state.repair_plan and state.repair_plan.language != "python":
                     log.warning(
                         "检测到 language=%s（%s），当前 Verifier 仅支持 Python 修复",
                         state.repair_plan.language,
                         state.repair_plan.language_source,
                     )
-                skill = self._match_skill(
+                matched = self._match_skill(
                     issue,
                     language=state.repair_plan.language if state.repair_plan else "python",
                 )
-                if skill and state.repair_plan:
-                    state.repair_plan.estimated_impact = skill.get("suggested_tools", [])
+                if matched and state.repair_plan:
+                    matched.apply_to_plan(state.repair_plan)
+                if tracer is not None:
+                    tracer.emit(
+                        "orchestrator",
+                        "skill_matched",
+                        matched.to_trace_payload()
+                        if matched
+                        else {"matched_skill": None},
+                    )
                 ms = int((time.time() - t0) * 1000)
                 state.node_timings["parse_issue_ms"] = ms
                 log.info("parse_issue: %dms", ms)

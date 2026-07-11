@@ -1,6 +1,22 @@
 name: python_test_failure_fix
 language: python
 trigger_pattern: "FAILED|assert|AssertionError"
-suggested_tools: [read_file, search, find_test, git_blame, patch_file]
-example_issue: "FAILED test_calculator.py::test_add - AssertionError: assert 3 == 5"
-example_patch: "读取测试理解预期行为，定位源码修复逻辑错误"
+priority: 5
+suggested_tools: [find_test, read_file, search, git_blame, patch_file]
+
+example_issue: |
+  FAILED tests/test_module.py::test_case - AssertionError: expected != actual
+  CI log shows assert line and file:line in implementation
+
+guidance:
+  - 先用 find_test/read_file 读失败用例，理解 assert 期望与实际差异
+  - 从 assert 消息反推实现应如何变更，定位源码而非改测试
+  - 若涉及多模块调用链，沿堆栈向内层实现追踪
+  - 保持最小 diff，使失败用例通过且不破坏其他行为
+
+avoid:
+  - 勿修改测试文件或放宽 assert 来通过 CI
+  - 勿忽略 FAILED 行中的具体 test 名称而盲目改代码
+  - 勿做与 assert 消息无关的重构
+
+example_patch: "align return value with test expectation (read test first)"
