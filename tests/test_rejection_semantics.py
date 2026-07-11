@@ -212,6 +212,7 @@ class TestRepairRejectionAggregation:
         assert state.repair_run_id
         assert state.node_timings["permission_denied_by_tool"]["write_file"] == 2
         assert state.node_timings["permission_denied_by_agent"]["localizer"]["write_file"] == 2
+        assert state.agent_errors["localizer"] == "gateway permission_denied: write_file×2"
 
         report = json.loads(
             (temp_workspace / ".agent" / "runs" / state.repair_run_id / "report.json").read_text(

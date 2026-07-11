@@ -6,6 +6,34 @@ from pathlib import Path
 
 from src.repair.agent_report_loader import load_agent_reports_from_run
 
+GATEWAY_AGENT_ERROR_PREFIX = "gateway permission_denied:"
+
+
+def format_gateway_denial_summary(tools: dict[str, int]) -> str:
+    """Human-readable gateway denial summary for one agent."""
+    parts = ", ".join(f"{tool}×{count}" for tool, count in sorted(tools.items()))
+    return f"{GATEWAY_AGENT_ERROR_PREFIX} {parts}"
+
+
+def apply_gateway_denials_to_agent_errors(
+    agent_errors: dict,
+    by_agent: dict[str, dict] | None,
+) -> None:
+    """Merge gateway permission_denied counts into RepairState.agent_errors."""
+    if not by_agent:
+        return
+    for agent, tools in sorted(by_agent.items()):
+        if not tools:
+            continue
+        msg = format_gateway_denial_summary(tools)
+        existing = agent_errors.get(agent)
+        if existing:
+            if GATEWAY_AGENT_ERROR_PREFIX in existing:
+                continue
+            agent_errors[agent] = f"{existing}; {msg}"
+        else:
+            agent_errors[agent] = msg
+
 
 def merge_count_maps(*maps: dict | None) -> dict:
     """Sum integer counts keyed by string."""

@@ -424,7 +424,10 @@ class Orchestrator(RepairPipelineMixin):
             state.node_timings["total_tool_steps"] = summary["total_tool_steps"]
 
     def _attach_rejection_stats(self, state: RepairState) -> None:
-        from src.repair.rejection_aggregate import summarize_repair_rejections
+        from src.repair.rejection_aggregate import (
+            apply_gateway_denials_to_agent_errors,
+            summarize_repair_rejections,
+        )
 
         run_id = state.repair_run_id or ""
         if not run_id:
@@ -433,6 +436,10 @@ class Orchestrator(RepairPipelineMixin):
         summary = summarize_repair_rejections(run_dir)
         for key, value in summary.items():
             state.node_timings[key] = value
+        apply_gateway_denials_to_agent_errors(
+            state.agent_errors,
+            summary.get("permission_denied_by_agent"),
+        )
 
     def _run_patcher(self, state: RepairState) -> tuple[list[CandidatePatch], dict]:
         """Patcher：直接调模型生成 JSON，Orchestrator 自己应用补丁。
