@@ -5,12 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from src.repair.prompt_router import patcher_variant_for
+from src.repair.prompt_router import GENERIC_FALLBACK_ISSUE_TYPES, patcher_variant_for
+from src.skills.models import MatchedSkill
 from src.state import RepairPlan
 
 SkillFallbackStrategy = Literal["hit", "issue_type_routing", "generic_patcher"]
-
-GENERIC_FALLBACK_ISSUE_TYPES = frozenset({"unknown", "", "test_failure"})
 
 
 @dataclass(frozen=True)
@@ -24,7 +23,7 @@ class SkillFallback:
 
 def resolve_skill_fallback(plan: RepairPlan) -> SkillFallback:
     """Choose fallback strategy from plan skill match and issue_type."""
-    if plan.matched_skill:
+    if plan.skill.matched_skill:
         return SkillFallback(
             strategy="hit",
             patcher_variant=patcher_variant_for(plan),
@@ -46,10 +45,10 @@ def resolve_skill_fallback(plan: RepairPlan) -> SkillFallback:
     )
 
 
-def apply_skill_fallback(plan: RepairPlan, *, matched: object | None) -> SkillFallback:
+def apply_skill_fallback(plan: RepairPlan) -> SkillFallback:
     """Write fallback strategy onto plan and adjust patcher prompt variant if needed."""
     fallback = resolve_skill_fallback(plan)
-    plan.skill_fallback_strategy = fallback.strategy
+    plan.skill.fallback_strategy = fallback.strategy
     if fallback.strategy in ("issue_type_routing", "generic_patcher"):
         variants = dict(plan.prompt_variants or {})
         variants["patcher"] = fallback.patcher_variant
@@ -57,9 +56,12 @@ def apply_skill_fallback(plan: RepairPlan, *, matched: object | None) -> SkillFa
     return fallback
 
 
-def skill_matched_trace_payload(matched, fallback: SkillFallback) -> dict:
+def skill_matched_trace_payload(
+    matched: MatchedSkill | None,
+    fallback: SkillFallback,
+) -> dict:
     """Trace payload for orchestrator ``skill_matched`` event."""
-    if matched is not None and getattr(matched, "to_trace_payload", None):
+    if matched is not None:
         payload = matched.to_trace_payload()
         payload["fallback_strategy"] = "hit"
         return payload

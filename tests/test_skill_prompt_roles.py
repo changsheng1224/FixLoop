@@ -5,23 +5,25 @@ from __future__ import annotations
 from src.prompts.repair_tasks import build_localizer_variables, build_retriever_template_and_variables
 from src.repair.prompt_router import apply_prompt_routing
 from src.skills.prompt import format_skill_hint
-from src.state import RepairPlan
+from src.state import RepairPlan, SkillContext
 
 
 def _sample_plan() -> RepairPlan:
     plan = RepairPlan(
         issue_type="type_error",
         suspect_files=["foo.py"],
-        matched_skill="python_type_error_fix",
-        suggested_tools=["stack_parse", "ast_parse", "search", "patch_file"],
-        skill_example_issue="TypeError: bad op",
-        skill_guidance=[
-            "convert operands before arithmetic",
-            "check stack trace first",
-            "third line trimmed for retriever",
-        ],
-        skill_avoid=["do not stringify numeric addition"],
-        skill_example_patch="return int(a) + b",
+        skill=SkillContext(
+            matched_skill="python_type_error_fix",
+            suggested_tools=["stack_parse", "ast_parse", "search", "patch_file"],
+            example_issue="TypeError: bad op",
+            guidance=[
+                "convert operands before arithmetic",
+                "check stack trace first",
+                "third line trimmed for retriever",
+            ],
+            avoid=["do not stringify numeric addition"],
+            example_patch="return int(a) + b",
+        ),
     )
     apply_prompt_routing(plan)
     return plan

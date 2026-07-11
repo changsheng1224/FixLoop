@@ -24,6 +24,36 @@ from src.repair.termination import is_repair_success
 from src.repair_factory import make_orchestrator_factory
 
 
+def _add_eval_run_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--all", action="store_true", help="运行全部 Case")
+    parser.add_argument("--case", action="append", dest="cases", help="指定 case_id")
+    parser.add_argument("--cases-dir", default=str(DEFAULT_CASES_DIR), help="Case 目录")
+    parser.add_argument("--output", default="eval_results", help="报告目录或 .json 路径")
+    parser.add_argument("--verbose", action="store_true", help="打印每个 Case 详情")
+    parser.add_argument(
+        "--fake",
+        action="store_true",
+        help="Fake Orchestrator（应用 expected_patch，无需 API）",
+    )
+    parser.add_argument(
+        "--skip-verify",
+        action="store_true",
+        help="禁用 Verifier 重试（默认启用 pytest/Docker 验证）",
+    )
+    parser.add_argument(
+        "--with-verify",
+        action="store_true",
+        help="（已默认启用）显式开启 Verifier 重试",
+    )
+    parser.add_argument(
+        "--markdown",
+        nargs="?",
+        const="report.md",
+        metavar="PATH",
+        help="生成 Markdown 指标报告（默认 output/report.md）",
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="src.cli", description="多 Agent 代码修复")
     add_log_level_argument(parser)
@@ -38,33 +68,9 @@ def main() -> int:
 
     p_eval = sub.add_parser("eval", help="运行评测 Case")
     p_eval_sub = p_eval.add_subparsers(dest="eval_command")
-    p_eval.add_argument("--all", action="store_true", help="运行全部 Case")
-    p_eval.add_argument("--case", action="append", dest="cases", help="指定 case_id")
-    p_eval.add_argument("--cases-dir", default=str(DEFAULT_CASES_DIR), help="Case 目录")
-    p_eval.add_argument("--output", default="eval_results", help="报告目录或 .json 路径")
-    p_eval.add_argument("--verbose", action="store_true", help="打印每个 Case 详情")
-    p_eval.add_argument(
-        "--fake",
-        action="store_true",
-        help="Fake Orchestrator（应用 expected_patch，无需 API）",
-    )
-    p_eval.add_argument(
-        "--skip-verify",
-        action="store_true",
-        help="禁用 Verifier 重试（默认启用 pytest/Docker 验证）",
-    )
-    p_eval.add_argument(
-        "--with-verify",
-        action="store_true",
-        help="（已默认启用）显式开启 Verifier 重试",
-    )
-    p_eval.add_argument(
-        "--markdown",
-        nargs="?",
-        const="report.md",
-        metavar="PATH",
-        help="生成 Markdown 指标报告（默认 output/report.md）",
-    )
+    _add_eval_run_args(p_eval)
+    p_eval_run = p_eval_sub.add_parser("run", help="运行 repair eval（默认，同 eval --all）")
+    _add_eval_run_args(p_eval_run)
 
     p_eval_skills = p_eval_sub.add_parser("skills", help="Skill 召回率 eval（离线 match_skill）")
     p_eval_skills.add_argument("--all", action="store_true", help="评测全部已标注 Case")
@@ -286,12 +292,12 @@ def _print_repair_result(state, verbose: bool) -> None:
             f"{plan.issue_type}, {plan.suspect_files}{variants}",
             file=sys.stderr,
         )
-        if plan.matched_skill:
-            print(f"[Orchestrator] Skill: {plan.matched_skill}", file=sys.stderr)
-        elif plan.skill_fallback_strategy:
+        if plan.skill.matched_skill:
+            print(f"[Orchestrator] Skill: {plan.skill.matched_skill}", file=sys.stderr)
+        elif plan.skill.fallback_strategy:
             patcher = plan.prompt_variants.get("patcher", "default")
             print(
-                f"[Orchestrator] Skill: 未命中 → fallback={plan.skill_fallback_strategy} "
+                f"[Orchestrator] Skill: 未命中 → fallback={plan.skill.fallback_strategy} "
                 f"(patcher={patcher})",
                 file=sys.stderr,
             )

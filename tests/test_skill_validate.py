@@ -63,13 +63,13 @@ class TestSkillValidateL2:
         assert report.ok
         assert any(issue.field == "name" for issue in report.warnings)
 
-    def test_builtin_skills_validate_with_warnings_only(self):
+    def test_builtin_skills_validate_clean(self):
         from src.skills.catalog import _BUILTIN_DIR
 
         report = validate_directory(_BUILTIN_DIR)
         assert report.ok
         assert report.skill_count == 10
-        assert report.warnings  # filename stem != name for several built-ins
+        assert not report.warnings  # filenames match skill names after P2-11 rename
 
     def test_strict_load_raises_on_errors(self, tmp_path: Path):
         (tmp_path / "bad.yaml").write_text(

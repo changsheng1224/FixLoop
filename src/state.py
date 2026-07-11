@@ -7,6 +7,45 @@ from dataclasses import dataclass, field
 
 
 @dataclass
+class SkillContext:
+    """Skill 匹配结果与 fallback 策略（嵌套于 RepairPlan）。"""
+
+    matched_skill: str | None = None
+    suggested_tools: list[str] = field(default_factory=list)
+    example_issue: str = ""
+    guidance: list[str] = field(default_factory=list)
+    avoid: list[str] = field(default_factory=list)
+    example_patch: str = ""
+    fallback_strategy: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "matched_skill": self.matched_skill,
+            "suggested_tools": list(self.suggested_tools),
+            "example_issue": self.example_issue,
+            "guidance": list(self.guidance),
+            "avoid": list(self.avoid),
+            "example_patch": self.example_patch,
+            "fallback_strategy": self.fallback_strategy,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> "SkillContext":
+        raw = data or {}
+        return cls(
+            matched_skill=raw.get("matched_skill"),
+            suggested_tools=list(raw.get("suggested_tools") or []),
+            example_issue=str(raw.get("example_issue") or raw.get("skill_example_issue") or ""),
+            guidance=list(raw.get("guidance") or raw.get("skill_guidance") or []),
+            avoid=list(raw.get("avoid") or raw.get("skill_avoid") or []),
+            example_patch=str(raw.get("example_patch") or raw.get("skill_example_patch") or ""),
+            fallback_strategy=str(
+                raw.get("fallback_strategy") or raw.get("skill_fallback_strategy") or ""
+            ),
+        )
+
+
+@dataclass
 class SuspectLocation:
     """代码定位结果——由 Localizer 产出。
 
@@ -66,15 +105,9 @@ class RepairPlan:
         issue_type: 问题类型（"type_error" / "import_error" / "test_failure" 等）。
         suspect_files: 嫌疑文件列表。
         estimated_impact: 预估影响的文件列表。
-        matched_skill: 命中的 Skill 名称（无命中为 None）。
-        suggested_tools: Skill 建议的工具链。
-        skill_example_issue: Skill 参考 issue 摘要。
-        skill_guidance: Skill 修复原则列表。
-        skill_avoid: Skill 反模式列表。
-        skill_example_patch: Skill 示例修复文案。
+        skill: Skill 匹配上下文（matched_skill · tools · guidance · fallback）。
         reasoning: 判定依据。
         prompt_variants: 各 Agent prompt 变体键（patcher / localizer）。
-        skill_fallback_strategy: Skill 未命中时的 fallback 策略（hit / issue_type_routing / generic_patcher）。
     """
 
     language: str = "python"
@@ -82,15 +115,9 @@ class RepairPlan:
     issue_type: str = ""
     suspect_files: list[str] = field(default_factory=list)
     estimated_impact: list[str] = field(default_factory=list)
-    matched_skill: str | None = None
-    suggested_tools: list[str] = field(default_factory=list)
-    skill_example_issue: str = ""
-    skill_guidance: list[str] = field(default_factory=list)
-    skill_avoid: list[str] = field(default_factory=list)
-    skill_example_patch: str = ""
+    skill: SkillContext = field(default_factory=SkillContext)
     reasoning: str = ""
     prompt_variants: dict[str, str] = field(default_factory=dict)
-    skill_fallback_strategy: str = ""
     schema_version: str = "1.0"
 
     def to_dict(self) -> dict:
@@ -101,36 +128,27 @@ class RepairPlan:
             "issue_type": self.issue_type,
             "suspect_files": self.suspect_files,
             "estimated_impact": self.estimated_impact,
-            "matched_skill": self.matched_skill,
-            "suggested_tools": self.suggested_tools,
-            "skill_example_issue": self.skill_example_issue,
-            "skill_guidance": list(self.skill_guidance),
-            "skill_avoid": list(self.skill_avoid),
-            "skill_example_patch": self.skill_example_patch,
+            "skill": self.skill.to_dict(),
             "reasoning": self.reasoning,
             "prompt_variants": dict(self.prompt_variants),
-            "skill_fallback_strategy": self.skill_fallback_strategy,
             "schema_version": self.schema_version,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "RepairPlan":
         """从 dict 反序列化。"""
+        skill = SkillContext.from_dict(data.get("skill"))
+        if "skill" not in data:
+            skill = SkillContext.from_dict(data)
         return cls(
             language=data.get("language", "python"),
             language_source=data.get("language_source", ""),
             issue_type=data.get("issue_type", ""),
             suspect_files=data.get("suspect_files", []),
             estimated_impact=data.get("estimated_impact", []),
-            matched_skill=data.get("matched_skill"),
-            suggested_tools=data.get("suggested_tools", []),
-            skill_example_issue=data.get("skill_example_issue", ""),
-            skill_guidance=list(data.get("skill_guidance") or []),
-            skill_avoid=list(data.get("skill_avoid") or []),
-            skill_example_patch=data.get("skill_example_patch", ""),
+            skill=skill,
             reasoning=data.get("reasoning", ""),
             prompt_variants=dict(data.get("prompt_variants") or {}),
-            skill_fallback_strategy=str(data.get("skill_fallback_strategy") or ""),
             schema_version=data.get("schema_version", "1.0"),
         )
 

@@ -7,8 +7,9 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from src.eval.runner import DEFAULT_CASES_DIR, load_case_metadata
+from src.eval.case_io import DEFAULT_CASES_DIR, build_case_issue, load_case_metadata
 from src.skills.matcher import match_skill
+from src.state import RepairPlan
 
 _NONE_KEY = "__none__"
 
@@ -45,17 +46,17 @@ class SkillEvalReport:
     confusion: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        return {
-            "skill_metrics": {
-                "summary": self.summary,
-                "by_skill": self.by_skill,
-                "cases": [row.to_dict() for row in self.cases],
-                "confusion": self.confusion,
-            }
+        """JSON shape aligned with ``eval_report.json`` → ``skill_metrics`` field."""
+        metrics = {
+            "summary": self.summary,
+            "by_skill": self.by_skill,
+            "cases": [row.to_dict() for row in self.cases],
+            "confusion": self.confusion,
         }
+        return {"skill_metrics": metrics}
 
 
-def _normalize_skill(name: str | None) -> str | None:
+def normalize_skill_label(name: str | None) -> str | None:
     if name is None:
         return None
     text = str(name).strip()
@@ -65,15 +66,21 @@ def _normalize_skill(name: str | None) -> str | None:
 
 
 def _skills_match(expected: str | None, matched: str | None) -> bool:
-    return _normalize_skill(expected) == _normalize_skill(matched)
+    return normalize_skill_label(expected) == normalize_skill_label(matched)
 
 
-def _issue_for_skill_match(issue: str, meta: dict) -> str:
-    """Build issue text the same way EvalRunner passes it to repair."""
-    source_files = meta.get("source_files") or []
-    if source_files:
-        return f"{issue}\n\nCandidate source files: {', '.join(source_files)}"
-    return issue
+def skill_result_fields_from_plan(
+    plan: RepairPlan | None,
+    meta: dict,
+) -> tuple[str | None, str | None, bool, bool]:
+    """Derive eval CaseResult skill fields from repair plan (single source of truth)."""
+    skill_labeled = "expected_skill" in meta
+    expected = (
+        normalize_skill_label(meta.get("expected_skill")) if skill_labeled else None
+    )
+    matched = plan.skill.matched_skill if plan else None
+    skill_match = _skills_match(expected, matched) if skill_labeled else False
+    return expected, matched, skill_match, skill_labeled
 
 
 def evaluate_case_row(case_dir: Path) -> SkillEvalRow | None:
@@ -82,13 +89,12 @@ def evaluate_case_row(case_dir: Path) -> SkillEvalRow | None:
         return None
 
     meta = load_case_metadata(case_dir)
-    issue_raw = (case_dir / "issue.txt").read_text(encoding="utf-8").strip()
-    issue = _issue_for_skill_match(issue_raw, meta)
+    issue = build_case_issue(case_dir, metadata=meta)
     language = str(meta.get("language") or "python")
     matched = match_skill(issue, language=language)
     matched_skill = matched.name if matched else None
     has_label = "expected_skill" in meta
-    expected = _normalize_skill(meta.get("expected_skill")) if has_label else None
+    expected = normalize_skill_label(meta.get("expected_skill")) if has_label else None
     skill_match = _skills_match(expected, matched_skill) if has_label else False
 
     return SkillEvalRow(
@@ -159,8 +165,8 @@ def compute_skill_metrics(rows: list[dict] | list[SkillEvalRow]) -> dict:
     confusion: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
 
     for row in normalized:
-        expected = _normalize_skill(row.get("expected_skill"))
-        matched = _normalize_skill(row.get("matched_skill"))
+        expected = normalize_skill_label(row.get("expected_skill"))
+        matched = normalize_skill_label(row.get("matched_skill"))
         exp_key = expected or _NONE_KEY
         pred_key = matched or _NONE_KEY
         by_expected[exp_key].append(row)
@@ -179,13 +185,13 @@ def compute_skill_metrics(rows: list[dict] | list[SkillEvalRow]) -> dict:
         tp = sum(
             1
             for row in expected_rows
-            if _normalize_skill(row.get("matched_skill")) == skill
+            if normalize_skill_label(row.get("matched_skill")) == skill
         )
         fn = len(expected_rows) - tp
         fp = sum(
             1
             for row in predicted_rows
-            if _normalize_skill(row.get("expected_skill")) != skill
+            if normalize_skill_label(row.get("expected_skill")) != skill
         )
         support = len(expected_rows)
         recall = tp / support if support else 0.0

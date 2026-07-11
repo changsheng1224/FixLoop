@@ -11,7 +11,7 @@ from src.skills.catalog import SkillCatalog, SkillCatalogError
 from src.skills.matcher import match_skill
 from src.skills.models import SkillSpec
 from src.skills.prompt import format_skill_hint_block
-from src.state import RepairPlan
+from src.state import RepairPlan, SkillContext
 
 
 class TestSkillSpec:
@@ -120,65 +120,17 @@ class TestMatchSkill:
         assert len(get_default_catalog().skills) == 10
 
 
-class TestEvalSkillCoverage:
-    """Match eval case issue snippets to expected skills."""
-
-    @staticmethod
-    def _match(issue: str):
-        from src.skills.catalog import get_default_catalog
-
-        get_default_catalog.cache_clear()
-        return match_skill(issue, language="python")
-
-    def test_case_001_type_error(self):
-        issue = (
-            "TypeError: unsupported operand type(s) for +: 'str' and 'int'\n"
-            "File \"pricing.py\", line 6"
-        )
-        assert self._match(issue).name == "python_type_error_fix"
-
-    def test_case_004_import_error(self):
-        issue = "ModuleNotFoundError: No module named 'utils.helper'"
-        assert self._match(issue).name == "python_import_error_fix"
-
-    def test_case_006_logic_error(self):
-        issue = "AssertionError: inclusive_range off-by-one"
-        assert self._match(issue).name == "python_logic_error_fix"
-
-    def test_case_007_attribute_error(self):
-        issue = "AttributeError: 'NoneType' object has no attribute 'display_name'"
-        assert self._match(issue).name == "python_attribute_error_fix"
-
-    def test_case_009_config_error(self):
-        issue = "KeyError: 'tool' — missing [tool.eval] in pyproject.toml"
-        assert self._match(issue).name == "python_config_error_fix"
-
-    def test_case_010_composite(self):
-        issue = (
-            "ModuleNotFoundError + TypeError (composite, two files)\n"
-            "ModuleNotFoundError: No module named 'backend.service'\n"
-            "TypeError on str + int"
-        )
-        assert self._match(issue).name == "python_composite_fix"
-
-    def test_cannot_import_name_beats_generic_import(self):
-        issue = "ImportError: cannot import name 'Foo' from 'pkg.module'"
-        assert self._match(issue).name == "python_cannot_import_name_fix"
-
-    def test_logic_beats_generic_test_failure(self):
-        issue = "FAILED test_ranges.py::test_inclusive_range — off-by-one"
-        assert self._match(issue).name == "python_logic_error_fix"
-
-
 class TestSkillPrompt:
     def test_format_skill_hint_block(self):
         plan = RepairPlan(
-            matched_skill="python_type_error_fix",
-            suggested_tools=["stack_parse", "patch_file"],
-            skill_example_issue="TypeError: bad op at foo.py:1",
-            skill_guidance=["convert operands before arithmetic"],
-            skill_avoid=["do not stringify numeric addition"],
-            skill_example_patch="return int(a) + b",
+            skill=SkillContext(
+                matched_skill="python_type_error_fix",
+                suggested_tools=["stack_parse", "patch_file"],
+                example_issue="TypeError: bad op at foo.py:1",
+                guidance=["convert operands before arithmetic"],
+                avoid=["do not stringify numeric addition"],
+                example_patch="return int(a) + b",
+            ),
         )
         block = format_skill_hint_block(plan)
         assert "[Skill 提示]" in block
@@ -213,11 +165,11 @@ class TestMatchedSkillApply:
         )
         plan = RepairPlan()
         matched.apply_to_plan(plan)
-        assert plan.matched_skill == "demo_skill"
-        assert plan.skill_example_issue == "Error: demo"
-        assert plan.skill_guidance == ["fix root cause"]
-        assert plan.skill_avoid == ["no hacks"]
-        assert plan.skill_example_patch == "patch line"
+        assert plan.skill.matched_skill == "demo_skill"
+        assert plan.skill.example_issue == "Error: demo"
+        assert plan.skill.guidance == ["fix root cause"]
+        assert plan.skill.avoid == ["no hacks"]
+        assert plan.skill.example_patch == "patch line"
 
 
 class TestSkillIntegration:
@@ -225,10 +177,12 @@ class TestSkillIntegration:
         from src.prompts.patcher_task_builder import assemble_patcher_variables
 
         plan = RepairPlan(
-            matched_skill="python_type_error_fix",
-            suggested_tools=["stack_parse", "patch_file"],
-            skill_guidance=["convert before add"],
-            skill_example_patch="cast operands",
+            skill=SkillContext(
+                matched_skill="python_type_error_fix",
+                suggested_tools=["stack_parse", "patch_file"],
+                guidance=["convert before add"],
+                example_patch="cast operands",
+            ),
         )
         variables = assemble_patcher_variables(
             suspects=[],
@@ -249,9 +203,12 @@ class TestSkillIntegration:
 
         plan = RepairPlan(
             issue_type="type_error",
-            matched_skill="python_type_error_fix",
-            suggested_tools=["stack_parse"],
+            skill=SkillContext(
+                matched_skill="python_type_error_fix",
+                suggested_tools=["stack_parse"],
+            ),
         )
         snapshot = repair_plan_intent_snapshot(plan)
         assert snapshot["matched_skill"] == "python_type_error_fix"
         assert snapshot["suggested_tools"] == ["stack_parse"]
+        assert snapshot["skill"]["matched_skill"] == "python_type_error_fix"

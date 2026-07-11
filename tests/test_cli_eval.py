@@ -61,6 +61,26 @@ class TestCliEval:
 
         assert main() == 2
 
+    def test_eval_run_subcommand_fake_all(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "src.cli",
+                "eval",
+                "run",
+                "--fake",
+                "--all",
+                "--output",
+                str(tmp_path),
+            ],
+        )
+        from src.cli import main
+
+        assert main() == 0
+        data = json.loads((tmp_path / "eval_report.json").read_text(encoding="utf-8"))
+        assert data["summary"]["total"] == 10
+
     def test_eval_module_runner_fake(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
             sys,

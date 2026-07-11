@@ -131,9 +131,9 @@ class MatchedSkill:
 
     def apply_to_plan(self, plan) -> None:
         """Write matched skill fields onto a ``RepairPlan`` (in-place)."""
-        plan.matched_skill = self.name
-        plan.suggested_tools = list(self.suggested_tools)
-        plan.skill_example_issue = self.example_issue
-        plan.skill_guidance = list(self.guidance)
-        plan.skill_avoid = list(self.avoid)
-        plan.skill_example_patch = self.example_patch
+        plan.skill.matched_skill = self.name
+        plan.skill.suggested_tools = list(self.suggested_tools)
+        plan.skill.example_issue = self.example_issue
+        plan.skill.guidance = list(self.guidance)
+        plan.skill.avoid = list(self.avoid)
+        plan.skill.example_patch = self.example_patch

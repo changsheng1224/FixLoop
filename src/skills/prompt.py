@@ -30,8 +30,8 @@ def _bullet_section(title: str, items: list[str]) -> list[str]:
 
 
 def _tool_chain(plan: RepairPlan) -> str:
-    if plan.suggested_tools:
-        return " → ".join(plan.suggested_tools)
+    if plan.skill.suggested_tools:
+        return " → ".join(plan.skill.suggested_tools)
     return "（无）"
 
 
@@ -43,45 +43,48 @@ def _truncate(text: str, max_chars: int) -> str:
 
 
 def _format_localizer_hint(plan: RepairPlan) -> str:
+    skill = plan.skill
     lines = [
-        f"[Skill 工具序] {plan.matched_skill}",
+        f"[Skill 工具序] {skill.matched_skill}",
         f"建议优先: {_tool_chain(plan)}",
     ]
-    if plan.skill_guidance:
-        lines.append(f"定位提示: {plan.skill_guidance[0]}")
+    if skill.guidance:
+        lines.append(f"定位提示: {skill.guidance[0]}")
     return _truncate("\n".join(lines), _ROLE_CHAR_LIMITS["localizer"])
 
 
 def _format_retriever_hint(plan: RepairPlan) -> str:
+    skill = plan.skill
     lines = [
         "[Skill 提示·检索]",
-        f"策略: {plan.matched_skill}",
+        f"策略: {skill.matched_skill}",
         f"工具序: {_tool_chain(plan)}",
     ]
-    for item in plan.skill_guidance[:2]:
+    for item in skill.guidance[:2]:
         lines.append(f"  - {item}")
     return _truncate("\n".join(lines), _ROLE_CHAR_LIMITS["retriever"])
 
 
 def _format_patcher_hint(plan: RepairPlan) -> str:
+    skill = plan.skill
     lines = [
         "[Skill 提示]",
-        f"策略: {plan.matched_skill}",
+        f"策略: {skill.matched_skill}",
         f"建议工具链: {_tool_chain(plan)}",
     ]
-    if plan.skill_example_issue.strip():
+    if skill.example_issue.strip():
         lines.append("参考 issue:")
-        lines.append(_indent_block(plan.skill_example_issue))
-    lines.extend(_bullet_section("修复原则:", plan.skill_guidance))
-    lines.extend(_bullet_section("避免:", plan.skill_avoid))
-    if plan.skill_example_patch.strip():
-        lines.append(f"示例修复: {plan.skill_example_patch.strip()}")
+        lines.append(_indent_block(skill.example_issue))
+    lines.extend(_bullet_section("修复原则:", skill.guidance))
+    lines.extend(_bullet_section("避免:", skill.avoid))
+    if skill.example_patch.strip():
+        lines.append(f"示例修复: {skill.example_patch.strip()}")
     return _truncate("\n".join(lines), _ROLE_CHAR_LIMITS["patcher"])
 
 
 def format_skill_hint(plan: RepairPlan | None, role: SkillHintRole) -> str:
     """Render role-specific Skill hint block for L2 repair user prompts."""
-    if not plan or not plan.matched_skill:
+    if not plan or not plan.skill.matched_skill:
         return ""
 
     if role == "localizer":
@@ -102,9 +105,9 @@ def format_skill_hint_for_plan(plan: RepairPlan | None, role: SkillHintRole) -> 
     """Render matched Skill hint or generic miss hint based on plan fallback state."""
     if not plan:
         return ""
-    if plan.matched_skill:
+    if plan.skill.matched_skill:
         return format_skill_hint(plan, role)
-    if plan.skill_fallback_strategy in ("issue_type_routing", "generic_patcher"):
+    if plan.skill.fallback_strategy in ("issue_type_routing", "generic_patcher"):
         return format_skill_miss_hint(role)
     return ""
 
