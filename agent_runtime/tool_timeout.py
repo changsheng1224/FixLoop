@@ -1,10 +1,10 @@
-"""Gate 9 工具执行超时：ThreadPoolExecutor + result(timeout)。"""
+"""Gate 9 工具执行超时：基于 cancellation.run_blocking。"""
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Callable, TypeVar
+
+from agent_runtime.cancellation import BlockingDeadlineError, CancellationToken, run_blocking
 
 T = TypeVar("T")
 
@@ -19,17 +19,16 @@ class ToolTimeoutError(Exception):
         super().__init__(f"tool execution timed out after {self.timeout_s}s")
 
 
-def run_with_timeout(func: Callable[[], T], *, timeout_s: int) -> T:
-    """在独立线程中执行 *func*；*timeout_s*≤0 时不限时。"""
-    if timeout_s <= 0:
+def run_with_timeout(
+    func: Callable[[], T],
+    *,
+    timeout_s: int,
+    cancel_token: CancellationToken | None = None,
+) -> T:
+    """在独立线程中执行 *func*；*timeout_s*≤0 时不限时；可选协作式 cancel。"""
+    if timeout_s <= 0 and cancel_token is None:
         return func()
-
-    pool = ThreadPoolExecutor(max_workers=1)
-    fut = pool.submit(func)
     try:
-        return fut.result(timeout=timeout_s)
-    except FuturesTimeoutError as exc:
-        raise ToolTimeoutError(timeout_s) from exc
-    finally:
-        # 不在超时后等待孤儿线程结束（with 块默认 wait=True 会阻塞到 run() 返回）
-        pool.shutdown(wait=False, cancel_futures=True)
+        return run_blocking(func, cancel_token=cancel_token, timeout_s=timeout_s or None)
+    except BlockingDeadlineError as exc:
+        raise ToolTimeoutError(int(exc.timeout_s)) from exc

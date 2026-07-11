@@ -6,7 +6,12 @@
 import json
 
 from src.harness.sandbox_manager import TEST_TIMEOUT_S
-from src.harness.sandbox_results import is_exec_timeout, verification_result_for_exec_timeout
+from src.harness.sandbox_results import (
+    is_exec_cancelled,
+    is_exec_timeout,
+    verification_result_for_exec_timeout,
+    verification_result_for_user_cancel,
+)
 from src.state import VerificationResult
 
 
@@ -45,7 +50,7 @@ class PythonTestRunner:
             cancel_token=cancel_token,
         )
 
-        if test.stderr == "cancelled by user":
+        if is_exec_cancelled(test):
             return verification_result_for_user_cancel()
 
         if is_exec_timeout(test):
@@ -75,7 +80,7 @@ class PythonTestRunner:
         result = self.manager.execute(
             sandbox, "cat /code/.report.json", timeout=10, cancel_token=cancel_token
         )
-        if result.stderr == "cancelled by user":
+        if is_exec_cancelled(result):
             return {}
         raw = (result.stdout or "").strip()
         if not raw or result.exit_code != 0:

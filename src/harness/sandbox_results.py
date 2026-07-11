@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from src.harness.sandbox_manager import EXEC_TIMEOUT_EXIT_CODE, ExecResult
+from src.harness.sandbox_manager import (
+    EXEC_TIMEOUT_EXIT_CODE,
+    EXEC_USER_CANCEL_EXIT_CODE,
+    ExecResult,
+)
 from src.state import VerificationResult
 
 
@@ -14,8 +18,12 @@ def verification_result_for_user_cancel() -> VerificationResult:
     )
 
 
+def is_exec_cancelled(result: ExecResult) -> bool:
+    return bool(result.cancelled) or result.exit_code == EXEC_USER_CANCEL_EXIT_CODE
+
+
 def is_exec_timeout(result: ExecResult) -> bool:
-    return result.exit_code == EXEC_TIMEOUT_EXIT_CODE
+    return result.exit_code == EXEC_TIMEOUT_EXIT_CODE and not is_exec_cancelled(result)
 
 
 def verification_result_for_exec_timeout(

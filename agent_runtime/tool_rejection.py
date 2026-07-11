@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 __all__ = [
+    "EXECUTOR_GATE_CANCEL",
+    "REJECTION_LAYER_CANCEL",
     "REJECTION_LAYER_EXECUTOR",
     "REJECTION_LAYER_GATEWAY",
     "TOOL_TRACE_PUBLIC_KEYS",
+    "build_executor_cancel_metadata",
     "build_executor_error_metadata",
     "build_executor_rejection_metadata",
     "build_gate7_pass_metadata",
@@ -16,6 +19,8 @@ __all__ = [
 
 REJECTION_LAYER_GATEWAY = "gateway"
 REJECTION_LAYER_EXECUTOR = "executor"
+REJECTION_LAYER_CANCEL = "cancel"
+EXECUTOR_GATE_CANCEL = "cancel"
 
 TOOL_TRACE_PUBLIC_KEYS = (
     "tool_status",
@@ -67,7 +72,12 @@ def build_rejection_observability_payload(summary: dict | None = None, **fields)
 
     metrics = []
     for gate_id, count in sorted(gate.items()):
-        layer_name = REJECTION_LAYER_GATEWAY if gate_id == "gateway" else REJECTION_LAYER_EXECUTOR
+        if gate_id == EXECUTOR_GATE_CANCEL:
+            layer_name = REJECTION_LAYER_CANCEL
+        elif gate_id == "gateway":
+            layer_name = REJECTION_LAYER_GATEWAY
+        else:
+            layer_name = REJECTION_LAYER_EXECUTOR
         metrics.append(
             {
                 "layer": layer_name,
@@ -85,13 +95,25 @@ def build_rejection_observability_payload(summary: dict | None = None, **fields)
     return payload
 
 
-def build_executor_rejection_metadata(gate_id: int, tool_error_code: str, **extra) -> dict:
+def build_executor_rejection_metadata(gate_id: int | str, tool_error_code: str, **extra) -> dict:
     """Layer 2 Executor 闸口拒绝 metadata。"""
     meta = {
         "tool_status": "rejected",
         "tool_error_code": tool_error_code,
         "rejection_layer": REJECTION_LAYER_EXECUTOR,
         "gate_id": gate_id,
+    }
+    meta.update(extra)
+    return meta
+
+
+def build_executor_cancel_metadata(tool_error_code: str = "cancelled", **extra) -> dict:
+    """用户 cancel 导致的工具拒绝（非 Gate 1–9）。"""
+    meta = {
+        "tool_status": "rejected",
+        "tool_error_code": tool_error_code,
+        "rejection_layer": REJECTION_LAYER_CANCEL,
+        "gate_id": EXECUTOR_GATE_CANCEL,
     }
     meta.update(extra)
     return meta

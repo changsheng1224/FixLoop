@@ -127,7 +127,7 @@ class RepairPipelineMixin:
 
         cancelled = False
         try:
-            if self._is_repair_cancelled():
+            if self._abort_repair_if_cancelled(state):
                 cancelled = True
             else:
                 t0 = time.time()
@@ -186,20 +186,20 @@ class RepairPipelineMixin:
                     n_tests,
                 )
 
-                if self._is_repair_cancelled():
+                if self._abort_repair_if_cancelled(state):
                     cancelled = True
                 elif self._verification_enabled():
                     _record_pytest_exit(state, self._repo_root, "baseline_pytest_code")
 
                 while not cancelled and state.retry_count < max_retries:
-                    if self._is_repair_cancelled():
+                    if self._abort_repair_if_cancelled(state):
                         cancelled = True
                         break
 
                     repo_snapshot = self._snapshot_repo() if self._verification_enabled() else None
                     log.info("Patcher 开始 (retry=%d)...", state.retry_count)
                     state.candidate_patches, patch_timing = self._run_patcher(state)
-                    if patch_timing.get("user_cancel") or self._is_repair_cancelled():
+                    if patch_timing.get("user_cancel") or self._abort_repair_if_cancelled(state):
                         cancelled = True
                         break
 
@@ -236,12 +236,12 @@ class RepairPipelineMixin:
                         continue
 
                     log.info("Verifier 开始...")
-                    if self._is_repair_cancelled():
+                    if self._abort_repair_if_cancelled(state):
                         cancelled = True
                         break
                     t0 = time.time()
                     state.verification_result = self._run_verifier(state)
-                    if self._is_repair_cancelled():
+                    if self._abort_repair_if_cancelled(state):
                         cancelled = True
                         break
                     ms = int((time.time() - t0) * 1000)

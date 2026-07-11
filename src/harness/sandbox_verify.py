@@ -75,7 +75,7 @@ def run_sandbox_verification_flow(
             timings["build_result"] = build_result
             context._build_result = build_result
             if pip_exec is not None and pip_exec.exit_code != 0:
-                if pip_exec.stderr == "cancelled by user":
+                if pip_exec.cancelled:
                     timings["user_cancel"] = True
                     return verification_result_for_user_cancel(), timings
                 result = verification_result_for_pip_failure(

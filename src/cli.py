@@ -1,7 +1,6 @@
 """Layer 2 CLI：多 Agent 修复与评测命令。"""
 
 import argparse
-import signal
 import sys
 from pathlib import Path
 
@@ -143,20 +142,15 @@ def _repair(args) -> int:
         print("[Orchestrator] 开始修复...", file=sys.stderr)
 
     from agent_runtime.cancellation import CancellationToken
+    from agent_runtime.signal_cancel import sigint_cancel_scope
 
     cancel_token = CancellationToken()
 
-    def _sigint_handler(signum, frame):
-        if cancel_token.is_cancelled:
-            raise KeyboardInterrupt
-        cancel_token.cancel()
-        print("\n[Orchestrator] 取消中…", file=sys.stderr)
-
-    old_handler = signal.signal(signal.SIGINT, _sigint_handler)
-    try:
+    with sigint_cancel_scope(
+        cancel_token,
+        first_message="[Orchestrator] 取消中…",
+    ):
         state = orch.repair(args.issue, cancel_token=cancel_token)
-    finally:
-        signal.signal(signal.SIGINT, old_handler)
 
     _print_repair_result(state, verbose=args.verbose)
     return repair_exit_code(state)

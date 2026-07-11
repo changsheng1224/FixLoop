@@ -26,14 +26,6 @@ from agent_runtime.stop_reasons import StopReason
 from agent_runtime.cancellation import CancelledError, run_with_cancellation
 
 
-class CancelledRun(Exception):
-    """Native tool 路径在 cancel 时中断 chat_with_tools。"""
-
-    def __init__(self, answer: str):
-        self.answer = answer
-        super().__init__(answer)
-
-
 def _log_loop(msg: str) -> None:
     """Loop 阶段 debug 日志（受 --log-level 控制）。"""
     from agent_runtime.logging_setup import get_logger
@@ -261,7 +253,7 @@ class AgentLoop:
     ) -> str:
         """执行工具、写 trace/history，返回下一轮 user_message。"""
         if (msg := self._abort_if_cancelled(ts, phase="pre_tool", in_flight=tool_name)) is not None:
-            raise CancelledRun(msg)
+            raise CancelledError("user", answer=msg)
         if emit_acting:
             self._notify_react_phase(
                 ReactPhase.ACTING,
@@ -287,7 +279,7 @@ class AgentLoop:
         finally:
             self._in_flight_tool = ""
         if (msg := self._abort_if_cancelled(ts, phase="post_tool", in_flight=tool_name)) is not None:
-            raise CancelledRun(msg)
+            raise CancelledError("user", answer=msg)
         result_text = result.content if hasattr(result, "content") else str(result)
         result_text = truncate_tool_result_for_agent(self.agent, tool_name, result_text)
         te_ms = int((_time.time() - t0) * 1000)
@@ -460,7 +452,7 @@ class AgentLoop:
             nonlocal step_clock
             if phase == ReactPhase.REASONING:
                 if (msg := self._abort_if_cancelled(ts, phase="native_reasoning")) is not None:
-                    raise CancelledRun(msg)
+                    raise CancelledError("user", answer=msg)
                 if step > 1:
                     step_clock = StepClock(step_timeout_s)
                 step_clock.check(step=step, path="native")
@@ -520,9 +512,9 @@ class AgentLoop:
             )
         except StepTimeoutError as e:
             return self._finish_step_timeout(ts, e, clock=step_clock)
-        except CancelledRun as e:
-            return e.answer
-        except CancelledError:
+        except CancelledError as e:
+            if e.answer:
+                return e.answer
             return self._finish_user_cancel(ts, phase="model_wait")
         except Exception as e:
             if (msg := self._stop_for_api_error(ts, e)) is not None:
@@ -616,7 +608,7 @@ class AgentLoop:
                         path="xml",
                         callback=callback,
                     )
-                except CancelledRun as e:
+                except CancelledError as e:
                     return e.answer
                 continue
 

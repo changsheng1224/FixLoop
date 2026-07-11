@@ -20,6 +20,7 @@ from pathlib import Path
 
 from agent_runtime.schema_utils import auto_validate
 from agent_runtime.tool_rejection import (
+    build_executor_cancel_metadata,
     build_executor_error_metadata,
     build_executor_rejection_metadata,
     build_gate7_pass_metadata,
@@ -70,11 +71,7 @@ class ToolExecutor:
         """按序执行 Executor 闸口（Gate 1–9），不含 Gateway 权限层。"""
         token = getattr(self.agent, "cancel_token", None)
         if token is not None and token.is_cancelled:
-            return self._rejected(
-                0,
-                "cancelled",
-                "Error: 任务已取消，跳过工具执行。",
-            )
+            return self._rejected_cancel("Error: 任务已取消，跳过工具执行。")
 
         allowed = self.agent._tool_names
         if name not in allowed:
@@ -143,11 +140,7 @@ class ToolExecutor:
         if name in self._high_risk_tools:
             if not self._approve(name, args, patch_preview_meta):
                 if token is not None and token.is_cancelled:
-                    return self._rejected(
-                        0,
-                        "cancelled",
-                        "Error: 任务已取消（审批中断）。",
-                    )
+                    return self._rejected_cancel("Error: 任务已取消（审批中断）。")
                 extra = {"approval_policy": self.approval_policy}
                 if patch_preview_meta:
                     extra["patch_preview"] = patch_preview_meta
@@ -167,15 +160,23 @@ class ToolExecutor:
         # ---- Gate 9: 执行工具 ----
         timeout_s = int(getattr(self.agent.config, "tool_timeout_s", 0) or 0)
         ctx = self.agent.tool_context
-        prev_ctx_token = getattr(ctx, "cancel_token", None)
-        if token is not None:
-            ctx.cancel_token = token
+        prev_ctx_token = ctx.cancel_token
+        # write/patch 必须等工具返回后再 restore；只读/shell 可协作式中断
+        run_cancel = token if name not in ("write_file", "patch_file") else None
+        ctx.cancel_token = token
         try:
+            from agent_runtime.cancellation import CancelledError
             from agent_runtime.tool_timeout import ToolTimeoutError, run_with_timeout
 
             result_text = run_with_timeout(
                 lambda: tool_spec["run"](args),
                 timeout_s=timeout_s,
+                cancel_token=run_cancel,
+            )
+        except CancelledError:
+            return ToolExecutionResult(
+                content=f"Error: 工具 '{name}' 执行已取消。",
+                metadata=build_executor_cancel_metadata(),
             )
         except ToolTimeoutError as e:
             return ToolExecutionResult(
@@ -188,12 +189,7 @@ class ToolExecutor:
                 metadata=build_executor_error_metadata(),
             )
         finally:
-            if token is not None:
-                if prev_ctx_token is None:
-                    if hasattr(ctx, "cancel_token"):
-                        delattr(ctx, "cancel_token")
-                else:
-                    ctx.cancel_token = prev_ctx_token
+            ctx.cancel_token = prev_ctx_token
 
         # ---- Gate 9 续: 执行后快照对比 ----
         metadata = {"tool_status": "success"}
@@ -231,6 +227,13 @@ class ToolExecutor:
         return ToolExecutionResult(
             content=content,
             metadata=build_executor_rejection_metadata(gate_id, tool_error_code, **extra),
+        )
+
+    def _rejected_cancel(self, content: str, **extra) -> ToolExecutionResult:
+        """用户 cancel 导致的拒绝（rejection_layer=cancel）。"""
+        return ToolExecutionResult(
+            content=content,
+            metadata=build_executor_cancel_metadata(**extra),
         )
 
     def _validate_path_args(self, args) -> ToolExecutionResult | None:

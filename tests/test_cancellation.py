@@ -70,20 +70,16 @@ class TestRunWithCancellation:
 class TestReplCancel:
     def test_cancel_active_task(self):
         from agent_runtime.repl_cancel import (
-            ReplCancelSession,
             cancel_active_repl_task,
             has_active_repl_task,
+            repl_cancel_scope,
         )
 
         token = CancellationToken()
-        session = ReplCancelSession(token)
-        session.install()
-        try:
+        with repl_cancel_scope(token):
             assert has_active_repl_task()
             assert cancel_active_repl_task()
             assert token.is_cancelled
-        finally:
-            session.restore()
         assert not has_active_repl_task()
         assert not cancel_active_repl_task()
 
@@ -282,7 +278,7 @@ class TestSandboxVerifyCancel:
 
     def test_execute_kills_container_on_cancel(self, monkeypatch):
         from agent_runtime.cancellation import CancellationToken
-        from src.harness.sandbox_manager import Sandbox, SandboxManager
+        from src.harness.sandbox_manager import EXEC_USER_CANCEL_EXIT_CODE, Sandbox, SandboxManager
 
         token = CancellationToken()
         killed = []
@@ -314,8 +310,8 @@ class TestSandboxVerifyCancel:
         result = mgr.execute(Sandbox(id="abc", profile="python"), "sleep 99", timeout=30, cancel_token=token)
         elapsed = time.time() - t0
         assert killed == [True]
-        assert result.exit_code == -1
-        assert "cancel" in result.stderr.lower()
+        assert result.cancelled is True
+        assert result.exit_code == EXEC_USER_CANCEL_EXIT_CODE
         assert elapsed < 2.0
 
 
@@ -357,6 +353,7 @@ class TestGate7Cancel:
         result = executor.execute("write_file", {"path": "x.txt", "content": "y"})
         assert result.metadata["tool_status"] == "rejected"
         assert result.metadata["tool_error_code"] == "cancelled"
+        assert result.metadata["rejection_layer"] == "cancel"
         assert agent.cancel_token.is_cancelled
 
 

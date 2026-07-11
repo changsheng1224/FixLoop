@@ -11,6 +11,7 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
+from contextlib import contextmanager
 from pathlib import Path
 
 import yaml
@@ -110,11 +111,9 @@ class Orchestrator(RepairPipelineMixin):
 
         state = RepairState(issue_input=issue, max_retries=max_retries)
         token = cancel_token or CancellationToken()
-        self._cancel_token = token
-        self._bind_cancel_token(token)
         initial_snapshot = self._snapshot_repo()
 
-        try:
+        with self._repair_cancel_scope(token):
             if repair_timeout_s <= 0:
                 return self._repair_impl(state, initial_snapshot=initial_snapshot)
 
@@ -125,15 +124,31 @@ class Orchestrator(RepairPipelineMixin):
                 except FuturesTimeoutError:
                     from src.repair.termination import RepairTerminalStatus, finalize_repair_state
 
+                    token.cancel("timeout")
+                    self._restore_repo_snapshot(initial_snapshot)
                     state.status = RepairTerminalStatus.TIMEOUT
-                    state.agent_errors["orchestrator"] = f"repair timeout ({repair_timeout_s}s)"
+                    state.agent_errors["orchestrator"] = (
+                        f"repair timeout ({repair_timeout_s}s)"
+                    )
                     state.node_timings["repair_timeout"] = repair_timeout_s
                     log.warning("修复超时 (%ds)", repair_timeout_s)
                     finalize_repair_state(state)
                     return state
+
+    @contextmanager
+    def _repair_cancel_scope(self, token):
+        """绑定 cancel token 到子 Agent，退出时解绑。"""
+        self._cancel_token = token
+        self._bind_cancel_token(token)
+        try:
+            yield
         finally:
             self._unbind_cancel_token()
             self._cancel_token = None
+
+    def _abort_repair_if_cancelled(self, state: RepairState) -> bool:
+        """若用户已 cancel 则返回 True（由 pipeline finally 负责 restore）。"""
+        return self._is_repair_cancelled()
 
     def _bind_cancel_token(self, token) -> None:
         for agent in (self.localizer, self.retriever, self.patcher):
