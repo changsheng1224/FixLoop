@@ -136,3 +136,67 @@ class TestMetricsHttpEndpoint:
         with urllib.request.urlopen(req) as resp:
             assert resp.status == 200
         assert "test_counter" not in get_registry().render()
+
+
+class TestGrafanaDashboard:
+    """Grafana dashboard JSON 结构验证。"""
+
+    def test_dashboard_json_is_valid(self):
+        import json
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parent.parent / "assets" / "grafana-dashboard.json"
+        assert path.is_file(), f"Dashboard file not found: {path}"
+        try:
+            dashboard = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            pytest.fail(f"Invalid JSON: {exc}")
+
+        assert dashboard.get("title") == "FixLoop — Multi-Agent Repair Metrics"
+        assert dashboard.get("schemaVersion") == 27
+        assert dashboard.get("templating") is not None
+        templating = dashboard["templating"].get("list", [])
+        datasource_var = next((v for v in templating if v.get("name") == "datasource"), None)
+        assert datasource_var is not None, "Missing 'datasource' template variable"
+        assert datasource_var["type"] == "prometheus"
+
+        panels = dashboard.get("panels", [])
+        assert len(panels) == 6, f"Expected 6 panels, got {len(panels)}"
+
+        panel_types = {p["type"] for p in panels}
+        assert "stat" in panel_types
+        assert "gauge" in panel_types
+        assert "bargauge" in panel_types
+        assert "piechart" in panel_types
+
+        for panel in panels:
+            assert panel.get("id") is not None
+            assert panel.get("title")
+            assert panel.get("targets")
+            assert len(panel["targets"]) > 0
+
+    def test_all_metrics_have_panel_coverage(self):
+        """每个 Prometheus 指标至少有 1 个面板引用。"""
+        import json
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parent.parent / "assets" / "grafana-dashboard.json"
+        dashboard = json.loads(path.read_text(encoding="utf-8"))
+
+        all_exprs: list[str] = []
+        for panel in dashboard["panels"]:
+            for target in panel.get("targets", []):
+                expr = target.get("expr", "")
+                if expr:
+                    all_exprs.append(expr)
+
+        covered = {e.split("{")[0].strip() for e in all_exprs}
+        expected = {
+            "fixloop_repair_status",
+            "fixloop_repair_phase_ms",
+            "fixloop_tool_steps_total",
+            "fixloop_token_usage_total",
+            "fixloop_cache_hit_rate",
+        }
+        missing = expected - covered
+        assert not missing, f"Metrics without panel coverage: {missing}"
