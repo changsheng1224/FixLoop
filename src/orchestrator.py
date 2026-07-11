@@ -69,12 +69,14 @@ class Orchestrator(RepairPipelineMixin):
         verifier=None,
         *,
         use_pytest_verify: bool = False,
+        l1_prompt_cache_key: str = "",
     ):
         self.localizer = localizer
         self.retriever = retriever
         self.patcher = patcher
         self.verifier = verifier
         self.use_pytest_verify = use_pytest_verify
+        self.l1_prompt_cache_key = l1_prompt_cache_key or self._resolve_l1_prompt_cache_key()
         self._repair_tracer = None
         self._log_run_id_token = None
         # 修复目标目录：优先 --repo / Agent cwd，而非 git 顶层仓库
@@ -86,6 +88,27 @@ class Orchestrator(RepairPipelineMixin):
                 or localizer.workspace.repo_root
                 or self._repo_root
             )
+
+    @staticmethod
+    def _resolve_l1_prompt_cache_key_from_agents(*agents) -> str:
+        hashes = []
+        for agent in agents:
+            if agent is None:
+                continue
+            prefix = getattr(agent, "_prefix", None)
+            if prefix is not None and getattr(prefix, "hash", ""):
+                hashes.append(prefix.hash)
+        if hashes and len(set(hashes)) == 1:
+            return hashes[0]
+        return ""
+
+    def _resolve_l1_prompt_cache_key(self) -> str:
+        return self._resolve_l1_prompt_cache_key_from_agents(
+            self.localizer,
+            self.retriever,
+            self.patcher,
+            self.verifier,
+        )
 
     def repair(
         self,
@@ -341,7 +364,17 @@ class Orchestrator(RepairPipelineMixin):
         from src.repair.run_trace import RepairRunTracer
 
         tracer = RepairRunTracer(self._repo_root)
-        run_id = tracer.begin(state.issue_input)
+        l1_meta = {}
+        if self.l1_prompt_cache_key:
+            l1_meta["l1_prompt_cache_key"] = self.l1_prompt_cache_key
+            ref = self.localizer or self.patcher
+            prefix = getattr(ref, "_prefix", None) if ref is not None else None
+            if prefix is not None:
+                if prefix.tool_signature:
+                    l1_meta["tool_signature"] = prefix.tool_signature
+                if prefix.workspace_fingerprint:
+                    l1_meta["workspace_fingerprint"] = prefix.workspace_fingerprint
+        run_id = tracer.begin(state.issue_input, **l1_meta)
         tracer.bind_agents(self.localizer, self.retriever, self.patcher)
         self._repair_tracer = tracer
         state.repair_run_id = run_id

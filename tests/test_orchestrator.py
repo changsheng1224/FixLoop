@@ -181,6 +181,21 @@ class TestOrchestrator:
         assert "retriever" in agents_seen
         assert "orchestrator" in agents_seen
         assert any(e.get("event") == "prompt_routing" for e in events)
+        started = next(e for e in events if e.get("event") == "repair_started")
+        l1_key = started.get("payload", {}).get("l1_prompt_cache_key")
+        assert l1_key
+        assert len(l1_key) == 64
+        cache_keys = set()
+        for rec in events:
+            if rec.get("event") != "context_built":
+                continue
+            key = (rec.get("payload") or {}).get("prompt_cache_key") or (
+                (rec.get("payload") or {}).get("prefix_hashes") or {}
+            ).get("cache_key")
+            if key:
+                cache_keys.add(key)
+        if cache_keys:
+            assert cache_keys == {l1_key}
 
         report = json.loads((runs_dir / "report.json").read_text(encoding="utf-8"))
         assert report.get("phases", {}).get("repair_total_ms", 0) > 0

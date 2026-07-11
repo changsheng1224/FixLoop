@@ -7,12 +7,15 @@ from pathlib import Path
 from typing import TypeVar
 
 from agent_runtime.bootstrap import create_model_client, load_dotenv
+from agent_runtime.prompt_prefix import build_repair_l1_prefix
+from agent_runtime.tool_context import ToolContext
 from agent_runtime.workspace import WorkspaceContext
 from src.agents.localizer import create_localizer
 from src.agents.patcher import create_patcher
 from src.agents.retriever import create_retriever
 from src.agents.verifier import create_verifier
 from src.orchestrator import Orchestrator
+from src.tools.composite import build_repair_canonical_tools
 
 O = TypeVar("O", bound=Orchestrator)
 
@@ -25,7 +28,7 @@ __all__ = [
 ]
 
 
-def try_create_verifier(client, ws, repo: str):
+def try_create_verifier(client, ws, repo: str, **agent_kw):
     """Docker 探针就绪时创建 Verifier Agent，否则返回 None。"""
     import sys
 
@@ -37,7 +40,7 @@ def try_create_verifier(client, ws, repo: str):
         print(f"[repair_factory] sandbox health probe failed: {detail}", file=sys.stderr)
         return None
     try:
-        return create_verifier(client, ws, cwd=repo)
+        return create_verifier(client, ws, cwd=repo, **agent_kw)
     except Exception:
         return None
 
@@ -54,17 +57,28 @@ def wire_orchestrator(
     """装配 Localizer / Retriever / Patcher / 可选 Verifier。"""
     ws = WorkspaceContext.build(repo_path)
     repo = str(Path(repo_path).resolve())
-    localizer = create_localizer(client, ws, cwd=repo)
-    retriever = create_retriever(client, ws, cwd=repo) if with_retriever else None
-    patcher = create_patcher(client, ws, cwd=repo)
-    if dry_run:
-        localizer.dry_run = True
-        if retriever is not None:
-            retriever.dry_run = True
-        patcher.dry_run = True
-    orch = orch_class(localizer, retriever, patcher, use_pytest_verify=not skip_verify)
+    ctx = ToolContext(root=repo)
+    tools = build_repair_canonical_tools(ctx)
+    l1 = build_repair_l1_prefix(
+        ws,
+        tools,
+        dry_run=dry_run,
+        approval="auto",
+        repo_root=repo,
+    )
+    agent_kw = {"l1_prefix": l1, "dry_run": dry_run}
+    localizer = create_localizer(client, ws, cwd=repo, **agent_kw)
+    retriever = create_retriever(client, ws, cwd=repo, **agent_kw) if with_retriever else None
+    patcher = create_patcher(client, ws, cwd=repo, **agent_kw)
+    orch = orch_class(
+        localizer,
+        retriever,
+        patcher,
+        use_pytest_verify=not skip_verify,
+        l1_prompt_cache_key=l1.hash,
+    )
     if not skip_verify:
-        verifier = try_create_verifier(client, ws, repo)
+        verifier = try_create_verifier(client, ws, repo, **agent_kw)
         if verifier:
             orch.verifier = verifier
     return orch

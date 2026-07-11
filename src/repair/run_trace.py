@@ -20,13 +20,15 @@ class RepairRunTracer:
             self._store = RunStore(self.repo_root)
         return self._store
 
-    def begin(self, issue: str) -> str:
+    def begin(self, issue: str, **extra: str) -> str:
         self.run_id = new_run_id()
         self.store.start_run_by_id(self.run_id)
+        payload = {"issue_preview": issue[:300]}
+        payload.update({k: v for k, v in extra.items() if v})
         self.emit(
             "orchestrator",
             "repair_started",
-            {"issue_preview": issue[:300]},
+            payload,
         )
         return self.run_id
 
