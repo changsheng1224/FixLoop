@@ -466,3 +466,8 @@ class TestTtftObservability:
         assert "tool_steps" in rs
         assert rs["model_attempts"] >= 1
         assert rs["tool_steps"] >= 0
+
+        qu = data.get("quota_usage")
+        assert qu is not None, "report.json missing quota_usage"
+        assert qu["total"]["used"] >= 0
+        assert qu["total"]["limit"] == 50

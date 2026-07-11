@@ -474,6 +474,14 @@ class QuotaEnforcer:
             f"total {cnt['total']}/{lim['total']}"
         )
 
+    def quota_summary(self) -> dict:
+        """返回结构化配额使用数据（供 report.json）。"""
+        return {
+            "writes": {"used": self._counts["write"], "limit": self._limits["write"]},
+            "shell": {"used": self._counts["shell"], "limit": self._limits["shell"]},
+            "total": {"used": self._counts["total"], "limit": self._limits["total"]},
+        }
+
 
 def _sha256_file(path: Path) -> str:
     """计算文件的 SHA256 哈希。"""

@@ -843,6 +843,11 @@ class AgentLoop:
                     "model_attempts": ts.attempts,
                     "tool_steps": ts.tool_steps,
                 },
+                "quota_usage": (
+                    self.agent.quota.quota_summary()
+                    if getattr(self.agent, "quota", None)
+                    else {}
+                ),
                 **report_token,
                 **report_latency,
                 **ts.rejection_report_fields(),
