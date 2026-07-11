@@ -780,7 +780,8 @@ class Orchestrator(RepairPipelineMixin):
         plan: RepairPlan | None = None,
         issue: str = "",
     ) -> tuple[str, dict]:
-        variables, render = assemble_patcher_variables(
+        blackboard = getattr(self, "_blackboard", None)
+        variables, render, subscribe_meta = assemble_patcher_variables(
             suspects=suspects,
             context=context,
             feedback=feedback,
@@ -789,7 +790,14 @@ class Orchestrator(RepairPipelineMixin):
             read_snippet=self._read_code_snippet,
             read_test_context=self._read_test_context,
             fallback_suspects=self._fallback_suspects_from_plan,
+            blackboard=blackboard,
         )
+        if subscribe_meta and self._repair_tracer is not None:
+            self._repair_tracer.emit(
+                "orchestrator",
+                "blackboard_prefix_subscribed",
+                subscribe_meta,
+            )
         self._emit_skill_hint_trace("patcher", render)
         return render_repair_task("patcher", variables)
 

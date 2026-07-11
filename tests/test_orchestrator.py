@@ -250,6 +250,7 @@ class TestOrchestrator:
         event_names = {e.get("event") for e in events}
         assert "blackboard_written" in event_names
         assert "blackboard_merge_for_patch" in event_names
+        assert "blackboard_prefix_subscribed" in event_names
         assert "blackboard_snapshot" in event_names
 
         report = json.loads((runs_dir / "report.json").read_text(encoding="utf-8"))

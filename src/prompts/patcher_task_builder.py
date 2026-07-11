@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import Callable
 
+from src.blackboard import Blackboard
 from src.prompts.repair_tasks import build_patcher_variables
+from src.repair.blackboard_merge import read_suspects_from_blackboard
+from src.repair.blackboard_subscribe import render_patcher_prefix_blocks
 from src.repair.prompt_router import collect_patcher_user_hints, is_composite_multi_file
 from src.skills.skill_block import SkillBlockRender, render_skill_hint_for_plan
 from src.state import RepairPlan, RetrievedContext, SuspectLocation
@@ -14,6 +17,25 @@ __all__ = ["assemble_patcher_variables", "build_issue_hints"]
 
 def build_issue_hints(plan: RepairPlan | None, issue: str) -> list[str]:
     return collect_patcher_user_hints(plan, issue)
+
+
+def _build_suspects_block_manual(
+    effective_suspects: list[SuspectLocation],
+    read_snippet: Callable[[str, int, int], str],
+) -> str:
+    if not effective_suspects:
+        return ""
+    lines = ["嫌疑位置（代码已预读，无需再调用 read_file）:"]
+    for suspect in effective_suspects:
+        if not suspect.file_path:
+            continue
+        lines.append(f"  - {suspect.file_path}:{suspect.start_line} ({suspect.reason})")
+        snippet = read_snippet(suspect.file_path, suspect.start_line, suspect.end_line)
+        if snippet:
+            lines.append(snippet)
+        else:
+            lines.append(f"    ⚠ 文件不存在: {suspect.file_path}")
+    return "\n".join(lines)
 
 
 def assemble_patcher_variables(
@@ -30,27 +52,51 @@ def assemble_patcher_variables(
     ],
     fallback_suspects: Callable[[RepairPlan, str], list[SuspectLocation]],
     skill_render: SkillBlockRender | None = None,
-) -> tuple[dict[str, str], SkillBlockRender]:
-    effective_suspects = suspects or (
-        fallback_suspects(plan, issue) if plan else []
-    )
+    blackboard: Blackboard | None = None,
+) -> tuple[dict[str, str], SkillBlockRender, dict | None]:
+    subscribe_meta: dict | None = None
+
+    if blackboard is not None:
+        prefix_blocks = render_patcher_prefix_blocks(
+            blackboard,
+            read_snippet=read_snippet,
+            read_test_context=read_test_context,
+            plan=plan,
+        )
+        effective_suspects = read_suspects_from_blackboard(blackboard)
+        if not effective_suspects and plan:
+            effective_suspects = fallback_suspects(plan, issue)
+
+        suspects_block = prefix_blocks.suspects_block
+        if not suspects_block:
+            suspects_block = _build_suspects_block_manual(effective_suspects, read_snippet)
+
+        test_text = prefix_blocks.test_blocks
+        if not test_text:
+            test_blocks = read_test_context(context, effective_suspects, plan)
+            if test_blocks:
+                test_text = "相关测试文件（补丁必须通过这些 assert）:\n" + "\n".join(test_blocks)
+
+        if prefix_blocks.scratch_block and not feedback:
+            feedback = prefix_blocks.scratch_block
+
+        subscribe_meta = {
+            "subscribed_prefixes": prefix_blocks.subscribed_prefixes,
+            "entry_counts": prefix_blocks.entry_counts,
+        }
+    else:
+        effective_suspects = suspects or (
+            fallback_suspects(plan, issue) if plan else []
+        )
+        suspects_block = _build_suspects_block_manual(effective_suspects, read_snippet)
+        test_blocks = read_test_context(context, effective_suspects, plan)
+        test_text = ""
+        if test_blocks:
+            test_text = "相关测试文件（补丁必须通过这些 assert）:\n" + "\n".join(test_blocks)
 
     allowed_files_line = ""
     if plan and plan.suspect_files:
         allowed_files_line = f"只允许修改以下文件: {', '.join(plan.suspect_files)}"
-
-    suspects_lines: list[str] = []
-    if effective_suspects:
-        suspects_lines.append("嫌疑位置（代码已预读，无需再调用 read_file）:")
-        for s in effective_suspects:
-            if not s.file_path:
-                continue
-            suspects_lines.append(f"  - {s.file_path}:{s.start_line} ({s.reason})")
-            snippet = read_snippet(s.file_path, s.start_line, s.end_line)
-            if snippet:
-                suspects_lines.append(snippet)
-            else:
-                suspects_lines.append(f"    ⚠ 文件不存在: {s.file_path}")
 
     extra_lines: list[str] = []
     if is_composite_multi_file(plan):
@@ -65,11 +111,6 @@ def assemble_patcher_variables(
                     extra_lines.append(f"  - {fp}")
                     extra_lines.append(snippet)
 
-    test_blocks = read_test_context(context, effective_suspects, plan)
-    test_text = ""
-    if test_blocks:
-        test_text = "相关测试文件（补丁必须通过这些 assert）:\n" + "\n".join(test_blocks)
-
     render = render_skill_hint_for_plan(plan, "patcher") if plan else SkillBlockRender(
         text="", role="patcher", source="none"
     )
@@ -80,8 +121,8 @@ def assemble_patcher_variables(
         issue_hints_block="\n".join(build_issue_hints(plan, issue)),
         skill_hint_block=render.text,
         allowed_files_line=allowed_files_line,
-        suspects_block="\n".join(suspects_lines),
+        suspects_block=suspects_block,
         extra_files_block="\n".join(extra_lines),
         test_blocks=test_text,
     )
-    return variables, render
+    return variables, render, subscribe_meta
