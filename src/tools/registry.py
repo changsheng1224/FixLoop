@@ -4,6 +4,7 @@
 """
 
 from agent_runtime.schema_utils import auto_schema
+from agent_runtime.tools import TIER_HOST
 from src.tools.ast_parser import AstParseArgs, ast_parse
 from src.tools.find_test import FindTestArgs, find_test_for_function
 from src.tools.git_tools import (
@@ -30,6 +31,7 @@ def build_repair_tools(context) -> dict:
     registry["ast_parse"] = {
         "schema": auto_schema(AstParseArgs),
         "risky": False,
+        "execution_tier": TIER_HOST,
         "description": "解析 Python 文件为结构化函数/类/方法列表（排除注释）。参数: path",
         "run": lambda args: ast_parse(context, args),
     }
@@ -38,6 +40,7 @@ def build_repair_tools(context) -> dict:
     registry["stack_parse"] = {
         "schema": auto_schema(StackParseArgs),
         "risky": False,
+        "execution_tier": TIER_HOST,
         "description": "解析 Python Traceback 为结构化数据。参数: traceback",
         "run": lambda args: stack_parse(context, args),
     }
@@ -46,6 +49,7 @@ def build_repair_tools(context) -> dict:
     registry["git_blame"] = {
         "schema": auto_schema(GitBlameArgs),
         "risky": False,
+        "execution_tier": TIER_HOST,
         "description": "查看指定文件指定行的最后修改者。参数: file, line",
         "run": lambda args: git_blame(context, args),
     }
@@ -54,6 +58,7 @@ def build_repair_tools(context) -> dict:
     registry["git_diff"] = {
         "schema": auto_schema(GitDiffArgs),
         "risky": False,
+        "execution_tier": TIER_HOST,
         "description": "查看两个 commit 之间的文件级差异。参数: commit_a, commit_b, path",
         "run": lambda args: git_diff(context, args),
     }
@@ -62,6 +67,7 @@ def build_repair_tools(context) -> dict:
     registry["find_test"] = {
         "schema": auto_schema(FindTestArgs),
         "risky": False,
+        "execution_tier": TIER_HOST,
         "description": "定位函数的对应测试文件与用例。参数: function_name, file_path",
         "run": lambda args: find_test_for_function(context, args),
     }

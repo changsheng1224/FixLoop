@@ -193,6 +193,9 @@ class ToolExecutor:
 
         # ---- Gate 9 续: 执行后快照对比 ----
         metadata = {"tool_status": "success"}
+        execution_tier = tool_spec.get("execution_tier", "host")
+        if execution_tier:
+            metadata["execution_tier"] = execution_tier
         if gate7_meta:
             metadata.update(gate7_meta)
         if patch_preview_meta:

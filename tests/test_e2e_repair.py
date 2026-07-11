@@ -146,6 +146,11 @@ class TestEdgeCases:
         (temp_workspace / "calc.py").write_text("x = 1\n")
         orch = self._orch_with_patches(ws, temp_workspace)
 
+        monkeypatch.setattr(
+            "src.harness.sandbox_verify.assert_sandbox_available",
+            lambda: None,
+        )
+
         def _boom(*_a, **_kw):
             raise RuntimeError("sandbox timeout")
 

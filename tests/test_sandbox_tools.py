@@ -3,6 +3,8 @@
 import json
 from unittest.mock import MagicMock
 
+import pytest
+
 from agent_runtime.tool_context import ToolContext
 from src.harness.sandbox_manager import ExecResult, Sandbox
 from src.state import VerificationResult
@@ -12,6 +14,14 @@ from src.tools.sandbox_tools import (
     sandbox_test,
     sandbox_verify,
 )
+
+
+def _patch_sandbox_available(monkeypatch):
+    """Mock assert_sandbox_available 为 no-op（sandbox 测试不需要真实 Docker）。"""
+    monkeypatch.setattr(
+        "src.harness.sandbox_verify.assert_sandbox_available",
+        lambda: None,
+    )
 
 
 class TestSandboxToolsValidation:
@@ -92,6 +102,7 @@ class TestSandboxToolsMocked:
 
     def test_run_sandbox_verification_tar_limit_returns_failure(self, monkeypatch, tmp_path):
         (tmp_path / "big.bin").write_bytes(b"x" * 500)
+        _patch_sandbox_available(monkeypatch)
         import src.harness.sandbox_tar as sandbox_tar_mod
 
         original_max = sandbox_tar_mod.sandbox_tar_max_bytes
@@ -109,6 +120,7 @@ class TestSandboxToolsMocked:
             '[project]\nname="t"\ndependencies=["requests"]\n',
             encoding="utf-8",
         )
+        _patch_sandbox_available(monkeypatch)
         fake_mgr = MagicMock()
         fake_mgr.create.return_value = Sandbox(id="sb-timeout", profile="python")
         fake_mgr.execute.return_value = ExecResult(-1, "", "timeout after 600s")
@@ -127,6 +139,7 @@ class TestSandboxToolsMocked:
             '[project]\nname="t"\ndependencies=["requests"]\n',
             encoding="utf-8",
         )
+        _patch_sandbox_available(monkeypatch)
         fake_mgr = MagicMock()
         fake_mgr.create.return_value = Sandbox(id="sb-fail", profile="python")
         fake_mgr.execute.return_value = ExecResult(1, "pip error output", "")
@@ -139,3 +152,44 @@ class TestSandboxToolsMocked:
         assert "sandbox pip install failed: exit_code=1" in result.failure_logs[0]
         assert timings["pytest_ms"] == 0
         assert fake_mgr.execute.call_count == 1
+
+
+class TestSandboxExecutionTier:
+    """sandbox 工具 execution_tier 声明与体检。"""
+
+    def test_sandbox_tools_have_container_tier(self):
+        from src.tools.sandbox_tools import build_sandbox_tool_registry
+
+        ctx = ToolContext(root=".")
+        registry = build_sandbox_tool_registry(ctx)
+        for name in ("sandbox_build", "sandbox_test", "sandbox_verify"):
+            spec = registry.get(name)
+            assert spec is not None, f"missing tool: {name}"
+            assert spec.get("execution_tier") == "container", (
+                f"{name} should be container tier"
+            )
+
+    def test_assert_sandbox_available_raises_when_docker_missing(self, monkeypatch):
+        from src.harness.sandbox_verify import SandboxNotAvailableError, assert_sandbox_available
+
+        # 强制 import docker 时失败
+        import builtins
+
+        real_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "docker":
+                raise ImportError("No module named 'docker'")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+        with pytest.raises(SandboxNotAvailableError):
+            assert_sandbox_available()
+
+    def test_sandbox_not_available_error_message(self):
+        from src.harness.sandbox_verify import SandboxNotAvailableError
+
+        exc = SandboxNotAvailableError("Docker daemon not running")
+        assert "Docker sandbox 不可用" in str(exc)
+        assert "Docker daemon not running" in str(exc)
+        assert exc.reason == "Docker daemon not running"

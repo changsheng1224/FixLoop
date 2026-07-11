@@ -96,3 +96,11 @@ class TestRepairRegistry:
         registry = build_repair_tools(ctx)
         r = registry["ast_parse"]["run"]({"path": "README.md"})
         assert isinstance(r, str)
+
+    def test_all_repair_tools_are_host_tier(self, temp_workspace):
+        ctx = ToolContext(root=str(temp_workspace))
+        registry = build_repair_tools(ctx)
+        for name in ("ast_parse", "stack_parse", "git_blame", "git_diff", "find_test"):
+            spec = registry.get(name)
+            assert spec is not None
+            assert spec.get("execution_tier") == "host", f"{name} should be host tier"
