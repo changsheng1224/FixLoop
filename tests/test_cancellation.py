@@ -1,8 +1,15 @@
 """CancellationToken 与 TaskState 用户取消单测。"""
 
+import threading
+import time
+
 import pytest
 
-from agent_runtime.cancellation import CancelledError, CancellationToken
+from agent_runtime.cancellation import (
+    CancelledError,
+    CancellationToken,
+    run_with_cancellation,
+)
 from agent_runtime.config import AgentConfig
 from agent_runtime.providers.clients import FakeModelClient
 from agent_runtime.runtime import Agent
@@ -35,6 +42,78 @@ class TestCancellationToken:
         token.cancel()
         with pytest.raises(CancelledError):
             token.check()
+
+
+class TestRunWithCancellation:
+    def test_aborts_when_already_cancelled(self):
+        token = CancellationToken()
+        token.cancel()
+        with pytest.raises(CancelledError):
+            run_with_cancellation(lambda: "x", token, poll_interval=0.01)
+
+    def test_aborts_during_blocking_call(self):
+        token = CancellationToken()
+
+        def slow():
+            time.sleep(1.0)
+            return "done"
+
+        def cancel_soon():
+            time.sleep(0.05)
+            token.cancel()
+
+        threading.Thread(target=cancel_soon, daemon=True).start()
+        with pytest.raises(CancelledError):
+            run_with_cancellation(slow, token, poll_interval=0.02)
+
+
+class TestReplCancel:
+    def test_cancel_active_task(self):
+        from agent_runtime.repl_cancel import (
+            ReplCancelSession,
+            cancel_active_repl_task,
+            has_active_repl_task,
+        )
+
+        token = CancellationToken()
+        session = ReplCancelSession(token)
+        session.install()
+        try:
+            assert has_active_repl_task()
+            assert cancel_active_repl_task()
+            assert token.is_cancelled
+        finally:
+            session.restore()
+        assert not has_active_repl_task()
+        assert not cancel_active_repl_task()
+
+
+class TestOllamaStreamCancel:
+    def test_complete_stream_aborts_on_cancel(self, monkeypatch):
+        from agent_runtime.providers.clients import OllamaModelClient
+
+        token = CancellationToken()
+        lines = [
+            b'{"response":"a","done":false}\n',
+            b'{"response":"b","done":false}\n',
+        ]
+
+        class FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def __iter__(self):
+                for line in lines:
+                    token.cancel()
+                    yield line
+
+        monkeypatch.setattr("urllib.request.urlopen", lambda *args, **kwargs: FakeResp())
+        client = OllamaModelClient()
+        with pytest.raises(CancelledError):
+            client.complete_stream("hello", cancel_token=token)
 
 
 class TestTaskStateUserCancel:

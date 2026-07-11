@@ -14,6 +14,22 @@ from agent_runtime.runtime import Agent
 from agent_runtime.workspace import WorkspaceContext
 
 
+def _ensure_ask_token(agent: Agent):
+    from agent_runtime.cancellation import CancellationToken
+
+    if agent.cancel_token is None or agent.cancel_token.is_cancelled:
+        agent.cancel_token = CancellationToken()
+    return agent.cancel_token
+
+
+def _ask_with_repl_cancel(agent: Agent, user_message: str, callback=None) -> str:
+    from agent_runtime.repl_cancel import repl_cancel_scope
+
+    token = _ensure_ask_token(agent)
+    with repl_cancel_scope(token):
+        return agent.ask(user_message, callback=callback)
+
+
 def _make_parser() -> argparse.ArgumentParser:
     """构建 CLI 参数解析器。默认值来自 AgentConfig。"""
     cfg = AgentConfig()
@@ -116,7 +132,11 @@ def main() -> int:
 
     from agent_runtime.callbacks import CLIProgressCallback
 
-    answer = agent.ask(args.prompt, callback=CLIProgressCallback())
+    try:
+        answer = _ask_with_repl_cancel(agent, args.prompt, callback=CLIProgressCallback())
+    except KeyboardInterrupt:
+        print("\n已取消。", file=sys.stderr)
+        return 130
     print(answer)
     return 0
 
@@ -310,7 +330,15 @@ def _repl_mode(args) -> int:
         from agent_runtime.callbacks import CLIProgressCallback
 
         print("", end="", flush=True)
-        answer = agent.ask(user_input, callback=CLIProgressCallback())
+        try:
+            answer = _ask_with_repl_cancel(
+                agent,
+                user_input,
+                callback=CLIProgressCallback(),
+            )
+        except KeyboardInterrupt:
+            print("\n再见！")
+            return 0
         print(answer)
 
 
@@ -325,10 +353,23 @@ def _handle_command(cmd: str, agent: Agent) -> str:
     if name == "/help":
         print("""可用命令:
   /help     显示此帮助
+  /cancel   取消当前运行中的 ask（运行中请用 Ctrl+C）
   /memory   显示工作记忆（M3 完整实现）
   /session  显示当前会话信息
   /reset    清空对话历史
-  /exit     退出""")
+  /exit     退出
+
+交互:
+  ask 运行中 Ctrl+C  首次取消当前任务
+  再次 Ctrl+C        退出 REPL""")
+    elif name == "/cancel":
+        from agent_runtime.repl_cancel import cancel_active_repl_task, has_active_repl_task
+
+        if has_active_repl_task():
+            cancel_active_repl_task()
+            print("已请求取消当前任务。", file=sys.stderr)
+        else:
+            print("当前没有运行中的任务。", file=sys.stderr)
     elif name == "/memory":
         # M3 接入工作记忆
         print("工作记忆（M3 实现）:")

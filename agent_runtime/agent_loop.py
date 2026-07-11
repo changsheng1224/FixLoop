@@ -23,6 +23,7 @@ from agent_runtime.providers.retry_policy import RateLimitExceededError
 from agent_runtime.react_phases import ReactPhase, ReactPath
 from agent_runtime.step_clock import StepClock, StepTimeoutError
 from agent_runtime.stop_reasons import StopReason
+from agent_runtime.cancellation import CancelledError, run_with_cancellation
 
 
 class CancelledRun(Exception):
@@ -105,7 +106,12 @@ class AgentLoop:
         if token is None or not token.is_cancelled:
             return None
         inflight = in_flight or self._in_flight_tool
-        ts.stop_user_cancel(in_flight=inflight, phase=phase)
+        return self._finish_user_cancel(ts, phase=phase, in_flight=inflight)
+
+    def _finish_user_cancel(self, ts, *, phase: str, in_flight: str = "") -> str:
+        inflight = in_flight or self._in_flight_tool
+        if ts.stop_reason != StopReason.USER_CANCEL.value:
+            ts.stop_user_cancel(in_flight=inflight, phase=phase)
         self._emit(
             "run_cancelled",
             {
@@ -116,6 +122,12 @@ class AgentLoop:
             },
         )
         return self._complete_run(ts, "<final>用户已取消当前任务。</final>")
+
+    def _invoke_model_call(self, fn):
+        token = self._cancel_token
+        if token is None:
+            return fn()
+        return run_with_cancellation(fn, token)
 
     # ---- 停机与 trace 收尾 ----
 
@@ -344,10 +356,12 @@ class AgentLoop:
             "model_request_start",
             {"step": ts.tool_steps + 1, "attempt": ts.attempts},
         )
-        raw = self.agent.circuit_breaker.call(
-            self.agent.model_client.complete,
-            prompt_text,
-            max_new_tokens=self.agent.config.max_new_tokens,
+        raw = self._invoke_model_call(
+            lambda: self.agent.circuit_breaker.call(
+                self.agent.model_client.complete,
+                prompt_text,
+                max_new_tokens=self.agent.config.max_new_tokens,
+            )
         )
         ts.node_timings.setdefault("model_call_ms", 0)
         ts.node_timings["model_call_ms"] += int((_time.time() - t1) * 1000)
@@ -481,14 +495,17 @@ class AgentLoop:
         t0 = _time.time()
         self._emit("model_request_start", {"step": 1, "attempt": 1})
         try:
-            result = self.agent.model_client.chat_with_tools(
-                system_prompt=system_prompt,
-                user_message=user_message,
-                tools=tools_def,
-                executor=executor,
-                max_turns=self.max_steps,
-                phase_hook=phase_hook,
-                step_boundary_hook=after_model,
+            result = self._invoke_model_call(
+                lambda: self.agent.model_client.chat_with_tools(
+                    system_prompt=system_prompt,
+                    user_message=user_message,
+                    tools=tools_def,
+                    executor=executor,
+                    max_turns=self.max_steps,
+                    phase_hook=phase_hook,
+                    step_boundary_hook=after_model,
+                    cancel_token=self._cancel_token,
+                )
             )
             if isinstance(result, tuple):
                 answer, call_usage = result
@@ -503,6 +520,8 @@ class AgentLoop:
             return self._finish_step_timeout(ts, e, clock=step_clock)
         except CancelledRun as e:
             return e.answer
+        except CancelledError:
+            return self._finish_user_cancel(ts, phase="model_wait")
         except Exception as e:
             if (msg := self._stop_for_api_error(ts, e)) is not None:
                 return msg
@@ -550,6 +569,8 @@ class AgentLoop:
 
             try:
                 raw, t1 = self._xml_call_model(ts, prompt_text, step=step)
+            except CancelledError:
+                return self._finish_user_cancel(ts, phase="model_wait")
             except Exception as e:
                 if (msg := self._stop_for_api_error(ts, e)) is not None:
                     return msg

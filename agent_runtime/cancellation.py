@@ -3,8 +3,19 @@
 from __future__ import annotations
 
 import threading
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
+from typing import Callable, TypeVar
 
-__all__ = ["CancelledError", "CancellationToken"]
+T = TypeVar("T")
+
+__all__ = [
+    "CancelledError",
+    "CancellationToken",
+    "run_with_cancellation",
+]
+
+_DEFAULT_POLL_S = 0.05
 
 
 class CancelledError(Exception):
@@ -41,3 +52,28 @@ class CancellationToken:
     def check(self) -> None:
         if self.is_cancelled:
             raise CancelledError(self.reason or "user")
+
+
+def run_with_cancellation(
+    func: Callable[[], T],
+    cancel_token: CancellationToken | None,
+    *,
+    poll_interval: float = _DEFAULT_POLL_S,
+) -> T:
+    """在后台线程执行 *func*，主线程轮询 cancel_token。"""
+    if cancel_token is None:
+        return func()
+    if cancel_token.is_cancelled:
+        cancel_token.check()
+
+    pool = ThreadPoolExecutor(max_workers=1)
+    fut = pool.submit(func)
+    try:
+        while True:
+            try:
+                return fut.result(timeout=poll_interval)
+            except FuturesTimeoutError:
+                if cancel_token.is_cancelled:
+                    cancel_token.check()
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
