@@ -212,3 +212,20 @@ class TestSkillIntegration:
         assert snapshot["matched_skill"] == "python_type_error_fix"
         assert snapshot["suggested_tools"] == ["stack_parse"]
         assert snapshot["skill"]["matched_skill"] == "python_type_error_fix"
+
+    def test_full_match_to_snapshot_pipeline(self):
+        """端到端：match_skill → apply_to_plan → snapshot 串联。"""
+        from src.repair.prompt_router import repair_plan_intent_snapshot
+        from src.state import RepairPlan
+
+        plan = RepairPlan(issue_type="type_error", intent_parser="rule")
+        matched = match_skill("TypeError at calc.py:42")
+        assert matched is not None
+        matched.apply_to_plan(plan)
+
+        snap = repair_plan_intent_snapshot(plan)
+        assert snap["matched_skill"] == "python_type_error_fix"
+        assert snap["skill_confidence"] > 0
+        assert snap["intent_parser"] == "rule"
+        assert snap["issue_type"] == "type_error"
+        assert "stack_parse" in snap["suggested_tools"]
