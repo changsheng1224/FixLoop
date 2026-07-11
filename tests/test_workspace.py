@@ -91,3 +91,89 @@ class TestDocLoading:
         assert "README.md" not in ws.doc_contents
         # pyproject.toml 仍应存在
         assert "pyproject.toml" in ws.doc_contents
+
+
+class TestWorkspaceFingerprintDenoise:
+    """fingerprint() 使用 dirty file-set content hash，与 text() 展示解耦。"""
+
+    def test_fingerprint_changes_when_tracked_content_changes(self, temp_workspace):
+        ws_before = WorkspaceContext.build(str(temp_workspace))
+        before = ws_before.fingerprint()
+
+        readme = temp_workspace / "README.md"
+        readme.write_text(readme.read_text() + "\n# extra line\n")
+
+        ws_after = WorkspaceContext.build(str(temp_workspace))
+        assert ws_after.fingerprint() != before
+
+    def test_fingerprint_stable_when_content_restored(self, temp_workspace):
+        readme = temp_workspace / "README.md"
+        original = readme.read_text()
+        ws_clean = WorkspaceContext.build(str(temp_workspace))
+        clean_fp = ws_clean.fingerprint()
+
+        readme.write_text(original + "\ntemporary\n")
+        WorkspaceContext.build(str(temp_workspace))
+
+        readme.write_text(original)
+        ws_restored = WorkspaceContext.build(str(temp_workspace))
+        assert ws_restored.fingerprint() == clean_fp
+
+    def test_fingerprint_ignores_excluded_untracked_paths(self, temp_workspace):
+        ws_clean = WorkspaceContext.build(str(temp_workspace))
+        clean_fp = ws_clean.fingerprint()
+
+        agent_dir = temp_workspace / ".agent" / "runs" / "demo"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "trace.jsonl").write_text('{"event":"test"}\n')
+        (temp_workspace / "__pycache__").mkdir()
+        (temp_workspace / "__pycache__" / "mod.pyc").write_bytes(b"\x00\x01")
+
+        ws_noise = WorkspaceContext.build(str(temp_workspace))
+        assert ws_noise.fingerprint() == clean_fp
+
+    def test_fingerprint_detects_real_untracked_file(self, temp_workspace):
+        ws_before = WorkspaceContext.build(str(temp_workspace))
+        before = ws_before.fingerprint()
+        (temp_workspace / "scratch.py").write_text("x = 1\n")
+        ws_after = WorkspaceContext.build(str(temp_workspace))
+        assert ws_after.fingerprint() != before
+
+    def test_fingerprint_not_tied_to_recent_commits_text(self, temp_workspace):
+        import subprocess
+
+        ws_before = WorkspaceContext.build(str(temp_workspace))
+        before = ws_before.fingerprint()
+        assert ws_before.recent_commits
+
+        (temp_workspace / "note.txt").write_text("note\n")
+        subprocess.run(
+            ["git", "add", "note.txt"],
+            cwd=str(temp_workspace),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "add note"],
+            cwd=str(temp_workspace),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        ws_after = WorkspaceContext.build(str(temp_workspace))
+        assert ws_after.recent_commits != ws_before.recent_commits
+        assert ws_after.fingerprint() != before
+
+    def test_fingerprint_uses_full_doc_hash_not_preview(self, temp_workspace):
+        ws_before = WorkspaceContext.build(str(temp_workspace))
+        before = ws_before.fingerprint()
+
+        readme = temp_workspace / "README.md"
+        # Change beyond the 200-char preview window used in text()
+        readme.write_text(readme.read_text() + ("x" * 250) + "\n")
+
+        ws_after = WorkspaceContext.build(str(temp_workspace))
+        assert ws_after.fingerprint() != before
+
