@@ -84,6 +84,44 @@ class AgentLoop:
         self._in_flight_tool = ""
         self._tier_counts: dict[str, int] = {}
         self._tier_tools: dict[str, dict[str, int]] = {"host": {}, "container": {}}
+        self._context_section_totals: dict[str, int] = {}
+        self._context_built_count = 0
+        self._context_cut_count = 0
+        self._last_cache_key = ""
+        self._cache_key_changes = 0
+
+    def _accumulate_context_stats(self, meta: dict) -> None:
+        """从 context_built metadata 累积 section 统计 + cache hit rate。"""
+        self._context_built_count += 1
+        sections = meta.get("sections") or meta.get("context_sections") or {}
+        for name, tokens in sections.items():
+            try:
+                self._context_section_totals[name] = (
+                    self._context_section_totals.get(name, 0) + int(tokens)
+                )
+            except (ValueError, TypeError):
+                pass
+        cuts = meta.get("cuts") or []
+        self._context_cut_count += len(cuts)
+        cache_key = str(meta.get("prompt_cache_key", "") or "")
+        if self._last_cache_key and cache_key != self._last_cache_key:
+            self._cache_key_changes += 1
+        self._last_cache_key = cache_key
+
+    def _build_context_summary(self) -> dict:
+        """构建 report.json 中的 context_summary 字段。"""
+        build_count = self._context_built_count
+        cache_hit_rate = 0.0
+        if build_count > 0:
+            cache_hit_rate = round(
+                1.0 - (self._cache_key_changes / build_count), 3
+            )
+        return {
+            "sections": dict(self._context_section_totals),
+            "build_count": build_count,
+            "cut_count": self._context_cut_count,
+            "cache_hit_rate": cache_hit_rate,
+        }
 
     @property
     def _cancel_token(self):
@@ -346,6 +384,7 @@ class AgentLoop:
         context_prefix = build_context_prefix(self.agent, token_meta)
         attach_projection_metadata(token_meta, self.agent.session, context_prefix=context_prefix)
         self._last_token_meta = token_meta
+        self._accumulate_context_stats(token_meta)
         self._emit("context_built", build_trace_payload(token_meta))
         self._notify_react_phase(
             ReactPhase.REASONING,
@@ -478,6 +517,7 @@ class AgentLoop:
         )
         self._last_token_meta = budget_meta
         self._last_budget_meta = budget_meta
+        self._accumulate_context_stats(budget_meta)
         self._emit("context_built", build_trace_payload(budget_meta))
         tools_def = _build_anthropic_tools(self.agent.tools)
 
@@ -797,6 +837,7 @@ class AgentLoop:
                     "host_tools": self._tier_tools.get("host", {}),
                     "container_tools": self._tier_tools.get("container", {}),
                 },
+                "context_summary": self._build_context_summary(),
                 **report_token,
                 **report_latency,
                 **ts.rejection_report_fields(),
