@@ -458,3 +458,11 @@ class TestTtftObservability:
         assert isinstance(cs["sections"], dict)
         assert "cache_hit_rate" in cs
         assert 0.0 <= cs["cache_hit_rate"] <= 1.0
+
+        rs = data.get("retry_summary")
+        assert rs is not None, "report.json missing retry_summary"
+        assert "parse_retries" in rs
+        assert "model_attempts" in rs
+        assert "tool_steps" in rs
+        assert rs["model_attempts"] >= 1
+        assert rs["tool_steps"] >= 0

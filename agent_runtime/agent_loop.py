@@ -838,6 +838,11 @@ class AgentLoop:
                     "container_tools": self._tier_tools.get("container", {}),
                 },
                 "context_summary": self._build_context_summary(),
+                "retry_summary": {
+                    "parse_retries": self._retry_count,
+                    "model_attempts": ts.attempts,
+                    "tool_steps": ts.tool_steps,
+                },
                 **report_token,
                 **report_latency,
                 **ts.rejection_report_fields(),
