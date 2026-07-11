@@ -9,6 +9,8 @@ from src.prompts.repair_tasks import build_patcher_variables
 from src.repair.blackboard_merge import read_suspects_from_blackboard
 from src.repair.blackboard_subscribe import render_patcher_prefix_blocks
 from src.repair.prompt_router import collect_patcher_user_hints, is_composite_multi_file
+from src.repair.repair_context_blocks import build_repair_context_blocks
+from src.repair.suspect_blocks import render_suspects_with_snippets
 from src.skills.skill_block import SkillBlockRender, render_skill_hint_for_plan
 from src.state import RepairPlan, RetrievedContext, SuspectLocation
 
@@ -17,25 +19,6 @@ __all__ = ["assemble_patcher_variables", "build_issue_hints"]
 
 def build_issue_hints(plan: RepairPlan | None, issue: str) -> list[str]:
     return collect_patcher_user_hints(plan, issue)
-
-
-def _build_suspects_block_manual(
-    effective_suspects: list[SuspectLocation],
-    read_snippet: Callable[[str, int, int], str],
-) -> str:
-    if not effective_suspects:
-        return ""
-    lines = ["嫌疑位置（代码已预读，无需再调用 read_file）:"]
-    for suspect in effective_suspects:
-        if not suspect.file_path:
-            continue
-        lines.append(f"  - {suspect.file_path}:{suspect.start_line} ({suspect.reason})")
-        snippet = read_snippet(suspect.file_path, suspect.start_line, suspect.end_line)
-        if snippet:
-            lines.append(snippet)
-        else:
-            lines.append(f"    ⚠ 文件不存在: {suspect.file_path}")
-    return "\n".join(lines)
 
 
 def assemble_patcher_variables(
@@ -55,6 +38,7 @@ def assemble_patcher_variables(
     blackboard: Blackboard | None = None,
 ) -> tuple[dict[str, str], SkillBlockRender, dict | None]:
     subscribe_meta: dict | None = None
+    effective_suspects: list[SuspectLocation]
 
     if blackboard is not None:
         prefix_blocks = render_patcher_prefix_blocks(
@@ -69,7 +53,7 @@ def assemble_patcher_variables(
 
         suspects_block = prefix_blocks.suspects_block
         if not suspects_block:
-            suspects_block = _build_suspects_block_manual(effective_suspects, read_snippet)
+            suspects_block, _ = render_suspects_with_snippets(effective_suspects, read_snippet)
 
         test_text = prefix_blocks.test_blocks
         if not test_text:
@@ -88,7 +72,7 @@ def assemble_patcher_variables(
         effective_suspects = suspects or (
             fallback_suspects(plan, issue) if plan else []
         )
-        suspects_block = _build_suspects_block_manual(effective_suspects, read_snippet)
+        suspects_block, _ = render_suspects_with_snippets(effective_suspects, read_snippet)
         test_blocks = read_test_context(context, effective_suspects, plan)
         test_text = ""
         if test_blocks:

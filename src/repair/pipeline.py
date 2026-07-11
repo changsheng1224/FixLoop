@@ -9,25 +9,15 @@ from pathlib import Path
 
 from agent_runtime.logging_setup import get_logger
 from src.eval.runner import run_pytest
+from src.repair.blackboard_mixin import BlackboardMixin
 from src.repair.degrade import run_baseline_fallback, should_degrade_to_baseline
+from src.repair.l2_ask_mixin import L2AskMixin
 from src.repair.termination import (
     RepairTerminalStatus,
     finalize_repair_state,
     mark_fixed_skip_verify,
 )
 from src.repair.output_parsers import parse_retrieved_context, parse_suspect_list
-from src.repair.blackboard_merge import (
-    BLACKBOARD_SCHEMA_VERSION,
-    merge_blackboard_for_patch,
-    write_feedback_to_blackboard,
-    write_localize_phase_to_blackboard,
-)
-from src.repair.l2_binding import (
-    AgentAskRef,
-    bind_l2_context,
-    clear_l2_context,
-    make_repair_task_id,
-)
 from src.repair.phase_clock import PhaseTimeoutError, RepairPhaseClock
 from src.repair.timing_schema import (
     finalize_phases,
@@ -36,6 +26,7 @@ from src.repair.timing_schema import (
     set_repair_total_ms,
 )
 from src.repair.prompt_router import repair_plan_intent_snapshot
+from src.repair.run_context import RepairRunContext
 from src.state import RepairState, RetrievedContext, SuspectLocation
 
 log = get_logger("repair.pipeline")
@@ -46,11 +37,13 @@ def _record_pytest_exit(state: RepairState, repo_root: str, key: str) -> None:
     state.node_timings[key] = code
 
 
-class RepairPipelineMixin:
+class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
     """Orchestrator 修复主循环与 Localizer/Retriever 步骤。"""
 
+    _repair_ctx: RepairRunContext | None
+
     def _make_phase_clock(self) -> RepairPhaseClock | None:
-        config = getattr(self, "_phase_timeout_config", None)
+        config = self._active_repair_ctx().phase_timeout_config
         if config is None or not config.any_enabled():
             return None
         return RepairPhaseClock(config)
@@ -61,20 +54,18 @@ class RepairPipelineMixin:
         initial_snapshot: dict,
         exc: PhaseTimeoutError,
     ) -> None:
-        token = getattr(self, "_cancel_token", None)
-        if token is not None:
-            token.cancel("timeout")
+        ctx = self._active_repair_ctx()
+        if ctx.cancel_token is not None:
+            ctx.cancel_token.cancel("timeout")
         self._restore_repo_snapshot(initial_snapshot)
         state.status = RepairTerminalStatus.TIMEOUT
         state.node_timings["phase_timeout"] = exc.phase
-        config = getattr(self, "_phase_timeout_config", None)
-        if config is not None:
-            state.node_timings["phase_timeout_budgets"] = config.budget_dict()
+        if ctx.phase_timeout_config is not None:
+            state.node_timings["phase_timeout_budgets"] = ctx.phase_timeout_config.budget_dict()
         state.node_timings["phase_timeout_consumed_s"] = exc.consumed_s
         state.agent_errors["orchestrator"] = str(exc)
-        tracer = self._repair_tracer
-        if tracer is not None:
-            tracer.emit(
+        if ctx.repair_tracer is not None:
+            ctx.repair_tracer.emit(
                 "orchestrator",
                 "phase_timeout",
                 {
@@ -84,222 +75,6 @@ class RepairPipelineMixin:
                 },
             )
         log.warning("阶段超时: %s", exc)
-
-    def _l2_elapsed_ms(self) -> int:
-        started = getattr(self, "_repair_started_at", None)
-        if started is None:
-            return 0
-        return int((time.time() - started) * 1000)
-
-    def _begin_l2_agent_ask(
-        self,
-        state: RepairState,
-        agent,
-        *,
-        agent_name: str,
-        phase: str,
-        attempt: int,
-    ) -> str:
-        repair_run_id = state.repair_run_id
-        if not repair_run_id or agent is None:
-            return ""
-        started_ms = self._l2_elapsed_ms()
-        task_id = bind_l2_context(
-            agent,
-            repair_run_id=repair_run_id,
-            agent_name=agent_name,
-            phase=phase,
-            attempt=attempt,
-            started_ms=started_ms,
-        )
-        tracer = self._repair_tracer
-        if tracer is not None:
-            tracer.emit(
-                agent_name,
-                "agent_ask_started",
-                {
-                    "task_id": task_id,
-                    "repair_run_id": repair_run_id,
-                    "l2_agent": agent_name,
-                    "l2_phase": phase,
-                    "l2_attempt": attempt,
-                    "started_ms": started_ms,
-                },
-            )
-        return task_id
-
-    def _finish_l2_agent_ask(
-        self,
-        state: RepairState,
-        agent,
-        *,
-        agent_name: str,
-        phase: str,
-        attempt: int,
-        task_id: str,
-        elapsed_ms: int,
-        stop_reason: str = "",
-        tool_steps: int = 0,
-    ) -> None:
-        if not task_id or not state.repair_run_id:
-            clear_l2_context(agent)
-            return
-        finished_ms = self._l2_elapsed_ms()
-        started_ms = int(getattr(agent, "_l2_ask_started_ms", finished_ms - elapsed_ms))
-        ref = AgentAskRef(
-            agent=agent_name,
-            phase=phase,
-            attempt=int(attempt),
-            task_id=task_id,
-            run_id=state.repair_run_id,
-            started_ms=started_ms,
-            finished_ms=finished_ms,
-            stop_reason=stop_reason,
-            tool_steps=int(tool_steps),
-        )
-        state.agent_asks.append(ref)
-        tracer = self._repair_tracer
-        if tracer is not None:
-            tracer.emit(
-                agent_name,
-                "agent_ask_finished",
-                {
-                    **ref.to_dict(),
-                    "elapsed_ms": elapsed_ms,
-                },
-            )
-        clear_l2_context(agent)
-
-    def _record_l2_synthetic_ask(
-        self,
-        state: RepairState,
-        *,
-        agent_name: str,
-        phase: str,
-        attempt: int,
-        elapsed_ms: int,
-        stop_reason: str = "",
-        tool_steps: int = 0,
-    ) -> str:
-        """Patcher complete_once / Verifier 等非 AgentLoop 路径。"""
-        repair_run_id = state.repair_run_id
-        if not repair_run_id:
-            return ""
-        task_id = make_repair_task_id(repair_run_id, agent_name, attempt)
-        finished_ms = self._l2_elapsed_ms()
-        started_ms = max(0, finished_ms - int(elapsed_ms))
-        ref = AgentAskRef(
-            agent=agent_name,
-            phase=phase,
-            attempt=int(attempt),
-            task_id=task_id,
-            run_id=repair_run_id,
-            started_ms=started_ms,
-            finished_ms=finished_ms,
-            stop_reason=stop_reason,
-            tool_steps=int(tool_steps),
-        )
-        tracer = self._repair_tracer
-        if tracer is not None:
-            payload = {
-                "task_id": task_id,
-                "repair_run_id": repair_run_id,
-                "l2_agent": agent_name,
-                "l2_phase": phase,
-                "l2_attempt": attempt,
-                "started_ms": started_ms,
-                "synthetic": True,
-            }
-            tracer.emit(agent_name, "agent_ask_started", payload)
-            tracer.emit(
-                agent_name,
-                "agent_ask_finished",
-                {**ref.to_dict(), "elapsed_ms": elapsed_ms, "synthetic": True},
-            )
-        state.agent_asks.append(ref)
-        return task_id
-
-    def _init_repair_blackboard(self) -> None:
-        from src.blackboard import Blackboard
-
-        self._blackboard = Blackboard()
-
-    def _write_localize_phase_to_blackboard(
-        self,
-        state: RepairState,
-        suspects: list[SuspectLocation],
-        context: RetrievedContext | None,
-    ) -> dict:
-        """Write localize/retrieve outputs to Blackboard (merge deferred to patch)."""
-        bb = getattr(self, "_blackboard", None)
-        if bb is None:
-            state.suspect_locations = suspects
-            state.retrieved_context = context or RetrievedContext()
-            return {"suspects_written": len(suspects), "context_keys_written": 0}
-
-        write_stats = write_localize_phase_to_blackboard(bb, suspects, context)
-        tracer = self._repair_tracer
-        if tracer is not None:
-            tracer.emit(
-                "orchestrator",
-                "blackboard_written",
-                {**write_stats, "phase": "localize"},
-            )
-            tracer.emit(
-                "orchestrator",
-                "blackboard_snapshot",
-                bb.snapshot(),
-            )
-        return write_stats
-
-    def _merge_blackboard_for_patch(self, state: RepairState) -> dict:
-        """Read Blackboard at patch boundary and materialize into RepairState."""
-        bb = getattr(self, "_blackboard", None)
-        if bb is None:
-            return {}
-
-        merge_meta = merge_blackboard_for_patch(state, bb)
-        tracer = self._repair_tracer
-        if tracer is not None:
-            tracer.emit(
-                "orchestrator",
-                "blackboard_merge_for_patch",
-                {
-                    "suspect_count": merge_meta["suspect_count"],
-                    "context_keys": merge_meta["context_keys"],
-                    "conflict_count": len(merge_meta["conflicts"]),
-                    "conflicts_resolved": merge_meta["conflicts_resolved"],
-                    "scratch_feedback_applied": merge_meta["scratch_feedback_applied"],
-                    "retry_count": merge_meta["retry_count"],
-                    "blackboard_schema_version": BLACKBOARD_SCHEMA_VERSION,
-                },
-            )
-            if merge_meta["conflicts"]:
-                tracer.emit(
-                    "orchestrator",
-                    "blackboard_conflicts",
-                    {"conflicts": merge_meta["conflicts"]},
-                )
-            tracer.emit(
-                "orchestrator",
-                "blackboard_snapshot",
-                merge_meta["snapshot"],
-            )
-        return merge_meta
-
-    def _write_feedback_to_blackboard(self, feedback: str) -> None:
-        bb = getattr(self, "_blackboard", None)
-        if bb is not None:
-            write_feedback_to_blackboard(bb, feedback)
-
-    def _sync_localize_phase_via_blackboard(
-        self,
-        state: RepairState,
-        suspects: list[SuspectLocation],
-        context: RetrievedContext | None,
-    ) -> dict:
-        """Write-only blackboard sync after localize (patch merge reads BB later)."""
-        return self._write_localize_phase_to_blackboard(state, suspects, context)
 
     def _run_localizer_only(
         self,
@@ -390,9 +165,10 @@ class RepairPipelineMixin:
 
         max_retries = state.max_retries
         issue = state.issue_input
+        ctx = self._active_repair_ctx()
 
         t_start = time.time()
-        self._repair_started_at = t_start
+        ctx.repair_started_at = t_start
         self._reset_token_tracking()
         self._begin_repair_trace(state)
         self._init_repair_blackboard()
@@ -427,7 +203,7 @@ class RepairPipelineMixin:
                         match_skill_fn=self._match_skill,
                     )
                 skill_ms = int((time.time() - t_skill) * 1000)
-                tracer = self._repair_tracer
+                tracer = ctx.repair_tracer
                 if state.repair_plan and tracer is not None:
                     tracer.emit(
                         "orchestrator",
@@ -466,7 +242,7 @@ class RepairPipelineMixin:
                     ret_timing["total_ms"],
                     internal=ret_timing["internal"],
                 )
-                write_stats = self._sync_localize_phase_via_blackboard(state, suspects, context)
+                write_stats = self._write_localize_phase_to_blackboard(state, suspects, context)
                 n = write_stats.get("suspects_written", len(suspects))
                 n_tests = len(context.related_tests) if context else 0
                 log.info(
@@ -578,7 +354,7 @@ class RepairPipelineMixin:
                         state,
                         verification_enabled=self._verification_enabled(),
                         cancelled=cancelled,
-                        allow=getattr(self, "_allow_baseline_degrade", True),
+                        allow=ctx.allow_baseline_degrade,
                     )
                 ):
                     run_baseline_fallback(self, state, initial_snapshot=initial_snapshot)

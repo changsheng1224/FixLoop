@@ -13,6 +13,7 @@ from src.repair.blackboard_merge import (
     read_context_from_blackboard,
     read_suspects_from_blackboard,
 )
+from src.repair.suspect_blocks import render_suspects_with_snippets
 from src.state import RepairPlan, RetrievedContext, SuspectLocation
 
 __all__ = [
@@ -70,18 +71,8 @@ def _render_suspects_block(
             suspects.append(SuspectLocation.from_dict(value))
     if not suspects:
         return "", []
-
-    lines = ["嫌疑位置（代码已预读，无需再调用 read_file）:"]
-    for suspect in sorted(suspects, key=lambda s: (-s.confidence, s.file_path, s.start_line)):
-        if not suspect.file_path:
-            continue
-        lines.append(f"  - {suspect.file_path}:{suspect.start_line} ({suspect.reason})")
-        snippet = read_snippet(suspect.file_path, suspect.start_line, suspect.end_line)
-        if snippet:
-            lines.append(snippet)
-        else:
-            lines.append(f"    ⚠ 文件不存在: {suspect.file_path}")
-    return "\n".join(lines), suspects
+    block, ordered = render_suspects_with_snippets(suspects, read_snippet)
+    return block, ordered
 
 
 def _render_context_test_block(

@@ -27,8 +27,10 @@ class FailureTag(StrEnum):
     TIMEOUT = "timeout"
 
 
+DEGRADED_BASELINE_TAG = "degraded_baseline"
+
 # 非失败根因、仅描述修复路径的 metadata tag（成功时仍保留）
-REPAIR_METADATA_TAGS = frozenset({"degraded_baseline"})
+REPAIR_METADATA_TAGS = frozenset({DEGRADED_BASELINE_TAG})
 
 
 def _normalize_path(path: str) -> str:

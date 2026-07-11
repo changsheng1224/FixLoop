@@ -3,7 +3,6 @@
 from src.blackboard import Blackboard
 from src.repair.blackboard_merge import (
     merge_blackboard_for_patch,
-    merge_blackboard_to_repair_state,
     read_suspects_from_blackboard,
     resolve_blackboard_conflicts,
     suspect_key,
@@ -100,7 +99,7 @@ class TestMergeBlackboardForPatch:
         assert meta["scratch_feedback_applied"] is True
         assert "assert 1 == 2" in state.feedback
 
-    def test_legacy_merge_alias(self):
+    def test_merge_materializes_suspects(self):
         bb = Blackboard()
         write_localize_phase_to_blackboard(
             bb,
@@ -108,7 +107,7 @@ class TestMergeBlackboardForPatch:
             None,
         )
         state = RepairState(issue_input="err")
-        meta = merge_blackboard_to_repair_state(state, bb)
+        meta = merge_blackboard_for_patch(state, bb)
         assert meta["suspect_count"] == 1
         assert state.suspect_locations[0].file_path == "z.py"
 

@@ -3,9 +3,52 @@
 Agent 间通过结构化 dataclass 通信，不靠自然语言。
 """
 
-from dataclasses import dataclass, field
+from __future__ import annotations
 
-from src.repair.l2_binding import AgentAskRef
+from dataclasses import asdict, dataclass, field
+
+__all__ = [
+    "AgentAskRef",
+    "CandidatePatch",
+    "RepairPlan",
+    "RepairState",
+    "RetrievedContext",
+    "SkillContext",
+    "SuspectLocation",
+    "VerificationResult",
+]
+
+
+@dataclass
+class AgentAskRef:
+    """单次 L2 phase 内 Agent 调用（ask 或 synthetic complete_once）。"""
+
+    agent: str
+    phase: str
+    attempt: int
+    task_id: str
+    run_id: str
+    started_ms: int = 0
+    finished_ms: int = 0
+    stop_reason: str = ""
+    tool_steps: int = 0
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> AgentAskRef:
+        return cls(
+            agent=str(data.get("agent", "")),
+            phase=str(data.get("phase", "")),
+            attempt=int(data.get("attempt", 0) or 0),
+            task_id=str(data.get("task_id", "")),
+            run_id=str(data.get("run_id", "")),
+            started_ms=int(data.get("started_ms", 0) or 0),
+            finished_ms=int(data.get("finished_ms", 0) or 0),
+            stop_reason=str(data.get("stop_reason", "")),
+            tool_steps=int(data.get("tool_steps", 0) or 0),
+        )
 
 
 @dataclass

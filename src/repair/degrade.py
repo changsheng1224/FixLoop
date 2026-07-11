@@ -3,17 +3,59 @@
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING
+from typing import Protocol
 
 from src.repair.baseline_apply import apply_baseline_answer
+from src.repair.failure_tags import DEGRADED_BASELINE_TAG
+from src.repair.repair_context_blocks import (
+    append_degraded_context_sections,
+    build_repair_context_blocks,
+)
 from src.repair.termination import RepairTerminalStatus, has_repair_timeout, is_repair_success
-from src.state import RepairState, SuspectLocation
-
-if TYPE_CHECKING:
-    pass
+from src.state import RepairState, VerificationResult
 
 DEGRADED_TRIGGER_VERIFY_EXHAUSTED = "verify_exhausted"
-DEGRADED_FAILURE_TAG = "degraded_baseline"
+
+
+class BaselineDegradeHost(Protocol):
+    """run_baseline_fallback 所需的 Orchestrator 能力面。"""
+
+    patcher: object | None
+    _repo_root: str
+
+    def _restore_repo_snapshot(self, snapshot: dict) -> None: ...
+    def _merge_blackboard_for_patch(self, state: RepairState) -> dict: ...
+    def _read_code_snippet(self, file_path: str, start_line: int, end_line: int) -> str: ...
+    def _read_test_context(
+        self,
+        context,
+        suspects,
+        plan,
+    ) -> list[str]: ...
+    def _verification_enabled(self) -> bool: ...
+    def _begin_l2_agent_ask(
+        self,
+        state: RepairState,
+        agent,
+        *,
+        agent_name: str,
+        phase: str,
+        attempt: int,
+    ) -> str: ...
+    def _finish_l2_agent_ask(
+        self,
+        state: RepairState,
+        agent,
+        *,
+        agent_name: str,
+        phase: str,
+        attempt: int,
+        task_id: str,
+        elapsed_ms: int,
+        stop_reason: str = "",
+        tool_steps: int = 0,
+    ) -> None: ...
+    def _run_verifier(self, state: RepairState) -> VerificationResult: ...
 
 
 def _had_verify_failure(state: RepairState) -> bool:
@@ -45,7 +87,7 @@ def should_degrade_to_baseline(
     return _had_verify_failure(state)
 
 
-def build_degraded_baseline_prompt(state: RepairState, orch=None) -> str:
+def build_degraded_baseline_prompt(state: RepairState, host: BaselineDegradeHost | None = None) -> str:
     """构造带 Multi-Agent / Blackboard 上下文的 baseline prompt。"""
     lines = [
         "请修复以下 issue（Multi-Agent 流水线 verify 已失败 "
@@ -54,34 +96,20 @@ def build_degraded_baseline_prompt(state: RepairState, orch=None) -> str:
         state.issue_input,
     ]
 
-    bb_blocks_added = False
-    if orch is not None:
-        bb = getattr(orch, "_blackboard", None)
-        if bb is not None:
-            from src.repair.blackboard_subscribe import render_patcher_prefix_blocks
+    if host is not None:
+        from src.repair.run_context import RepairRunContext
 
-            if hasattr(orch, "_merge_blackboard_for_patch"):
-                orch._merge_blackboard_for_patch(state)
-            blocks = render_patcher_prefix_blocks(
-                bb,
-                read_snippet=orch._read_code_snippet,
-                read_test_context=orch._read_test_context,
-                plan=state.repair_plan,
-            )
-            if blocks.suspects_block:
-                lines.extend(["", "## 已定位嫌疑", blocks.suspects_block])
-                bb_blocks_added = True
-            if blocks.test_blocks:
-                lines.extend(["", "## 检索上下文", blocks.test_blocks])
-            if blocks.scratch_block and not state.feedback.strip():
-                lines.extend(["", "## 末轮验证反馈", blocks.scratch_block])
-
-    if not bb_blocks_added:
-        suspect_lines = _format_suspects(state.suspect_locations)
-        if suspect_lines:
-            lines.extend(["", "## 已定位嫌疑", suspect_lines])
-
-    if state.feedback.strip():
+        ctx = getattr(host, "_repair_ctx", None)
+        blackboard = ctx.blackboard if isinstance(ctx, RepairRunContext) else None
+        blocks = build_repair_context_blocks(
+            state,
+            blackboard=blackboard,
+            read_snippet=host._read_code_snippet,
+            read_test_context=host._read_test_context,
+            merge_for_patch=host._merge_blackboard_for_patch,
+        )
+        append_degraded_context_sections(lines, blocks, state=state)
+    elif state.feedback.strip():
         lines.extend(["", "## 末轮验证反馈", state.feedback.strip()])
 
     plan = state.repair_plan
@@ -92,18 +120,6 @@ def build_degraded_baseline_prompt(state: RepairState, orch=None) -> str:
 
     lines.extend(["", "可使用全部工具完成定位、修补与验证。"])
     return "\n".join(lines)
-
-
-def _format_suspects(suspects: list[SuspectLocation]) -> str:
-    if not suspects:
-        return ""
-    parts = []
-    for suspect in suspects[:8]:
-        parts.append(
-            f"- {suspect.file_path}:{suspect.start_line}-{suspect.end_line} "
-            f"({suspect.reason})"
-        )
-    return "\n".join(parts)
 
 
 def _finalize_baseline_status(state: RepairState, *, verify_after: bool) -> None:
@@ -120,7 +136,7 @@ def _finalize_baseline_status(state: RepairState, *, verify_after: bool) -> None
 
 
 def run_baseline_fallback(
-    orch,
+    host: BaselineDegradeHost,
     state: RepairState,
     *,
     initial_snapshot: dict,
@@ -128,21 +144,23 @@ def run_baseline_fallback(
 ) -> None:
     """执行 baseline 降级并更新 *state*（in-place）。"""
     from src.agents.factory import create_baseline_agent
+    from src.repair.run_context import RepairRunContext
 
-    if orch.patcher is None:
+    if host.patcher is None:
         return
 
-    orch._restore_repo_snapshot(initial_snapshot)
+    host._restore_repo_snapshot(initial_snapshot)
 
     agent = create_baseline_agent(
-        orch.patcher.model_client,
-        orch.patcher.workspace,
-        cwd=orch._repo_root,
-        approval=getattr(getattr(orch.patcher, "config", None), "approval", "auto"),
+        host.patcher.model_client,
+        host.patcher.workspace,
+        cwd=host._repo_root,
+        approval=getattr(getattr(host.patcher, "config", None), "approval", "auto"),
     )
     if state.repair_run_id:
         agent.shared_run_id = state.repair_run_id
-    cancel_token = getattr(orch, "_cancel_token", None)
+    ctx = getattr(host, "_repair_ctx", None)
+    cancel_token = ctx.cancel_token if isinstance(ctx, RepairRunContext) else None
     if cancel_token is not None:
         agent.cancel_token = cancel_token
 
@@ -150,11 +168,11 @@ def run_baseline_fallback(
     state.node_timings["degraded_mode"] = True
     state.node_timings["degraded_trigger"] = DEGRADED_TRIGGER_VERIFY_EXHAUSTED
     state.node_timings["multi_agent_retries"] = state.retry_count
-    if DEGRADED_FAILURE_TAG not in state.failure_tags:
-        state.failure_tags.append(DEGRADED_FAILURE_TAG)
+    if DEGRADED_BASELINE_TAG not in state.failure_tags:
+        state.failure_tags.append(DEGRADED_BASELINE_TAG)
 
-    tracer = getattr(orch, "_repair_tracer", None)
-    prompt = build_degraded_baseline_prompt(state, orch)
+    tracer = ctx.repair_tracer if isinstance(ctx, RepairRunContext) else None
+    prompt = build_degraded_baseline_prompt(state, host)
     feedback_preview = (state.feedback or "")[:200]
     if tracer is not None:
         tracer.emit(
@@ -168,8 +186,8 @@ def run_baseline_fallback(
             },
         )
 
-    run_verify = verify_after and orch._verification_enabled()
-    baseline_task_id = orch._begin_l2_agent_ask(
+    run_verify = verify_after and host._verification_enabled()
+    baseline_task_id = host._begin_l2_agent_ask(
         state,
         agent,
         agent_name="baseline",
@@ -181,7 +199,7 @@ def run_baseline_fallback(
     try:
         apply_baseline_answer(
             agent,
-            orch._repo_root,
+            host._repo_root,
             prompt,
             state,
             mark_fixed_on_apply=not run_verify,
@@ -190,7 +208,7 @@ def run_baseline_fallback(
         elapsed_ms = int((time.time() - t0) * 1000)
         last_ts = getattr(agent, "_last_task_state", None)
         if baseline_task_id:
-            orch._finish_l2_agent_ask(
+            host._finish_l2_agent_ask(
                 state,
                 agent,
                 agent_name="baseline",
@@ -210,7 +228,7 @@ def run_baseline_fallback(
         and state.status != RepairTerminalStatus.FAILED
     ):
         t_verify = time.time()
-        state.verification_result = orch._run_verifier(state)
+        state.verification_result = host._run_verifier(state)
         state.node_timings["baseline_verify_ms"] = int((time.time() - t_verify) * 1000)
         if tracer is not None:
             tracer.emit(

@@ -43,11 +43,16 @@ class PhaseTimeoutConfig:
     repair_total_s: int = 0
 
     @classmethod
-    def from_repair_timeout(cls, repair_timeout_s: int) -> PhaseTimeoutConfig:
-        """由全局 ``repair_timeout_s`` 推导默认阶段预算。"""
+    def with_repair_total_cap(cls, repair_timeout_s: int) -> PhaseTimeoutConfig:
+        """设置全流程硬上限；各阶段预算仍用类默认值（≤0 表示禁用该维度）。"""
         if repair_timeout_s <= 0:
             return cls(0, 0, 0, 0)
         return cls(repair_total_s=int(repair_timeout_s))
+
+    @classmethod
+    def from_repair_timeout(cls, repair_timeout_s: int) -> PhaseTimeoutConfig:
+        """Deprecated alias for :meth:`with_repair_total_cap`."""
+        return cls.with_repair_total_cap(repair_timeout_s)
 
     def any_enabled(self) -> bool:
         return any(

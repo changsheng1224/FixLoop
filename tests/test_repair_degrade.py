@@ -119,6 +119,7 @@ class TestDegradedPrompt:
         from src.blackboard import Blackboard
         from src.orchestrator import Orchestrator
         from src.repair.blackboard_merge import write_localize_phase_to_blackboard
+        from src.repair.run_context import RepairRunContext
 
         (temp_workspace / "calc.py").write_text("x=1\n", encoding="utf-8")
         bb = Blackboard()
@@ -136,7 +137,7 @@ class TestDegradedPrompt:
         )
         orch = Orchestrator(None, None, None)
         orch._repo_root = str(temp_workspace)
-        orch._blackboard = bb
+        orch._repair_ctx = RepairRunContext(blackboard=bb)
         state = RepairState(
             issue_input="TypeError in calc.py",
             retry_count=2,

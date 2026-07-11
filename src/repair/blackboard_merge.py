@@ -205,20 +205,6 @@ def merge_blackboard_for_patch(
     }
 
 
-def merge_blackboard_to_repair_state(
-    state: RepairState,
-    bb: Blackboard,
-) -> dict:
-    """Materialize blackboard entries into RepairState (legacy alias)."""
-    meta = merge_blackboard_for_patch(state, bb)
-    return {
-        "suspect_count": meta["suspect_count"],
-        "context_keys": meta["context_keys"],
-        "conflicts": meta["conflicts"],
-        "snapshot": meta["snapshot"],
-    }
-
-
 def restore_blackboard_from_snapshot(bb: Blackboard, snapshot: dict | None) -> None:
     """Restore blackboard entries from a prior snapshot (checkpoint resume)."""
     if not snapshot:

@@ -730,7 +730,7 @@ class AgentLoop:
 
     def _emit(self, event: str, payload: dict | None = None):
         try:
-            from src.repair.l2_binding import l2_payload_from_agent, l2_payload_from_task_state
+            from agent_runtime.l2_context import l2_payload_from_agent, l2_payload_from_task_state
 
             payload = dict(payload or {})
             agent_name = getattr(self.agent, "_agent_name", "") or "agent"
