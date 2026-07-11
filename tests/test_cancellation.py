@@ -197,6 +197,199 @@ class TestToolExecutorCancel:
         assert not (temp_workspace / "new.py").exists()
 
 
+class TestCompleteOnceCancel:
+    def test_complete_once_aborts_when_cancelled(self, workspace):
+        token = CancellationToken()
+        token.cancel()
+
+        class SlowClient(FakeModelClient):
+            def complete(self, prompt, max_new_tokens=None):
+                time.sleep(2.0)
+                return "should not return"
+
+        config = AgentConfig(provider="fake", max_steps=1, approval="auto")
+        agent = Agent(
+            config=config,
+            model_client=SlowClient(["unused"]),
+            workspace=workspace,
+        )
+        agent.cancel_token = token
+        with pytest.raises(CancelledError):
+            agent.complete_once("hello")
+
+
+class TestPatcherCompleteOnceCancel:
+    def test_run_patcher_returns_empty_on_cancel(self, temp_workspace):
+        from src.agents.patcher import create_patcher
+        from src.orchestrator import Orchestrator
+        from src.state import RepairPlan, RepairState, SuspectLocation
+
+        token = CancellationToken()
+
+        class SlowClient(FakeModelClient):
+            def complete(self, prompt, max_new_tokens=None):
+                time.sleep(2.0)
+                return "[]"
+
+        ws_ctx = __import__(
+            "agent_runtime.workspace", fromlist=["WorkspaceContext"]
+        ).WorkspaceContext.build(str(temp_workspace))
+        pat = create_patcher(SlowClient(["[]"]), ws_ctx)
+        orch = Orchestrator(None, None, pat, use_pytest_verify=False)
+        orch._cancel_token = token
+        orch._bind_cancel_token(token)
+
+        state = RepairState(issue_input="TypeError")
+        state.repair_plan = RepairPlan()
+        state.suspect_locations = [
+            SuspectLocation(file_path="app.py", start_line=1, end_line=1, reason="x")
+        ]
+
+        def cancel_soon():
+            time.sleep(0.05)
+            token.cancel()
+
+        threading.Thread(target=cancel_soon, daemon=True).start()
+        patches, timing = orch._run_patcher(state)
+        assert patches == []
+        assert token.is_cancelled
+
+
+class TestSandboxVerifyCancel:
+    def test_run_sandbox_verification_aborts_when_cancelled(self, temp_workspace, monkeypatch):
+        from src.harness.sandbox_verify import run_sandbox_verification_flow
+        from src.state import VerificationResult
+
+        token = CancellationToken()
+        token.cancel()
+        ctx = __import__("agent_runtime.tool_context", fromlist=["ToolContext"]).ToolContext(
+            root=str(temp_workspace)
+        )
+
+        class FakeMgr:
+            def create(self, repo_path, profile="python"):
+                raise AssertionError("should not create when already cancelled")
+
+        monkeypatch.setattr(
+            "src.harness.sandbox_verify.SandboxManager",
+            lambda: FakeMgr(),
+        )
+        result, timings = run_sandbox_verification_flow(
+            ctx, str(temp_workspace), "", cancel_token=token
+        )
+        assert result.all_passed is False
+        assert timings.get("user_cancel") is True
+
+    def test_execute_kills_container_on_cancel(self, monkeypatch):
+        from agent_runtime.cancellation import CancellationToken
+        from src.harness.sandbox_manager import Sandbox, SandboxManager
+
+        token = CancellationToken()
+        killed = []
+
+        class FakeContainer:
+            def exec_run(self, command):
+                time.sleep(2.0)
+                return 0, b"ok"
+
+            def kill(self):
+                killed.append(True)
+
+        class FakeContainers:
+            def get(self, sandbox_id):
+                return FakeContainer()
+
+        class FakeDocker:
+            containers = FakeContainers()
+
+        mgr = SandboxManager.__new__(SandboxManager)
+        mgr._docker = FakeDocker()
+
+        def cancel_soon():
+            time.sleep(0.05)
+            token.cancel()
+
+        threading.Thread(target=cancel_soon, daemon=True).start()
+        t0 = time.time()
+        result = mgr.execute(Sandbox(id="abc", profile="python"), "sleep 99", timeout=30, cancel_token=token)
+        elapsed = time.time() - t0
+        assert killed == [True]
+        assert result.exit_code == -1
+        assert "cancel" in result.stderr.lower()
+        assert elapsed < 2.0
+
+
+class TestRunShellCancel:
+    def test_run_shell_terminates_on_cancel(self, temp_workspace):
+        from agent_runtime.tool_context import ToolContext
+        from agent_runtime.tools import tool_run_shell
+
+        token = CancellationToken()
+        ctx = ToolContext(root=str(temp_workspace))
+        ctx.cancel_token = token
+
+        def cancel_soon():
+            time.sleep(0.1)
+            token.cancel()
+
+        threading.Thread(target=cancel_soon, daemon=True).start()
+        t0 = time.time()
+        result = tool_run_shell(
+            ctx,
+            {"command": 'python -c "import time; time.sleep(2)"', "timeout": 30},
+        )
+        elapsed = time.time() - t0
+        assert "取消" in result
+        assert elapsed < 1.5
+
+
+class TestGate7Cancel:
+    def test_approval_interrupt_cancels_token(self, agent, monkeypatch):
+        agent.cancel_token = CancellationToken()
+        agent.config.approval = "ask"
+        executor = ToolExecutor(agent=agent, approval_policy="ask")
+
+        def fake_input(_prompt):
+            agent.cancel_token.cancel("user")
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr("builtins.input", fake_input)
+        result = executor.execute("write_file", {"path": "x.txt", "content": "y"})
+        assert result.metadata["tool_status"] == "rejected"
+        assert result.metadata["tool_error_code"] == "cancelled"
+        assert agent.cancel_token.is_cancelled
+
+
+class TestAgentLoopPostToolCancel:
+    def test_post_tool_abort_after_gate7_cancel(self, workspace, monkeypatch):
+        token = CancellationToken()
+
+        config = AgentConfig(provider="fake", max_steps=3, approval="ask")
+        agent = Agent(
+            config=config,
+            model_client=FakeModelClient(
+                [
+                    '<tool>{"name":"write_file","args":{"path":"a.txt","content":"x"}}</tool>',
+                    "<final>不应到达</final>",
+                ]
+            ),
+            workspace=workspace,
+        )
+        agent.cancel_token = token
+        executor = ToolExecutor(agent=agent, approval_policy="ask")
+
+        def fake_input(_prompt):
+            token.cancel("user")
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr("builtins.input", fake_input)
+        monkeypatch.setattr(agent, "execute_tool", executor.execute)
+
+        answer = agent.ask("写文件")
+        assert "取消" in answer
+        assert token.is_cancelled
+
+
 class TestRepairCancel:
     def test_immediate_cancel_restores_repo(self, temp_workspace):
         from agent_runtime.cancellation import CancellationToken

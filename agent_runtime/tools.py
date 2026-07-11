@@ -7,6 +7,7 @@
 auto_schema() 从 dataclass 自动推导参数字典，新增工具无需手写 schema。
 """
 
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -404,6 +405,13 @@ def tool_run_shell(context, args: dict) -> str:
     else:
         env = _shell_env(root=root)
 
+    cancel_token = getattr(context, "cancel_token", None)
+    if cancel_token is not None:
+        return redact_text(_run_shell_cancellable(command, root, env, timeout, cancel_token))
+    return redact_text(_run_shell_blocking(command, root, env, timeout))
+
+
+def _run_shell_blocking(command: str, root, env, timeout: int) -> str:
     try:
         result = subprocess.run(
             command,
@@ -415,16 +423,64 @@ def tool_run_shell(context, args: dict) -> str:
             env=env,
         )
     except subprocess.TimeoutExpired:
-        return redact_text(f"Error: 命令超时（{timeout} 秒）: {command[:100]}")
+        return f"Error: 命令超时（{timeout} 秒）: {command[:100]}"
 
+    return _format_shell_result(result.returncode, result.stdout, result.stderr)
+
+
+def _kill_process_tree(proc: subprocess.Popen) -> None:
+    """终止 shell 子进程（含 Windows 下 shell 派生的孙进程）。"""
+    if proc.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+            capture_output=True,
+            check=False,
+        )
+    else:
+        proc.kill()
+    try:
+        proc.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def _run_shell_cancellable(command: str, root, env, timeout: int, cancel_token) -> str:
+    import time
+
+    proc = subprocess.Popen(
+        command,
+        cwd=root,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    deadline = time.time() + timeout
+    poll_s = 0.05
+    while proc.poll() is None:
+        if cancel_token.is_cancelled:
+            _kill_process_tree(proc)
+            return f"Error: 命令已取消: {command[:100]}"
+        if time.time() >= deadline:
+            _kill_process_tree(proc)
+            return f"Error: 命令超时（{timeout} 秒）: {command[:100]}"
+        time.sleep(poll_s)
+
+    stdout, stderr = proc.communicate(timeout=1)
+    return _format_shell_result(proc.returncode or 0, stdout or "", stderr or "")
+
+
+def _format_shell_result(returncode: int, stdout: str, stderr: str) -> str:
     out = []
-    if result.stdout.strip():
-        out.append(f"stdout:\n{result.stdout.rstrip()}")
-    if result.stderr.strip():
-        out.append(f"stderr:\n{result.stderr.rstrip()}")
-    out.insert(0, f"exit_code: {result.returncode}")
-
-    return redact_text("\n".join(out))
+    out.append(f"exit_code: {returncode}")
+    if stdout.strip():
+        out.append(f"stdout:\n{stdout.rstrip()}")
+    if stderr.strip():
+        out.append(f"stderr:\n{stderr.rstrip()}")
+    return "\n".join(out)
 
 
 # ============================================================================

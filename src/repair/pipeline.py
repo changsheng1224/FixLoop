@@ -199,6 +199,10 @@ class RepairPipelineMixin:
                     repo_snapshot = self._snapshot_repo() if self._verification_enabled() else None
                     log.info("Patcher 开始 (retry=%d)...", state.retry_count)
                     state.candidate_patches, patch_timing = self._run_patcher(state)
+                    if patch_timing.get("user_cancel") or self._is_repair_cancelled():
+                        cancelled = True
+                        break
+
                     set_phase_ms(
                         state.node_timings,
                         "patch",
@@ -232,8 +236,14 @@ class RepairPipelineMixin:
                         continue
 
                     log.info("Verifier 开始...")
+                    if self._is_repair_cancelled():
+                        cancelled = True
+                        break
                     t0 = time.time()
                     state.verification_result = self._run_verifier(state)
+                    if self._is_repair_cancelled():
+                        cancelled = True
+                        break
                     ms = int((time.time() - t0) * 1000)
                     set_phase_ms(state.node_timings, "verify", ms)
                     log.info("Verifier 完成: %dms", ms)

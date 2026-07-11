@@ -470,7 +470,18 @@ class Orchestrator(RepairPipelineMixin):
 
             usage_before = get_client_session_usage(self.patcher.model_client)
         try:
+            from agent_runtime.cancellation import CancelledError
+
             raw = self.patcher.complete_once(prompt, system_prompt=patcher_system)
+        except CancelledError:
+            total_ms = int((time.time() - t_start) * 1000)
+            model_call_ms = int((time.time() - t_model) * 1000)
+            return [], {
+                "model_call_ms": model_call_ms,
+                "parse_apply_ms": max(0, total_ms - model_call_ms),
+                "total_ms": total_ms,
+                "user_cancel": True,
+            }
         except Exception as e:
             state.agent_errors["patcher"] = str(e)
             total_ms = int((time.time() - t_start) * 1000)
@@ -542,17 +553,19 @@ class Orchestrator(RepairPipelineMixin):
 
     def _run_verifier(self, state: RepairState) -> "VerificationResult":
         """Docker 沙箱或本地 pytest 验证（不走 LLM Agent loop）。"""
+        cancel_token = getattr(self, "_cancel_token", None)
         if self.verifier is not None:
             run = DockerVerifyStrategy().run(
                 self._repo_root,
                 test_path=self._pick_test_path(state),
+                cancel_token=cancel_token,
             )
             if run.error:
                 log.warning("[verifier] 沙箱验证失败: %s", run.error)
             record_verify_timings(state, run, log_sandbox=True)
             return run.result
         if self.use_pytest_verify:
-            run = PytestVerifyStrategy().run(self._repo_root)
+            run = PytestVerifyStrategy().run(self._repo_root, cancel_token=cancel_token)
             record_verify_timings(state, run)
             return run.result
         return VerificationResult(all_passed=False, failure_logs=["verifier 未配置"])

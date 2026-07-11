@@ -286,6 +286,8 @@ class AgentLoop:
             result = self.agent.execute_tool(tool_name, tool_args)
         finally:
             self._in_flight_tool = ""
+        if (msg := self._abort_if_cancelled(ts, phase="post_tool", in_flight=tool_name)) is not None:
+            raise CancelledRun(msg)
         result_text = result.content if hasattr(result, "content") else str(result)
         result_text = truncate_tool_result_for_agent(self.agent, tool_name, result_text)
         te_ms = int((_time.time() - t0) * 1000)
@@ -605,14 +607,17 @@ class AgentLoop:
                     return msg
                 tool_name = payload.get("name", "unknown")
                 tool_args = payload.get("args", {})
-                user_message = self._run_tool_step(
-                    ts,
-                    tool_name,
-                    tool_args,
-                    step=step,
-                    path="xml",
-                    callback=callback,
-                )
+                try:
+                    user_message = self._run_tool_step(
+                        ts,
+                        tool_name,
+                        tool_args,
+                        step=step,
+                        path="xml",
+                        callback=callback,
+                    )
+                except CancelledRun as e:
+                    return e.answer
                 continue
 
             if kind == "retry":

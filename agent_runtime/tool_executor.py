@@ -142,6 +142,12 @@ class ToolExecutor:
         gate7_meta = None
         if name in self._high_risk_tools:
             if not self._approve(name, args, patch_preview_meta):
+                if token is not None and token.is_cancelled:
+                    return self._rejected(
+                        0,
+                        "cancelled",
+                        "Error: 任务已取消（审批中断）。",
+                    )
                 extra = {"approval_policy": self.approval_policy}
                 if patch_preview_meta:
                     extra["patch_preview"] = patch_preview_meta
@@ -160,6 +166,10 @@ class ToolExecutor:
 
         # ---- Gate 9: 执行工具 ----
         timeout_s = int(getattr(self.agent.config, "tool_timeout_s", 0) or 0)
+        ctx = self.agent.tool_context
+        prev_ctx_token = getattr(ctx, "cancel_token", None)
+        if token is not None:
+            ctx.cancel_token = token
         try:
             from agent_runtime.tool_timeout import ToolTimeoutError, run_with_timeout
 
@@ -177,6 +187,13 @@ class ToolExecutor:
                 content=f"Error: 工具 '{name}' 执行异常: {e}",
                 metadata=build_executor_error_metadata(),
             )
+        finally:
+            if token is not None:
+                if prev_ctx_token is None:
+                    if hasattr(ctx, "cancel_token"):
+                        delattr(ctx, "cancel_token")
+                else:
+                    ctx.cancel_token = prev_ctx_token
 
         # ---- Gate 9 续: 执行后快照对比 ----
         metadata = {"tool_status": "success"}
@@ -289,7 +306,12 @@ class ToolExecutor:
                 )
             response = input(prompt)
             return response.strip().lower() == "y"
-        except (EOFError, KeyboardInterrupt):
+        except KeyboardInterrupt:
+            token = getattr(self.agent, "cancel_token", None)
+            if token is not None:
+                token.cancel("user")
+            return False
+        except EOFError:
             return False
 
     def _build_patch_preview(self, args: dict) -> tuple[dict | None, str | None]:

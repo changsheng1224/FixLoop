@@ -54,7 +54,7 @@ class TestSandboxToolsMocked:
         vr = VerificationResult(all_passed=True, total_tests=1, passed=1)
         monkeypatch.setattr(
             "src.tools.sandbox_tools._run_test_in_sandbox",
-            lambda _ctx, repo, test_path: (vr, {}),
+            lambda _ctx, repo, test_path, cancel_token=None: (vr, {}),
         )
         result, timings = run_sandbox_verification(".")
         assert result.all_passed

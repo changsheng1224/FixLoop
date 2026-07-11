@@ -113,9 +113,14 @@ class Agent:
         self._last_budget_meta = budget_meta
         prefix = system_prompt if system_prompt is not None else self._system_prompt
         full_prompt = f"{prefix}\n\n{user_message}" if prefix else user_message
-        return self.model_client.complete(
-            full_prompt,
-            max_new_tokens=self.config.max_new_tokens or 4096,
+        from agent_runtime.cancellation import run_with_cancellation
+
+        return run_with_cancellation(
+            lambda: self.model_client.complete(
+                full_prompt,
+                max_new_tokens=self.config.max_new_tokens or 4096,
+            ),
+            self.cancel_token,
         )
 
     def fit_user_message(
