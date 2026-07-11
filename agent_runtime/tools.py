@@ -15,6 +15,13 @@ from pathlib import Path
 from agent_runtime.schema_utils import auto_schema
 
 # ============================================================================
+# 工具执行层级常量
+# ============================================================================
+
+TIER_HOST = "host"
+TIER_CONTAINER = "container"
+
+# ============================================================================
 # 工具参数 Dataclass
 # ============================================================================
 
@@ -507,7 +514,7 @@ def build_tool_registry(context) -> dict:
     registry["list_files"] = {
         "schema": auto_schema(ListFilesArgs),
         "risky": False,
-        "execution_tier": "host",
+        "execution_tier": TIER_HOST,
         "description": "列出目录内容。参数: path（默认 '.'）",
         "run": lambda args: tool_list_files(context, args),
     }
@@ -516,7 +523,7 @@ def build_tool_registry(context) -> dict:
     registry["read_file"] = {
         "schema": auto_schema(ReadFileArgs),
         "risky": False,
-        "execution_tier": "host",
+        "execution_tier": TIER_HOST,
         "description": "按行号范围读取 UTF-8 文件。参数: path, start(默认1), end(默认200)",
         "run": lambda args: tool_read_file(context, args),
     }
@@ -525,7 +532,7 @@ def build_tool_registry(context) -> dict:
     registry["search"] = {
         "schema": auto_schema(SearchArgs),
         "risky": False,
-        "execution_tier": "host",
+        "execution_tier": TIER_HOST,
         "description": "代码搜索（rg 优先，Python fallback）。参数: pattern, path（默认 '.'）",
         "run": lambda args: tool_search(context, args),
     }
@@ -534,7 +541,7 @@ def build_tool_registry(context) -> dict:
     registry["write_file"] = {
         "schema": auto_schema(WriteFileArgs),
         "risky": True,
-        "execution_tier": "host",
+        "execution_tier": TIER_HOST,
         "description": "创建或覆盖文件，自动创建父目录。参数: path, content",
         "run": lambda args: tool_write_file(context, args),
     }
@@ -543,7 +550,7 @@ def build_tool_registry(context) -> dict:
     registry["patch_file"] = {
         "schema": auto_schema(PatchFileArgs),
         "risky": True,
-        "execution_tier": "host",
+        "execution_tier": TIER_HOST,
         "description": ("精确文本替换：old_text 必须恰好出现 1 次。参数: path, old_text, new_text"),
         "run": lambda args: tool_patch_file(context, args),
     }
@@ -552,7 +559,7 @@ def build_tool_registry(context) -> dict:
     registry["run_shell"] = {
         "schema": auto_schema(RunShellArgs),
         "risky": True,
-        "execution_tier": "host",
+        "execution_tier": TIER_HOST,
         "description": "执行 Shell 命令。参数: command, timeout(默认20s，最大120s)",
         "run": lambda args: tool_run_shell(context, args),
     }

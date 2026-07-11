@@ -4,9 +4,9 @@
 Docker 不可用时自动 skip。
 """
 
-import os
 import time
 from pathlib import Path
+from shlex import quote as _sh_quote
 
 import pytest
 
@@ -15,7 +15,6 @@ from src.harness.sandbox_manager import (
     ExecResult,
     Sandbox,
     SandboxManager,
-    sandbox_container_run_kwargs,
 )
 from src.harness.sandbox_verify import SandboxNotAvailableError, assert_sandbox_available
 
@@ -35,12 +34,6 @@ def _docker_available() -> bool:
 def _run_in_sandbox(mgr: SandboxManager, sandbox: Sandbox, command: str, timeout: int = ESCAPE_TIMEOUT_S) -> ExecResult:
     """在容器内执行命令并返回 ExecResult。"""
     return mgr.execute(sandbox, f"/bin/sh -c {_sh_quote(command)}", timeout=timeout)
-
-
-def _sh_quote(s: str) -> str:
-    """用单引号包裹 shell 字符串（简单场景）。"""
-    escaped = s.replace("'", "'\\''")
-    return f"'{escaped}'"
 
 
 @pytest.fixture

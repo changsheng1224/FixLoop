@@ -16,6 +16,14 @@ from src.tools.sandbox_tools import (
 )
 
 
+def _patch_sandbox_available(monkeypatch):
+    """Mock assert_sandbox_available 为 no-op（sandbox 测试不需要真实 Docker）。"""
+    monkeypatch.setattr(
+        "src.harness.sandbox_verify.assert_sandbox_available",
+        lambda: None,
+    )
+
+
 class TestSandboxToolsValidation:
     def test_sandbox_test_missing_repo(self):
         ctx = ToolContext(root=".")
@@ -94,10 +102,7 @@ class TestSandboxToolsMocked:
 
     def test_run_sandbox_verification_tar_limit_returns_failure(self, monkeypatch, tmp_path):
         (tmp_path / "big.bin").write_bytes(b"x" * 500)
-        monkeypatch.setattr(
-            "src.harness.sandbox_verify.assert_sandbox_available",
-            lambda: None,
-        )
+        _patch_sandbox_available(monkeypatch)
         import src.harness.sandbox_tar as sandbox_tar_mod
 
         original_max = sandbox_tar_mod.sandbox_tar_max_bytes
@@ -115,10 +120,7 @@ class TestSandboxToolsMocked:
             '[project]\nname="t"\ndependencies=["requests"]\n',
             encoding="utf-8",
         )
-        monkeypatch.setattr(
-            "src.harness.sandbox_verify.assert_sandbox_available",
-            lambda: None,
-        )
+        _patch_sandbox_available(monkeypatch)
         fake_mgr = MagicMock()
         fake_mgr.create.return_value = Sandbox(id="sb-timeout", profile="python")
         fake_mgr.execute.return_value = ExecResult(-1, "", "timeout after 600s")
@@ -137,10 +139,7 @@ class TestSandboxToolsMocked:
             '[project]\nname="t"\ndependencies=["requests"]\n',
             encoding="utf-8",
         )
-        monkeypatch.setattr(
-            "src.harness.sandbox_verify.assert_sandbox_available",
-            lambda: None,
-        )
+        _patch_sandbox_available(monkeypatch)
         fake_mgr = MagicMock()
         fake_mgr.create.return_value = Sandbox(id="sb-fail", profile="python")
         fake_mgr.execute.return_value = ExecResult(1, "pip error output", "")
@@ -173,11 +172,6 @@ class TestSandboxExecutionTier:
     def test_assert_sandbox_available_raises_when_docker_missing(self, monkeypatch):
         from src.harness.sandbox_verify import SandboxNotAvailableError, assert_sandbox_available
 
-        monkeypatch.setattr(
-            "src.harness.sandbox_verify.docker",
-            None,
-            raising=False,
-        )
         # 强制 import docker 时失败
         import builtins
 

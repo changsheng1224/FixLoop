@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from agent_runtime.tools import TIER_CONTAINER, TIER_HOST
+
 from src.state import VerificationResult
 
 
@@ -70,7 +72,7 @@ class DockerVerifyStrategy:
                     failure_logs=[f"Docker sandbox 不可用，请使用 --pytest 降级: {exc}"],
                 ),
                 elapsed_ms=elapsed_ms,
-                internal={"execution_tier": "host", "sandbox_unavailable": True, "error": str(exc)},
+                internal={"execution_tier": TIER_HOST, "sandbox_unavailable": True, "error": str(exc)},
                 error="sandbox_unavailable",
             )
         try:
@@ -79,22 +81,14 @@ class DockerVerifyStrategy:
                 test_path=test_path,
                 cancel_token=cancel_token,
             )
-            internal["execution_tier"] = "container"
+            internal["execution_tier"] = TIER_CONTAINER
             return _verify_from_sandbox_result(result, internal, t0)
-        except SandboxNotAvailableError:
-            elapsed_ms = int((time.time() - t0) * 1000)
-            return VerifyRun(
-                result=VerificationResult(all_passed=False, failure_logs=["Docker sandbox 不可用"]),
-                elapsed_ms=elapsed_ms,
-                internal={"execution_tier": "host", "sandbox_unavailable": True},
-                error="sandbox_unavailable",
-            )
         except Exception as exc:
             elapsed_ms = int((time.time() - t0) * 1000)
             return VerifyRun(
                 result=VerificationResult(all_passed=False, failure_logs=[str(exc)]),
                 elapsed_ms=elapsed_ms,
-                internal={"execution_tier": "container"},
+                internal={"execution_tier": TIER_CONTAINER},
                 error=str(exc),
             )
 
@@ -134,7 +128,7 @@ class PytestVerifyStrategy:
                 failure_logs=[out[-2000:]] if out and not passed else [],
             ),
             elapsed_ms=elapsed_ms,
-            internal={"pytest_ms": elapsed_ms, "execution_tier": "host"},
+            internal={"pytest_ms": elapsed_ms, "execution_tier": TIER_HOST},
         )
 
 

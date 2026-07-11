@@ -7,6 +7,7 @@ Orchestrator 可直连 harness，避免 Verifier LLM 多轮 tool 调用开销。
 import json
 from dataclasses import dataclass
 
+from agent_runtime.tools import TIER_CONTAINER
 from src.harness.sandbox_verify import ensure_sandbox, run_sandbox_verification_flow
 from src.state import VerificationResult
 
@@ -61,21 +62,21 @@ def build_sandbox_tool_registry(context) -> dict:
         "sandbox_build": {
             "schema": {"repo_path": "str"},
             "risky": False,
-            "execution_tier": "container",
+            "execution_tier": TIER_CONTAINER,
             "description": "在 Docker 容器内执行 pip install。参数: repo_path",
             "run": lambda args: sandbox_build(context, args),
         },
         "sandbox_test": {
             "schema": {"repo_path": "str", "test_path": "str="},
             "risky": False,
-            "execution_tier": "container",
+            "execution_tier": TIER_CONTAINER,
             "description": "在 Docker 容器内运行 pytest。参数: repo_path, test_path",
             "run": lambda args: sandbox_test(context, args),
         },
         "sandbox_verify": {
             "schema": {"repo_path": "str", "test_path": "str="},
             "risky": False,
-            "execution_tier": "container",
+            "execution_tier": TIER_CONTAINER,
             "description": "单容器 build+test。参数: repo_path, test_path",
             "run": lambda args: sandbox_verify(context, args),
         },
