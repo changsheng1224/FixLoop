@@ -68,6 +68,14 @@ class ToolExecutor:
 
     def execute_gated(self, name: str, args: dict) -> ToolExecutionResult:
         """按序执行 Executor 闸口（Gate 1–9），不含 Gateway 权限层。"""
+        token = getattr(self.agent, "cancel_token", None)
+        if token is not None and token.is_cancelled:
+            return self._rejected(
+                0,
+                "cancelled",
+                "Error: 任务已取消，跳过工具执行。",
+            )
+
         allowed = self.agent._tool_names
         if name not in allowed:
             return self._rejected(
@@ -148,6 +156,7 @@ class ToolExecutor:
         # ---- Gate 8: 执行前工作区快照 ----
         is_risky = name in self._high_risk_tools
         before_snapshot = self._capture_snapshot() if is_risky else {}
+        restore_snapshot = self._capture_restore_snapshot() if is_risky else {}
 
         # ---- Gate 9: 执行工具 ----
         timeout_s = int(getattr(self.agent.config, "tool_timeout_s", 0) or 0)
@@ -180,7 +189,12 @@ class ToolExecutor:
             if callable(provider):
                 metadata["shell_env_keys"] = sorted(provider().keys())
         if is_risky:
-            after_snapshot = self._capture_snapshot()
+            if token is not None and token.is_cancelled:
+                self._restore_restore_snapshot(restore_snapshot)
+                metadata["cancel_restored"] = True
+                after_snapshot = self._capture_snapshot()
+            else:
+                after_snapshot = self._capture_snapshot()
             metadata.update(self._diff_snapshots(before_snapshot, after_snapshot))
 
         # 记录配额
@@ -315,6 +329,47 @@ class ToolExecutor:
                 except (OSError, ValueError):
                     pass
         return snapshot
+
+    def _capture_restore_snapshot(self) -> dict[str, str | None]:
+        """Gate 8 内容快照：用于 cancel 后回滚 write/patch 变更。"""
+        root = Path(self.agent.tool_context.root)
+        if not root.exists():
+            return {}
+        snapshot: dict[str, str | None] = {}
+        for fpath in root.rglob("*"):
+            if fpath.is_file() and not self._is_ignored(fpath):
+                try:
+                    rel = str(fpath.relative_to(root))
+                    snapshot[rel] = fpath.read_text(encoding="utf-8")
+                except (OSError, ValueError, UnicodeDecodeError):
+                    pass
+        return snapshot
+
+    def _restore_restore_snapshot(self, before: dict[str, str | None]) -> None:
+        """将 workspace 恢复到 Gate 8 内容快照。"""
+        root = Path(self.agent.tool_context.root)
+        if not root.exists():
+            return
+        before_paths = set(before.keys())
+        current_paths: set[str] = set()
+        for fpath in root.rglob("*"):
+            if fpath.is_file() and not self._is_ignored(fpath):
+                try:
+                    current_paths.add(str(fpath.relative_to(root)))
+                except ValueError:
+                    pass
+        for rel, content in before.items():
+            target = root / rel
+            if content is None:
+                if target.exists():
+                    target.unlink()
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+        for rel in sorted(current_paths - before_paths):
+            target = root / rel
+            if target.is_file():
+                target.unlink()
 
     def _is_ignored(self, path: Path) -> bool:
         """检查路径是否在忽略目录中。"""

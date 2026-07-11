@@ -48,6 +48,8 @@ class Agent:
         self._prefix_mode: PrefixMode = prefix_mode
         self.shared_run_id: str | None = None
         self._last_budget_meta: dict = {}
+        self.cancel_token = None
+        self._active_cancel_token = None
 
         # 构建工具上下文和注册表（允许外部注入）
         self.tool_context = ToolContext(root=self._cwd)
@@ -90,6 +92,11 @@ class Agent:
             模型返回的最终答案文本。
         """
         from agent_runtime.agent_loop import AgentLoop
+        from agent_runtime.cancellation import CancellationToken
+
+        if self.cancel_token is None or self.cancel_token.is_cancelled:
+            self.cancel_token = CancellationToken()
+        self._active_cancel_token = self.cancel_token
 
         loop = AgentLoop(agent=self)
         return loop.run(user_message, callback=callback)

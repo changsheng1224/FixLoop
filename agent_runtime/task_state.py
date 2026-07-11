@@ -157,6 +157,14 @@ class TaskState:
         self.node_timings["step_timeout_s"] = int(timeout_s)
         self.node_timings["step_timeout_step"] = int(step)
 
+    def stop_user_cancel(self, *, in_flight: str = "", phase: str = ""):
+        """用户协作式取消。"""
+        if in_flight:
+            self.node_timings["in_flight_tool"] = in_flight
+        if phase:
+            self.node_timings["cancel_phase"] = phase
+        self.stop_with_reason(StopReason.USER_CANCEL, "stopped")
+
     def finish_success(self, final_answer: str):
         """正常结束。"""
         self.final_answer = final_answer

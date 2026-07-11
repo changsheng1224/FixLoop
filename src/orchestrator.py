@@ -93,6 +93,7 @@ class Orchestrator(RepairPipelineMixin):
         issue: str,
         max_retries: int = 3,
         repair_timeout_s: int = DEFAULT_REPAIR_TIMEOUT_S,
+        cancel_token=None,
     ) -> RepairState:
         """执行修复流水线。
 
@@ -100,27 +101,66 @@ class Orchestrator(RepairPipelineMixin):
             issue: Issue 描述（含堆栈和错误信息）。
             max_retries: 最大重试次数。
             repair_timeout_s: 全流程超时秒数（≤0 表示不限制）。
+            cancel_token: 可选协作式取消 token（CLI Ctrl+C 注入）。
 
         Returns:
             RepairState 实例。
         """
+        from agent_runtime.cancellation import CancellationToken
+
         state = RepairState(issue_input=issue, max_retries=max_retries)
-        if repair_timeout_s <= 0:
-            return self._repair_impl(state)
+        token = cancel_token or CancellationToken()
+        self._cancel_token = token
+        self._bind_cancel_token(token)
+        initial_snapshot = self._snapshot_repo()
 
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            fut = pool.submit(self._repair_impl, state)
-            try:
-                return fut.result(timeout=repair_timeout_s)
-            except FuturesTimeoutError:
-                from src.repair.termination import RepairTerminalStatus, finalize_repair_state
+        try:
+            if repair_timeout_s <= 0:
+                return self._repair_impl(state, initial_snapshot=initial_snapshot)
 
-                state.status = RepairTerminalStatus.TIMEOUT
-                state.agent_errors["orchestrator"] = f"repair timeout ({repair_timeout_s}s)"
-                state.node_timings["repair_timeout"] = repair_timeout_s
-                log.warning("修复超时 (%ds)", repair_timeout_s)
-                finalize_repair_state(state)
-                return state
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                fut = pool.submit(self._repair_impl, state, initial_snapshot)
+                try:
+                    return fut.result(timeout=repair_timeout_s)
+                except FuturesTimeoutError:
+                    from src.repair.termination import RepairTerminalStatus, finalize_repair_state
+
+                    state.status = RepairTerminalStatus.TIMEOUT
+                    state.agent_errors["orchestrator"] = f"repair timeout ({repair_timeout_s}s)"
+                    state.node_timings["repair_timeout"] = repair_timeout_s
+                    log.warning("修复超时 (%ds)", repair_timeout_s)
+                    finalize_repair_state(state)
+                    return state
+        finally:
+            self._unbind_cancel_token()
+            self._cancel_token = None
+
+    def _bind_cancel_token(self, token) -> None:
+        for agent in (self.localizer, self.retriever, self.patcher):
+            if agent is not None:
+                agent.cancel_token = token
+
+    def _unbind_cancel_token(self) -> None:
+        for agent in (self.localizer, self.retriever, self.patcher):
+            if agent is not None:
+                agent.cancel_token = None
+
+    def _is_repair_cancelled(self) -> bool:
+        token = getattr(self, "_cancel_token", None)
+        return token is not None and token.is_cancelled
+
+    def _emit_repair_cancelled(self, state: RepairState) -> None:
+        tracer = self._repair_tracer
+        if tracer is None:
+            return
+        tracer.emit(
+            "orchestrator",
+            "repair_cancelled",
+            {
+                "status": state.status,
+                "repo_restored": True,
+            },
+        )
 
     def _parse_issue(self, issue: str) -> RepairPlan:
         """正则解析 Issue 文本，提取语言/异常类型/文件名。"""
