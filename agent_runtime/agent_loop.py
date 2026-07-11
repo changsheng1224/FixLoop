@@ -458,6 +458,16 @@ class AgentLoop:
             return msg
 
         system_prompt, user_message, budget_meta = self.agent.build_for_native(user_message)
+        from agent_runtime.message_projection import (
+            attach_projection_metadata,
+            build_context_prefix,
+        )
+
+        context_prefix = build_context_prefix(self.agent, budget_meta)
+        attach_projection_metadata(
+            budget_meta, self.agent.session, context_prefix=context_prefix
+        )
+        self._last_token_meta = budget_meta
         self._last_budget_meta = budget_meta
         self._emit("context_built", build_trace_payload(budget_meta))
         tools_def = _build_anthropic_tools(self.agent.tools)

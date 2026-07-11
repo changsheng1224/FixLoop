@@ -5,6 +5,15 @@ from __future__ import annotations
 from agent_runtime.run_ids import new_run_id
 from agent_runtime.run_store import RunStore
 
+# Repair trace 可选事件（Orchestrator / Agent 写入）
+REPAIR_TRACE_EVENTS = frozenset(
+    {
+        "repair_started",
+        "skill_hint_rendered",
+        "skill_matched",
+    }
+)
+
 
 class RepairRunTracer:
     """Orchestrator 驱动：多 Agent 写入同一 trace.jsonl，结束时合并 report。"""

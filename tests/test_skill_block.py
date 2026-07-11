@@ -5,7 +5,7 @@ from __future__ import annotations
 from src.repair.prompt_router import apply_prompt_routing
 from src.skills.skill_block import (
     SKILL_BLOCK_HEADER,
-    _ROLE_LABELS,
+    ROLE_LABELS,
     render_skill_hint_for_plan,
     skill_hint_rendered_trace,
 )
@@ -40,7 +40,7 @@ class TestRenderSkillHintForPlan:
             render = render_skill_hint_for_plan(plan, role)
             assert render.source == "hit"
             assert render.text.startswith(SKILL_BLOCK_HEADER)
-            assert f"角色: {_ROLE_LABELS[role]}" in render.text
+            assert f"角色: {ROLE_LABELS[role]}" in render.text
 
     def test_localizer_projection(self):
         render = render_skill_hint_for_plan(_sample_plan(), "localizer")

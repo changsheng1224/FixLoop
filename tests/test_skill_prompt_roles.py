@@ -61,11 +61,11 @@ class TestFormatSkillHintRoles:
 
 class TestSkillHintInTaskVariables:
     def test_localizer_variables_include_skill_block(self):
-        variables = build_localizer_variables(_sample_plan(), issue="TypeError")
+        variables, _ = build_localizer_variables(_sample_plan(), issue="TypeError")
         assert "[Skill 提示]" in variables["skill_hint_block"]
         assert "角色: Localizer" in variables["skill_hint_block"]
 
     def test_retriever_variables_include_skill_block(self):
-        _, variables = build_retriever_template_and_variables([], plan=_sample_plan())
+        _, variables, _ = build_retriever_template_and_variables([], plan=_sample_plan())
         assert "[Skill 提示]" in variables["skill_hint_block"]
         assert "角色: Retriever" in variables["skill_hint_block"]

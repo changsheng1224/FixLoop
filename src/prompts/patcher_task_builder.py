@@ -6,7 +6,7 @@ from typing import Callable
 
 from src.prompts.repair_tasks import build_patcher_variables
 from src.repair.prompt_router import collect_patcher_user_hints, is_composite_multi_file
-from src.skills.prompt import format_skill_hint_for_plan
+from src.skills.skill_block import SkillBlockRender, render_skill_hint_for_plan
 from src.state import RepairPlan, RetrievedContext, SuspectLocation
 
 __all__ = ["assemble_patcher_variables", "build_issue_hints"]
@@ -29,7 +29,8 @@ def assemble_patcher_variables(
         list[str],
     ],
     fallback_suspects: Callable[[RepairPlan, str], list[SuspectLocation]],
-) -> dict[str, str]:
+    skill_render: SkillBlockRender | None = None,
+) -> tuple[dict[str, str], SkillBlockRender]:
     effective_suspects = suspects or (
         fallback_suspects(plan, issue) if plan else []
     )
@@ -69,12 +70,18 @@ def assemble_patcher_variables(
     if test_blocks:
         test_text = "相关测试文件（补丁必须通过这些 assert）:\n" + "\n".join(test_blocks)
 
-    return build_patcher_variables(
+    render = render_skill_hint_for_plan(plan, "patcher") if plan else SkillBlockRender(
+        text="", role="patcher", source="none"
+    )
+    if skill_render is not None:
+        render = skill_render
+    variables = build_patcher_variables(
         feedback=feedback,
         issue_hints_block="\n".join(build_issue_hints(plan, issue)),
-        skill_hint_block=format_skill_hint_for_plan(plan, "patcher"),
+        skill_hint_block=render.text,
         allowed_files_line=allowed_files_line,
         suspects_block="\n".join(suspects_lines),
         extra_files_block="\n".join(extra_lines),
         test_blocks=test_text,
     )
+    return variables, render

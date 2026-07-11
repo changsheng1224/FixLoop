@@ -238,6 +238,10 @@ class ContextManager:
             sections["request"] = request_text
             used += request_tokens
 
+        metadata["_context_prefix_text"] = "\n".join(
+            sections[name] for name in self.SECTION_ORDER if sections.get(name)
+        )
+
         sys_tokens = metadata["sections"].get("system", 0)
         tools_tokens = metadata["sections"].get("tools", 0)
         skills_tokens = metadata["sections"].get("skills", 0)

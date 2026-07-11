@@ -12,7 +12,7 @@ SkillBlockSource = Literal["hit", "miss", "none"]
 
 SKILL_BLOCK_HEADER = "[Skill 提示]"
 
-_ROLE_LABELS: dict[SkillHintRole, str] = {
+ROLE_LABELS: dict[SkillHintRole, str] = {
     "localizer": "Localizer",
     "retriever": "Retriever",
     "patcher": "Patcher",
@@ -99,15 +99,11 @@ def _resolve_source(plan: RepairPlan | None) -> SkillBlockSource:
     return "none"
 
 
-def _should_render(plan: RepairPlan | None) -> bool:
-    return _resolve_source(plan) != "none"
-
-
 def _build_hit_lines(plan: RepairPlan, role: SkillHintRole) -> list[str]:
     skill = plan.skill
     lines = [
         SKILL_BLOCK_HEADER,
-        f"角色: {_ROLE_LABELS[role]}",
+        f"角色: {ROLE_LABELS[role]}",
         f"策略: {skill.matched_skill}",
     ]
 
@@ -150,7 +146,7 @@ def _build_miss_lines(role: SkillHintRole) -> list[str]:
     avoid = list(defaults.get("avoid") or [])
     lines = [
         SKILL_BLOCK_HEADER,
-        f"角色: {_ROLE_LABELS[role]}",
+        f"角色: {ROLE_LABELS[role]}",
         "策略: generic",
         summary,
     ]

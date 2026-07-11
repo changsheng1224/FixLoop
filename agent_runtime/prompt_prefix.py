@@ -164,6 +164,54 @@ def _make_prompt_prefix(
     )
 
 
+@dataclass(frozen=True)
+class _StableSectionBundle:
+    stable_system_text: str
+    stable_tools_text: str
+    stable_skills_text: str
+    tool_signature: str
+    assets_fingerprint: str
+
+
+def _assemble_stable_sections(
+    prompt_assets: PromptAssets,
+    tools_registry: dict,
+    *,
+    repair: bool,
+    dry_run: bool,
+    approval: str,
+) -> _StableSectionBundle:
+    if repair:
+        stable_system_text = join_stable_parts(
+            compose_rules(prompt_assets, dry_run=dry_run, approval=approval),
+            _repair_tool_gateway_note(),
+        )
+    else:
+        stable_system_text = join_stable_parts(
+            _system_persona(),
+            compose_rules(prompt_assets, dry_run=dry_run, approval=approval),
+        )
+    stable_tools_text = _tools_section(tools_registry)
+    stable_skills_text = compose_examples(prompt_assets)
+    for part in (stable_system_text, stable_tools_text, stable_skills_text):
+        if part:
+            assert_stable_prefix_clean(part)
+    return _StableSectionBundle(
+        stable_system_text=stable_system_text.strip(),
+        stable_tools_text=stable_tools_text.strip(),
+        stable_skills_text=stable_skills_text.strip(),
+        tool_signature=_tool_signature(tools_registry),
+        assets_fingerprint=prompt_assets.fingerprint,
+    )
+
+
+def _cache_hash_from_bundle(bundle: _StableSectionBundle) -> str:
+    cache_text = cache_stable_text(bundle.stable_system_text, bundle.stable_tools_text)
+    if not cache_text:
+        cache_text = bundle.stable_system_text
+    return hash_stable_prefix(cache_text)
+
+
 def build_prompt_prefix(
     workspace,
     tools_registry: dict,
@@ -180,20 +228,20 @@ def build_prompt_prefix(
     """
     tools_registry = _filter_tools(tools_registry, tool_names)
     prompt_assets = _resolve_assets(workspace, repo_root, assets)
-    stable_system_text = join_stable_parts(
-        _system_persona(),
-        compose_rules(prompt_assets, dry_run=dry_run, approval=approval),
+    bundle = _assemble_stable_sections(
+        prompt_assets,
+        tools_registry,
+        repair=False,
+        dry_run=dry_run,
+        approval=approval,
     )
-    stable_tools_text = _tools_section(tools_registry)
-    stable_skills_text = compose_examples(prompt_assets)
-    tool_sig = _tool_signature(tools_registry)
     return _make_prompt_prefix(
-        stable_system_text,
-        stable_tools_text,
-        stable_skills_text,
+        bundle.stable_system_text,
+        bundle.stable_tools_text,
+        bundle.stable_skills_text,
         workspace,
-        tool_sig,
-        prompt_assets.fingerprint,
+        bundle.tool_signature,
+        bundle.assets_fingerprint,
     )
 
 
@@ -208,26 +256,21 @@ def build_repair_l1_prefix(
 ) -> RepairL1Prefix:
     """构建 repair 全流程共享的 L1 稳定段（Orchestrator 构建一次）。"""
     prompt_assets = _resolve_assets(workspace, repo_root, assets)
-    stable_system_text = join_stable_parts(
-        compose_rules(prompt_assets, dry_run=dry_run, approval=approval),
-        _repair_tool_gateway_note(),
+    bundle = _assemble_stable_sections(
+        prompt_assets,
+        tools_registry,
+        repair=True,
+        dry_run=dry_run,
+        approval=approval,
     )
-    stable_tools_text = _tools_section(tools_registry)
-    stable_skills_text = compose_examples(prompt_assets)
-    for part in (stable_system_text, stable_tools_text, stable_skills_text):
-        if part:
-            assert_stable_prefix_clean(part)
-    cache_text = cache_stable_text(stable_system_text, stable_tools_text)
-    if not cache_text:
-        cache_text = stable_system_text.strip()
     return RepairL1Prefix(
-        stable_system_text=stable_system_text.strip(),
-        stable_tools_text=stable_tools_text.strip(),
-        stable_skills_text=stable_skills_text.strip(),
+        stable_system_text=bundle.stable_system_text,
+        stable_tools_text=bundle.stable_tools_text,
+        stable_skills_text=bundle.stable_skills_text,
         workspace_text=workspace.text(),
-        hash=hash_stable_prefix(cache_text),
-        tool_signature=_tool_signature(tools_registry),
-        assets_fingerprint=prompt_assets.fingerprint,
+        hash=_cache_hash_from_bundle(bundle),
+        tool_signature=bundle.tool_signature,
+        assets_fingerprint=bundle.assets_fingerprint,
         workspace_fingerprint=workspace.fingerprint(),
     )
 

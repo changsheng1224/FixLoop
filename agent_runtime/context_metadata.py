@@ -22,6 +22,7 @@ CONTEXT_TRACE_KEYS = (
     "projection_step",
     "sealed_history_count",
     "prefix_aligned",
+    "prefix_monotonic",
     "prefix_fingerprint",
 )
 

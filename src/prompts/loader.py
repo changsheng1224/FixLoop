@@ -6,7 +6,6 @@ _PROMPTS_DIR = Path(__file__).parent
 _SUFFIX_DIR = _PROMPTS_DIR / "patcher_suffix"
 _LOCALIZER_HINTS_DIR = _PROMPTS_DIR / "localizer_hints"
 _PATCHER_USER_HINTS_DIR = _PROMPTS_DIR / "patcher_user_hints"
-_SKILL_MISS_DIR = _PROMPTS_DIR / "skill_miss"
 _DEFAULT_SUFFIX = "default"
 _DEFAULT_LOCALIZER_HINTS = "stack_first"
 
@@ -68,6 +67,10 @@ def load_patcher_user_hint(name: str, **format_vars: object) -> str:
 
 
 def load_skill_miss_hint(role: str) -> str:
-    """读取 Skill 未命中时注入的通用 user 提示（localizer/retriever/patcher）。"""
+    """读取 Skill 未命中时注入的通用 user 提示（canonical：skill_block）。"""
+    from src.skills.prompt import format_skill_miss_hint
+
     key = (role or "").strip().lower() or "patcher"
-    return _load_variant_text(_SKILL_MISS_DIR, key, "patcher")
+    if key not in ("localizer", "retriever", "patcher", "verifier"):
+        key = "patcher"
+    return format_skill_miss_hint(key)  # type: ignore[arg-type]

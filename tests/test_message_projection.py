@@ -9,6 +9,7 @@ import pytest
 from agent_runtime.config import AgentConfig
 from agent_runtime.context_manager import ContextManager
 from agent_runtime.message_projection import (
+    PROJECTION_STATE_KEY,
     attach_projection_metadata,
     build_context_prefix,
     check_prefix_aligned,
@@ -46,14 +47,15 @@ class TestMessageProjectionHelpers:
         agent.session["memory"]["working"]["recent_files"] = ["a.py"]
         init_run_projection(agent.session, "find bug in a.py")
         agent.session["memory"]["working"]["recent_files"] = ["b.py"]
-        assert agent.session["_run_user_query"] == "find bug in a.py"
-        assert agent.session["_run_memory_snapshot"]["working"]["recent_files"] == ["a.py"]
+        assert agent.session[PROJECTION_STATE_KEY].user_query == "find bug in a.py"
+        assert agent.session[PROJECTION_STATE_KEY].memory_snapshot["working"]["recent_files"] == ["a.py"]
 
     def test_seal_history_at_build(self, agent):
         init_run_projection(agent.session, "q")
         seal_history_at_build(agent.session, 3, "## 对话历史\n\n**user**: hi")
-        assert agent.session["_sealed_history_count"] == 3
-        assert agent.session["_sealed_history_text"].startswith("## 对话历史")
+        state = agent.session[PROJECTION_STATE_KEY]
+        assert state.sealed_history_count == 3
+        assert state.sealed_history_text.startswith("## 对话历史")
 
 
 class TestContextManagerSealedHistory:
@@ -91,9 +93,10 @@ class TestContextManagerSealedHistory:
 
     def test_memory_snapshot_prevents_prefix_drift_from_recent_files(self, agent):
         init_run_projection(agent.session, "scan")
-        snap = copy.deepcopy(agent.session["_run_memory_snapshot"])
+        state = agent.session[PROJECTION_STATE_KEY]
+        snap = copy.deepcopy(state.memory_snapshot)
         snap["working"]["recent_files"] = []
-        agent.session["_run_memory_snapshot"] = snap
+        state.memory_snapshot = snap
 
         agent.session["history"] = [{"role": "user", "content": "scan", "turn_id": 1}]
         cm = ContextManager(agent)
