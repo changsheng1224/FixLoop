@@ -16,6 +16,7 @@ from src.repair.termination import (
     mark_fixed_skip_verify,
 )
 from src.repair.output_parsers import parse_retrieved_context, parse_suspect_list
+from src.repair.phase_clock import PhaseTimeoutError, RepairPhaseClock
 from src.repair.timing_schema import (
     finalize_phases,
     set_parallel_wall_ms,
@@ -35,6 +36,42 @@ def _record_pytest_exit(state: RepairState, repo_root: str, key: str) -> None:
 
 class RepairPipelineMixin:
     """Orchestrator 修复主循环与 Localizer/Retriever 步骤。"""
+
+    def _make_phase_clock(self) -> RepairPhaseClock | None:
+        config = getattr(self, "_phase_timeout_config", None)
+        if config is None or not config.any_enabled():
+            return None
+        return RepairPhaseClock(config)
+
+    def _apply_phase_timeout(
+        self,
+        state: RepairState,
+        initial_snapshot: dict,
+        exc: PhaseTimeoutError,
+    ) -> None:
+        token = getattr(self, "_cancel_token", None)
+        if token is not None:
+            token.cancel("timeout")
+        self._restore_repo_snapshot(initial_snapshot)
+        state.status = RepairTerminalStatus.TIMEOUT
+        state.node_timings["phase_timeout"] = exc.phase
+        config = getattr(self, "_phase_timeout_config", None)
+        if config is not None:
+            state.node_timings["phase_timeout_budgets"] = config.budget_dict()
+        state.node_timings["phase_timeout_consumed_s"] = exc.consumed_s
+        state.agent_errors["orchestrator"] = str(exc)
+        tracer = self._repair_tracer
+        if tracer is not None:
+            tracer.emit(
+                "orchestrator",
+                "phase_timeout",
+                {
+                    "phase": exc.phase,
+                    "budget_s": exc.budget_s,
+                    "consumed_s": exc.consumed_s,
+                },
+            )
+        log.warning("阶段超时: %s", exc)
 
     def _run_localizer_only(
         self,
@@ -127,6 +164,8 @@ class RepairPipelineMixin:
         log.info("Orchestrator 开始")
 
         cancelled = False
+        phase_timed_out = False
+        phase_clock = self._make_phase_clock()
         try:
             if self._abort_repair_if_cancelled(state):
                 cancelled = True
@@ -172,9 +211,13 @@ class RepairPipelineMixin:
                 log.info("parse_issue: %dms, skill_resolve: %dms", parse_ms, skill_ms)
 
                 log.info("Localizer + Retriever 并行开始...")
+                if phase_clock is not None:
+                    phase_clock.ensure("localize")
                 t0 = time.time()
                 suspects, context, loc_timing, ret_timing = self._run_localize_and_retrieve(state)
                 wall_ms = int((time.time() - t0) * 1000)
+                if phase_clock is not None:
+                    phase_clock.consume("localize", wall_ms)
                 set_parallel_wall_ms(state.node_timings, wall_ms)
                 set_phase_ms(
                     state.node_timings,
@@ -213,7 +256,11 @@ class RepairPipelineMixin:
 
                     repo_snapshot = self._snapshot_repo() if self._verification_enabled() else None
                     log.info("Patcher 开始 (retry=%d)...", state.retry_count)
+                    if phase_clock is not None:
+                        phase_clock.ensure("patch")
                     state.candidate_patches, patch_timing = self._run_patcher(state)
+                    if phase_clock is not None:
+                        phase_clock.consume("patch", patch_timing["total_ms"])
                     if patch_timing.get("user_cancel") or self._abort_repair_if_cancelled(state):
                         cancelled = True
                         break
@@ -254,12 +301,16 @@ class RepairPipelineMixin:
                     if self._abort_repair_if_cancelled(state):
                         cancelled = True
                         break
+                    if phase_clock is not None:
+                        phase_clock.ensure("verify")
                     t0 = time.time()
                     state.verification_result = self._run_verifier(state)
                     if self._abort_repair_if_cancelled(state):
                         cancelled = True
                         break
                     ms = int((time.time() - t0) * 1000)
+                    if phase_clock is not None:
+                        phase_clock.consume("verify", ms)
                     set_phase_ms(state.node_timings, "verify", ms)
                     log.info("Verifier 完成: %dms", ms)
 
@@ -286,8 +337,11 @@ class RepairPipelineMixin:
                     )
                 ):
                     run_baseline_fallback(self, state, initial_snapshot=initial_snapshot)
+        except PhaseTimeoutError as exc:
+            self._apply_phase_timeout(state, initial_snapshot, exc)
+            phase_timed_out = True
         finally:
-            if cancelled or self._is_repair_cancelled():
+            if not phase_timed_out and (cancelled or self._is_repair_cancelled()):
                 state.node_timings["user_cancel"] = True
                 self._restore_repo_snapshot(initial_snapshot)
                 self._emit_repair_cancelled(state)

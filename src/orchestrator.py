@@ -28,6 +28,7 @@ from src.repair.prompt_router import (
     fallback_suspect_uses_import_line,
     patcher_variant_for,
 )
+from src.repair.phase_clock import PhaseTimeoutConfig
 from src.repair.repo_snapshot import restore_repo_snapshot, snapshot_repo
 from src.repair.language_detect import detect_repair_language
 from src.repair.verify import DockerVerifyStrategy, PytestVerifyStrategy, record_verify_timings
@@ -115,6 +116,7 @@ class Orchestrator(RepairPipelineMixin):
         issue: str,
         max_retries: int = 3,
         repair_timeout_s: int = DEFAULT_REPAIR_TIMEOUT_S,
+        phase_timeouts: PhaseTimeoutConfig | None = None,
         cancel_token=None,
     ) -> RepairState:
         """执行修复流水线。
@@ -123,6 +125,7 @@ class Orchestrator(RepairPipelineMixin):
             issue: Issue 描述（含堆栈和错误信息）。
             max_retries: 最大重试次数。
             repair_timeout_s: 全流程超时秒数（≤0 表示不限制）。
+            phase_timeouts: 分阶段超时；默认由 ``repair_timeout_s`` 推导。
             cancel_token: 可选协作式取消 token（CLI Ctrl+C 注入）。
 
         Returns:
@@ -130,31 +133,38 @@ class Orchestrator(RepairPipelineMixin):
         """
         from agent_runtime.cancellation import CancellationToken
 
+        if phase_timeouts is None:
+            phase_timeouts = PhaseTimeoutConfig.from_repair_timeout(repair_timeout_s)
+
         state = RepairState(issue_input=issue, max_retries=max_retries)
         token = cancel_token or CancellationToken()
         initial_snapshot = self._snapshot_repo()
 
-        with self._repair_cancel_scope(token):
-            if repair_timeout_s <= 0:
-                return self._repair_impl(state, initial_snapshot=initial_snapshot)
+        self._phase_timeout_config = phase_timeouts
+        try:
+            with self._repair_cancel_scope(token):
+                if repair_timeout_s <= 0:
+                    return self._repair_impl(state, initial_snapshot=initial_snapshot)
 
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                fut = pool.submit(self._repair_impl, state, initial_snapshot)
-                try:
-                    return fut.result(timeout=repair_timeout_s)
-                except FuturesTimeoutError:
-                    from src.repair.termination import RepairTerminalStatus, finalize_repair_state
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    fut = pool.submit(self._repair_impl, state, initial_snapshot)
+                    try:
+                        return fut.result(timeout=repair_timeout_s)
+                    except FuturesTimeoutError:
+                        from src.repair.termination import RepairTerminalStatus, finalize_repair_state
 
-                    token.cancel("timeout")
-                    self._restore_repo_snapshot(initial_snapshot)
-                    state.status = RepairTerminalStatus.TIMEOUT
-                    state.agent_errors["orchestrator"] = (
-                        f"repair timeout ({repair_timeout_s}s)"
-                    )
-                    state.node_timings["repair_timeout"] = repair_timeout_s
-                    log.warning("修复超时 (%ds)", repair_timeout_s)
-                    finalize_repair_state(state)
-                    return state
+                        token.cancel("timeout")
+                        self._restore_repo_snapshot(initial_snapshot)
+                        state.status = RepairTerminalStatus.TIMEOUT
+                        state.agent_errors["orchestrator"] = (
+                            f"repair timeout ({repair_timeout_s}s)"
+                        )
+                        state.node_timings["repair_timeout"] = repair_timeout_s
+                        log.warning("修复超时 (%ds)", repair_timeout_s)
+                        finalize_repair_state(state)
+                        return state
+        finally:
+            self._phase_timeout_config = None
 
     @contextmanager
     def _repair_cancel_scope(self, token):
@@ -374,6 +384,9 @@ class Orchestrator(RepairPipelineMixin):
                     l1_meta["tool_signature"] = prefix.tool_signature
                 if prefix.workspace_fingerprint:
                     l1_meta["workspace_fingerprint"] = prefix.workspace_fingerprint
+        phase_cfg = getattr(self, "_phase_timeout_config", None)
+        if phase_cfg is not None and phase_cfg.any_enabled():
+            l1_meta["phase_timeout_budgets"] = phase_cfg.budget_dict()
         run_id = tracer.begin(state.issue_input, **l1_meta)
         tracer.bind_agents(
             self.localizer,

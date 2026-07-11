@@ -11,6 +11,7 @@ REPAIR_TRACE_EVENTS = frozenset(
         "repair_started",
         "skill_hint_rendered",
         "skill_matched",
+        "phase_timeout",
     }
 )
 
