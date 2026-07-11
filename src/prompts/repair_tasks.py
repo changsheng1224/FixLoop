@@ -7,6 +7,7 @@ from pathlib import Path
 from agent_runtime.template_render import render_template, template_metadata
 from src.prompts.loader import load_localizer_hints
 from src.repair.prompt_router import apply_prompt_routing, localizer_hints_key_for
+from src.skills.prompt import format_skill_hint
 
 _TASKS_DIR = Path(__file__).parent / "tasks"
 
@@ -36,6 +37,7 @@ def build_localizer_variables(plan, issue: str = "") -> dict[str, str]:
         "issue": issue_text,
         "suspect_files_line": suspect_line,
         "issue_type_hints": hints,
+        "skill_hint_block": format_skill_hint(plan, "localizer"),
     }
 
 
@@ -44,6 +46,7 @@ def build_retriever_template_and_variables(
     plan=None,
     issue: str = "",
 ) -> tuple[str, dict[str, str]]:
+    skill_hint_block = format_skill_hint(plan, "retriever") if plan else ""
     if suspects:
         lines = ["根据以下嫌疑位置搜索相关代码："]
         for s in suspects:
@@ -51,15 +54,17 @@ def build_retriever_template_and_variables(
         return "retriever_suspects", {
             "suspects_list": "\n".join(lines[1:]),
             "header": lines[0],
+            "skill_hint_block": skill_hint_block,
         }
 
     if plan and plan.suspect_files:
         return "retriever_plan", {
             "issue": issue or plan.reasoning,
             "suspect_files": ", ".join(plan.suspect_files),
+            "skill_hint_block": skill_hint_block,
         }
 
-    return "retriever_fallback", {}
+    return "retriever_fallback", {"skill_hint_block": skill_hint_block}
 
 
 def build_patcher_variables(

@@ -181,7 +181,7 @@
 
 ### 5.3 模板 · Skill 块
 
-- **[P1] [C:⭐ I:⭐⭐⭐] Skill 块注入 Prompt 统一**：`[Skill 提示]` = `suggested_tools` + `example_patch`（见 [§13.3](#133-注入)）
+- **[P1] ✅ [C:⭐ I:⭐⭐⭐] Skill 块注入 Prompt 统一**：Localizer/Retriever/Patcher 分角色 `[Skill 提示]`（见 [§13.3](#133-注入)）
 
 ### 5.2 L2 角色 Prompt
 
