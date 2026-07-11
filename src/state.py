@@ -62,6 +62,7 @@ class SkillContext:
     avoid: list[str] = field(default_factory=list)
     example_patch: str = ""
     fallback_strategy: str = ""
+    confidence: float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -72,6 +73,7 @@ class SkillContext:
             "avoid": list(self.avoid),
             "example_patch": self.example_patch,
             "fallback_strategy": self.fallback_strategy,
+            "confidence": self.confidence,
         }
 
     @classmethod
@@ -87,6 +89,7 @@ class SkillContext:
             fallback_strategy=str(
                 raw.get("fallback_strategy") or raw.get("skill_fallback_strategy") or ""
             ),
+            confidence=float(raw.get("confidence", 0.0)),
         )
 
 
