@@ -70,6 +70,14 @@ def main() -> int:
         action="store_true",
         help="禁用 verify 耗尽后的 Single-Agent 最后一搏",
     )
+    p_repair.add_argument(
+        "--metrics",
+        type=int,
+        nargs="?",
+        const=0,
+        default=None,
+        help="启动 Prometheus /metrics 端点（可选指定端口，默认 9090）",
+    )
 
     p_eval = sub.add_parser("eval", help="运行评测 Case")
     p_eval_sub = p_eval.add_subparsers(dest="eval_command")
@@ -181,6 +189,13 @@ def _repair(args) -> int:
     except Exception as exc:
         print(f"错误: 配置/初始化失败: {exc}", file=sys.stderr)
         return REPAIR_EXIT_CONFIG
+
+    if args.metrics is not None:
+        from agent_runtime.metrics import start_metrics_server
+
+        port = args.metrics if args.metrics > 0 else 9090
+        start_metrics_server(port)
+        print(f"[metrics] Prometheus /metrics → http://127.0.0.1:{port}/metrics", file=sys.stderr)
 
     if args.dry_run:
         print("⚠ DRY-RUN MODE", file=sys.stderr)

@@ -1,0 +1,189 @@
+{
+  "schemaVersion": 27,
+  "title": "FixLoop — Multi-Agent Repair Metrics",
+  "description": "Prometheus-powered observability for FixLoop repair pipeline. Requires the --metrics flag on repair/eval CLI and a Prometheus server scraping the endpoint.",
+  "tags": ["fixloop", "multi-agent", "repair"],
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "prometheus",
+        "query": "prometheus",
+        "current": { "text": "Prometheus", "value": "Prometheus" },
+        "hide": 0,
+        "label": "Data source",
+        "multi": false,
+        "includeAll": false,
+        "refresh": 1,
+        "regex": ""
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Repairs Fixed",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 0, "w": 8, "h": 4 },
+      "datasource": "${datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "mappings": [],
+          "unit": "short"
+        }
+      },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"] }, "textMode": "value" },
+      "targets": [
+        {
+          "expr": "fixloop_repair_status{status=\"fixed\"}",
+          "legendFormat": "Fixed",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Repairs Failed",
+      "type": "stat",
+      "gridPos": { "x": 8, "y": 0, "w": 8, "h": 4 },
+      "datasource": "${datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }] },
+          "mappings": [],
+          "unit": "short"
+        }
+      },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"] }, "textMode": "value" },
+      "targets": [
+        {
+          "expr": "fixloop_repair_status{status=\"failed\"} or fixloop_repair_status{status=\"exhausted\"} or fixloop_repair_status{status=\"timeout\"}",
+          "legendFormat": "Failed",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Cache Hit Rate",
+      "type": "gauge",
+      "gridPos": { "x": 16, "y": 0, "w": 8, "h": 4 },
+      "datasource": "${datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "orange", "value": 0.3 },
+            { "color": "green", "value": 0.7 }
+          ]},
+          "mappings": [],
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        }
+      },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"] }, "showThresholdLabels": true, "showThresholdMarkers": true },
+      "targets": [
+        {
+          "expr": "fixloop_cache_hit_rate",
+          "legendFormat": "Cache Hit Rate",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Phase Timings (ms)",
+      "type": "bargauge",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 7 },
+      "datasource": "${datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "mappings": [],
+          "unit": "ms"
+        }
+      },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"] }, "orientation": "horizontal", "displayMode": "gradient", "showUnfilled": true },
+      "targets": [
+        {
+          "expr": "fixloop_repair_phase_ms{phase=\"localize\"}",
+          "legendFormat": "Localizer",
+          "refId": "A"
+        },
+        {
+          "expr": "fixloop_repair_phase_ms{phase=\"retrieve\"}",
+          "legendFormat": "Retriever",
+          "refId": "B"
+        },
+        {
+          "expr": "fixloop_repair_phase_ms{phase=\"patch\"}",
+          "legendFormat": "Patcher",
+          "refId": "C"
+        },
+        {
+          "expr": "fixloop_repair_phase_ms{phase=\"verify\"}",
+          "legendFormat": "Verifier",
+          "refId": "D"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Tool Steps by Tier",
+      "type": "piechart",
+      "gridPos": { "x": 12, "y": 4, "w": 6, "h": 7 },
+      "datasource": "${datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "mappings": []
+        }
+      },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"] }, "displayLabels": ["percent"], "legend": { "displayMode": "table", "placement": "right" } },
+      "targets": [
+        {
+          "expr": "fixloop_tool_steps_total{tier=\"host\"}",
+          "legendFormat": "Host",
+          "refId": "A"
+        },
+        {
+          "expr": "fixloop_tool_steps_total{tier=\"container\"}",
+          "legendFormat": "Container",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Token Usage",
+      "type": "stat",
+      "gridPos": { "x": 18, "y": 4, "w": 6, "h": 7 },
+      "datasource": "${datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null }
+          ]},
+          "mappings": [],
+          "unit": "short"
+        }
+      },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "none" },
+      "targets": [
+        {
+          "expr": "fixloop_token_usage_total",
+          "legendFormat": "Tokens",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

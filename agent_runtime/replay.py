@@ -1,4 +1,4 @@
-"""Deterministic Replay：从 trace.jsonl 回放工具执行，对比结果差异。
+"""Deterministic Replay：从 trace.jsonl（或 .gz）回放工具执行，对比结果差异。
 
 不重新调模型（结果不确定），只回放工具执行（结果确定）。
 """
@@ -6,6 +6,8 @@
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from agent_runtime.run_store import read_trace_path
 
 
 @dataclass
@@ -40,14 +42,9 @@ class ReplayRunner:
         """
         result = ReplayResult()
 
-        if not self.trace_path.exists():
+        lines = read_trace_path(self.trace_path)
+        if not lines:
             result.errors.append(f"Trace file not found: {self.trace_path}")
-            return result
-
-        try:
-            lines = self.trace_path.read_text(encoding="utf-8").strip().splitlines()
-        except OSError as e:
-            result.errors.append(f"Cannot read trace: {e}")
             return result
 
         for line in lines:

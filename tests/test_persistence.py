@@ -140,3 +140,87 @@ class TestRunStore:
         assert report_path.exists()
         data = json.loads(report_path.read_text())
         assert data["total_tokens"] == 500
+
+
+class TestTraceGzip:
+    """trace.jsonl gzip 归档测试。"""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        return RunStore(str(tmp_path))
+
+    def test_read_trace_lines_plain_jsonl(self, store):
+        run_id = "gzip-test-001"
+        store.append_trace_event(run_id, "run_started")
+        store.append_trace_event(run_id, "tool_executed", {"tool": "read_file"})
+        lines = store.read_trace_lines(run_id)
+        assert len(lines) == 2
+        assert json.loads(lines[0])["event"] == "run_started"
+
+    def test_read_trace_lines_missing_run(self, store):
+        assert store.read_trace_lines("nonexistent") == []
+
+    def test_no_compress_below_threshold(self, store, monkeypatch):
+        monkeypatch.setenv("FIXLOOP_TRACE_GZIP_LINES", "9999")
+        run_id = "gzip-test-002"
+        store.append_trace_event(run_id, "run_started")
+        store.append_trace_event(run_id, "tool_executed", {"tool": "read_file"})
+        stats = store.compress_trace_if_needed(run_id)
+        assert stats is None
+        assert (store.runs_dir / run_id / "trace.jsonl").is_file()
+
+    def test_compress_above_threshold(self, store, monkeypatch):
+        monkeypatch.setenv("FIXLOOP_TRACE_GZIP_LINES", "2")
+        run_id = "gzip-test-003"
+        for i in range(5):
+            store.append_trace_event(run_id, "tool_executed", {"tool": f"t{i}"})
+        stats = store.compress_trace_if_needed(run_id)
+        assert stats is not None
+        assert stats["compressed_bytes"] > 0
+        assert stats["original_bytes"] > stats["compressed_bytes"]
+        assert stats["compression_ratio"] < 1.0
+        assert not (store.runs_dir / run_id / "trace.jsonl").is_file()
+        assert (store.runs_dir / run_id / "trace.jsonl.gz").is_file()
+
+    def test_read_trace_lines_from_gz(self, store, monkeypatch):
+        monkeypatch.setenv("FIXLOOP_TRACE_GZIP_LINES", "2")
+        run_id = "gzip-test-004"
+        for i in range(5):
+            store.append_trace_event(run_id, "tool_executed", {"tool": f"t{i}"})
+        store.compress_trace_if_needed(run_id)
+        lines = store.read_trace_lines(run_id)
+        assert len(lines) == 5
+        assert json.loads(lines[0])["event"] == "tool_executed"
+
+    def test_threshold_zero_disables_compression(self, store, monkeypatch):
+        monkeypatch.setenv("FIXLOOP_TRACE_GZIP_LINES", "0")
+        run_id = "gzip-test-005"
+        for i in range(50):
+            store.append_trace_event(run_id, "tool_executed", {"tool": f"t{i}"})
+        stats = store.compress_trace_if_needed(run_id)
+        assert stats is None
+        assert (store.runs_dir / run_id / "trace.jsonl").is_file()
+
+    def test_invalid_env_var_falls_back_to_default(self):
+        from agent_runtime.run_store import _trace_gzip_threshold
+
+        assert _trace_gzip_threshold() == 1000
+
+    def test_replay_runner_reads_gz_transparently(self, tmp_path):
+        import gzip
+
+        gz = tmp_path / "trace.jsonl.gz"
+        events = [
+            {"event": "run_started", "created_at": "2026-01-01T00:00:00Z"},
+            {"event": "tool_executed", "payload": {"tool": "read_file"}},
+        ]
+        with gzip.open(gz, "wt", encoding="utf-8") as f:
+            for e in events:
+                f.write(json.dumps(e) + "\n")
+
+        from agent_runtime.replay import ReplayRunner
+
+        runner = ReplayRunner(str(tmp_path / "trace.jsonl"))
+        result = runner.replay(None)
+        assert result.total == 1
+        assert len(result.errors) == 0

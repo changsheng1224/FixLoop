@@ -375,5 +375,29 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         self._attach_token_usage(state)
         self._attach_rejection_stats(state)
         self._end_repair_trace(state)
+        self._push_repair_metrics(state)
         log.info("总耗时: %dms, status=%s", total_ms, state.status)
         return state
+
+    def _push_repair_metrics(self, state) -> None:
+        """推送 repair 指标到 Prometheus registry（静默失败）。"""
+        try:
+            from agent_runtime.metrics import get_registry
+
+            registry = get_registry()
+            registry.counter_inc(
+                "fixloop_repair_status",
+                labels={"status": state.status or "unknown"},
+            )
+            registry.gauge_set("fixloop_retry_count", state.retry_count)
+            for phase, ms in (state.node_timings.get("phases") or {}).items():
+                try:
+                    registry.gauge_set(
+                        "fixloop_repair_phase_ms",
+                        float(ms),
+                        labels={"phase": phase.replace("_ms", "")},
+                    )
+                except (ValueError, TypeError):
+                    pass
+        except Exception:
+            pass

@@ -2,13 +2,47 @@
 
 每个 run 目录含：
     task_state.json — 运行状态（原子写）
-    trace.jsonl     — 逐事件时间线（JSONL 追加）
+    trace.jsonl     — 逐事件时间线（JSONL 追加，>阈值自动 gzip）
     report.json     — 运行摘要（原子写）
 """
 
+import gzip
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
+
+# trace.jsonl 超此行数自动 gzip 归档（FIXLOOP_TRACE_GZIP_LINES 可配，0=禁用）
+_DEFAULT_TRACE_GZIP_LINES = 1000
+
+
+def _trace_gzip_threshold() -> int:
+    val = os.environ.get("FIXLOOP_TRACE_GZIP_LINES", str(_DEFAULT_TRACE_GZIP_LINES))
+    try:
+        return int(val)
+    except ValueError:
+        return _DEFAULT_TRACE_GZIP_LINES
+
+
+def read_trace_path(path: Path) -> list[str]:
+    """透明读取 trace 文件（支持 .jsonl 和 .jsonl.gz）。
+
+    Args:
+        path: trace.jsonl 路径（优先），不存在则尝试 trace.jsonl.gz。
+
+    Returns:
+        trace 每行文本列表，文件不存在返回空列表。
+    """
+    if not path.exists():
+        gz = path.with_suffix(".jsonl.gz")
+        if gz.is_file():
+            with gzip.open(gz, "rt", encoding="utf-8") as f:
+                return [line.rstrip("\n") for line in f]
+        return []
+    if path.suffix == ".gz":
+        with gzip.open(path, "rt", encoding="utf-8") as f:
+            return [line.rstrip("\n") for line in f]
+    return path.read_text(encoding="utf-8").strip().splitlines()
 
 
 class RunStore:
@@ -136,3 +170,57 @@ class RunStore:
             encoding="utf-8",
         )
         tmp.replace(path)
+
+    # ── trace 透明读取 + gzip 归档 ──
+
+    def _trace_path(self, run_id: str) -> Path:
+        """返回 trace 实际路径（.jsonl 优先，.jsonl.gz fallback）。"""
+        run_dir = self.runs_dir / run_id
+        plain = run_dir / "trace.jsonl"
+        if plain.is_file():
+            return plain
+        gz = run_dir / "trace.jsonl.gz"
+        if gz.is_file():
+            return gz
+        return plain  # 新 run 尚未创建时返回默认路径
+
+    def read_trace_lines(self, run_id: str) -> list[str]:
+        """透明读取 trace 行（自动处理 gzip）。"""
+        return read_trace_path(self._trace_path(run_id))
+
+    def compress_trace_if_needed(self, run_id: str) -> dict | None:
+        """trace.jsonl 超阈值时 gzip 归档。
+
+        Args:
+            run_id: 运行 ID。
+
+        Returns:
+            压缩统计 dict 或 None（未触发压缩时）。
+        """
+        threshold = _trace_gzip_threshold()
+        if threshold <= 0:
+            return None
+
+        run_dir = self.runs_dir / run_id
+        plain = run_dir / "trace.jsonl"
+        if not plain.is_file():
+            return None
+
+        lines = plain.read_text(encoding="utf-8").count("\n")
+        if lines < threshold:
+            return None
+
+        original_bytes = plain.stat().st_size
+        gz = run_dir / "trace.jsonl.gz"
+        with open(plain, "rb") as src:
+            with gzip.open(gz, "wb") as dst:
+                dst.writelines(src)
+        compressed_bytes = gz.stat().st_size
+        plain.unlink()
+
+        return {
+            "original_bytes": original_bytes,
+            "compressed_bytes": compressed_bytes,
+            "compression_ratio": round(compressed_bytes / max(original_bytes, 1), 3),
+            "trace_lines": lines,
+        }

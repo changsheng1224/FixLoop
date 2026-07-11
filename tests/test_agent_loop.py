@@ -438,3 +438,36 @@ class TestTtftObservability:
         data = json.loads(report_path.read_text(encoding="utf-8"))
         assert "ttft_ms_p50" in data
         assert data["ttft_ms_by_call"][0]["ttft_ms"] == 0
+
+    def test_report_includes_context_summary(self, config, workspace, temp_workspace):
+        import json
+
+        from agent_runtime.run_store import RunStore
+
+        agent = _make_agent(["<final>done</final>"], config, workspace)
+        agent.cwd = str(temp_workspace)
+        agent.ask("find the bug")
+
+        run_dirs = list(RunStore(str(temp_workspace)).runs_dir.iterdir())
+        report_path = run_dirs[0] / "report.json"
+        data = json.loads(report_path.read_text(encoding="utf-8"))
+
+        cs = data.get("context_summary")
+        assert cs is not None, "report.json missing context_summary"
+        assert cs["build_count"] >= 1
+        assert isinstance(cs["sections"], dict)
+        assert "cache_hit_rate" in cs
+        assert 0.0 <= cs["cache_hit_rate"] <= 1.0
+
+        rs = data.get("retry_summary")
+        assert rs is not None, "report.json missing retry_summary"
+        assert "parse_retries" in rs
+        assert "model_attempts" in rs
+        assert "tool_steps" in rs
+        assert rs["model_attempts"] >= 1
+        assert rs["tool_steps"] >= 0
+
+        qu = data.get("quota_usage")
+        assert qu is not None, "report.json missing quota_usage"
+        assert qu["total"]["used"] >= 0
+        assert qu["total"]["limit"] == 50
