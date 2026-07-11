@@ -4,13 +4,17 @@ from src.skills.catalog import SkillCatalog, SkillCatalogError, get_default_cata
 from src.skills.matcher import match_skill
 from src.skills.models import MatchedSkill, SkillSpec
 from src.skills.prompt import format_skill_hint_block
+from src.skills.validate import SkillValidationIssue, SkillValidationReport, validate_directory
 
 __all__ = [
     "MatchedSkill",
     "SkillCatalog",
     "SkillCatalogError",
     "SkillSpec",
+    "SkillValidationIssue",
+    "SkillValidationReport",
     "format_skill_hint_block",
     "get_default_catalog",
     "match_skill",
+    "validate_directory",
 ]

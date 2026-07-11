@@ -105,6 +105,15 @@ def main() -> int:
         help="生成 Markdown 指标报告（默认 output/report.md）",
     )
 
+    p_skills = sub.add_parser("skills", help="Skill YAML 管理")
+    p_skills_sub = p_skills.add_subparsers(dest="skills_command")
+    p_skills_validate = p_skills_sub.add_parser("validate", help="校验 Skill YAML schema")
+    p_skills_validate.add_argument(
+        "--path",
+        default=str(Path(__file__).resolve().parent / "skills"),
+        help="Skill YAML 目录（默认 src/skills）",
+    )
+
     args = parser.parse_args()
     setup_logging_from_args(args)
     if args.command == "repair":
@@ -113,6 +122,8 @@ def main() -> int:
         return _eval(args)
     if args.command == "ablation":
         return _ablation(args)
+    if args.command == "skills":
+        return _skills(args)
     parser.print_help()
     return 1
 
@@ -198,6 +209,22 @@ def _ablation(args) -> int:
     )
     print_ablation_report(report, verbose=args.verbose, report_path=report_path)
     return code
+
+
+def _skills(args) -> int:
+    if args.skills_command == "validate":
+        return _skills_validate(args)
+    print("错误: 请指定 skills 子命令，例如: skills validate", file=sys.stderr)
+    return 2
+
+
+def _skills_validate(args) -> int:
+    from src.skills.validate import format_report, validate_directory
+
+    directory = Path(args.path).resolve()
+    report = validate_directory(directory)
+    print(format_report(report, directory=directory))
+    return 0 if report.ok else 1
 
 
 def _print_repair_result(state, verbose: bool) -> None:

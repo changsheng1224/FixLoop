@@ -354,7 +354,7 @@
 
 ### 13.1 YAML Schema
 
-- **[P1] ✅ [C:⭐⭐ I:⭐⭐⭐⭐] Skill YAML schema 校验**：pydantic 校验 `name` · `language` · `trigger_pattern` · `priority`
+- **[P1] ✅ [C:⭐⭐ I:⭐⭐⭐⭐] Skill YAML schema 校验**：pydantic 校验 `name` · `language` · `trigger_pattern` · `priority`；L2 语义校验 + `python -m src.cli skills validate`
 
 ### 13.2 匹配算法
 
