@@ -13,10 +13,8 @@
 from __future__ import annotations
 
 import http.server
-import json
 import os
 import threading
-from typing import Optional
 
 
 def _default_port() -> int:
@@ -53,34 +51,33 @@ def _format_labels(labels: dict[str, str] | None) -> str:
     return "{" + ",".join(parts) + "}"
 
 
+def _render_metric_group(
+    name: str, labeled: dict[tuple, int | float], value_fmt: str = "{}"
+) -> list[str]:
+    """渲染单个 metric 的 HELP + TYPE + 值行。"""
+    lines: list[str] = []
+    help_text = _METRIC_HELP.get(name, "")
+    type_text = _METRIC_TYPE.get(name, "untyped")
+    lines.append(f"# HELP {name} {help_text}")
+    lines.append(f"# TYPE {name} {type_text}")
+    for label_tuple, value in sorted(labeled.items()):
+        labels = dict(pair.split("=", 1) for pair in label_tuple) if label_tuple else {}
+        lbl = _format_labels(labels)
+        lines.append(f"{name}{lbl} {value_fmt.format(value)}")
+    return lines
+
+
 def _render_prometheus(
     counters: dict[str, dict[tuple, int]],
     gauges: dict[str, dict[tuple, float]],
 ) -> str:
     """渲染 Prometheus text exposition format。"""
     lines: list[str] = []
-
     for name, labeled in sorted(counters.items()):
-        help_text = _METRIC_HELP.get(name, "")
-        type_text = _METRIC_TYPE.get(name, "untyped")
-        lines.append(f"# HELP {name} {help_text}")
-        lines.append(f"# TYPE {name} {type_text}")
-        for label_tuple, value in sorted(labeled.items()):
-            labels = dict(pair.split("=", 1) for pair in label_tuple) if label_tuple else {}
-            lbl = _format_labels(labels)
-            lines.append(f"{name}{lbl} {value}")
-
+        lines.extend(_render_metric_group(name, labeled))
     for name, labeled in sorted(gauges.items()):
-        help_text = _METRIC_HELP.get(name, "")
-        type_text = _METRIC_TYPE.get(name, "untyped")
-        lines.append(f"# HELP {name} {help_text}")
-        lines.append(f"# TYPE {name} {type_text}")
-        for label_tuple, value in sorted(labeled.items()):
-            labels = dict(pair.split("=", 1) for pair in label_tuple) if label_tuple else {}
-            lbl = _format_labels(labels)
-            lines.append(f"{name}{lbl} {value:.6g}")
-
-    lines.append("")  # 末尾换行
+        lines.extend(_render_metric_group(name, labeled, value_fmt="{:.6g}"))
+    lines.append("")
     return "\n".join(lines)
 
 

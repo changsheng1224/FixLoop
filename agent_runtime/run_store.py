@@ -24,6 +24,27 @@ def _trace_gzip_threshold() -> int:
         return _DEFAULT_TRACE_GZIP_LINES
 
 
+def read_trace_path(path: Path) -> list[str]:
+    """透明读取 trace 文件（支持 .jsonl 和 .jsonl.gz）。
+
+    Args:
+        path: trace.jsonl 路径（优先），不存在则尝试 trace.jsonl.gz。
+
+    Returns:
+        trace 每行文本列表，文件不存在返回空列表。
+    """
+    if not path.exists():
+        gz = path.with_suffix(".jsonl.gz")
+        if gz.is_file():
+            with gzip.open(gz, "rt", encoding="utf-8") as f:
+                return [line.rstrip("\n") for line in f]
+        return []
+    if path.suffix == ".gz":
+        with gzip.open(path, "rt", encoding="utf-8") as f:
+            return [line.rstrip("\n") for line in f]
+    return path.read_text(encoding="utf-8").strip().splitlines()
+
+
 class RunStore:
     """运行工件持久化存储。
 
@@ -164,21 +185,8 @@ class RunStore:
         return plain  # 新 run 尚未创建时返回默认路径
 
     def read_trace_lines(self, run_id: str) -> list[str]:
-        """透明读取 trace 行（自动处理 gzip）。
-
-        Args:
-            run_id: 运行 ID。
-
-        Returns:
-            trace 的每行文本列表（不存在时返回空列表）。
-        """
-        path = self._trace_path(run_id)
-        if not path.exists():
-            return []
-        if path.suffix == ".gz":
-            with gzip.open(path, "rt", encoding="utf-8") as f:
-                return [line.rstrip("\n") for line in f]
-        return path.read_text(encoding="utf-8").strip().splitlines()
+        """透明读取 trace 行（自动处理 gzip）。"""
+        return read_trace_path(self._trace_path(run_id))
 
     def compress_trace_if_needed(self, run_id: str) -> dict | None:
         """trace.jsonl 超阈值时 gzip 归档。

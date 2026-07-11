@@ -7,6 +7,8 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from agent_runtime.run_store import read_trace_path
+
 
 @dataclass
 class ReplayResult:
@@ -21,22 +23,6 @@ class ReplayResult:
     def all_match(self) -> bool:
         """回放结果与 trace 是否完全一致（无 diff 且无 error）。"""
         return len(self.diffs) == 0 and len(self.errors) == 0
-
-
-def _read_trace_lines(trace_path: Path) -> list[str]:
-    """透明读取 trace 文件（支持 .jsonl 和 .jsonl.gz）。"""
-    import gzip
-
-    if not trace_path.exists():
-        gz = trace_path.with_suffix(".jsonl.gz")
-        if gz.is_file():
-            with gzip.open(gz, "rt", encoding="utf-8") as f:
-                return [line.rstrip("\n") for line in f]
-        return []
-    if trace_path.suffix == ".gz":
-        with gzip.open(trace_path, "rt", encoding="utf-8") as f:
-            return [line.rstrip("\n") for line in f]
-    return trace_path.read_text(encoding="utf-8").strip().splitlines()
 
 
 class ReplayRunner:
@@ -56,7 +42,7 @@ class ReplayRunner:
         """
         result = ReplayResult()
 
-        lines = _read_trace_lines(self.trace_path)
+        lines = read_trace_path(self.trace_path)
         if not lines:
             result.errors.append(f"Trace file not found: {self.trace_path}")
             return result
