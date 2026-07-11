@@ -18,6 +18,12 @@ from agent_runtime.compression_pipeline import (
 )
 from agent_runtime.tier_policy import TierPolicy, filter_relevant_results
 from agent_runtime.context_projection import attach_context_projection
+from agent_runtime.message_projection import (
+    get_sealed_history,
+    run_memory_snapshot,
+    run_user_query,
+    seal_history_at_build,
+)
 from agent_runtime.tokenizers import resolve_token_counter, resolve_tokenizer_spec
 from agent_runtime.task_section import (
     render_task_message,
@@ -217,9 +223,11 @@ class ContextManager:
             self._get_relevant(user_message),
             scaled_section_budget(BUDGET_RELEVANT, section_cap or total),
         )
+        history_text = self._get_compressed_history(metadata)
+        metadata["_history_section_text"] = history_text
         filler.add_section(
             "history",
-            self._get_compressed_history(metadata),
+            history_text,
             history_window_budget(section_cap or total),
         )
 
@@ -229,6 +237,10 @@ class ContextManager:
         if include_request:
             sections["request"] = request_text
             used += request_tokens
+
+        metadata["_context_prefix_text"] = "\n".join(
+            sections[name] for name in self.SECTION_ORDER if sections.get(name)
+        )
 
         sys_tokens = metadata["sections"].get("system", 0)
         tools_tokens = metadata["sections"].get("tools", 0)
@@ -243,6 +255,9 @@ class ContextManager:
         metadata["budget"] = self.budget.total_limit
         metadata["tokenizer_backend"] = self.budget.backend
         attach_context_projection(metadata, agent=self.agent, budget=self.budget)
+        history = self.agent.session.get("history", [])
+        if history and history_text:
+            seal_history_at_build(self.agent.session, len(history), history_text)
         return sections
 
     def _agent_repo_root(self) -> str | None:
@@ -291,7 +306,8 @@ class ContextManager:
 
     def _get_memory(self) -> str:
         """Working Memory：当前任务 + 最近文件 + 文件摘要。"""
-        mem = self.agent.session.get("memory", {})
+        snap = run_memory_snapshot(self.agent.session)
+        mem = snap if snap is not None else self.agent.session.get("memory", {})
         working = mem.get("working", {})
         parts = []
 
@@ -316,6 +332,7 @@ class ContextManager:
 
     def _get_relevant(self, query: str = "") -> str:
         """Episodic + Durable Memory 检索：与当前查询相关的笔记和持久知识。"""
+        query = run_user_query(self.agent.session, query)
         if not query:
             return ""
         from agent_runtime.features.memory import (
@@ -350,12 +367,33 @@ class ContextManager:
         return "\n".join(parts) if parts else ""
 
     def _get_compressed_history(self, metadata: dict | None = None) -> str:
-        """获取压缩后的对话历史（L0–L5 管线，L5 在 L1–L4 之后）。"""
+        """获取压缩后的对话历史（L0–L5 管线；已封印段单调追加）。"""
         history = self.agent.session.get("history", [])
         if not history:
             return ""
 
+        sealed_count, sealed_text = get_sealed_history(self.agent.session)
+        if sealed_count > 0 and sealed_text:
+            if sealed_count >= len(history):
+                return sealed_text
+            tail = history[sealed_count:]
+            tail_text = self._format_projected_history(tail, metadata)
+            if not tail_text:
+                return sealed_text
+            return f"{sealed_text.rstrip()}\n{tail_text}"
+
+        return self._format_projected_history(history, metadata)
+
+    def _format_projected_history(
+        self, history: list, metadata: dict | None = None
+    ) -> str:
+        """对 history 切片跑 L0–L5 并格式化为 history section 文本。"""
+        if not history:
+            return ""
+
         meta = metadata if metadata is not None else {}
+        sealed_count, sealed_text = get_sealed_history(self.agent.session)
+        include_header = not (sealed_count > 0 and sealed_text)
 
         projected = run_compression_pipeline(
             history,
@@ -369,12 +407,17 @@ class ContextManager:
 
         pipe = meta.get("compression_pipeline", {})
         if pipe.get("l5_triggered"):
-            return self._format_compressed_result(projected, apply_l1=False)
+            body = self._format_compressed_result(projected, apply_l1=False)
+            if include_header:
+                return body
+            return self._strip_history_header(body)
 
         recent = projected[-KEEP_RECENT_HISTORY:]
         old = projected[:-KEEP_RECENT_HISTORY]
 
-        lines = ["## 对话历史", ""]
+        lines: list[str] = []
+        if include_header:
+            lines.extend(["## 对话历史", ""])
 
         if old and not any(
             pipe.get(k)
@@ -382,11 +425,15 @@ class ContextManager:
         ):
             compressed = self._compress_old_entries(old)
             if compressed:
-                lines.append("### 早期摘要")
+                if include_header:
+                    lines.append("### 早期摘要")
+                else:
+                    lines.append("### 追加早期摘要")
                 lines.append(compressed)
                 lines.append("")
 
-        lines.append("### 最近对话")
+        if include_header:
+            lines.append("### 最近对话")
         for item in recent:
             role = item.get("role", "unknown")
             content = str(item.get("content", ""))
@@ -396,6 +443,16 @@ class ContextManager:
             lines.append("")
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _strip_history_header(text: str) -> str:
+        """去掉 history 段首行标题，便于单调追加。"""
+        lines = text.splitlines()
+        while lines and lines[0].strip() in ("## 对话历史", ""):
+            lines.pop(0)
+        while lines and lines[0].strip() == "### 最近对话":
+            lines.pop(0)
+        return "\n".join(lines).strip()
 
     def _format_compressed_result(self, history: list, *, apply_l1: bool = False) -> str:
         """将 history 列表格式化为 prompt 文本。"""

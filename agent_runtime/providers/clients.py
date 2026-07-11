@@ -25,6 +25,7 @@ class FakeModelClient(SessionUsageMixin):
         self._index = 0
         self.supports_prompt_cache = False
         self.prompts: list[str] = []
+        self.cache_keys: list[str] = []
         self._init_usage_tracking()
 
     def _record_usage(self, prompt: str, result: str) -> None:
@@ -49,6 +50,7 @@ class FakeModelClient(SessionUsageMixin):
             RuntimeError: 输出序列已耗尽。
         """
         self.prompts.append(prompt)
+        self.cache_keys.append(prompt_cache_key)
         if self._index >= len(self._outputs):
             raise RuntimeError(
                 f"FakeClient 输出序列已耗尽（共 {len(self._outputs)} 个，已用 {self._index} 个）"

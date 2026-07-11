@@ -69,12 +69,14 @@ class Orchestrator(RepairPipelineMixin):
         verifier=None,
         *,
         use_pytest_verify: bool = False,
+        l1_prompt_cache_key: str = "",
     ):
         self.localizer = localizer
         self.retriever = retriever
         self.patcher = patcher
         self.verifier = verifier
         self.use_pytest_verify = use_pytest_verify
+        self.l1_prompt_cache_key = l1_prompt_cache_key or self._resolve_l1_prompt_cache_key()
         self._repair_tracer = None
         self._log_run_id_token = None
         # 修复目标目录：优先 --repo / Agent cwd，而非 git 顶层仓库
@@ -86,6 +88,27 @@ class Orchestrator(RepairPipelineMixin):
                 or localizer.workspace.repo_root
                 or self._repo_root
             )
+
+    @staticmethod
+    def _resolve_l1_prompt_cache_key_from_agents(*agents) -> str:
+        hashes = []
+        for agent in agents:
+            if agent is None:
+                continue
+            prefix = getattr(agent, "_prefix", None)
+            if prefix is not None and getattr(prefix, "hash", ""):
+                hashes.append(prefix.hash)
+        if hashes and len(set(hashes)) == 1:
+            return hashes[0]
+        return ""
+
+    def _resolve_l1_prompt_cache_key(self) -> str:
+        return self._resolve_l1_prompt_cache_key_from_agents(
+            self.localizer,
+            self.retriever,
+            self.patcher,
+            self.verifier,
+        )
 
     def repair(
         self,
@@ -341,8 +364,23 @@ class Orchestrator(RepairPipelineMixin):
         from src.repair.run_trace import RepairRunTracer
 
         tracer = RepairRunTracer(self._repo_root)
-        run_id = tracer.begin(state.issue_input)
-        tracer.bind_agents(self.localizer, self.retriever, self.patcher)
+        l1_meta = {}
+        if self.l1_prompt_cache_key:
+            l1_meta["l1_prompt_cache_key"] = self.l1_prompt_cache_key
+            ref = self.localizer or self.patcher
+            prefix = getattr(ref, "_prefix", None) if ref is not None else None
+            if prefix is not None:
+                if prefix.tool_signature:
+                    l1_meta["tool_signature"] = prefix.tool_signature
+                if prefix.workspace_fingerprint:
+                    l1_meta["workspace_fingerprint"] = prefix.workspace_fingerprint
+        run_id = tracer.begin(state.issue_input, **l1_meta)
+        tracer.bind_agents(
+            self.localizer,
+            self.retriever,
+            self.patcher,
+            self.verifier,
+        )
         self._repair_tracer = tracer
         state.repair_run_id = run_id
         self._log_run_id_token = bind_run_id(run_id)
@@ -376,7 +414,12 @@ class Orchestrator(RepairPipelineMixin):
             return
         token_summary = state.node_timings.get("token_usage") or {}
         tracer.finalize(state, token_summary)
-        tracer.unbind_agents(self.localizer, self.retriever, self.patcher)
+        tracer.unbind_agents(
+            self.localizer,
+            self.retriever,
+            self.patcher,
+            self.verifier,
+        )
         self._repair_tracer = None
         token = getattr(self, "_log_run_id_token", None)
         if token is not None:
@@ -627,11 +670,18 @@ class Orchestrator(RepairPipelineMixin):
 
     # ---- Prompt 构建 ----
 
+    def _emit_skill_hint_trace(self, agent: str, render) -> None:
+        from src.skills.skill_block import skill_hint_rendered_trace
+
+        tracer = self._repair_tracer
+        if tracer is None or not render.text:
+            return
+        tracer.emit(agent, "skill_hint_rendered", skill_hint_rendered_trace(render))
+
     def _localizer_prompt(self, plan: RepairPlan, issue: str = "") -> str:
-        text, _ = render_repair_task(
-            "localizer",
-            build_localizer_variables(plan, issue),
-        )
+        variables, render = build_localizer_variables(plan, issue)
+        self._emit_skill_hint_trace("localizer", render)
+        text, _ = render_repair_task("localizer", variables)
         return text
 
     def _retriever_prompt(
@@ -640,9 +690,10 @@ class Orchestrator(RepairPipelineMixin):
         plan: RepairPlan | None = None,
         issue: str = "",
     ) -> str:
-        template_name, variables = build_retriever_template_and_variables(
+        template_name, variables, render = build_retriever_template_and_variables(
             suspects, plan, issue
         )
+        self._emit_skill_hint_trace("retriever", render)
         text, _ = render_repair_task(template_name, variables)
         return text
 
@@ -654,7 +705,7 @@ class Orchestrator(RepairPipelineMixin):
         plan: RepairPlan | None = None,
         issue: str = "",
     ) -> tuple[str, dict]:
-        variables = assemble_patcher_variables(
+        variables, render = assemble_patcher_variables(
             suspects=suspects,
             context=context,
             feedback=feedback,
@@ -664,6 +715,7 @@ class Orchestrator(RepairPipelineMixin):
             read_test_context=self._read_test_context,
             fallback_suspects=self._fallback_suspects_from_plan,
         )
+        self._emit_skill_hint_trace("patcher", render)
         return render_repair_task("patcher", variables)
 
     def _read_code_snippet(self, file_path: str, start_line: int, end_line: int) -> str:
@@ -769,10 +821,11 @@ class Orchestrator(RepairPipelineMixin):
         return parse_retrieved_context(answer)
 
     def _verifier_prompt(self, patches: list[CandidatePatch], plan: RepairPlan | None) -> str:
-        text, _ = render_repair_task(
-            "verifier",
-            build_verifier_variables(patches, self._repo_root),
+        variables, render = build_verifier_variables(
+            patches, self._repo_root, plan=plan
         )
+        self._emit_skill_hint_trace("verifier", render)
+        text, _ = render_repair_task("verifier", variables)
         return text
 
     def _parse_verification(self, answer: str) -> "VerificationResult":

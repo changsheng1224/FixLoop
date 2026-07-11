@@ -127,11 +127,13 @@ class TestAgentLoopCancel:
         token = CancellationToken()
 
         class CancelAfterFirstTool(FakeModelClient):
-            def complete(self, prompt, max_new_tokens=None):
+            def complete(self, prompt, max_new_tokens=None, prompt_cache_key=""):
                 self._n = getattr(self, "_n", 0) + 1
                 if self._n == 1:
                     token.cancel()
-                return super().complete(prompt, max_new_tokens=max_new_tokens)
+                return super().complete(
+                    prompt, max_new_tokens=max_new_tokens, prompt_cache_key=prompt_cache_key
+                )
 
         config = AgentConfig(provider="fake", max_steps=5, approval="auto")
         agent = Agent(
@@ -199,7 +201,7 @@ class TestCompleteOnceCancel:
         token.cancel()
 
         class SlowClient(FakeModelClient):
-            def complete(self, prompt, max_new_tokens=None):
+            def complete(self, prompt, max_new_tokens=None, prompt_cache_key=""):
                 time.sleep(2.0)
                 return "should not return"
 
@@ -223,7 +225,7 @@ class TestPatcherCompleteOnceCancel:
         token = CancellationToken()
 
         class SlowClient(FakeModelClient):
-            def complete(self, prompt, max_new_tokens=None):
+            def complete(self, prompt, max_new_tokens=None, prompt_cache_key=""):
                 time.sleep(2.0)
                 return "[]"
 

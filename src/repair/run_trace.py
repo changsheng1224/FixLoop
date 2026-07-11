@@ -5,6 +5,15 @@ from __future__ import annotations
 from agent_runtime.run_ids import new_run_id
 from agent_runtime.run_store import RunStore
 
+# Repair trace 可选事件（Orchestrator / Agent 写入）
+REPAIR_TRACE_EVENTS = frozenset(
+    {
+        "repair_started",
+        "skill_hint_rendered",
+        "skill_matched",
+    }
+)
+
 
 class RepairRunTracer:
     """Orchestrator 驱动：多 Agent 写入同一 trace.jsonl，结束时合并 report。"""
@@ -20,13 +29,15 @@ class RepairRunTracer:
             self._store = RunStore(self.repo_root)
         return self._store
 
-    def begin(self, issue: str) -> str:
+    def begin(self, issue: str, **extra: str) -> str:
         self.run_id = new_run_id()
         self.store.start_run_by_id(self.run_id)
+        payload = {"issue_preview": issue[:300]}
+        payload.update({k: v for k, v in extra.items() if v})
         self.emit(
             "orchestrator",
             "repair_started",
-            {"issue_preview": issue[:300]},
+            payload,
         )
         return self.run_id
 

@@ -35,6 +35,7 @@ class Agent:
         agent_name: str = "",
         tool_dispatch=None,
         prefix_mode: PrefixMode = "default",
+        l1_prefix=None,
     ):
         self.config = config
         self.model_client = model_client
@@ -46,6 +47,7 @@ class Agent:
         self._agent_name = agent_name
         self._tool_dispatch = tool_dispatch
         self._prefix_mode: PrefixMode = prefix_mode
+        self._l1_prefix = l1_prefix
         self.shared_run_id: str | None = None
         self._last_budget_meta: dict = {}
         self.cancel_token = None
@@ -408,6 +410,10 @@ class Agent:
         """构建 System Prompt 前缀。system_prompt 非空时用它替代默认前缀。"""
         if system_prompt:
             if self._prefix_mode == "repair":
+                if self._l1_prefix is not None:
+                    from agent_runtime.prompt_prefix import compose_repair_prefix
+
+                    return compose_repair_prefix(self._l1_prefix, system_prompt)
                 from agent_runtime.prompt_prefix import build_repair_agent_prefix
 
                 return build_repair_agent_prefix(

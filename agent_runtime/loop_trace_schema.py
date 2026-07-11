@@ -6,6 +6,7 @@ from agent_runtime.react_phases import LoopPath
 
 __all__ = [
     "AGENTIC_LOOP_STAGES",
+    "CONTEXT_BUILT_PROJECTION_KEYS",
     "LOOP_PATH_SNAPSHOTS",
     "LoopPath",
     "assert_subsequence",
@@ -13,6 +14,15 @@ __all__ = [
     "normalize_trace_events",
     "validate_loop_trace",
 ]
+
+# context_built payload 可选投影字段（message_projection）
+CONTEXT_BUILT_PROJECTION_KEYS = (
+    "projection_step",
+    "sealed_history_count",
+    "prefix_monotonic",
+    "prefix_aligned",
+    "prefix_fingerprint",
+)
 
 # Observe → Context → Model → Tool → Record
 AGENTIC_LOOP_STAGES: dict[str, list[str]] = {

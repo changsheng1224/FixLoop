@@ -7,7 +7,7 @@ from pathlib import Path
 from agent_runtime.template_render import render_template, template_metadata
 from src.prompts.loader import load_localizer_hints
 from src.repair.prompt_router import apply_prompt_routing, localizer_hints_key_for
-from src.skills.prompt import format_skill_hint_for_plan
+from src.skills.skill_block import SkillBlockRender, SkillHintRole, render_skill_hint_for_plan
 
 _TASKS_DIR = Path(__file__).parent / "tasks"
 
@@ -25,7 +25,23 @@ def render_repair_task(name: str, variables: dict[str, str]) -> tuple[str, dict]
     return render_template(template, variables), template_metadata(template, source)
 
 
-def build_localizer_variables(plan, issue: str = "") -> dict[str, str]:
+def _resolve_skill_render(
+    plan,
+    role: SkillHintRole,
+    *,
+    skill_render: SkillBlockRender | None = None,
+) -> SkillBlockRender:
+    if skill_render is not None:
+        return skill_render
+    return render_skill_hint_for_plan(plan, role)
+
+
+def build_localizer_variables(
+    plan,
+    issue: str = "",
+    *,
+    skill_render: SkillBlockRender | None = None,
+) -> tuple[dict[str, str], SkillBlockRender]:
     if not plan.prompt_variants:
         apply_prompt_routing(plan)
     issue_text = issue or plan.reasoning
@@ -33,20 +49,29 @@ def build_localizer_variables(plan, issue: str = "") -> dict[str, str]:
     if plan.suspect_files:
         suspect_line = f"嫌疑文件: {', '.join(plan.suspect_files)}"
     hints = load_localizer_hints(localizer_hints_key_for(plan))
-    return {
+    render = _resolve_skill_render(plan, "localizer", skill_render=skill_render)
+    variables = {
         "issue": issue_text,
         "suspect_files_line": suspect_line,
         "issue_type_hints": hints,
-        "skill_hint_block": format_skill_hint_for_plan(plan, "localizer"),
+        "skill_hint_block": render.text,
     }
+    return variables, render
 
 
 def build_retriever_template_and_variables(
     suspects,
     plan=None,
     issue: str = "",
-) -> tuple[str, dict[str, str]]:
-    skill_hint_block = format_skill_hint_for_plan(plan, "retriever") if plan else ""
+    *,
+    skill_render: SkillBlockRender | None = None,
+) -> tuple[str, dict[str, str], SkillBlockRender]:
+    render = (
+        _resolve_skill_render(plan, "retriever", skill_render=skill_render)
+        if plan
+        else SkillBlockRender(text="", role="retriever", source="none")
+    )
+    skill_hint_block = render.text
     if suspects:
         lines = ["根据以下嫌疑位置搜索相关代码："]
         for s in suspects:
@@ -55,16 +80,16 @@ def build_retriever_template_and_variables(
             "suspects_list": "\n".join(lines[1:]),
             "header": lines[0],
             "skill_hint_block": skill_hint_block,
-        }
+        }, render
 
     if plan and plan.suspect_files:
         return "retriever_plan", {
             "issue": issue or plan.reasoning,
             "suspect_files": ", ".join(plan.suspect_files),
             "skill_hint_block": skill_hint_block,
-        }
+        }, render
 
-    return "retriever_fallback", {"skill_hint_block": skill_hint_block}
+    return "retriever_fallback", {"skill_hint_block": skill_hint_block}, render
 
 
 def build_patcher_variables(
@@ -91,12 +116,25 @@ def build_patcher_variables(
     }
 
 
-def build_verifier_variables(patches, repo_root: str) -> dict[str, str]:
+def build_verifier_variables(
+    patches,
+    repo_root: str,
+    plan=None,
+    *,
+    skill_render: SkillBlockRender | None = None,
+) -> tuple[dict[str, str], SkillBlockRender]:
     lines = []
     for p in patches:
         lines.append(f"  - {p.file_path}: {p.explanation or p.diff[:80]}")
     repo = repr(repo_root)
-    return {
+    render = (
+        _resolve_skill_render(plan, "verifier", skill_render=skill_render)
+        if plan
+        else SkillBlockRender(text="", role="verifier", source="none")
+    )
+    variables = {
         "patches_list": "\n".join(lines),
         "repo": repo,
+        "skill_hint_block": render.text,
     }
+    return variables, render

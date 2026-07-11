@@ -336,6 +336,13 @@ class AgentLoop:
     def _xml_build_context(self, ts, user_message: str, *, step: int, callback) -> str:
         t0 = _time.time()
         prompt_text, token_meta = self.agent._build_prompt_with_meta(user_message)
+        from agent_runtime.message_projection import (
+            attach_projection_metadata,
+            build_context_prefix,
+        )
+
+        context_prefix = build_context_prefix(self.agent, token_meta)
+        attach_projection_metadata(token_meta, self.agent.session, context_prefix=context_prefix)
         self._last_token_meta = token_meta
         self._emit("context_built", build_trace_payload(token_meta))
         self._notify_react_phase(
@@ -355,11 +362,14 @@ class AgentLoop:
             "model_request_start",
             {"step": ts.tool_steps + 1, "attempt": ts.attempts},
         )
+        meta = getattr(self, "_last_token_meta", None) or {}
+        cache_key = str(meta.get("prompt_cache_key", "") or "")
         raw = self._invoke_model_call(
             lambda: self.agent.circuit_breaker.call(
                 self.agent.model_client.complete,
                 prompt_text,
                 max_new_tokens=self.agent.config.max_new_tokens,
+                prompt_cache_key=cache_key,
             )
         )
         ts.node_timings.setdefault("model_call_ms", 0)
@@ -429,6 +439,9 @@ class AgentLoop:
         try:
             with log_context(run_id=ts.run_id, agent=agent_name):
                 self._emit("run_started")
+                from agent_runtime.message_projection import init_run_projection
+
+                init_run_projection(self.agent.session, user_message)
                 self.agent.record({"role": "user", "content": user_message})
                 self._gen_task_summary(user_message)
 
@@ -445,6 +458,16 @@ class AgentLoop:
             return msg
 
         system_prompt, user_message, budget_meta = self.agent.build_for_native(user_message)
+        from agent_runtime.message_projection import (
+            attach_projection_metadata,
+            build_context_prefix,
+        )
+
+        context_prefix = build_context_prefix(self.agent, budget_meta)
+        attach_projection_metadata(
+            budget_meta, self.agent.session, context_prefix=context_prefix
+        )
+        self._last_token_meta = budget_meta
         self._last_budget_meta = budget_meta
         self._emit("context_built", build_trace_payload(budget_meta))
         tools_def = _build_anthropic_tools(self.agent.tools)

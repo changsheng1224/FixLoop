@@ -15,7 +15,9 @@ class TestLocalizerTaskTemplate:
             suspect_files=["app.py"],
             reasoning="app.py:1",
         )
-        text, meta = render_repair_task("localizer", build_localizer_variables(plan, "ImportError"))
+        text, meta = render_repair_task(
+            "localizer", build_localizer_variables(plan, "ImportError")[0]
+        )
         assert "定位以下问题" in text
         assert "ImportError" in text
         assert "嫌疑文件: app.py" in text
@@ -24,7 +26,7 @@ class TestLocalizerTaskTemplate:
 
     def test_default_stack_hints(self):
         plan = RepairPlan(issue_type="type_error", reasoning="calc.py:2")
-        text, _ = render_repair_task("localizer", build_localizer_variables(plan))
+        text, _ = render_repair_task("localizer", build_localizer_variables(plan)[0])
         assert "stack_parse" in text
 
 
@@ -33,14 +35,14 @@ class TestRetrieverTaskTemplate:
         suspects = [
             SuspectLocation(file_path="a.py", start_line=1, end_line=2, function_name="f"),
         ]
-        name, vars_ = build_retriever_template_and_variables(suspects)
+        name, vars_, _ = build_retriever_template_and_variables(suspects)
         text, _ = render_repair_task(name, vars_)
         assert name == "retriever_suspects"
         assert "a.py:1 f" in text
         assert "RetrievedContext JSON" in text
 
     def test_fallback(self):
-        name, vars_ = build_retriever_template_and_variables([])
+        name, vars_, _ = build_retriever_template_and_variables([])
         text, _ = render_repair_task(name, vars_)
         assert name == "retriever_fallback"
         assert "搜索与该 Issue 相关的代码上下文" in text

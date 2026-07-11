@@ -176,12 +176,12 @@
 - **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] 工具 schema 集稳定化**：`_tool_names` **字典序固定**；repair 全流程同一 tool 集
 - **[P2] [C:⭐ I:⭐⭐⭐] workspace fingerprint 降噪**：git dirty 用 **file-set content hash** 而非 mtime/全文 diff
 - **[P2] [C:⭐⭐ I:⭐⭐⭐] repair 多 phase 共享 L1 prefix**：Orchestrator 复用同一 `prompt_cache_key`；L2 角色 system **不参与** L1 hash
-- **[P2] [C:⭐ I:⭐⭐⭐] 多轮 messages 前缀对齐**：每 step 全量 history 投影；禁止 divergent message 序列
+- **[P2] ✅ [C:⭐ I:⭐⭐⭐] 多轮 messages 前缀对齐**：每 step 全量 history 投影；禁止 divergent message 序列
 - **[P2] [C:⭐⭐ I:⭐⭐⭐] few-shot / rules 外置**：`.agent/examples.md`、`.agent/rules.md`；变更 invalidate prefix hash
 
 ### 5.3 模板 · Skill 块
 
-- **[P1] ✅ [C:⭐ I:⭐⭐⭐] Skill 块注入 Prompt 统一**：Localizer/Retriever/Patcher 分角色 `[Skill 提示]`（见 [§13.3](#133-注入)）
+- **[P1] ✅ [C:⭐ I:⭐⭐⭐] Skill 块注入 Prompt 统一**：Canonical `SkillBlockRenderer`；四角色统一 `[Skill 提示]` + `角色:` schema；trace `skill_hint_rendered`
 
 ### 5.2 L2 角色 Prompt
 
