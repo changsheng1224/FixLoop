@@ -27,17 +27,45 @@ class VerifyStrategy(Protocol):
     def run(self, repo_root: str, test_path: str = "") -> VerifyRun: ...
 
 
+def _verify_cancelled_run(start: float) -> VerifyRun:
+    from src.harness.sandbox_results import verification_result_for_user_cancel
+
+    return VerifyRun(
+        result=verification_result_for_user_cancel(),
+        elapsed_ms=int((time.time() - start) * 1000),
+        internal={"user_cancel": True},
+        error="user_cancel",
+    )
+
+
+def _verify_from_sandbox_result(
+    result: VerificationResult,
+    internal: dict,
+    start: float,
+) -> VerifyRun:
+    error = "user_cancel" if internal.get("user_cancel") else None
+    return VerifyRun(
+        result=result,
+        elapsed_ms=int((time.time() - start) * 1000),
+        internal=internal,
+        error=error,
+    )
+
+
 class DockerVerifyStrategy:
     """Docker sandbox build + pytest。"""
 
-    def run(self, repo_root: str, test_path: str = "") -> VerifyRun:
+    def run(self, repo_root: str, test_path: str = "", cancel_token=None) -> VerifyRun:
         from src.tools.sandbox_tools import run_sandbox_verification
 
         t0 = time.time()
         try:
-            result, internal = run_sandbox_verification(repo_root, test_path=test_path)
-            elapsed_ms = int((time.time() - t0) * 1000)
-            return VerifyRun(result=result, elapsed_ms=elapsed_ms, internal=internal)
+            result, internal = run_sandbox_verification(
+                repo_root,
+                test_path=test_path,
+                cancel_token=cancel_token,
+            )
+            return _verify_from_sandbox_result(result, internal, t0)
         except Exception as exc:
             elapsed_ms = int((time.time() - t0) * 1000)
             return VerifyRun(
@@ -51,12 +79,23 @@ class DockerVerifyStrategy:
 class PytestVerifyStrategy:
     """宿主机 subprocess pytest。"""
 
-    def run(self, repo_root: str, test_path: str = "") -> VerifyRun:
+    def run(self, repo_root: str, test_path: str = "", cancel_token=None) -> VerifyRun:
+        from agent_runtime.cancellation import CancelledError, run_with_cancellation
         from src.eval.runner import run_pytest
 
         del test_path
+
+        def _run_pytest():
+            return run_pytest(Path(repo_root))
+
         t0 = time.time()
-        code, out = run_pytest(Path(repo_root))
+        try:
+            if cancel_token is not None:
+                code, out = run_with_cancellation(_run_pytest, cancel_token)
+            else:
+                code, out = _run_pytest()
+        except CancelledError:
+            return _verify_cancelled_run(t0)
         elapsed_ms = int((time.time() - t0) * 1000)
         passed = code == 0
         if not passed:

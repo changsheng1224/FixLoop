@@ -75,10 +75,13 @@ class FakeNativeToolClient(FakeModelClient):
         max_turns: int = 6,
         phase_hook=None,
         step_boundary_hook=None,
+        cancel_token=None,
     ) -> tuple[str, dict]:
         """模拟原生 tool 多轮对话（测试用）。"""
         import json
         import re
+
+        from agent_runtime.cancellation import CancelledError
 
         call_usage = {
             "input_tokens": 0,
@@ -91,6 +94,8 @@ class FakeNativeToolClient(FakeModelClient):
         user_msg = user_message
 
         for turn in range(max_turns):
+            if cancel_token is not None and cancel_token.is_cancelled:
+                raise CancelledError(cancel_token.reason)
             step = turn + 1
             if phase_hook is not None:
                 from agent_runtime.react_phases import ReactPhase
@@ -240,6 +245,7 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
         max_turns: int = 6,
         phase_hook=None,
         step_boundary_hook=None,
+        cancel_token=None,
     ) -> tuple[str, dict]:
         """使用原生 Anthropic tool_use 协议进行多轮对话。
 
@@ -253,6 +259,8 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
         Returns:
             (最终文本回复, 本次 call 累计 usage dict)。
         """
+        from agent_runtime.cancellation import CancelledError
+
         messages = []
         call_usage = {
             "input_tokens": 0,
@@ -281,6 +289,8 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
         }
 
         for turn in range(max_turns):
+            if cancel_token is not None and cancel_token.is_cancelled:
+                raise CancelledError(cancel_token.reason)
             step = turn + 1
             if phase_hook is not None:
                 from agent_runtime.react_phases import ReactPhase
@@ -584,6 +594,53 @@ class OllamaModelClient:
         with urllib.request.urlopen(request, timeout=self.timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         return data.get("response", "")
+
+    def complete_stream(
+        self,
+        prompt: str,
+        *,
+        max_new_tokens: int = 512,
+        cancel_token=None,
+        on_chunk=None,
+    ) -> str:
+        """Ollama 流式 generate；chunk 循环内检查 cancel_token。"""
+        from agent_runtime.cancellation import CancelledError
+
+        payload = {
+            "model": self.model,
+            "prompt": prompt,
+            "stream": True,
+            "options": {
+                "num_predict": max_new_tokens,
+                "temperature": self.temperature,
+                "top_p": self.top_p,
+            },
+        }
+        body = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(
+            f"{self.host}/api/generate",
+            data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        parts: list[str] = []
+        with urllib.request.urlopen(request, timeout=self.timeout) as resp:
+            for raw_line in resp:
+                if cancel_token is not None and cancel_token.is_cancelled:
+                    break
+                line = raw_line.decode("utf-8").strip()
+                if not line:
+                    continue
+                data = json.loads(line)
+                chunk = data.get("response", "")
+                if chunk:
+                    parts.append(chunk)
+                    if on_chunk is not None:
+                        on_chunk(chunk)
+                if data.get("done"):
+                    break
+        if cancel_token is not None and cancel_token.is_cancelled:
+            raise CancelledError(cancel_token.reason)
+        return "".join(parts)
 
 
 class OpenAICompatibleModelClient:

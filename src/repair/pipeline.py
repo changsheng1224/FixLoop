@@ -107,8 +107,15 @@ class RepairPipelineMixin:
 
         return suspects, context, loc_timing, ret_timing
 
-    def _repair_impl(self, state: RepairState) -> RepairState:
+    def _repair_impl(
+        self,
+        state: RepairState,
+        initial_snapshot: dict | None = None,
+    ) -> RepairState:
         """修复流水线主体（可被 repair() 超时包装）。"""
+        if initial_snapshot is None:
+            initial_snapshot = self._snapshot_repo()
+
         max_retries = state.max_retries
         issue = state.issue_input
 
@@ -118,120 +125,146 @@ class RepairPipelineMixin:
         self._begin_repair_trace(state)
         log.info("Orchestrator 开始")
 
-        t0 = time.time()
-        state.repair_plan = self._parse_issue(issue)
-        if state.repair_plan:
-            tracer = self._repair_tracer
-            if tracer is not None:
-                tracer.emit(
-                    "orchestrator",
-                    "prompt_routing",
-                    repair_plan_intent_snapshot(state.repair_plan),
-                )
-        if state.repair_plan and state.repair_plan.language != "python":
-            log.warning(
-                "检测到 language=%s（%s），当前 Verifier 仅支持 Python 修复",
-                state.repair_plan.language,
-                state.repair_plan.language_source,
-            )
-        skill = self._match_skill(
-            issue,
-            language=state.repair_plan.language if state.repair_plan else "python",
-        )
-        if skill and state.repair_plan:
-            state.repair_plan.estimated_impact = skill.get("suggested_tools", [])
-        ms = int((time.time() - t0) * 1000)
-        state.node_timings["parse_issue_ms"] = ms
-        log.info("parse_issue: %dms", ms)
-
-        log.info("Localizer + Retriever 并行开始...")
-        t0 = time.time()
-        suspects, context, loc_timing, ret_timing = self._run_localize_and_retrieve(state)
-        wall_ms = int((time.time() - t0) * 1000)
-        set_parallel_wall_ms(state.node_timings, wall_ms)
-        set_phase_ms(
-            state.node_timings,
-            "localize",
-            loc_timing["total_ms"],
-            internal=loc_timing["internal"],
-        )
-        set_phase_ms(
-            state.node_timings,
-            "retrieve",
-            ret_timing["total_ms"],
-            internal=ret_timing["internal"],
-        )
-        state.suspect_locations = suspects
-        state.retrieved_context = context
-        n = len(suspects)
-        n_tests = len(context.related_tests) if context else 0
-        log.info(
-            "Localizer+Retriever 完成: 墙钟%dms (L=%dms, R=%dms), %d suspect, %d tests",
-            wall_ms,
-            loc_timing["total_ms"],
-            ret_timing["total_ms"],
-            n,
-            n_tests,
-        )
-
-        if self._verification_enabled():
-            _record_pytest_exit(state, self._repo_root, "baseline_pytest_code")
-
-        while state.retry_count < max_retries:
-            repo_snapshot = self._snapshot_repo() if self._verification_enabled() else None
-            log.info("Patcher 开始 (retry=%d)...", state.retry_count)
-            state.candidate_patches, patch_timing = self._run_patcher(state)
-            set_phase_ms(
-                state.node_timings,
-                "patch",
-                patch_timing["total_ms"],
-                internal={
-                    "model_call_ms": patch_timing["model_call_ms"],
-                    "parse_apply_ms": patch_timing["parse_apply_ms"],
-                },
-            )
-            ms = patch_timing["total_ms"]
-            n = len(state.candidate_patches)
-            log.info("Patcher 完成: %dms, %d个补丁", ms, n)
-
-            if not state.candidate_patches and not state.agent_errors.get("patcher_apply"):
-                state.node_timings["patcher_parse_failed"] = True
-
-            if not self._verification_enabled():
-                if state.candidate_patches:
-                    mark_fixed_skip_verify(state)
-                break
-
-            if not state.candidate_patches:
-                if state.agent_errors.pop("patcher_apply", None):
-                    state.feedback = (
-                        "补丁 JSON 解析成功但未能写入文件。"
-                        "original_lines 必须与预读代码完全一致；优先使用 diff 字段。"
-                    )
-                else:
-                    state.feedback = "补丁生成失败（模型返回无法解析的 JSON）。请重新生成。"
-                state.retry_count += 1
-                continue
-
-            log.info("Verifier 开始...")
-            t0 = time.time()
-            state.verification_result = self._run_verifier(state)
-            ms = int((time.time() - t0) * 1000)
-            set_phase_ms(state.node_timings, "verify", ms)
-            log.info("Verifier 完成: %dms", ms)
-
-            if state.verification_result.all_passed:
-                state.status = RepairTerminalStatus.FIXED
-                break
-
-            _record_pytest_exit(state, self._repo_root, "post_patch_pytest_code")
-
-            if repo_snapshot is not None:
-                self._restore_repo_snapshot(repo_snapshot)
+        cancelled = False
+        try:
+            if self._abort_repair_if_cancelled(state):
+                cancelled = True
             else:
-                self._revert_changes(state)
-            state.feedback = self._build_feedback(state.verification_result)
-            state.retry_count += 1
+                t0 = time.time()
+                state.repair_plan = self._parse_issue(issue)
+                if state.repair_plan:
+                    tracer = self._repair_tracer
+                    if tracer is not None:
+                        tracer.emit(
+                            "orchestrator",
+                            "prompt_routing",
+                            repair_plan_intent_snapshot(state.repair_plan),
+                        )
+                if state.repair_plan and state.repair_plan.language != "python":
+                    log.warning(
+                        "检测到 language=%s（%s），当前 Verifier 仅支持 Python 修复",
+                        state.repair_plan.language,
+                        state.repair_plan.language_source,
+                    )
+                skill = self._match_skill(
+                    issue,
+                    language=state.repair_plan.language if state.repair_plan else "python",
+                )
+                if skill and state.repair_plan:
+                    state.repair_plan.estimated_impact = skill.get("suggested_tools", [])
+                ms = int((time.time() - t0) * 1000)
+                state.node_timings["parse_issue_ms"] = ms
+                log.info("parse_issue: %dms", ms)
+
+                log.info("Localizer + Retriever 并行开始...")
+                t0 = time.time()
+                suspects, context, loc_timing, ret_timing = self._run_localize_and_retrieve(state)
+                wall_ms = int((time.time() - t0) * 1000)
+                set_parallel_wall_ms(state.node_timings, wall_ms)
+                set_phase_ms(
+                    state.node_timings,
+                    "localize",
+                    loc_timing["total_ms"],
+                    internal=loc_timing["internal"],
+                )
+                set_phase_ms(
+                    state.node_timings,
+                    "retrieve",
+                    ret_timing["total_ms"],
+                    internal=ret_timing["internal"],
+                )
+                state.suspect_locations = suspects
+                state.retrieved_context = context
+                n = len(suspects)
+                n_tests = len(context.related_tests) if context else 0
+                log.info(
+                    "Localizer+Retriever 完成: 墙钟%dms (L=%dms, R=%dms), %d suspect, %d tests",
+                    wall_ms,
+                    loc_timing["total_ms"],
+                    ret_timing["total_ms"],
+                    n,
+                    n_tests,
+                )
+
+                if self._abort_repair_if_cancelled(state):
+                    cancelled = True
+                elif self._verification_enabled():
+                    _record_pytest_exit(state, self._repo_root, "baseline_pytest_code")
+
+                while not cancelled and state.retry_count < max_retries:
+                    if self._abort_repair_if_cancelled(state):
+                        cancelled = True
+                        break
+
+                    repo_snapshot = self._snapshot_repo() if self._verification_enabled() else None
+                    log.info("Patcher 开始 (retry=%d)...", state.retry_count)
+                    state.candidate_patches, patch_timing = self._run_patcher(state)
+                    if patch_timing.get("user_cancel") or self._abort_repair_if_cancelled(state):
+                        cancelled = True
+                        break
+
+                    set_phase_ms(
+                        state.node_timings,
+                        "patch",
+                        patch_timing["total_ms"],
+                        internal={
+                            "model_call_ms": patch_timing["model_call_ms"],
+                            "parse_apply_ms": patch_timing["parse_apply_ms"],
+                        },
+                    )
+                    ms = patch_timing["total_ms"]
+                    n = len(state.candidate_patches)
+                    log.info("Patcher 完成: %dms, %d个补丁", ms, n)
+
+                    if not state.candidate_patches and not state.agent_errors.get("patcher_apply"):
+                        state.node_timings["patcher_parse_failed"] = True
+
+                    if not self._verification_enabled():
+                        if state.candidate_patches:
+                            mark_fixed_skip_verify(state)
+                        break
+
+                    if not state.candidate_patches:
+                        if state.agent_errors.pop("patcher_apply", None):
+                            state.feedback = (
+                                "补丁 JSON 解析成功但未能写入文件。"
+                                "original_lines 必须与预读代码完全一致；优先使用 diff 字段。"
+                            )
+                        else:
+                            state.feedback = "补丁生成失败（模型返回无法解析的 JSON）。请重新生成。"
+                        state.retry_count += 1
+                        continue
+
+                    log.info("Verifier 开始...")
+                    if self._abort_repair_if_cancelled(state):
+                        cancelled = True
+                        break
+                    t0 = time.time()
+                    state.verification_result = self._run_verifier(state)
+                    if self._abort_repair_if_cancelled(state):
+                        cancelled = True
+                        break
+                    ms = int((time.time() - t0) * 1000)
+                    set_phase_ms(state.node_timings, "verify", ms)
+                    log.info("Verifier 完成: %dms", ms)
+
+                    if state.verification_result.all_passed:
+                        state.status = RepairTerminalStatus.FIXED
+                        break
+
+                    _record_pytest_exit(state, self._repo_root, "post_patch_pytest_code")
+
+                    if repo_snapshot is not None:
+                        self._restore_repo_snapshot(repo_snapshot)
+                    else:
+                        self._revert_changes(state)
+                    state.feedback = self._build_feedback(state.verification_result)
+                    state.retry_count += 1
+        finally:
+            if cancelled or self._is_repair_cancelled():
+                state.node_timings["user_cancel"] = True
+                self._restore_repo_snapshot(initial_snapshot)
+                self._emit_repair_cancelled(state)
 
         finalize_repair_state(state)
 

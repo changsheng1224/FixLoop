@@ -83,6 +83,7 @@ def run_sandbox_verification(
     repo_path: str,
     test_path: str = "",
     context=None,
+    cancel_token=None,
 ) -> tuple[VerificationResult, dict]:
     """Orchestrator 直连入口：不经过 Verifier LLM。"""
     if context is None:
@@ -90,4 +91,4 @@ def run_sandbox_verification(
 
         context = ToolContext(root=repo_path)
 
-    return _run_test_in_sandbox(context, repo_path, test_path)
+    return _run_test_in_sandbox(context, repo_path, test_path, cancel_token=cancel_token)

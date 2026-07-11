@@ -6,16 +6,22 @@
 """
 
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
 from pathlib import Path
 
+from agent_runtime.cancellation import (
+    BlockingDeadlineError,
+    CancelledError,
+    wait_future,
+)
 from src.harness.sandbox_tar import build_sandbox_tar
 
 BUILD_TIMEOUT_S = 600
 TEST_TIMEOUT_S = 900
 EXEC_TIMEOUT_EXIT_CODE = -1
+EXEC_USER_CANCEL_EXIT_CODE = -2
 
 # 可写面仅 /code + /tmp（read_only rootfs + tmpfs）；大小可通过环境变量调节。
 DEFAULT_TMPFS_TMP = "size=512m"
@@ -58,6 +64,7 @@ class ExecResult:
     exit_code: int
     stdout: str
     stderr: str
+    cancelled: bool = False
 
 
 @dataclass
@@ -140,32 +147,60 @@ class SandboxManager:
 
         return Sandbox(id=container.id, profile=profile, timings=timings)
 
-    def execute(self, sandbox: Sandbox, command: str, timeout: int = BUILD_TIMEOUT_S) -> ExecResult:
+    def execute(
+        self,
+        sandbox: Sandbox,
+        command: str,
+        timeout: int = BUILD_TIMEOUT_S,
+        cancel_token=None,
+    ) -> ExecResult:
         """在容器内执行命令。
 
         Args:
             sandbox: Sandbox 实例。
             command: 要执行的命令。
             timeout: 超时秒数。
+            cancel_token: 可选；置位时 SIGTERM 容器并返回 cancel 结果。
 
         Returns:
             ExecResult 实例。
         """
+        poll_s = 0.05
         container = self.docker.containers.get(sandbox.id)
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            fut = pool.submit(container.exec_run, command)
+
+        def _kill_container() -> None:
             try:
-                exit_code, output = fut.result(timeout=timeout)
-            except FuturesTimeoutError:
-                try:
-                    container.kill()
-                except Exception:
-                    pass
+                container.kill()
+            except Exception:
+                pass
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        fut = pool.submit(container.exec_run, command)
+        deadline = time.time() + timeout if timeout > 0 else None
+        try:
+            try:
+                exit_code, output = wait_future(
+                    fut,
+                    poll_interval=poll_s,
+                    cancel_token=cancel_token,
+                    deadline=deadline,
+                    on_cancel=_kill_container,
+                )
+            except CancelledError:
+                return ExecResult(
+                    exit_code=EXEC_USER_CANCEL_EXIT_CODE,
+                    stdout="",
+                    stderr="",
+                    cancelled=True,
+                )
+            except BlockingDeadlineError:
                 return ExecResult(
                     exit_code=EXEC_TIMEOUT_EXIT_CODE,
                     stdout="",
                     stderr=f"timeout after {timeout}s",
                 )
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
         return ExecResult(
             exit_code=exit_code or 0,
             stdout=output.decode("utf-8", errors="replace") if output else "",

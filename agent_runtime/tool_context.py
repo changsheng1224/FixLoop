@@ -3,10 +3,13 @@
 所有工具函数通过 ToolContext 获取 workspace 信息，不直接访问 Agent 内部状态。
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from agent_runtime.cancellation import CancellationToken
 from agent_runtime.path_safety import resolve_under_root
 
 
@@ -18,11 +21,13 @@ class ToolContext:
         root: workspace 根目录（绝对路径），所有文件访问必须在此目录内。
         path_resolver: 将相对路径解析为绝对路径的函数。
         shell_env_provider: 返回安全环境变量 dict 的可调用对象（M2 使用）。
+        cancel_token: 可选协作式取消 token（ToolExecutor Gate 9 注入）。
     """
 
     root: str
     path_resolver: Callable[[str], Path] = field(default=None)
     shell_env_provider: Callable[[], dict] | None = None
+    cancel_token: CancellationToken | None = None
 
     def __post_init__(self):
         if self.path_resolver is None:

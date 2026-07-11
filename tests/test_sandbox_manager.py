@@ -34,7 +34,7 @@ class FakeManager:
         self.responses = responses or {}
         self.calls = []
 
-    def execute(self, sandbox, command: str, timeout: int = 600) -> ExecResult:
+    def execute(self, sandbox, command: str, timeout: int = 600, cancel_token=None) -> ExecResult:
         self.calls.append(command)
         for key, result in self.responses.items():
             if key in command:

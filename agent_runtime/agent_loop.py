@@ -23,6 +23,7 @@ from agent_runtime.providers.retry_policy import RateLimitExceededError
 from agent_runtime.react_phases import ReactPhase, ReactPath
 from agent_runtime.step_clock import StepClock, StepTimeoutError
 from agent_runtime.stop_reasons import StopReason
+from agent_runtime.cancellation import CancelledError, run_with_cancellation
 
 
 def _log_loop(msg: str) -> None:
@@ -80,6 +81,45 @@ class AgentLoop:
         self._last_token_meta = {}
         self._retry_count = 0
         self._call_timings: list[ModelCallTiming] = []
+        self._in_flight_tool = ""
+
+    @property
+    def _cancel_token(self):
+        return getattr(self.agent, "cancel_token", None)
+
+    def _abort_if_cancelled(
+        self,
+        ts,
+        *,
+        phase: str,
+        in_flight: str = "",
+    ) -> str | None:
+        token = self._cancel_token
+        if token is None or not token.is_cancelled:
+            return None
+        inflight = in_flight or self._in_flight_tool
+        return self._finish_user_cancel(ts, phase=phase, in_flight=inflight)
+
+    def _finish_user_cancel(self, ts, *, phase: str, in_flight: str = "") -> str:
+        inflight = in_flight or self._in_flight_tool
+        if ts.stop_reason != StopReason.USER_CANCEL.value:
+            ts.stop_user_cancel(in_flight=inflight, phase=phase)
+        self._emit(
+            "run_cancelled",
+            {
+                "stop_reason": StopReason.USER_CANCEL.value,
+                "cancel_phase": phase,
+                "in_flight_tool": inflight,
+                "tool_steps": ts.tool_steps,
+            },
+        )
+        return self._complete_run(ts, "<final>用户已取消当前任务。</final>")
+
+    def _invoke_model_call(self, fn):
+        token = self._cancel_token
+        if token is None:
+            return fn()
+        return run_with_cancellation(fn, token)
 
     # ---- 停机与 trace 收尾 ----
 
@@ -212,6 +252,8 @@ class AgentLoop:
         emit_recording: bool = True,
     ) -> str:
         """执行工具、写 trace/history，返回下一轮 user_message。"""
+        if (msg := self._abort_if_cancelled(ts, phase="pre_tool", in_flight=tool_name)) is not None:
+            raise CancelledError("user", answer=msg)
         if emit_acting:
             self._notify_react_phase(
                 ReactPhase.ACTING,
@@ -231,7 +273,13 @@ class AgentLoop:
                 }
             )
         t0 = _time.time()
-        result = self.agent.execute_tool(tool_name, tool_args)
+        self._in_flight_tool = tool_name
+        try:
+            result = self.agent.execute_tool(tool_name, tool_args)
+        finally:
+            self._in_flight_tool = ""
+        if (msg := self._abort_if_cancelled(ts, phase="post_tool", in_flight=tool_name)) is not None:
+            raise CancelledError("user", answer=msg)
         result_text = result.content if hasattr(result, "content") else str(result)
         result_text = truncate_tool_result_for_agent(self.agent, tool_name, result_text)
         te_ms = int((_time.time() - t0) * 1000)
@@ -302,10 +350,12 @@ class AgentLoop:
             "model_request_start",
             {"step": ts.tool_steps + 1, "attempt": ts.attempts},
         )
-        raw = self.agent.circuit_breaker.call(
-            self.agent.model_client.complete,
-            prompt_text,
-            max_new_tokens=self.agent.config.max_new_tokens,
+        raw = self._invoke_model_call(
+            lambda: self.agent.circuit_breaker.call(
+                self.agent.model_client.complete,
+                prompt_text,
+                max_new_tokens=self.agent.config.max_new_tokens,
+            )
         )
         ts.node_timings.setdefault("model_call_ms", 0)
         ts.node_timings["model_call_ms"] += int((_time.time() - t1) * 1000)
@@ -401,6 +451,8 @@ class AgentLoop:
         def phase_hook(phase, *, step: int, tool: str | None = None) -> None:
             nonlocal step_clock
             if phase == ReactPhase.REASONING:
+                if (msg := self._abort_if_cancelled(ts, phase="native_reasoning")) is not None:
+                    raise CancelledError("user", answer=msg)
                 if step > 1:
                     step_clock = StepClock(step_timeout_s)
                 step_clock.check(step=step, path="native")
@@ -437,14 +489,17 @@ class AgentLoop:
         t0 = _time.time()
         self._emit("model_request_start", {"step": 1, "attempt": 1})
         try:
-            result = self.agent.model_client.chat_with_tools(
-                system_prompt=system_prompt,
-                user_message=user_message,
-                tools=tools_def,
-                executor=executor,
-                max_turns=self.max_steps,
-                phase_hook=phase_hook,
-                step_boundary_hook=after_model,
+            result = self._invoke_model_call(
+                lambda: self.agent.model_client.chat_with_tools(
+                    system_prompt=system_prompt,
+                    user_message=user_message,
+                    tools=tools_def,
+                    executor=executor,
+                    max_turns=self.max_steps,
+                    phase_hook=phase_hook,
+                    step_boundary_hook=after_model,
+                    cancel_token=self._cancel_token,
+                )
             )
             if isinstance(result, tuple):
                 answer, call_usage = result
@@ -457,6 +512,10 @@ class AgentLoop:
             )
         except StepTimeoutError as e:
             return self._finish_step_timeout(ts, e, clock=step_clock)
+        except CancelledError as e:
+            if e.answer:
+                return e.answer
+            return self._finish_user_cancel(ts, phase="model_wait")
         except Exception as e:
             if (msg := self._stop_for_api_error(ts, e)) is not None:
                 return msg
@@ -488,6 +547,8 @@ class AgentLoop:
 
     def _run_with_text_parsing(self, user_message: str, ts, callback=None) -> str:
         while True:
+            if (msg := self._abort_if_cancelled(ts, phase="step_start")) is not None:
+                return msg
             if (msg := self._check_xml_loop_limits(ts)) is not None:
                 return msg
 
@@ -502,10 +563,15 @@ class AgentLoop:
 
             try:
                 raw, t1 = self._xml_call_model(ts, prompt_text, step=step)
+            except CancelledError:
+                return self._finish_user_cancel(ts, phase="model_wait")
             except Exception as e:
                 if (msg := self._stop_for_api_error(ts, e)) is not None:
                     return msg
                 raise
+
+            if (msg := self._abort_if_cancelled(ts, phase="post_model")) is not None:
+                return msg
 
             if (msg := self._maybe_step_timeout(ts, step_clock, step, "xml")) is not None:
                 return msg
@@ -533,14 +599,17 @@ class AgentLoop:
                     return msg
                 tool_name = payload.get("name", "unknown")
                 tool_args = payload.get("args", {})
-                user_message = self._run_tool_step(
-                    ts,
-                    tool_name,
-                    tool_args,
-                    step=step,
-                    path="xml",
-                    callback=callback,
-                )
+                try:
+                    user_message = self._run_tool_step(
+                        ts,
+                        tool_name,
+                        tool_args,
+                        step=step,
+                        path="xml",
+                        callback=callback,
+                    )
+                except CancelledError as e:
+                    return e.answer
                 continue
 
             if kind == "retry":
@@ -672,7 +741,12 @@ class AgentLoop:
                 store.write_task_state_named(shared, f"task_state.{agent_name}.json", ts)
                 store.write_agent_report(shared, agent_name, report_body)
             else:
-                cp = create_checkpoint(self.agent, ts, ts.user_request, trigger="ask_end")
+                trigger = (
+                    "user_cancel"
+                    if ts.stop_reason == StopReason.USER_CANCEL.value
+                    else "ask_end"
+                )
+                cp = create_checkpoint(self.agent, ts, ts.user_request, trigger=trigger)
                 ts.checkpoint_id = cp.get("run_id", "") if cp else ""
                 store.write_task_state(ts)
                 store.write_report(ts, report_body)

@@ -6,7 +6,12 @@
 import json
 
 from src.harness.sandbox_manager import TEST_TIMEOUT_S
-from src.harness.sandbox_results import is_exec_timeout, verification_result_for_exec_timeout
+from src.harness.sandbox_results import (
+    is_exec_cancelled,
+    is_exec_timeout,
+    verification_result_for_exec_timeout,
+    verification_result_for_user_cancel,
+)
 from src.state import VerificationResult
 
 
@@ -16,16 +21,22 @@ class PythonTestRunner:
     def __init__(self, sandbox_manager):
         self.manager = sandbox_manager
 
-    def run(self, sandbox, test_path: str = "") -> VerificationResult:
+    def run(self, sandbox, test_path: str = "", cancel_token=None) -> VerificationResult:
         """在容器内构建并运行测试。
 
         Args:
             sandbox: Sandbox 实例。
             test_path: 测试路径（空 = tests/）。
+            cancel_token: 可选协作式取消 token。
 
         Returns:
             VerificationResult 实例。
         """
+        from src.harness.sandbox_results import verification_result_for_user_cancel
+
+        if cancel_token is not None and cancel_token.is_cancelled:
+            return verification_result_for_user_cancel()
+
         target = test_path.strip() if test_path else "."
         if target.startswith("/code/"):
             target = target[len("/code/") :]
@@ -36,14 +47,18 @@ class PythonTestRunner:
             sandbox,
             f"/entrypoint.sh test {test_cmd}",
             timeout=TEST_TIMEOUT_S,
+            cancel_token=cancel_token,
         )
+
+        if is_exec_cancelled(test):
+            return verification_result_for_user_cancel()
 
         if is_exec_timeout(test):
             return verification_result_for_exec_timeout("pytest", TEST_TIMEOUT_S, test)
 
         # 尝试解析 JSON 报告
         try:
-            report_data = self._read_report(sandbox)
+            report_data = self._read_report(sandbox, cancel_token=cancel_token)
             return self._parse_report(report_data)
         except Exception:
             pass
@@ -60,9 +75,13 @@ class PythonTestRunner:
             failure_logs=logs,
         )
 
-    def _read_report(self, sandbox) -> dict:
+    def _read_report(self, sandbox, cancel_token=None) -> dict:
         """读取容器内的 .report.json。"""
-        result = self.manager.execute(sandbox, "cat /code/.report.json", timeout=10)
+        result = self.manager.execute(
+            sandbox, "cat /code/.report.json", timeout=10, cancel_token=cancel_token
+        )
+        if is_exec_cancelled(result):
+            return {}
         raw = (result.stdout or "").strip()
         if not raw or result.exit_code != 0:
             return {}

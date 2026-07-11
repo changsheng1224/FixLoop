@@ -20,6 +20,7 @@ from pathlib import Path
 
 from agent_runtime.schema_utils import auto_validate
 from agent_runtime.tool_rejection import (
+    build_executor_cancel_metadata,
     build_executor_error_metadata,
     build_executor_rejection_metadata,
     build_gate7_pass_metadata,
@@ -68,6 +69,10 @@ class ToolExecutor:
 
     def execute_gated(self, name: str, args: dict) -> ToolExecutionResult:
         """按序执行 Executor 闸口（Gate 1–9），不含 Gateway 权限层。"""
+        token = getattr(self.agent, "cancel_token", None)
+        if token is not None and token.is_cancelled:
+            return self._rejected_cancel("Error: 任务已取消，跳过工具执行。")
+
         allowed = self.agent._tool_names
         if name not in allowed:
             return self._rejected(
@@ -134,6 +139,8 @@ class ToolExecutor:
         gate7_meta = None
         if name in self._high_risk_tools:
             if not self._approve(name, args, patch_preview_meta):
+                if token is not None and token.is_cancelled:
+                    return self._rejected_cancel("Error: 任务已取消（审批中断）。")
                 extra = {"approval_policy": self.approval_policy}
                 if patch_preview_meta:
                     extra["patch_preview"] = patch_preview_meta
@@ -148,15 +155,28 @@ class ToolExecutor:
         # ---- Gate 8: 执行前工作区快照 ----
         is_risky = name in self._high_risk_tools
         before_snapshot = self._capture_snapshot() if is_risky else {}
+        restore_snapshot = self._capture_restore_snapshot() if is_risky else {}
 
         # ---- Gate 9: 执行工具 ----
         timeout_s = int(getattr(self.agent.config, "tool_timeout_s", 0) or 0)
+        ctx = self.agent.tool_context
+        prev_ctx_token = ctx.cancel_token
+        # write/patch 必须等工具返回后再 restore；只读/shell 可协作式中断
+        run_cancel = token if name not in ("write_file", "patch_file") else None
+        ctx.cancel_token = token
         try:
+            from agent_runtime.cancellation import CancelledError
             from agent_runtime.tool_timeout import ToolTimeoutError, run_with_timeout
 
             result_text = run_with_timeout(
                 lambda: tool_spec["run"](args),
                 timeout_s=timeout_s,
+                cancel_token=run_cancel,
+            )
+        except CancelledError:
+            return ToolExecutionResult(
+                content=f"Error: 工具 '{name}' 执行已取消。",
+                metadata=build_executor_cancel_metadata(),
             )
         except ToolTimeoutError as e:
             return ToolExecutionResult(
@@ -168,6 +188,8 @@ class ToolExecutor:
                 content=f"Error: 工具 '{name}' 执行异常: {e}",
                 metadata=build_executor_error_metadata(),
             )
+        finally:
+            ctx.cancel_token = prev_ctx_token
 
         # ---- Gate 9 续: 执行后快照对比 ----
         metadata = {"tool_status": "success"}
@@ -180,7 +202,12 @@ class ToolExecutor:
             if callable(provider):
                 metadata["shell_env_keys"] = sorted(provider().keys())
         if is_risky:
-            after_snapshot = self._capture_snapshot()
+            if token is not None and token.is_cancelled:
+                self._restore_restore_snapshot(restore_snapshot)
+                metadata["cancel_restored"] = True
+                after_snapshot = self._capture_snapshot()
+            else:
+                after_snapshot = self._capture_snapshot()
             metadata.update(self._diff_snapshots(before_snapshot, after_snapshot))
 
         # 记录配额
@@ -200,6 +227,13 @@ class ToolExecutor:
         return ToolExecutionResult(
             content=content,
             metadata=build_executor_rejection_metadata(gate_id, tool_error_code, **extra),
+        )
+
+    def _rejected_cancel(self, content: str, **extra) -> ToolExecutionResult:
+        """用户 cancel 导致的拒绝（rejection_layer=cancel）。"""
+        return ToolExecutionResult(
+            content=content,
+            metadata=build_executor_cancel_metadata(**extra),
         )
 
     def _validate_path_args(self, args) -> ToolExecutionResult | None:
@@ -275,7 +309,12 @@ class ToolExecutor:
                 )
             response = input(prompt)
             return response.strip().lower() == "y"
-        except (EOFError, KeyboardInterrupt):
+        except KeyboardInterrupt:
+            token = getattr(self.agent, "cancel_token", None)
+            if token is not None:
+                token.cancel("user")
+            return False
+        except EOFError:
             return False
 
     def _build_patch_preview(self, args: dict) -> tuple[dict | None, str | None]:
@@ -315,6 +354,47 @@ class ToolExecutor:
                 except (OSError, ValueError):
                     pass
         return snapshot
+
+    def _capture_restore_snapshot(self) -> dict[str, str | None]:
+        """Gate 8 内容快照：用于 cancel 后回滚 write/patch 变更。"""
+        root = Path(self.agent.tool_context.root)
+        if not root.exists():
+            return {}
+        snapshot: dict[str, str | None] = {}
+        for fpath in root.rglob("*"):
+            if fpath.is_file() and not self._is_ignored(fpath):
+                try:
+                    rel = str(fpath.relative_to(root))
+                    snapshot[rel] = fpath.read_text(encoding="utf-8")
+                except (OSError, ValueError, UnicodeDecodeError):
+                    pass
+        return snapshot
+
+    def _restore_restore_snapshot(self, before: dict[str, str | None]) -> None:
+        """将 workspace 恢复到 Gate 8 内容快照。"""
+        root = Path(self.agent.tool_context.root)
+        if not root.exists():
+            return
+        before_paths = set(before.keys())
+        current_paths: set[str] = set()
+        for fpath in root.rglob("*"):
+            if fpath.is_file() and not self._is_ignored(fpath):
+                try:
+                    current_paths.add(str(fpath.relative_to(root)))
+                except ValueError:
+                    pass
+        for rel, content in before.items():
+            target = root / rel
+            if content is None:
+                if target.exists():
+                    target.unlink()
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+        for rel in sorted(current_paths - before_paths):
+            target = root / rel
+            if target.is_file():
+                target.unlink()
 
     def _is_ignored(self, path: Path) -> bool:
         """检查路径是否在忽略目录中。"""

@@ -11,6 +11,7 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
+from contextlib import contextmanager
 from pathlib import Path
 
 import yaml
@@ -93,6 +94,7 @@ class Orchestrator(RepairPipelineMixin):
         issue: str,
         max_retries: int = 3,
         repair_timeout_s: int = DEFAULT_REPAIR_TIMEOUT_S,
+        cancel_token=None,
     ) -> RepairState:
         """执行修复流水线。
 
@@ -100,27 +102,80 @@ class Orchestrator(RepairPipelineMixin):
             issue: Issue 描述（含堆栈和错误信息）。
             max_retries: 最大重试次数。
             repair_timeout_s: 全流程超时秒数（≤0 表示不限制）。
+            cancel_token: 可选协作式取消 token（CLI Ctrl+C 注入）。
 
         Returns:
             RepairState 实例。
         """
+        from agent_runtime.cancellation import CancellationToken
+
         state = RepairState(issue_input=issue, max_retries=max_retries)
-        if repair_timeout_s <= 0:
-            return self._repair_impl(state)
+        token = cancel_token or CancellationToken()
+        initial_snapshot = self._snapshot_repo()
 
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            fut = pool.submit(self._repair_impl, state)
-            try:
-                return fut.result(timeout=repair_timeout_s)
-            except FuturesTimeoutError:
-                from src.repair.termination import RepairTerminalStatus, finalize_repair_state
+        with self._repair_cancel_scope(token):
+            if repair_timeout_s <= 0:
+                return self._repair_impl(state, initial_snapshot=initial_snapshot)
 
-                state.status = RepairTerminalStatus.TIMEOUT
-                state.agent_errors["orchestrator"] = f"repair timeout ({repair_timeout_s}s)"
-                state.node_timings["repair_timeout"] = repair_timeout_s
-                log.warning("修复超时 (%ds)", repair_timeout_s)
-                finalize_repair_state(state)
-                return state
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                fut = pool.submit(self._repair_impl, state, initial_snapshot)
+                try:
+                    return fut.result(timeout=repair_timeout_s)
+                except FuturesTimeoutError:
+                    from src.repair.termination import RepairTerminalStatus, finalize_repair_state
+
+                    token.cancel("timeout")
+                    self._restore_repo_snapshot(initial_snapshot)
+                    state.status = RepairTerminalStatus.TIMEOUT
+                    state.agent_errors["orchestrator"] = (
+                        f"repair timeout ({repair_timeout_s}s)"
+                    )
+                    state.node_timings["repair_timeout"] = repair_timeout_s
+                    log.warning("修复超时 (%ds)", repair_timeout_s)
+                    finalize_repair_state(state)
+                    return state
+
+    @contextmanager
+    def _repair_cancel_scope(self, token):
+        """绑定 cancel token 到子 Agent，退出时解绑。"""
+        self._cancel_token = token
+        self._bind_cancel_token(token)
+        try:
+            yield
+        finally:
+            self._unbind_cancel_token()
+            self._cancel_token = None
+
+    def _abort_repair_if_cancelled(self, state: RepairState) -> bool:
+        """若用户已 cancel 则返回 True（由 pipeline finally 负责 restore）。"""
+        return self._is_repair_cancelled()
+
+    def _bind_cancel_token(self, token) -> None:
+        for agent in (self.localizer, self.retriever, self.patcher):
+            if agent is not None:
+                agent.cancel_token = token
+
+    def _unbind_cancel_token(self) -> None:
+        for agent in (self.localizer, self.retriever, self.patcher):
+            if agent is not None:
+                agent.cancel_token = None
+
+    def _is_repair_cancelled(self) -> bool:
+        token = getattr(self, "_cancel_token", None)
+        return token is not None and token.is_cancelled
+
+    def _emit_repair_cancelled(self, state: RepairState) -> None:
+        tracer = self._repair_tracer
+        if tracer is None:
+            return
+        tracer.emit(
+            "orchestrator",
+            "repair_cancelled",
+            {
+                "status": state.status,
+                "repo_restored": True,
+            },
+        )
 
     def _parse_issue(self, issue: str) -> RepairPlan:
         """正则解析 Issue 文本，提取语言/异常类型/文件名。"""
@@ -430,7 +485,18 @@ class Orchestrator(RepairPipelineMixin):
 
             usage_before = get_client_session_usage(self.patcher.model_client)
         try:
+            from agent_runtime.cancellation import CancelledError
+
             raw = self.patcher.complete_once(prompt, system_prompt=patcher_system)
+        except CancelledError:
+            total_ms = int((time.time() - t_start) * 1000)
+            model_call_ms = int((time.time() - t_model) * 1000)
+            return [], {
+                "model_call_ms": model_call_ms,
+                "parse_apply_ms": max(0, total_ms - model_call_ms),
+                "total_ms": total_ms,
+                "user_cancel": True,
+            }
         except Exception as e:
             state.agent_errors["patcher"] = str(e)
             total_ms = int((time.time() - t_start) * 1000)
@@ -502,17 +568,19 @@ class Orchestrator(RepairPipelineMixin):
 
     def _run_verifier(self, state: RepairState) -> "VerificationResult":
         """Docker 沙箱或本地 pytest 验证（不走 LLM Agent loop）。"""
+        cancel_token = getattr(self, "_cancel_token", None)
         if self.verifier is not None:
             run = DockerVerifyStrategy().run(
                 self._repo_root,
                 test_path=self._pick_test_path(state),
+                cancel_token=cancel_token,
             )
             if run.error:
                 log.warning("[verifier] 沙箱验证失败: %s", run.error)
             record_verify_timings(state, run, log_sandbox=True)
             return run.result
         if self.use_pytest_verify:
-            run = PytestVerifyStrategy().run(self._repo_root)
+            run = PytestVerifyStrategy().run(self._repo_root, cancel_token=cancel_token)
             record_verify_timings(state, run)
             return run.result
         return VerificationResult(all_passed=False, failure_logs=["verifier 未配置"])

@@ -31,12 +31,7 @@ class StopReason(StrEnum):
 CANONICAL_STOP_REASONS = frozenset(member.value for member in StopReason)
 
 # bonus 已列但尚未接线 — 枚举预留，normalize 时保持原值
-RESERVED_STOP_REASONS = frozenset(
-    {
-        StopReason.USER_CANCEL.value,
-        StopReason.STALL.value,
-    }
-)
+RESERVED_STOP_REASONS = frozenset({StopReason.STALL.value})
 
 
 def is_canonical_stop_reason(value: str) -> bool:

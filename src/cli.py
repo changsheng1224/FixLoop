@@ -141,7 +141,17 @@ def _repair(args) -> int:
             print("[Orchestrator] Docker 不可用，跳过验证", file=sys.stderr)
         print("[Orchestrator] 开始修复...", file=sys.stderr)
 
-    state = orch.repair(args.issue)
+    from agent_runtime.cancellation import CancellationToken
+    from agent_runtime.signal_cancel import sigint_cancel_scope
+
+    cancel_token = CancellationToken()
+
+    with sigint_cancel_scope(
+        cancel_token,
+        first_message="[Orchestrator] 取消中…",
+    ):
+        state = orch.repair(args.issue, cancel_token=cancel_token)
+
     _print_repair_result(state, verbose=args.verbose)
     return repair_exit_code(state)
 

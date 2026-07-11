@@ -34,12 +34,12 @@
 
 ### 2.1 用户中断与取消
 
-- **[P1] [C:⭐⭐⭐ I:⭐⭐⭐⭐] CancellationToken 全链路**：AgentLoop · ModelClient · ToolExecutor 共享；**Ctrl+C** · REPL **`/cancel`** 置位
-- **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] 协作式 cancel 检查点**：每 step 开始前 · model 返回后 · **每次 `execute_tool` 前**检查；已 cancel 则不再调度新 tool
-- **[P1] [C:⭐⭐ I:⭐⭐⭐] TaskState.user_cancel**：`status=stopped` · `stop_reason=user_cancel` · trace 含 phase + in-flight tool
-- **[P1] [C:⭐ I:⭐⭐⭐] cancel 后 workspace 一致性**：write 类依赖 Gate 8/9 snapshot diff + restore（[§8](bonus/DESIGN.md#8-工具安全闸口)）
-- **[P2] [C:⭐⭐ I:⭐⭐⭐] 流式模型 cancel**：chunk 循环内检查 token，立即 abort 并关闭连接
-- **[P2] [C:⭐ I:⭐⭐⭐] REPL `/cancel` 或二次 Ctrl+C**：向当前 `AgentLoop` 实例下发 cancel，不杀整个进程
+- **[P1] ✅ [C:⭐⭐⭐ I:⭐⭐⭐⭐] CancellationToken 全链路**：AgentLoop · ModelClient · ToolExecutor · Patcher `complete_once` · sandbox verify 共享；**Ctrl+C** · REPL **`/cancel`** 置位
+- **[P1] ✅ [C:⭐⭐ I:⭐⭐⭐⭐] 协作式 cancel 检查点**：每 step 开始前 · model 返回后 · **每次 `execute_tool` 前/后**检查；已 cancel 则不再调度新 tool
+- **[P1] ✅ [C:⭐⭐ I:⭐⭐⭐] TaskState.user_cancel**：`status=stopped` · `stop_reason=user_cancel` · trace 含 phase + in-flight tool
+- **[P1] ✅ [C:⭐ I:⭐⭐⭐] cancel 后 workspace 一致性**：write/patch/shell 依赖 Gate 8/9 snapshot diff + restore；L2 verify cancel → container kill + repo restore（[§8](bonus/DESIGN.md#8-工具安全闸口)）
+- **[P2] 🔶 [C:⭐⭐ I:⭐⭐⭐] 流式模型 cancel**：chunk 循环内检查 token，立即 abort 并关闭连接（Ollama `complete_stream` ✅；默认 ask 未接 streaming）
+- **[P2] ✅ [C:⭐ I:⭐⭐⭐] REPL `/cancel` 或二次 Ctrl+C**：向当前 `AgentLoop` 实例下发 cancel，不杀整个进程
 
 ### 2.2 执行前 Plan · TodoList
 

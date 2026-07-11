@@ -22,16 +22,38 @@ def run_sandbox_verification_flow(
     context,
     repo: str,
     test_path: str,
+    cancel_token=None,
 ) -> tuple[VerificationResult, dict]:
     """创建容器 → 可选 pip install → pytest → 销毁。"""
+    from src.harness.sandbox_results import verification_result_for_user_cancel
+
+    if cancel_token is not None and cancel_token.is_cancelled:
+        return verification_result_for_user_cancel(), {"user_cancel": True}
+
     sandbox_id = getattr(context, "_sandbox_id", None)
     mgr = getattr(context, "_sandbox_mgr", None)
     timings: dict[str, int | str] = {}
     sandbox = None
     created_here = False
 
+    def _abort_if_cancelled() -> tuple[VerificationResult, dict] | None:
+        if cancel_token is not None and cancel_token.is_cancelled:
+            if sandbox is not None and mgr is not None and created_here:
+                try:
+                    mgr.destroy(sandbox)
+                except Exception:
+                    pass
+                context._sandbox_id = None
+                context._sandbox_mgr = None
+            timings["user_cancel"] = True
+            return verification_result_for_user_cancel(), timings
+        return None
+
     try:
         if sandbox_id is None or mgr is None:
+            aborted = _abort_if_cancelled()
+            if aborted is not None:
+                return aborted
             mgr = SandboxManager()
             try:
                 sandbox = mgr.create(repo)
@@ -43,11 +65,19 @@ def run_sandbox_verification_flow(
             context._sandbox_repo = repo
             if sandbox.timings:
                 timings.update(sandbox.timings)
-            build_result, pip_ms, pip_exec = maybe_pip_install(mgr, sandbox, repo)
+            aborted = _abort_if_cancelled()
+            if aborted is not None:
+                return aborted
+            build_result, pip_ms, pip_exec = maybe_pip_install(
+                mgr, sandbox, repo, cancel_token=cancel_token
+            )
             timings["pip_ms"] = pip_ms
             timings["build_result"] = build_result
             context._build_result = build_result
             if pip_exec is not None and pip_exec.exit_code != 0:
+                if pip_exec.cancelled:
+                    timings["user_cancel"] = True
+                    return verification_result_for_user_cancel(), timings
                 result = verification_result_for_pip_failure(
                     build_result,
                     pip_exec,
@@ -59,10 +89,17 @@ def run_sandbox_verification_flow(
             sandbox = Sandbox(id=sandbox_id, profile="python")
             timings["build_result"] = getattr(context, "_build_result", "reused")
 
+        aborted = _abort_if_cancelled()
+        if aborted is not None:
+            return aborted
+
         runner = PythonTestRunner(mgr)
         t0 = time.time()
-        result = runner.run(sandbox, test_path)
+        result = runner.run(sandbox, test_path, cancel_token=cancel_token)
         timings["pytest_ms"] = int((time.time() - t0) * 1000)
+        if cancel_token is not None and cancel_token.is_cancelled:
+            timings["user_cancel"] = True
+            return verification_result_for_user_cancel(), timings
         return result, timings
     finally:
         if sandbox is not None and mgr is not None and created_here:
@@ -112,6 +149,7 @@ def maybe_pip_install(
     mgr: SandboxManager,
     sandbox: Sandbox,
     repo_path: str,
+    cancel_token=None,
 ) -> tuple[str, int, ExecResult | None]:
     """仅在有声明依赖时 pip install -e /code。"""
     repo = Path(repo_path)
@@ -131,6 +169,7 @@ def maybe_pip_install(
         sandbox,
         sandbox_pip_install_command(),
         timeout=BUILD_TIMEOUT_S,
+        cancel_token=cancel_token,
     )
     pip_ms = int((time.time() - t0) * 1000)
     build_result = f"pip install: exit_code={result.exit_code}\n{result.stdout}"
