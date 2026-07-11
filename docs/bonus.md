@@ -368,7 +368,7 @@
 
 > 设计见 [DESIGN §13.5](bonus/DESIGN.md#135-skill-召回率--版本--质量-rubric)。
 
-- **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] Skill 召回率 eval**：`matched_skill` × `case_id` → precision/recall · `eval_report.skill_metrics`（[§20.3](#203-agent-性能量化--judge--检索质量)）
+- ✅ **[P1] [C:⭐⭐ I:⭐⭐⭐⭐] Skill 召回率 eval**：`matched_skill` × `case_id` → precision/recall · `eval_report.skill_metrics` · `python -m src.cli eval skills --all`（[§20.3](#203-agent-性能量化--judge--检索质量)）
 - **[P2] [C:⭐⭐ I:⭐⭐⭐] Skill content_hash + 原子 swap**：索引 rebuild 写 temp → rename
 
 ### 13.6 Skill 与 tool 联动

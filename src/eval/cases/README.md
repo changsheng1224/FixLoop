@@ -76,6 +76,7 @@ case_XXX/
 | `case_id` | 与目录名一致 |
 | `language` | 固定 `python`（M7 范围） |
 | `issue_type` | `type_error` / `import_error` / `logic_error` / `attribute_error` / `config_error` / `composite` |
+| `expected_skill` | 期望命中的 Skill 名称（`src/skills/*.yaml` 的 `name`）；用于 Skill 召回率 eval |
 | `difficulty` | `easy` / `medium` / `hard` |
 | `status` | `scaffolded` → `ready`（可 pytest 复现）→ `verified`（补丁已验证） |
 | `estimated_duration_s` | 单次 repair 预估耗时（供评测排期） |
@@ -88,6 +89,10 @@ case_XXX/
 # 自动化（Fake，无需 API）
 python -m src.cli eval --fake --all --verbose
 python -m src.cli eval --fake --case case_001 --output eval_results/report.json
+
+# Skill 召回率（离线，无需 API）
+python -m src.cli eval skills --all --verbose
+python -m src.cli eval skills --case case_001 --output eval_results/skill_eval_report.json
 
 # 或
 python -m src.eval.runner --fake --all

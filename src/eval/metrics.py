@@ -71,11 +71,15 @@ def compute_metrics(results: list[CaseResult]) -> EvalReport:
         subset = [r for r in results if r.variant == variant]
         by_variant[variant] = _summary_metrics(subset)
 
+    from src.eval.skill_metrics import skill_metrics_from_case_results
+
+    skill_metrics = skill_metrics_from_case_results(results)
     report = EvalReport(
         cases=results,
         summary=_summary_metrics(results),
         by_type=_bucket_metrics(results, lambda r: r.issue_type),
         by_difficulty=_bucket_metrics(results, lambda r: r.difficulty),
+        skill_metrics=skill_metrics,
     )
     if by_variant:
         report.by_variant = by_variant
@@ -240,6 +244,9 @@ def case_result_from_dict(data: dict) -> CaseResult:
         run_index=int(data.get("run_index", 0)),
         total_tokens=int(data.get("total_tokens", 0) or 0),
         token_usage=dict(data.get("token_usage") or {}),
+        expected_skill=data.get("expected_skill"),
+        matched_skill=data.get("matched_skill"),
+        skill_match=bool(data.get("skill_match", False)),
     )
 
 

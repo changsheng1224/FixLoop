@@ -1,6 +1,7 @@
 case_id: case_009
 language: python
 issue_type: config_error
+expected_skill: python_config_error_fix
 difficulty: hard
 status: verified
 estimated_duration_s: 50

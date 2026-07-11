@@ -167,11 +167,20 @@ class EvalRunner:
             return CaseResult(case_id=case_id, error=f"unknown case: {case_id}")
 
         meta = load_case_metadata(case_dir)
-        issue = (case_dir / "issue.txt").read_text(encoding="utf-8").strip()
+        issue_raw = (case_dir / "issue.txt").read_text(encoding="utf-8").strip()
+        issue = issue_raw
         source_files = meta.get("source_files") or []
         if source_files:
             issue = f"{issue}\n\nCandidate source files: {', '.join(source_files)}"
         minimal_lines = _read_min_lines(case_dir)
+
+        from src.eval.skill_metrics import evaluate_case_row
+
+        skill_row = evaluate_case_row(case_dir)
+        skill_labeled = "expected_skill" in meta
+        expected_skill = skill_row.expected_skill if skill_row and skill_labeled else None
+        matched_skill = skill_row.matched_skill if skill_row else None
+        skill_match = skill_row.skill_match if skill_row and skill_labeled else False
 
         with tempfile.TemporaryDirectory(prefix=f"fixloop_eval_{case_id}_") as tmp:
             tmp_repo = Path(tmp) / "repo"
@@ -228,6 +237,10 @@ class EvalRunner:
                 case_id=case_id,
                 issue_type=str(meta.get("issue_type", "")),
                 difficulty=str(meta.get("difficulty", "")),
+                expected_skill=expected_skill,
+                matched_skill=matched_skill,
+                skill_match=skill_match,
+                skill_labeled=skill_labeled,
                 fixed=fixed,
                 retry_count=retry_count,
                 actual_patch=actual_patch,

@@ -1,6 +1,7 @@
 case_id: case_008
 language: python
 issue_type: logic_error
+expected_skill: python_test_failure_fix
 difficulty: hard
 status: verified
 estimated_duration_s: 60

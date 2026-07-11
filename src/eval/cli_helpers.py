@@ -41,6 +41,13 @@ def print_eval_report(report: EvalReport, verbose: bool, report_path: Path) -> N
                 print(f"       timings: {c.agent_timings}", file=sys.stderr)
             if c.error:
                 print(f"       error: {c.error}", file=sys.stderr)
+            if c.skill_labeled:
+                mark = "OK" if c.skill_match else "MISS"
+                print(
+                    f"       skill[{mark}]: expected={c.expected_skill} "
+                    f"matched={c.matched_skill}",
+                    file=sys.stderr,
+                )
 
     print(json.dumps(report.summary, ensure_ascii=False))
     print(f"Report: {report_path.resolve()}", file=sys.stderr)
@@ -92,6 +99,55 @@ def run_eval(
         print(f"Markdown: {md_path.resolve()}", file=sys.stderr)
 
     exit_code = 0 if report.summary.get("fixed") == report.summary.get("total") else 1
+    return report, report_path, exit_code
+
+
+def print_skill_eval_report(report, verbose: bool, report_path: Path) -> None:
+    """打印 skill eval summary JSON。"""
+    from src.eval.skill_metrics import SkillEvalReport
+
+    if verbose:
+        for row in report.cases:
+            mark = "OK" if row.skill_match else "MISS"
+            print(
+                f"[{mark}] {row.case_id} expected={row.expected_skill} "
+                f"matched={row.matched_skill} candidates={row.candidates_count}",
+                file=sys.stderr,
+            )
+
+    if isinstance(report, SkillEvalReport):
+        print(json.dumps(report.summary, ensure_ascii=False))
+    else:
+        print(json.dumps(report.get("skill_metrics", {}).get("summary", {}), ensure_ascii=False))
+    print(f"Report: {report_path.resolve()}", file=sys.stderr)
+
+
+def run_skill_eval_cmd(
+    *,
+    case_ids: list[str] | None,
+    cases_dir: str | Path = DEFAULT_CASES_DIR,
+    output: str = "eval_results/skill_eval_report.json",
+    verbose: bool = False,
+    markdown: str | None = None,
+) -> tuple[object, Path, int]:
+    """执行 eval skills 子命令。"""
+    from src.eval.skill_metrics import run_skill_eval, write_skill_eval_report
+
+    report = run_skill_eval(cases_dir, case_ids=case_ids)
+    report_path = Path(output)
+    md_path = None
+    if markdown is not None:
+        md_candidate = Path(markdown)
+        if md_candidate.suffix == ".md" and str(md_candidate.parent) not in ("", "."):
+            md_path = md_candidate
+        else:
+            md_path = report_path.parent / markdown
+    write_skill_eval_report(report, report_path, markdown_path=md_path)
+    if md_path is not None:
+        print(f"Markdown: {md_path.resolve()}", file=sys.stderr)
+
+    accuracy = report.summary.get("accuracy", 0.0)
+    exit_code = 0 if accuracy == 1.0 else 1
     return report, report_path, exit_code
 
 

@@ -1,6 +1,7 @@
 case_id: case_004
 language: python
 issue_type: import_error
+expected_skill: python_import_error_fix
 difficulty: medium
 status: verified
 estimated_duration_s: 40

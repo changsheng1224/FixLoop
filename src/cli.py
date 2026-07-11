@@ -11,7 +11,14 @@ from src.cli_exit_codes import (
     repair_config_error,
     repair_exit_code,
 )
-from src.eval.cli_helpers import print_ablation_report, print_eval_report, run_ablation, run_eval
+from src.eval.cli_helpers import (
+    print_ablation_report,
+    print_eval_report,
+    print_skill_eval_report,
+    run_ablation,
+    run_eval,
+    run_skill_eval_cmd,
+)
 from src.eval.runner import DEFAULT_CASES_DIR
 from src.repair.termination import is_repair_success
 from src.repair_factory import make_orchestrator_factory
@@ -30,6 +37,7 @@ def main() -> int:
     p_repair.add_argument("--skip-verify", action="store_true", help="跳过 Docker 验证")
 
     p_eval = sub.add_parser("eval", help="运行评测 Case")
+    p_eval_sub = p_eval.add_subparsers(dest="eval_command")
     p_eval.add_argument("--all", action="store_true", help="运行全部 Case")
     p_eval.add_argument("--case", action="append", dest="cases", help="指定 case_id")
     p_eval.add_argument("--cases-dir", default=str(DEFAULT_CASES_DIR), help="Case 目录")
@@ -56,6 +64,24 @@ def main() -> int:
         const="report.md",
         metavar="PATH",
         help="生成 Markdown 指标报告（默认 output/report.md）",
+    )
+
+    p_eval_skills = p_eval_sub.add_parser("skills", help="Skill 召回率 eval（离线 match_skill）")
+    p_eval_skills.add_argument("--all", action="store_true", help="评测全部已标注 Case")
+    p_eval_skills.add_argument("--case", action="append", dest="cases", help="指定 case_id")
+    p_eval_skills.add_argument("--cases-dir", default=str(DEFAULT_CASES_DIR), help="Case 目录")
+    p_eval_skills.add_argument(
+        "--output",
+        default="eval_results/skill_eval_report.json",
+        help="报告 .json 路径",
+    )
+    p_eval_skills.add_argument("--verbose", action="store_true", help="打印每个 Case 详情")
+    p_eval_skills.add_argument(
+        "--markdown",
+        nargs="?",
+        const="skill_eval_report.md",
+        metavar="PATH",
+        help="生成 Markdown 报告",
     )
 
     p_ablation = sub.add_parser("ablation", help="运行消融实验")
@@ -119,6 +145,8 @@ def main() -> int:
     if args.command == "repair":
         return _repair(args)
     if args.command == "eval":
+        if getattr(args, "eval_command", None) == "skills":
+            return _eval_skills(args)
         return _eval(args)
     if args.command == "ablation":
         return _ablation(args)
@@ -184,6 +212,23 @@ def _eval(args) -> int:
         markdown=getattr(args, "markdown", None),
     )
     print_eval_report(report, verbose=args.verbose, report_path=report_path)
+    return code
+
+
+def _eval_skills(args) -> int:
+    if not args.all and not args.cases:
+        print("错误: 请指定 --all 或 --case case_XXX", file=sys.stderr)
+        return 2
+
+    case_ids = None if args.all else args.cases
+    report, report_path, code = run_skill_eval_cmd(
+        case_ids=case_ids,
+        cases_dir=args.cases_dir,
+        output=args.output,
+        verbose=args.verbose,
+        markdown=getattr(args, "markdown", None),
+    )
+    print_skill_eval_report(report, verbose=args.verbose, report_path=report_path)
     return code
 
 
