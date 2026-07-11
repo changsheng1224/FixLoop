@@ -1,115 +1,138 @@
-"""metrics.py 单测。"""
+"""Prometheus MetricsRegistry 单测（含 HTTP 端点）。"""
 
-import json
+import threading
+import time
+import urllib.request
+from http.server import HTTPServer
 
-from src.eval.metrics import compute_metrics, format_markdown, write_metrics_markdown_from_report
-from src.eval.models import CaseResult
+import pytest
 
-
-def _sample_results() -> list[CaseResult]:
-    return [
-        CaseResult(
-            case_id="case_001",
-            issue_type="type_error",
-            difficulty="easy",
-            fixed=True,
-            retry_count=0,
-            actual_lines=2,
-            minimal_lines=1,
-            duration_ms=1500,
-            total_tokens=1000,
-            variant="full",
-        ),
-        CaseResult(
-            case_id="case_002",
-            issue_type="type_error",
-            difficulty="medium",
-            fixed=False,
-            retry_count=2,
-            actual_lines=4,
-            minimal_lines=1,
-            duration_ms=2500,
-            introduced_regression=True,
-            variant="full",
-        ),
-        CaseResult(
-            case_id="case_001",
-            issue_type="type_error",
-            difficulty="easy",
-            fixed=True,
-            retry_count=0,
-            actual_lines=1,
-            minimal_lines=1,
-            duration_ms=1200,
-            total_tokens=800,
-            variant="single",
-        ),
-    ]
+from agent_runtime.metrics import (
+    MetricsRegistry,
+    _MetricsHandler,
+    _reset_registry_for_tests,
+    get_registry,
+)
 
 
-class TestComputeMetrics:
-    def test_summary_metrics(self):
-        report = compute_metrics(_sample_results())
-        summary = report.summary
-        assert summary["total"] == 3
-        assert summary["fixed"] == 2
-        assert summary["fix_rate"] == round(2 / 3, 4)
-        assert summary["first_attempt_rate"] == round(2 / 3, 4)
-        assert summary["avg_retries"] == round(2 / 3, 2)
-        assert summary["patch_precision"] == round((0.5 + 0.25 + 1.0) / 3, 4)
-        assert summary["avg_duration_s"] == round((1500 + 2500 + 1200) / 3 / 1000, 2)
-        assert summary["regression_rate"] == round(1 / 3, 4)
-        assert summary["total_tokens"] == 1800
-
-    def test_groupings(self):
-        report = compute_metrics(_sample_results())
-        assert report.by_type["type_error"]["fixed"] == 2
-        assert report.by_difficulty["easy"]["total"] == 2
-        assert report.by_variant["full"]["fixed"] == 1
-        assert report.by_variant["single"]["fix_rate"] == 1.0
+@pytest.fixture(autouse=True)
+def _reset_registry():
+    _reset_registry_for_tests()
+    yield
+    _reset_registry_for_tests()
 
 
-class TestFormatMarkdown:
-    def test_contains_required_sections(self):
-        report = compute_metrics(_sample_results())
-        md = format_markdown(report)
-        assert "## Overall" in md
-        assert "## By Variant" in md
-        assert "## By Case" in md
-        assert "## By Issue Type" in md
-        assert "## By Difficulty" in md
-        assert "case_001" in md
-        assert "full" in md
+class TestMetricsRegistry:
+    """注册表 CRUD 测试。"""
+
+    def test_counter_inc_basic(self):
+        reg = MetricsRegistry()
+        reg.counter_inc("test_counter")
+        reg.counter_inc("test_counter", 2)
+        rendered = reg.render()
+        assert "test_counter 3" in rendered
+
+    def test_counter_with_labels(self):
+        reg = MetricsRegistry()
+        reg.counter_inc("test_labeled", labels={"tier": "host"})
+        reg.counter_inc("test_labeled", labels={"tier": "container"})
+        reg.counter_inc("test_labeled", labels={"tier": "host"})
+        rendered = reg.render()
+        assert 'test_labeled{tier="host"} 2' in rendered
+        assert 'test_labeled{tier="container"} 1' in rendered
+
+    def test_gauge_set(self):
+        reg = MetricsRegistry()
+        reg.gauge_set("test_gauge", 3.14)
+        rendered = reg.render()
+        assert "test_gauge 3.14" in rendered
+
+    def test_gauge_inc(self):
+        reg = MetricsRegistry()
+        reg.gauge_inc("test_gauge", 1.5)
+        reg.gauge_inc("test_gauge", 2.5)
+        rendered = reg.render()
+        assert "test_gauge 4" in rendered
+
+    def test_render_includes_help_and_type(self):
+        reg = MetricsRegistry()
+        reg.counter_inc("fixloop_tool_steps_total", labels={"tier": "host"})
+        rendered = reg.render()
+        assert "# HELP fixloop_tool_steps_total" in rendered
+        assert "# TYPE fixloop_tool_steps_total counter" in rendered
+
+    def test_reset_clears_all(self):
+        reg = MetricsRegistry()
+        reg.counter_inc("test_counter", 5)
+        reg.gauge_set("test_gauge", 1.0)
+        reg.reset()
+        rendered = reg.render()
+        assert "test_counter" not in rendered
+        assert "test_gauge" not in rendered
+
+    def test_global_registry_is_singleton(self):
+        r1 = get_registry()
+        r2 = get_registry()
+        assert r1 is r2
+
+    def test_thread_safety(self):
+        reg = MetricsRegistry()
+        errors = []
+
+        def inc_many():
+            try:
+                for _ in range(100):
+                    reg.counter_inc("thread_test", labels={"t": "a"})
+            except Exception as e:
+                errors.append(str(e))
+
+        threads = [threading.Thread(target=inc_many) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert not errors
+        rendered = reg.render()
+        assert 'thread_test{t="a"} 1000' in rendered
 
 
-class TestLoadAndWriteMarkdown:
-    def test_write_from_ablation_json(self, tmp_path):
-        payload = {
-            "runs": [
-                {
-                    "case_id": "case_001",
-                    "issue_type": "type_error",
-                    "difficulty": "easy",
-                    "fixed": True,
-                    "retry_count": 0,
-                    "actual_lines": 1,
-                    "minimal_lines": 1,
-                    "duration_ms": 1000,
-                    "variant": "full",
-                    "run_index": 0,
-                }
-            ],
-            "meta": {
-                "variants": ["full"],
-                "case_ids": ["case_001"],
-                "repetitions": 1,
-            },
-        }
-        json_path = tmp_path / "ablation_report.json"
-        json_path.write_text(json.dumps(payload), encoding="utf-8")
-        md_path = tmp_path / "report.md"
-        write_metrics_markdown_from_report(json_path, md_path)
-        text = md_path.read_text(encoding="utf-8")
-        assert "## Run Notes" in text
-        assert "## Overall" in text
-        assert "case_001" in text
+class TestMetricsHttpEndpoint:
+    """HTTP /metrics 端点测试。"""
+
+    @pytest.fixture
+    def server_port(self):
+        """在随机端口启动 daemon metrics server。"""
+        import socket
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+
+        server = HTTPServer(("127.0.0.1", port), _MetricsHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        time.sleep(0.1)
+        yield port
+        server.shutdown()
+
+    def test_metrics_endpoint_returns_prometheus_text(self, server_port):
+        get_registry().counter_inc("fixloop_tool_steps_total", labels={"tier": "host"})
+        url = f"http://127.0.0.1:{server_port}/metrics"
+        with urllib.request.urlopen(url) as resp:
+            assert resp.status == 200
+            body = resp.read().decode("utf-8")
+        assert "fixloop_tool_steps_total" in body
+
+    def test_health_endpoint(self, server_port):
+        url = f"http://127.0.0.1:{server_port}/health"
+        with urllib.request.urlopen(url) as resp:
+            assert resp.status == 200
+
+    def test_reset_endpoint(self, server_port):
+        get_registry().counter_inc("test_counter", 5)
+        url = f"http://127.0.0.1:{server_port}/reset"
+        req = urllib.request.Request(url, method="POST")
+        with urllib.request.urlopen(req) as resp:
+            assert resp.status == 200
+        assert "test_counter" not in get_registry().render()

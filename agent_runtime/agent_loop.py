@@ -730,6 +730,12 @@ class AgentLoop:
         self._tier_tools.setdefault(tier, {})[tool_name] = (
             self._tier_tools[tier].get(tool_name, 0) + 1
         )
+        try:
+            from agent_runtime.metrics import get_registry
+
+            get_registry().counter_inc("fixloop_tool_steps_total", labels={"tier": tier})
+        except Exception:
+            pass
         preview = meta.get("patch_preview")
         if preview:
             self._emit("tool_preview", {"tool": tool_name, **preview})
