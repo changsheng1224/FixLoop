@@ -275,7 +275,7 @@
 ### 10.2 修复流水线降级
 
 - **[P1] [C:⭐ I:⭐⭐⭐] Retriever 降级规则检索**：LLM 超时 → 堆栈文件名 + **grep**；补 `related_tests`（路径见 [§6.2](#62-grep-工具rg-封装)）
-- **[P2] [C:⭐⭐ I:⭐⭐⭐] Multi-Agent 降级 Single-Agent**：verify 连续失败后 `degraded_mode` + baseline
+- **[P2] ✅ [C:⭐⭐ I:⭐⭐⭐] Multi-Agent 降级 Single-Agent**：verify 连续失败后 `degraded_mode` + baseline
 
 ---
 
@@ -326,7 +326,7 @@
 - **[P1] [C:⭐⭐ I:⭐⭐⭐] Orchestrator 冲突仲裁 API**：`resolve_conflict(key, strategy=...)`
 - **[P2] [C:⭐ I:⭐⭐⭐] Localizer∥Retriever 去重**：同 file_path + 行号合并
 - **[P2] [C:⭐ I:⭐⭐] 冲突进 trace/report**：`blackboard_conflicts[]`
-- **[P2] [C:⭐⭐ I:⭐⭐⭐] 降级 Single-Agent 最后一搏**：见 [§10.2](#102-修复流水线降级)
+- **[P2] ✅ [C:⭐⭐ I:⭐⭐⭐] 降级 Single-Agent 最后一搏**：见 [§10.2](#102-修复流水线降级)
 
 
 ### 12.7 角色与机制

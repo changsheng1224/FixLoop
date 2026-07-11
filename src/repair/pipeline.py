@@ -9,6 +9,7 @@ from pathlib import Path
 
 from agent_runtime.logging_setup import get_logger
 from src.eval.runner import run_pytest
+from src.repair.degrade import run_baseline_fallback, should_degrade_to_baseline
 from src.repair.termination import (
     RepairTerminalStatus,
     finalize_repair_state,
@@ -260,6 +261,17 @@ class RepairPipelineMixin:
                         self._revert_changes(state)
                     state.feedback = self._build_feedback(state.verification_result)
                     state.retry_count += 1
+
+                if (
+                    not cancelled
+                    and not self._is_repair_cancelled()
+                    and should_degrade_to_baseline(
+                        state,
+                        verification_enabled=self._verification_enabled(),
+                        cancelled=cancelled,
+                    )
+                ):
+                    run_baseline_fallback(self, state, initial_snapshot=initial_snapshot)
         finally:
             if cancelled or self._is_repair_cancelled():
                 state.node_timings["user_cancel"] = True

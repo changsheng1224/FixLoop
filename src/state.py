@@ -264,6 +264,7 @@ class RepairState:
     node_timings: dict = field(default_factory=dict)
     agent_errors: dict = field(default_factory=dict)
     repair_run_id: str = ""
+    degraded_mode: bool = False
     schema_version: str = "1.0"
 
     def to_dict(self) -> dict:
@@ -287,6 +288,7 @@ class RepairState:
             "node_timings": self.node_timings,
             "agent_errors": self.agent_errors,
             "repair_run_id": self.repair_run_id,
+            "degraded_mode": self.degraded_mode,
             "schema_version": self.schema_version,
         }
 
@@ -322,5 +324,6 @@ class RepairState:
             node_timings=data.get("node_timings", {}),
             agent_errors=data.get("agent_errors", {}),
             repair_run_id=data.get("repair_run_id", ""),
+            degraded_mode=data.get("degraded_mode", False),
             schema_version=data.get("schema_version", "1.0"),
         )
