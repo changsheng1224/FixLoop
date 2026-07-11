@@ -130,6 +130,57 @@ class TestAgentLoopStopConditions:
         ]
         assert any("^" in m for m in system_msgs)
 
+    def test_circuit_breaker_events_in_trace(self, config, workspace, temp_workspace):
+        """跨多次 ask 累积失败与半开恢复写入 circuit_* trace 事件。"""
+        import json
+        import time
+
+        from agent_runtime.providers.circuit_breaker import CircuitBreaker
+        from agent_runtime.run_store import RunStore
+
+        class FailingClient(FakeModelClient):
+            def complete(self, prompt: str, max_new_tokens: int = 512, prompt_cache_key: str = ""):
+                raise RuntimeError("simulated API 500")
+
+        agent = Agent(
+            config=AgentConfig(provider="fake", max_steps=3, max_new_tokens=256),
+            model_client=FailingClient([]),
+            workspace=workspace,
+        )
+        agent.cwd = str(temp_workspace)
+        agent.circuit_breaker = CircuitBreaker(
+            failure_threshold=2,
+            recovery_timeout=0.05,
+            half_open_success_threshold=1,
+        )
+        store = RunStore(str(temp_workspace))
+
+        for _ in range(2):
+            with pytest.raises(RuntimeError):
+                agent.ask("trigger breaker")
+
+        run_dirs = sorted(store.runs_dir.iterdir(), key=lambda p: p.stat().st_mtime)
+        events = [
+            json.loads(line)
+            for line in (run_dirs[-1] / "trace.jsonl").read_text(encoding="utf-8").strip().splitlines()
+        ]
+        opened = [e for e in events if e.get("event") == "circuit_opened"]
+        assert len(opened) == 1
+        assert opened[0]["payload"]["reason"] == "consecutive_failures"
+
+        time.sleep(0.1)
+        agent.model_client = FakeModelClient(["<final>recovered</final>"])
+        agent.ask("recover")
+
+        run_dirs = sorted(store.runs_dir.iterdir(), key=lambda p: p.stat().st_mtime)
+        events = [
+            json.loads(line)
+            for line in (run_dirs[-1] / "trace.jsonl").read_text(encoding="utf-8").strip().splitlines()
+        ]
+        event_names = [e.get("event") for e in events]
+        assert "half_open_probe" in event_names
+        assert "circuit_closed" in event_names
+
     def test_invalid_tool_payload_emits_parse_retry(self, config, workspace, temp_workspace):
         """tool payload 缺 name → parse_recovery + parse_retry trace。"""
         import json
