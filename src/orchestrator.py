@@ -264,6 +264,7 @@ class Orchestrator(RepairPipelineMixin):
         )
         plan.language = language
         plan.language_source = source
+        plan.intent_parser = "rule"
         apply_prompt_routing(plan)
 
         return plan

@@ -63,3 +63,21 @@ class TestPatcherPrompt:
     def test_forbids_tool_calls(self):
         text = _read("patcher.txt")
         assert "只输出上面的 JSON" in text
+
+class TestIntentParserSnapshot:
+    def test_intent_parser_in_snapshot(self):
+        from src.repair.prompt_router import repair_plan_intent_snapshot
+        from src.state import RepairPlan
+
+        plan = RepairPlan(issue_type="type_error", intent_parser="rule")
+        snap = repair_plan_intent_snapshot(plan)
+        assert snap["intent_parser"] == "rule"
+        assert snap["issue_type"] == "type_error"
+
+    def test_intent_parser_defaults_to_rule(self):
+        from src.repair.prompt_router import repair_plan_intent_snapshot
+        from src.state import RepairPlan
+
+        plan = RepairPlan(issue_type="unknown")
+        snap = repair_plan_intent_snapshot(plan)
+        assert snap["intent_parser"] == "rule"

@@ -163,6 +163,7 @@ class RepairPlan:
     skill: SkillContext = field(default_factory=SkillContext)
     reasoning: str = ""
     prompt_variants: dict[str, str] = field(default_factory=dict)
+    intent_parser: str = ""
     schema_version: str = "1.0"
 
     def to_dict(self) -> dict:
@@ -176,6 +177,7 @@ class RepairPlan:
             "skill": self.skill.to_dict(),
             "reasoning": self.reasoning,
             "prompt_variants": dict(self.prompt_variants),
+            "intent_parser": self.intent_parser,
             "schema_version": self.schema_version,
         }
 
@@ -194,6 +196,7 @@ class RepairPlan:
             skill=skill,
             reasoning=data.get("reasoning", ""),
             prompt_variants=dict(data.get("prompt_variants") or {}),
+            intent_parser=data.get("intent_parser", ""),
             schema_version=data.get("schema_version", "1.0"),
         )
 
