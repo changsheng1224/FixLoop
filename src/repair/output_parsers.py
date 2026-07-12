@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
@@ -19,7 +20,7 @@ def _load_json(text: str) -> Any | None:
         pass
     # L2: regex 提取第一个 {...} 块
     try:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
+        match = re.search(r"\{(?:[^{}]|\{[^{}]*\})*\}", text, re.DOTALL)
         if match:
             return json.loads(match.group())
     except Exception:
@@ -49,12 +50,13 @@ def parse_suspect_list(answer: str) -> list[SuspectLocation]:
     return _with_validation_errors(result, errors)
 
 
+_log = logging.getLogger("fixloop.output_parsers")
+
+
 def _with_validation_errors(result, errors: list[str]):
-    """记录 schema 校验错误到 agent_errors（供 feedback 重试）。"""
+    """记录 schema 校验错误（供 feedback 重试）。"""
     if errors:
-        import logging
-        log = logging.getLogger("fixloop.output_parsers")
-        log.warning("schema 校验: %s", "; ".join(errors[:3]))
+        _log.warning("schema 校验: %s", "; ".join(errors[:3]))
     return result
 
 
@@ -89,6 +91,12 @@ def parse_retrieved_context(answer: str) -> RetrievedContext:
 
 def parse_verification(answer: str) -> VerificationResult:
     data = _load_json(answer)
-    if isinstance(data, dict):
-        return VerificationResult.from_dict(data)
-    return VerificationResult()
+    errors: list[str] = []
+    if not isinstance(data, dict):
+        errors.append("输出不是 JSON 对象")
+        return _with_validation_errors(VerificationResult(), errors)
+    try:
+        return _with_validation_errors(VerificationResult.from_dict(data), errors)
+    except Exception as e:
+        errors.append(str(e))
+        return _with_validation_errors(VerificationResult(), errors)

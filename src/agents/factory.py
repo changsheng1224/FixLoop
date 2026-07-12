@@ -71,8 +71,8 @@ def create_repair_agent(
         agent_name = role
         light = light_client if role in ("localizer", "retriever") else None
 
-    json_mode = role in ("localizer", "patcher", "retriever", "verifier")
-    if json_mode and not role == "verifier":
+    json_mode = role in ("localizer", "patcher", "retriever")
+    if json_mode:
         system_prompt += "\n\n【输出格式】只输出合法 JSON（不要包裹在 ```json 或 <final> 中）。"
     return Agent(
         config=AgentConfig(provider="deepseek", approval=approval, json_mode=json_mode, **defaults),
