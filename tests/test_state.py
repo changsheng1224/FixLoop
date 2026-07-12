@@ -104,3 +104,72 @@ class TestRepairState:
         assert restored.suspect_locations == []
         assert restored.candidate_patches == []
         assert restored.status == "pending"
+
+
+class TestRepairPhase:
+    def test_default_phase_is_localize(self):
+        state = RepairState(issue_input="test")
+        assert state.phase == "localize"
+        assert state.status == "pending"
+
+    def test_phase_independent_of_status(self):
+        state = RepairState(issue_input="test", status="fixed")
+        assert state.phase == "localize"
+        assert state.status == "fixed"
+
+    def test_phase_roundtrip(self):
+        state = RepairState(issue_input="test", phase="retrieve")
+        data = state.to_dict()
+        restored = RepairState.from_dict(data)
+        assert restored.phase == "retrieve"
+
+    def test_phase_transitions(self):
+        from src.state import REPAIR_PHASES
+        assert "localize" in REPAIR_PHASES
+        assert "retrieve" in REPAIR_PHASES
+        assert "patch" in REPAIR_PHASES
+        assert "verify" in REPAIR_PHASES
+        assert "done" in REPAIR_PHASES
+        assert "failed" in REPAIR_PHASES
+
+
+class TestRepairStatePersistence:
+    def test_full_state_to_dict_includes_phase_and_timings(self):
+        state = RepairState(
+            issue_input="test",
+            phase="verify",
+            status="fixed",
+            retry_count=1,
+            node_timings={"phases": {"localize_ms": 100, "patch_ms": 200}},
+        )
+        data = state.to_dict()
+        assert data["phase"] == "verify"
+        assert data["status"] == "fixed"
+        assert data["retry_count"] == 1
+        assert "node_timings" in data
+
+    def test_persist_and_restore_roundtrip(self, tmp_path):
+        import json
+        state = RepairState(
+            issue_input="TypeError at calc.py:1",
+            phase="done",
+            status="fixed",
+            node_timings={"phases": {"localize_ms": 50, "verify_ms": 300}},
+        )
+        path = tmp_path / "repair_state.json"
+        path.write_text(json.dumps(state.to_dict(), ensure_ascii=False, indent=2))
+        data = json.loads(path.read_text())
+        restored = RepairState.from_dict(data)
+        assert restored.issue_input == state.issue_input
+        assert restored.status == "fixed"
+        assert restored.phase == "done"
+
+class TestBlackboardSnapshot:
+    def test_snapshot_in_state_to_dict(self):
+        state = RepairState(
+            issue_input="test",
+            blackboard_snapshot={"entries": {"suspect:calc.py": "..."}, "conflicts": []},
+        )
+        data = state.to_dict()
+        assert "blackboard_snapshot" in data
+        assert data["blackboard_snapshot"]["conflicts"] == []

@@ -52,6 +52,29 @@ class BlackboardMixin:
         self._emit_bb_trace("blackboard_snapshot", bb.snapshot())
         return write_stats
 
+    def resolve_blackboard_conflict(self, key: str, strategy: str = "prefer_localizer") -> list[dict]:
+        """公开 API：仲裁 Blackboard 冲突。
+
+        Args:
+            key: 冲突 key（如 ``suspect:calc.py:42``），空字符串表示仲裁全部。
+            strategy: ``prefer_localizer`` 或 ``highest_confidence``。
+
+        Returns:
+            已仲裁的冲突条目列表。
+        """
+        from src.repair.blackboard_merge import resolve_blackboard_conflicts
+
+        bb = self._active_repair_ctx().blackboard
+        if bb is None:
+            return []
+        if key:
+            # 单 key 仲裁
+            for c in bb.conflicts:
+                if c["key"] == key:
+                    return resolve_blackboard_conflicts(bb, strategy=strategy)
+            return []
+        return resolve_blackboard_conflicts(bb, strategy=strategy)
+
     def _merge_blackboard_for_patch(self, state: RepairState) -> dict:
         """Read Blackboard at patch boundary and materialize into RepairState."""
         bb = self._active_repair_ctx().blackboard

@@ -107,6 +107,12 @@ class ToolExecutor:
                     "quota_exceeded",
                     f"Error: 工具 '{name}' 超出配额限制。{self._quota.status()}",
                 )
+            if name == "run_shell" and not self._quota.acquire_shell():
+                return self._rejected(
+                    4,
+                    "quota_exceeded",
+                    f"Error: 并行 shell 达到上限。{self._quota.status()}",
+                )
 
         # ---- Gate 5: 重复调用检测 ----
         if self._is_duplicate(name, args):
@@ -222,6 +228,8 @@ class ToolExecutor:
         # 记录配额
         if self._quota is not None:
             self._quota.record(name)
+            if name == "run_shell":
+                self._quota.release_shell()
 
         return ToolExecutionResult(content=result_text, metadata=metadata)
 
@@ -439,12 +447,21 @@ class ToolExecutor:
 class QuotaEnforcer:
     """工具执行配额控制。
 
-    限制每类工具在单次会话中的最大调用次数。
+    限制每类工具在单次会话中的最大调用次数 + 并发 subprocess 上限。
     """
 
-    def __init__(self, max_writes: int = 20, max_shell: int = 10, max_total: int = 50):
+    def __init__(self, max_writes: int = 20, max_shell: int = 10, max_total: int = 50, max_concurrent_shell: int = 3):
+        import threading
+
         self._limits = {"write": max_writes, "shell": max_shell, "total": max_total}
         self._counts = {"write": 0, "shell": 0, "total": 0}
+        self._shell_semaphore = threading.Semaphore(max_concurrent_shell)
+
+    def acquire_shell(self) -> bool:
+        return self._shell_semaphore.acquire(blocking=False)
+
+    def release_shell(self):
+        self._shell_semaphore.release()
 
     def check(self, tool_name: str) -> bool:
         """检查工具是否在配额内。

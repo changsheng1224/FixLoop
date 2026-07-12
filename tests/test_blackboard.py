@@ -56,3 +56,47 @@ class TestBlackboardReadWrite:
         bb.apply_conflict_winner("k", "v1", "localizer")
         assert bb.read("k") == "v1"
         assert bb.conflicts == []
+
+class TestOrchestratorConflictAPI:
+    def test_resolve_conflict_prefer_localizer(self):
+        from src.blackboard import Blackboard
+        from src.repair.blackboard_merge import resolve_blackboard_conflicts
+
+        bb = Blackboard()
+        bb.write("suspect:calc.py:42", {"confidence": 0.8}, source_agent="retriever")
+        bb.write("suspect:calc.py:42", {"confidence": 0.95}, source_agent="localizer")
+        # 冲突已记录
+        assert len(bb.conflicts) == 1
+        resolved = resolve_blackboard_conflicts(bb, strategy="prefer_localizer")
+        assert len(resolved) == 1
+        assert resolved[0]["strategy"] == "prefer_localizer"
+
+    def test_no_conflict_returns_empty(self):
+        from src.blackboard import Blackboard
+        from src.repair.blackboard_merge import resolve_blackboard_conflicts
+
+        bb = Blackboard()
+        bb.write("suspect:calc.py:42", {"confidence": 0.8}, source_agent="localizer")
+        assert resolve_blackboard_conflicts(bb) == []
+
+class TestSuspectDedupe:
+    def test_dedupes_same_file_line(self):
+        from src.repair.blackboard_merge import dedupe_suspects
+        from src.state import SuspectLocation
+
+        s1 = SuspectLocation(file_path="a.py", start_line=1, end_line=1, confidence=0.5)
+        s2 = SuspectLocation(file_path="a.py", start_line=1, end_line=1, confidence=0.9)
+        s3 = SuspectLocation(file_path="b.py", start_line=2, end_line=2, confidence=0.7)
+        result = dedupe_suspects([s1, s2, s3])
+        assert len(result) == 2
+        assert result[0].confidence == 0.9  # takes higher confidence
+
+class TestBlackboardConflictsInReport:
+    def test_conflicts_in_snapshot(self):
+        from src.blackboard import Blackboard
+        bb = Blackboard()
+        bb.write("suspect:a.py:1", {"c": 0.5}, source_agent="localizer")
+        bb.write("suspect:a.py:1", {"c": 0.9}, source_agent="retriever")
+        snap = bb.snapshot()
+        assert "conflicts" in snap
+        assert len(snap["conflicts"]) == 1

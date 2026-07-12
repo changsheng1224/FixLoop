@@ -21,6 +21,16 @@ _CONTEXT_FIELDS = (
 )
 
 
+def dedupe_suspects(suspects: list[SuspectLocation]) -> list[SuspectLocation]:
+    """按 (file_path, start_line) 去重，保留最高置信度。"""
+    seen: dict[tuple, SuspectLocation] = {}
+    for s in suspects:
+        key = (s.file_path, s.start_line)
+        if key not in seen or s.confidence > seen[key].confidence:
+            seen[key] = s
+    return list(seen.values())
+
+
 def suspect_key(suspect: SuspectLocation) -> str:
     """Blackboard key for a suspect location."""
     return f"{SUSPECT_PREFIX}{suspect.file_path}:{suspect.start_line}"
@@ -187,7 +197,7 @@ def merge_blackboard_for_patch(
     suspects = read_suspects_from_blackboard(bb)
     context = read_context_from_blackboard(bb)
 
-    state.suspect_locations = suspects
+    state.suspect_locations = dedupe_suspects(suspects)
     state.retrieved_context = context
     scratch_applied = _apply_scratch_feedback(state, bb)
 
