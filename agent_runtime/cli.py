@@ -357,6 +357,11 @@ def _handle_command(cmd: str, agent: Agent) -> str:
   /cancel   取消当前运行中的 ask（运行中请用 Ctrl+C）
   /memory   显示工作记忆（M3 完整实现）
   /todos   显示/管理计划（/todos done <id>）
+  /save [name]  保存当前会话
+  /load <name>  恢复已保存会话
+  /sessions     列出已保存会话
+  /replay       trace 回放
+  /prompt       查看最近 prompt
   /session  显示当前会话信息
   /reset    清空对话历史
   /exit     退出
@@ -425,6 +430,55 @@ def _handle_command(cmd: str, agent: Agent) -> str:
                 for t in todos:
                     m = marks.get(t.get("status", "pending"), "?")
                     print(f"[{m}] {t['id']}. {t['content']}")
+    elif name == "/save":
+        name = parts[1] if len(parts) > 1 else None
+        if not name:
+            import time
+            name = time.strftime("session_%Y%m%d_%H%M%S")
+        agent.session["id"] = name
+        SessionStore(agent._cwd).save(agent.session)
+        print(f"会话已保存: {name}", file=sys.stderr)
+    elif name == "/load":
+        name = parts[1] if len(parts) > 1 else None
+        if not name:
+            print("用法: /load <session_name>", file=sys.stderr)
+        else:
+            loaded = SessionStore(agent._cwd).load(name)
+            if loaded:
+                agent.session = loaded
+                print(f"会话已恢复: {name}", file=sys.stderr)
+            else:
+                print(f"会话不存在: {name}", file=sys.stderr)
+    elif name == "/sessions":
+        store = SessionStore(agent._cwd)
+        names = store.list_all()
+        if names:
+            for n in names:
+                print(f"  {n}")
+        else:
+            print("(无已保存会话)")
+    elif name == "/replay":
+        rid = parts[1] if len(parts) > 1 else "latest"
+        print(f"replay 功能请使用 Python API: ReplayRunner(trace_path).replay(agent)")
+    elif name == "/prompt":
+        from agent_runtime.run_store import RunStore
+        store = RunStore(agent._cwd)
+        latest = store.runs_dir
+        if latest.exists():
+            traces = sorted(latest.iterdir(), key=lambda p: p.stat().st_mtime_ns, reverse=True)
+            if traces:
+                run_id = traces[0].name
+                lines = store.read_trace_lines(run_id)
+                context = [l for l in lines if '"context_built"' in l]
+                if context:
+                    print(f"最近 prompt (run={run_id[:8]}):")
+                    print(context[-1][:500])
+                else:
+                    print("(无 prompt trace)")
+            else:
+                print("(无运行记录)")
+        else:
+            print("(无运行记录)")
     elif name == "/session":
         sid = agent.session.get("id", "?")
         history_len = len(agent.session.get("history", []))
