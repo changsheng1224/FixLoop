@@ -353,6 +353,7 @@ def _handle_command(cmd: str, agent: Agent) -> str:
     if name == "/help":
         print("""可用命令:
   /help     显示此帮助
+  /config   热重载配置（max_steps/approval）
   /cancel   取消当前运行中的 ask（运行中请用 Ctrl+C）
   /memory   显示工作记忆（M3 完整实现）
   /session  显示当前会话信息
@@ -374,6 +375,35 @@ def _handle_command(cmd: str, agent: Agent) -> str:
         # M3 接入工作记忆
         print("工作记忆（M3 实现）:")
         print("  (当前暂无持久记忆条目)")
+    elif name == "/config":
+        if len(parts) < 2:
+            print(f"可配置项: max_steps(当前:{agent.config.max_steps}), approval(当前:{agent.config.approval})")
+            print("用法: /config max_steps=10 或 /config approval=auto")
+        else:
+            for arg in parts[1:]:
+                if "=" not in arg:
+                    print(f"格式错误: {arg}（应为 key=value）")
+                    continue
+                key, _, value = arg.partition("=")
+                key = key.strip().lower()
+                value = value.strip()
+                if key == "max_steps":
+                    try:
+                        new_val = int(value)
+                        old = agent.config.max_steps
+                        agent.config.max_steps = new_val
+                        print(f"max_steps: {old} → {new_val}")
+                    except ValueError:
+                        print(f"max_steps 需要整数: {value}")
+                elif key == "approval":
+                    if value in ("auto", "ask", "never"):
+                        old = agent.config.approval
+                        agent.config.approval = value
+                        print(f"approval: {old} → {value}")
+                    else:
+                        print(f"approval 需为 auto/ask/never: {value}")
+                else:
+                    print(f"未知配置项: {key}（支持: max_steps, approval）")
     elif name == "/session":
         sid = agent.session.get("id", "?")
         history_len = len(agent.session.get("history", []))

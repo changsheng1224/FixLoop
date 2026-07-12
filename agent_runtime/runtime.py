@@ -96,12 +96,45 @@ class Agent:
         from agent_runtime.agent_loop import AgentLoop
         from agent_runtime.cancellation import CancellationToken
 
+        # workspace 切换检测：cwd 变更时重建 workspace + invalidate prefix + 清空 memory
+        self._detect_workspace_switch()
+
         if self.cancel_token is None or self.cancel_token.is_cancelled:
             self.cancel_token = CancellationToken()
         self._active_cancel_token = self.cancel_token
 
         loop = AgentLoop(agent=self)
         return loop.run(user_message, callback=callback)
+
+    def _detect_workspace_switch(self) -> None:
+        """检测 cwd 是否变更；变更则重建 workspace、prefix、清空 working memory。"""
+        import os
+
+        current = os.getcwd()
+        if getattr(self, "_last_cwd", None) and current == self._last_cwd:
+            return
+        if getattr(self, "_last_cwd", None) is None:
+            self._last_cwd = current
+            return  # 首次初始化，跳过
+        # cwd 变更
+        from agent_runtime.workspace import WorkspaceContext
+
+        self._last_cwd = current
+        self._cwd = current
+        self.workspace = WorkspaceContext.build(current)
+        self.tool_context = ToolContext(root=current)
+        # 清空 working memory（旧 workspace 的文件已失效）
+        session = getattr(self, "session", {}) or {}
+        working = session.get("working", {})
+        if isinstance(working, dict):
+            working["recent_files"] = []
+            working["file_summaries"] = {}
+        # 重建 prefix（workspace snapshot 变更影响 hash）
+        try:
+            sp = self._system_prompt if hasattr(self, "_system_prompt") else ""
+            self._prefix = self._build_prefix(sp)
+        except Exception:
+            pass
 
     def complete_once(self, user_message: str, *, system_prompt: str | None = None) -> str:
         """单次 LLM completion，不进入 AgentLoop。
