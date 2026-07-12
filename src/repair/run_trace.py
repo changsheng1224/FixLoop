@@ -125,6 +125,10 @@ class RepairRunTracer:
             "agent_asks": [ref.to_dict() for ref in state.agent_asks],
             "blackboard_schema_version": BLACKBOARD_SCHEMA_VERSION,
             "blackboard": state.blackboard_snapshot or {},
+            "blackboard_conflicts": {
+                "count": len(state.blackboard_snapshot.get("conflicts", [])),
+                "items": state.blackboard_snapshot.get("conflicts", []),
+            },
             "token_usage_by_agent": by_agent,
             **tool_summary,
             **token_summary,

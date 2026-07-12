@@ -90,3 +90,13 @@ class TestSuspectDedupe:
         result = dedupe_suspects([s1, s2, s3])
         assert len(result) == 2
         assert result[0].confidence == 0.9  # takes higher confidence
+
+class TestBlackboardConflictsInReport:
+    def test_conflicts_in_snapshot(self):
+        from src.blackboard import Blackboard
+        bb = Blackboard()
+        bb.write("suspect:a.py:1", {"c": 0.5}, source_agent="localizer")
+        bb.write("suspect:a.py:1", {"c": 0.9}, source_agent="retriever")
+        snap = bb.snapshot()
+        assert "conflicts" in snap
+        assert len(snap["conflicts"]) == 1
