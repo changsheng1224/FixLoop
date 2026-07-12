@@ -516,6 +516,13 @@ class Orchestrator(RepairPipelineMixin):
             state.node_timings["tool_usage_by_agent"] = summary["tool_usage_by_agent"]
         if summary.get("total_tool_steps") is not None:
             state.node_timings["total_tool_steps"] = summary["total_tool_steps"]
+        # 分 Agent latency
+        latency_by_agent: dict[str, dict] = {}
+        for name, client in clients.items():
+            if hasattr(client, "latency_stats"):
+                latency_by_agent[name] = client.latency_stats()
+        if latency_by_agent:
+            state.node_timings["latency_by_agent"] = latency_by_agent
 
     def _attach_rejection_stats(self, state: RepairState) -> None:
         from src.repair.rejection_aggregate import (
