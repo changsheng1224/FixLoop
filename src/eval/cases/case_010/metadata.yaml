@@ -7,6 +7,7 @@ status: verified
 estimated_duration_s: 75
 description: "跨两文件：类型错误与导入错误组合"
 tags:
+  - requires_retriever
   - composite
   - multi_file
 source_files:

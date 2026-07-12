@@ -6,6 +6,7 @@ difficulty: hard
 status: verified
 description: "跨模块类型转换：pricing→discount→checkout 三层调用链"
 tags:
+  - requires_retriever
   - type_error
   - multi_file
 source_files:

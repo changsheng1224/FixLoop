@@ -7,6 +7,7 @@ status: verified
 estimated_duration_s: 40
 description: "模块路径错误或缺少 __init__.py"
 tags:
+  - requires_retriever
   - import_error
   - package_layout
 source_files:

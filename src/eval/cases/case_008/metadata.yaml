@@ -7,6 +7,7 @@ status: verified
 estimated_duration_s: 60
 description: "多跳调用链（>=3 hop）中的逻辑缺陷"
 tags:
+  - requires_retriever
   - logic_error
   - multi_hop
 source_files:

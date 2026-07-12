@@ -6,6 +6,7 @@ difficulty: hard
 status: verified
 description: "循环导入：a.py imports b.py imports a.py"
 tags:
+  - requires_retriever
   - import_error
   - circular
 source_files:
