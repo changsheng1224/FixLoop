@@ -356,6 +356,7 @@ def _handle_command(cmd: str, agent: Agent) -> str:
   /config   热重载配置（max_steps/approval）
   /cancel   取消当前运行中的 ask（运行中请用 Ctrl+C）
   /memory   显示工作记忆（M3 完整实现）
+  /todos   显示/管理计划（/todos done <id>）
   /session  显示当前会话信息
   /reset    清空对话历史
   /exit     退出
@@ -404,6 +405,26 @@ def _handle_command(cmd: str, agent: Agent) -> str:
                         print(f"approval 需为 auto/ask/never: {value}")
                 else:
                     print(f"未知配置项: {key}（支持: max_steps, approval）")
+    elif name == "/todos":
+        todos = agent.session.get("plan_todos", [])
+        if not todos:
+            print("(无计划)")
+        else:
+            marks = {"done": "✓", "in_progress": "→", "pending": " ", "blocked": "✗", "cancelled": "✕"}
+            sub = parts[1] if len(parts) > 1 else ""
+            if sub == "done" and len(parts) > 2:
+                tid = parts[2]
+                for t in todos:
+                    if t.get("id") == tid:
+                        t["status"] = "done"
+                        print(f"[✓] {tid}. {t['content']}  ← 已标记完成")
+                        break
+                else:
+                    print(f"未找到 id={tid}")
+            else:
+                for t in todos:
+                    m = marks.get(t.get("status", "pending"), "?")
+                    print(f"[{m}] {t['id']}. {t['content']}")
     elif name == "/session":
         sid = agent.session.get("id", "?")
         history_len = len(agent.session.get("history", []))

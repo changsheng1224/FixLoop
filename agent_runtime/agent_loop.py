@@ -3,6 +3,7 @@
 停机后产出 task_state.json + trace.jsonl + report.json（含 node_timings 耗时分布）。
 """
 
+import json
 import time as _time
 
 from agent_runtime.compression_pipeline import truncate_tool_result_for_agent
@@ -89,6 +90,8 @@ class AgentLoop:
         self._context_cut_count = 0
         self._last_cache_key = ""
         self._cache_key_changes = 0
+        self._plan_todos: list[dict] = []
+        self._no_progress_steps = 0
 
     def _accumulate_context_stats(self, meta: dict) -> None:
         """从 context_built metadata 累积 section 统计 + cache hit rate。"""
@@ -179,6 +182,7 @@ class AgentLoop:
             create_checkpoint(self.agent, ts, ts.user_request, trigger="user_cancel")
         except Exception:
             pass
+        self._cancel_all_todos()
         return self._complete_run(ts, "<final>用户已取消当前任务。</final>")
 
     def _invoke_model_call(self, fn):
@@ -386,6 +390,25 @@ class AgentLoop:
                 create_checkpoint(self.agent, ts, ts.user_request, trigger="step_end")
             except Exception:
                 pass
+            self._advance_todo()
+            self._no_progress_steps = 0
+        else:
+            # 非成功或只读无副作用工具 → 累计无进展步数
+            meta = result.metadata if hasattr(result, "metadata") else {}
+            affected = meta.get("affected_paths", []) if isinstance(meta, dict) else []
+            if not affected:
+                self._no_progress_steps += 1
+                if self._no_progress_steps >= 3:
+                    self._emit("stall_detected", {
+                        "steps": self._no_progress_steps,
+                        "last_tool": tool_name,
+                    })
+                    # mark 当前 in_progress todo 为 blocked
+                    for todo in self._plan_todos:
+                        if todo.get("status") == "in_progress":
+                            todo["status"] = "blocked"
+                            self._emit("todo_updated", {"todo": dict(todo)})
+                            break
         return f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
 
     # ---- XML 路径辅助 ----
@@ -494,6 +517,64 @@ class AgentLoop:
         retry = ParseRetry(build_recovery_prompt(failure), failure)
         return self._handle_parse_retry(ts, raw, retry, step=step)
 
+    def _generate_plan(self, user_message: str) -> list[dict]:
+        """用 light_client 或规则生成 TodoList。"""
+        # 尝试 light_client
+        light = getattr(self.agent, "light_client", None)
+        if light is not None:
+            try:
+                prompt = (
+                    "将以下任务分解为 2-5 个步骤。只输出 JSON 数组：\n"
+                    f"[{{\"id\":\"1\",\"content\":\"...\",\"status\":\"pending\"}},...]\n\n{user_message[:500]}"
+                )
+                raw = light.complete(prompt, max_new_tokens=256)
+                # 提取 JSON 数组
+                start = raw.find("[")
+                end = raw.rfind("]") + 1
+                if start >= 0 and end > start:
+                    todos = json.loads(raw[start:end])
+                    if isinstance(todos, list) and todos:
+                        return todos
+            except Exception:
+                pass
+        # 规则 fallback
+        msg = user_message.lower()
+        todos = []
+        i = 1
+        if any(w in msg for w in ("error", "fix", "bug", "repair", "修复")):
+            todos.append({"id": str(i), "content": "Analyze error and locate suspect code", "status": "pending"})
+            todos.append({"id": str(i + 1), "content": "Retrieve related context and tests", "status": "pending"})
+            todos.append({"id": str(i + 2), "content": "Generate and apply fix patch", "status": "pending"})
+            todos.append({"id": str(i + 3), "content": "Verify fix passes tests", "status": "pending"})
+        else:
+            todos.append({"id": str(i), "content": "Read relevant files", "status": "pending"})
+            todos.append({"id": str(i + 1), "content": "Analyze and respond", "status": "pending"})
+        return todos
+
+    def _start_next_todo(self) -> None:
+        """将下一个 pending todo 标记为 in_progress。"""
+        for todo in self._plan_todos:
+            if todo.get("status") == "pending":
+                todo["status"] = "in_progress"
+                self._emit("todo_updated", {"todo": dict(todo)})
+                break
+
+    def _advance_todo(self) -> None:
+        """将当前 in_progress → done，启动下一个 pending。"""
+        for todo in self._plan_todos:
+            if todo.get("status") == "in_progress":
+                todo["status"] = "done"
+                self._emit("todo_updated", {"todo": dict(todo)})
+                break
+        self._start_next_todo()
+
+    def _cancel_all_todos(self) -> None:
+        """将未完成 todo 全部标记为 cancelled。"""
+        for todo in self._plan_todos:
+            if todo.get("status") in ("pending", "in_progress"):
+                todo["status"] = "cancelled"
+                self._emit("todo_updated", {"todo": dict(todo)})
+
     # ---- 入口 ----
 
     def run(self, user_message: str, callback=None) -> str:
@@ -526,6 +607,12 @@ class AgentLoop:
                 init_run_projection(self.agent.session, user_message)
                 self.agent.record({"role": "user", "content": user_message})
                 self._gen_task_summary(user_message)
+                self._plan_todos = self._generate_plan(user_message)
+                self._no_progress_steps = 0
+                if self._plan_todos:
+                    self.agent.session["plan_todos"] = self._plan_todos
+                    self._emit("plan_created", {"todos": list(self._plan_todos)})
+                    self._start_next_todo()
 
                 if hasattr(self.agent.model_client, "chat_with_tools"):
                     return self._run_with_native_tools(user_message, ts, callback)
@@ -893,6 +980,7 @@ class AgentLoop:
                     if getattr(self.agent, "quota", None)
                     else {}
                 ),
+                "plan_todos": list(self._plan_todos),
                 "memory_health": self._build_memory_health(),
                 **report_token,
                 **report_latency,
