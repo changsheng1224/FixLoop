@@ -36,6 +36,7 @@ def _make_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="agent_runtime", description="手写的 LLM Agent 运行时内核")
     p.add_argument("prompt", nargs="?", default=None, help="用户输入（缺省进入 REPL 模式）")
     p.add_argument("--cwd", default=".", help="工作目录")
+    p.add_argument("--stream", action="store_true", help="启用流式输出（REPL 实时显示）")
     p.add_argument("--provider", default=cfg.provider, help=f"模型 Provider（默认 {cfg.provider}）")
     p.add_argument("--model", default=None, help=f"模型名称（默认 {cfg.model}）")
     p.add_argument(

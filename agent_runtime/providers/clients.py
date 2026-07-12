@@ -668,19 +668,8 @@ class OpenAICompatibleModelClient:
 
     def complete(self, prompt: str, max_new_tokens: int = 512, prompt_cache_key: str = "") -> str:
         """调用 OpenAI Responses API。"""
-        payload = {
-            "model": self.model,
-            "input": [
-                {
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": prompt}],
-                }
-            ],
-            "max_output_tokens": max_new_tokens,
-            "temperature": self.temperature,
-        }
+        payload = self._build_payload(prompt, max_new_tokens, stream=False)
         body = json.dumps(payload).encode("utf-8")
-
         request = urllib.request.Request(
             f"{self.base_url}/responses",
             data=body,
@@ -691,13 +680,74 @@ class OpenAICompatibleModelClient:
         )
         with urllib.request.urlopen(request, timeout=self.timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
+        return self._extract_text(data)
 
-        # 提取文本
+    def complete_stream(self, prompt: str, max_new_tokens: int = 512, on_chunk=None, cancel_token=None):
+        """OpenAI Responses API 流式调用。"""
+        payload = self._build_payload(prompt, max_new_tokens, stream=True)
+        body = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(
+            f"{self.base_url}/responses",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            },
+        )
+        parts: list[str] = []
+        with urllib.request.urlopen(request, timeout=self.timeout) as resp:
+            for line_bytes in resp:
+                if cancel_token is not None and cancel_token.is_cancelled:
+                    break
+                line = line_bytes.decode("utf-8", errors="replace").strip()
+                if not line or not line.startswith("data: "):
+                    continue
+                data_str = line[6:]
+                if data_str == "[DONE]":
+                    break
+                try:
+                    event = json.loads(data_str)
+                    delta = _extract_stream_delta(event)
+                    if delta:
+                        parts.append(delta)
+                        if on_chunk is not None:
+                            on_chunk(delta)
+                except json.JSONDecodeError:
+                    pass
+        full_text = "".join(parts)
+        if not full_text:
+            full_text = self._extract_text(json.loads("{}"))
+        return full_text
+
+    @staticmethod
+    def _build_payload(prompt, max_new_tokens, stream):
+        return {
+            "model": "gpt-4o",
+            "input": [{"role": "user", "content": [{"type": "input_text", "text": prompt}]}],
+            "max_output_tokens": max_new_tokens,
+            "temperature": 0.2,
+            "stream": stream,
+        }
+
+    @staticmethod
+    def _extract_text(data):
         output = data.get("output", [])
         for item in output:
             if item.get("type") == "message":
-                content_list = item.get("content", [])
-                for c in content_list:
+                for c in item.get("content", []):
                     if c.get("type") == "output_text":
                         return c.get("text", "")
         return ""
+
+
+def _extract_stream_delta(event: dict) -> str:
+    """从 OpenAI SSE 事件中提取文本增量。"""
+    if event.get("type") == "response.output_text.delta":
+        return event.get("delta", "")
+    output = event.get("output", [])
+    for item in output:
+        if item.get("type") == "message":
+            for c in item.get("content", []):
+                if c.get("type") == "output_text":
+                    return c.get("text", "")
+    return ""
