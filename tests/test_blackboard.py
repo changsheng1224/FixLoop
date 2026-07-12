@@ -56,3 +56,25 @@ class TestBlackboardReadWrite:
         bb.apply_conflict_winner("k", "v1", "localizer")
         assert bb.read("k") == "v1"
         assert bb.conflicts == []
+
+class TestOrchestratorConflictAPI:
+    def test_resolve_conflict_prefer_localizer(self):
+        from src.blackboard import Blackboard
+        from src.repair.blackboard_merge import resolve_blackboard_conflicts
+
+        bb = Blackboard()
+        bb.write("suspect:calc.py:42", {"confidence": 0.8}, source_agent="retriever")
+        bb.write("suspect:calc.py:42", {"confidence": 0.95}, source_agent="localizer")
+        # 冲突已记录
+        assert len(bb.conflicts) == 1
+        resolved = resolve_blackboard_conflicts(bb, strategy="prefer_localizer")
+        assert len(resolved) == 1
+        assert resolved[0]["strategy"] == "prefer_localizer"
+
+    def test_no_conflict_returns_empty(self):
+        from src.blackboard import Blackboard
+        from src.repair.blackboard_merge import resolve_blackboard_conflicts
+
+        bb = Blackboard()
+        bb.write("suspect:calc.py:42", {"confidence": 0.8}, source_agent="localizer")
+        assert resolve_blackboard_conflicts(bb) == []
