@@ -494,6 +494,10 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 "suspect_count": len(state.suspect_locations),
                 "patch_count": len(state.candidate_patches),
                 "timings": state.node_timings.get("phases", {}),
+                "blackboard": {
+                    "entries": sum(1 for _ in state.blackboard_snapshot.get("entries", {}).keys()),
+                    "conflicts": state.blackboard_snapshot.get("conflicts", []),
+                },
                 "saved_at": time.time(),
             }
             tmp2 = cp_path.with_suffix(".tmp")

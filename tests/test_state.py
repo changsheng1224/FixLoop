@@ -163,3 +163,13 @@ class TestRepairStatePersistence:
         assert restored.issue_input == state.issue_input
         assert restored.status == "fixed"
         assert restored.phase == "done"
+
+class TestBlackboardSnapshot:
+    def test_snapshot_in_state_to_dict(self):
+        state = RepairState(
+            issue_input="test",
+            blackboard_snapshot={"entries": {"suspect:calc.py": "..."}, "conflicts": []},
+        )
+        data = state.to_dict()
+        assert "blackboard_snapshot" in data
+        assert data["blackboard_snapshot"]["conflicts"] == []
