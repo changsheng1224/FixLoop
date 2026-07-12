@@ -784,6 +784,23 @@ def run_compression_pipeline(
         history_window=window,
     )
 
+    # 收集触发事件进 trace
+    events = []
+    for level in ("l2", "l3", "l4", "l5"):
+        if pipe_meta.get(f"{level}_triggered"):
+            stage = pipe_meta.get(level, "")
+            tokens_before = pipe_meta.get(f"{level}_tokens_before", 0)
+            tokens_after = pipe_meta.get(f"{level}_tokens_after", 0)
+            ratio = round(tokens_after / max(tokens_before, 1), 3) if tokens_before else 0
+            events.append({
+                "level": level.upper(),
+                "stage": stage,
+                "ratio": ratio,
+                "section": "history",
+            })
+    if events:
+        pipe_meta["compression_events"] = events
+
     return projected
 
 
