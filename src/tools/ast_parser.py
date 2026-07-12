@@ -102,3 +102,43 @@ def _extract_node(node) -> dict | None:
         info["docstring_summary"] = doc.strip().split("\n")[0][:100]
 
     return info
+
+
+def check_semantic_equivalence(original: str, patched: str) -> dict:
+    """对比两个 Python 源码的 AST 结构，检测语义漂移。
+
+    Returns:
+        {"status": "semantic_ok" | "drift", "detail": str}
+    """
+    result = {"status": "semantic_ok", "detail": ""}
+    try:
+        t1 = ast.parse(original)
+        t2 = ast.parse(patched)
+    except SyntaxError as e:
+        return {"status": "drift", "detail": f"syntax error: {e}"}
+
+    sigs1 = _extract_signatures(t1)
+    sigs2 = _extract_signatures(t2)
+    removed = sigs1 - sigs2
+    added = sigs2 - sigs1
+    if removed or added:
+        parts = []
+        if removed:
+            parts.append(f"removed: {sorted(removed)}")
+        if added:
+            parts.append(f"added: {sorted(added)}")
+        result["status"] = "drift"
+        result["detail"] = "; ".join(parts)
+    return result
+
+
+def _extract_signatures(tree: ast.AST) -> set[str]:
+    """提取 AST 中所有函数/类的方法签名。"""
+    sigs = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            params = ", ".join(a.arg for a in node.args.args)
+            sigs.add(f"def {node.name}({params})")
+        elif isinstance(node, ast.ClassDef):
+            sigs.add(f"class {node.name}")
+    return sigs
