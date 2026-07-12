@@ -14,6 +14,7 @@ _SEMANTIC_MODEL = None
 _SEMANTIC_LOCK = threading.Lock()
 _SEMANTIC_INIT_LOGGED = False
 _SEMANTIC_MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
+EMBED_MAX_CHARS = 800  # ~256 tokens for English（all-MiniLM-L6-v2 max_seq_length）
 
 
 def _hf_cache_dir() -> Path:
@@ -112,7 +113,8 @@ class SemanticMemory:
         if not text:
             return
         try:
-            embedding = self.model.encode(text)
+            truncated = _truncate_head_tail(text)
+            embedding = self.model.encode(truncated)
             self._notes.append({**note, "embedding": embedding})
         except Exception:
             pass
@@ -140,6 +142,15 @@ class SemanticMemory:
             return [note for _, note in scores[:top_k]]
         except Exception:
             return []
+
+
+def _truncate_head_tail(text: str, max_chars: int = EMBED_MAX_CHARS) -> str:
+    """按 head + tail 截断长文本，保留头（异常类型）和尾（Traceback）。"""
+    text = text.strip()
+    if len(text) <= max_chars:
+        return text
+    half = max_chars // 2
+    return f"{text[:half]}\n...\n{text[-half:]}"
 
 
 def derive_embed_query(user_message: str, task_summary: str = "") -> str:
