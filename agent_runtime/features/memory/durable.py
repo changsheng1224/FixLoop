@@ -39,6 +39,12 @@ class UserPreference:
     value: str
     confidence: float = 1.0
     source: str = ""
+    updated_at: float = 0.0
+
+    def __post_init__(self):
+        if not self.updated_at:
+            import time
+            self.updated_at = time.time()
 
     @classmethod
     def from_line(cls, line: str) -> "UserPreference | None":
@@ -65,6 +71,9 @@ class UserPreference:
         return "| key | value | confidence | source |\n|-----|-------|------------|--------|"
 
 
+DECAY_RATE = 0.95  # 每天衰减 5%（模块级常量）
+
+
 class DurableMemoryStore:
     """跨会话 Markdown 持久记忆（.agent/memory/topics/）。"""
 
@@ -81,7 +90,7 @@ class DurableMemoryStore:
     # ── 结构化用户画像 ──
 
     def get_preferences(self) -> list[UserPreference]:
-        """读取 user-preferences topic 的结构化条目。"""
+        """读取 user-preferences topic 的结构化条目（含时间衰减）。"""
         entries = self._read_topic(self.topics_dir / "user-preferences.md")
         prefs = []
         in_table = False
@@ -97,7 +106,7 @@ class DurableMemoryStore:
                     prefs.append(pref)
             else:
                 in_table = False
-        return prefs
+        return _apply_time_decay(prefs)
 
     def upsert_preference(self, pref: UserPreference) -> None:
         """写入或更新一个用户偏好条目（按 key 去重）。"""
@@ -291,6 +300,20 @@ def _resolve_conflict(existing: str, new: str, new_authority: str = "auto") -> C
     if new_rank > old_rank:
         return ConflictResolution.OVERRIDE
     return ConflictResolution.INVALID
+
+
+def _apply_time_decay(prefs: list[UserPreference]) -> list[UserPreference]:
+    """对偏好条目应用时间衰减；低于阈值 0.1 的不再参与召回。"""
+    import time
+    now = time.time()
+    result = []
+    for p in prefs:
+        days = (now - p.updated_at) / 86400
+        if days > 1:
+            p.confidence = round(p.confidence * (DECAY_RATE ** days), 3)
+        if p.confidence >= 0.1:
+            result.append(p)
+    return result
 
 
 def reject_durable_reason(text: str) -> str:
