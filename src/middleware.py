@@ -57,6 +57,7 @@ REPAIR_PERMISSION_TABLE = {
     "find_test": {"retriever", "patcher"},
     "search": {"*"},
     "grep": {"*"},
+    "inspect_file": {"localizer", "retriever"},
     "read_file": {"*"},
     "list_files": {"*"},
     "run_shell": set(),
