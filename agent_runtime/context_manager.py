@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from agent_runtime.compression_pipeline import (
     DEFAULT_TOOL_TRUNCATION,
     L5_TRIGGER_RATIO,
@@ -89,6 +91,42 @@ class TokenBudget:
         return max(0, self.total_limit - used)
 
 
+class _DiskCache(dict):
+    """dict-like 磁盘缓存（key → .agent/summary_cache/<hash>.txt）。"""
+
+    def __init__(self, cache_dir: Path):
+        super().__init__()
+        self._dir = cache_dir
+        self._dir.mkdir(parents=True, exist_ok=True)
+        self._load()
+
+    def _path(self, key: str) -> Path:
+        import hashlib
+
+        h = hashlib.sha256(key.encode()).hexdigest()[:16]
+        return self._dir / f"{h}.txt"
+
+    def _load(self):
+        for p in self._dir.glob("*.txt"):
+            try:
+                super().__setitem__(p.stem, p.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        try:
+            self._path(key).write_text(str(value), encoding="utf-8")
+        except Exception:
+            pass
+
+    def __getitem__(self, key):
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        return super().get(key, default)
+
+
 class ContextManager:
     """Prompt 组装器：按预算拼接 section，超限时自动裁剪。
 
@@ -124,7 +162,8 @@ class ContextManager:
         model = getattr(getattr(agent, "config", None), "model", "deepseek-v4-pro")
         provider = getattr(getattr(agent, "config", None), "provider", "deepseek")
         self.budget = TokenBudget(model=model, total_limit=limit, provider=provider)
-        self._summary_cache: dict[str, str] = {}
+        cache_dir = Path(getattr(agent, "_cwd", ".")) / ".agent" / "summary_cache"
+        self._summary_cache: dict[str, str] = _DiskCache(cache_dir)
         self.tier_policy = TierPolicy.from_agent(agent)
 
     def build(self, user_message: str) -> tuple[str, dict]:
