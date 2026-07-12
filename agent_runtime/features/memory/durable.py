@@ -2,7 +2,19 @@
 
 import re
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
+
+
+class ConflictResolution(Enum):
+    NONE = "none"
+    EQUIVALENT = "equivalent"
+    OVERRIDE = "override"
+    INVALID = "invalid"
+
+
+# 权威序：user > agent > auto
+AUTHORITY_ORDER = {"user": 3, "agent": 2, "auto": 1}
 
 DURABLE_TOPICS = [
     "project-conventions",
@@ -162,11 +174,13 @@ class DurableMemoryStore:
             path.unlink()
 
     @staticmethod
-    def _upsert_entry(entries: list[str], new_text: str) -> list[str]:
-        new_subject = new_text.split("\n")[0].strip()
+    def _upsert_entry(entries: list[str], new_text: str, authority: str = "auto") -> list[str]:
+        new_subject = new_text.split("\n")[0].strip().lower()
         for i, entry in enumerate(entries):
-            if entry.split("\n")[0].strip().lower() == new_subject.lower():
-                entries[i] = new_text
+            if entry.split("\n")[0].strip().lower() == new_subject:
+                result = _resolve_conflict(entry, new_text, authority)
+                if result in (ConflictResolution.OVERRIDE, ConflictResolution.EQUIVALENT):
+                    entries[i] = new_text
                 return entries
         entries.append(new_text)
         return entries
@@ -246,6 +260,25 @@ def _extract_promotions(text: str) -> list[tuple[str, str]]:
                     promotions.append((topic, f"{prefix} {body}"))
                 break
     return promotions
+
+
+def _resolve_conflict(existing: str, new: str, new_authority: str = "auto") -> ConflictResolution:
+    """冲突状态机：比较新旧条目，按权威序决定是否覆盖。"""
+    if not existing:
+        return ConflictResolution.NONE
+    if existing.strip().lower() == new.strip().lower():
+        return ConflictResolution.EQUIVALENT
+    # 从条目中提取 authority 标记
+    import re
+    old_auth = "auto"
+    m = re.search(r"\[authority:(\w+)\]", existing)
+    if m:
+        old_auth = m.group(1)
+    new_rank = AUTHORITY_ORDER.get(new_authority, 1)
+    old_rank = AUTHORITY_ORDER.get(old_auth, 1)
+    if new_rank > old_rank:
+        return ConflictResolution.OVERRIDE
+    return ConflictResolution.INVALID
 
 
 def reject_durable_reason(text: str) -> str:
