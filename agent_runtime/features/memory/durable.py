@@ -1,6 +1,7 @@
 """持久记忆 — Durable Memory：跨会话 Markdown 文件存储。"""
 
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
 
 DURABLE_TOPICS = [
@@ -18,12 +19,86 @@ PREFIX_MAP = {
 }
 
 
+@dataclass
+class UserPreference:
+    """结构化用户偏好条目。"""
+
+    key: str
+    value: str
+    confidence: float = 1.0
+    source: str = ""
+
+    @classmethod
+    def from_line(cls, line: str) -> "UserPreference | None":
+        """从 `| key | value | confidence | source |` 表格行解析。"""
+        parts = [p.strip() for p in line.split("|") if p.strip()]
+        if len(parts) < 2:
+            return None
+        try:
+            conf = float(parts[2]) if len(parts) > 2 else 1.0
+        except (ValueError, IndexError):
+            conf = 1.0
+        return cls(
+            key=parts[0],
+            value=parts[1],
+            confidence=conf,
+            source=parts[3] if len(parts) > 3 else "",
+        )
+
+    def to_table_row(self) -> str:
+        return f"| {self.key} | {self.value} | {self.confidence:.2f} | {self.source} |"
+
+    @staticmethod
+    def table_header() -> str:
+        return "| key | value | confidence | source |\n|-----|-------|------------|--------|"
+
+
 class DurableMemoryStore:
     """跨会话 Markdown 持久记忆（.agent/memory/topics/）。"""
 
     def __init__(self, root: str):
         self.memory_dir = Path(root) / ".agent" / "memory"
         self.topics_dir = self.memory_dir / "topics"
+
+    # ── 结构化用户画像 ──
+
+    def get_preferences(self) -> list[UserPreference]:
+        """读取 user-preferences topic 的结构化条目。"""
+        entries = self._read_topic(self.topics_dir / "user-preferences.md")
+        prefs = []
+        in_table = False
+        for line in entries:
+            if line.startswith("| key "):
+                in_table = True
+                continue
+            if line.startswith("|---"):
+                continue
+            if in_table and line.startswith("|"):
+                pref = UserPreference.from_line(line)
+                if pref:
+                    prefs.append(pref)
+            else:
+                in_table = False
+        return prefs
+
+    def upsert_preference(self, pref: UserPreference) -> None:
+        """写入或更新一个用户偏好条目（按 key 去重）。"""
+        self.ensure_dirs()
+        topic_file = self.topics_dir / "user-preferences.md"
+        header = UserPreference.table_header()
+        existing = self.get_preferences()
+        # upsert
+        replaced = False
+        for i, p in enumerate(existing):
+            if p.key.lower() == pref.key.lower():
+                existing[i] = pref
+                replaced = True
+                break
+        if not replaced:
+            existing.append(pref)
+        lines = [header] + [p.to_table_row() for p in existing]
+        topic_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self._update_index()
 
     def ensure_dirs(self):
         """创建 memory/topics 目录。"""
