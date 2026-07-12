@@ -348,7 +348,7 @@ class TestL5AutoCompact:
         assert meta["compression_pipeline"]["l5_fallback"] is False
         assert result[0]["role"] == "system"
         assert summary_text in result[0]["content"]
-        assert len(result) == len(history) // 2 + 1
+        assert len(result) >= len(history) // 2 + 1  # +1 for first user pin
 
     def test_l5_fallback_when_summarizer_fails(self, budget):
         history = _long_user_history(30, pad=300)

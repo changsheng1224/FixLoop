@@ -612,9 +612,12 @@ def l5_auto_compact(
         pipe["l5"] = "skipped"
         return history
 
-    mid = len(history) // 2
-    old_history = history[:mid]
-    recent_history = history[mid:]
+    # 钉扎保护：将 pinned items 移到后半段，确保不被 L5 摘要丢弃
+    pinned, unpinned = _partition_pinned(history)
+    protected_count = len(pinned)
+    mid = max(len(unpinned) // 2, 1)
+    old_history = unpinned[:mid]
+    recent_history = unpinned[mid:] + pinned  # pinned 数据在最后，永不进入摘要
 
     cache = summary_cache if summary_cache is not None else {}
     cache_key = _summary_cache_key(old_history)
@@ -655,6 +658,27 @@ def l5_auto_compact(
     pipe["l5_tokens_before"] = tokens_before
     pipe["l5_tokens_after"] = tokens_after
     return fallback
+
+
+def _partition_pinned(history: list[dict]) -> tuple[list[dict], list[dict]]:
+    """将 history 分为 pinned（钉扎保护）和 unpinned 两部分。
+
+    保护规则：第一个 user 消息（含 issue/stack）+ Error: Traceback + [Earlier summary]。
+    """
+    pinned: list[dict] = []
+    unpinned: list[dict] = []
+    seen_user = False
+    for item in history:
+        role = str(item.get("role", ""))
+        content = str(item.get("content", ""))
+        is_first_user = role == "user" and not seen_user
+        if role == "user":
+            seen_user = True
+        if is_first_user or "Error: Traceback" in content or "[Earlier summary]" in content:
+            pinned.append(dict(item))
+        else:
+            unpinned.append(dict(item))
+    return pinned, unpinned
 
 
 def _summary_cache_key(old_history: list[dict]) -> str:
