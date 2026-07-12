@@ -108,6 +108,26 @@ class AgentLoop:
             self._cache_key_changes += 1
         self._last_cache_key = cache_key
 
+    def _build_memory_health(self) -> dict:
+        """构建 report.json 中的 memory_health 字段。"""
+        try:
+            from agent_runtime.features.memory.core import MAX_EPISODIC_NOTES
+            from agent_runtime.features.memory.durable import DurableMemoryStore
+
+            session = self.agent.session or {}
+            episodic = session.get("episodic_notes", [])
+            store = DurableMemoryStore(self.agent._cwd)
+            prefs = store.get_preferences()
+            avg_conf = round(sum(p.confidence for p in prefs) / max(len(prefs), 1), 2)
+            return {
+                "episodic_notes": len(episodic),
+                "episodic_cap": MAX_EPISODIC_NOTES,
+                "durable_entries": sum(1 for _ in store.topics_dir.glob("*.md") if store.topics_dir.is_dir()),
+                "avg_confidence": avg_conf,
+            }
+        except Exception:
+            return {}
+
     def _build_context_summary(self) -> dict:
         """构建 report.json 中的 context_summary 字段。"""
         build_count = self._context_built_count
@@ -859,6 +879,7 @@ class AgentLoop:
                     if getattr(self.agent, "quota", None)
                     else {}
                 ),
+                "memory_health": self._build_memory_health(),
                 **report_token,
                 **report_latency,
                 **ts.rejection_report_fields(),
