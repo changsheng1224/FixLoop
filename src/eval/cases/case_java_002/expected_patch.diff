@@ -1,0 +1,5 @@
+--- a/Service.java
++++ b/Service.java
+@@ -1,4 +1,4 @@
+-        data = null;
++        data = "";

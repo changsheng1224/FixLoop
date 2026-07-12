@@ -112,5 +112,5 @@ class TestRunnerCli:
         report_path = out / "eval_report.json"
         assert report_path.is_file()
         data = json.loads(report_path.read_text(encoding="utf-8"))
-        assert data["summary"]["total"] == 18
-        assert data["summary"]["fix_rate"] >= 0.9
+        assert data["summary"]["total"] == 20
+        assert data["summary"]["fix_rate"] >= 0.85

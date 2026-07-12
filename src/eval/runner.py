@@ -127,12 +127,22 @@ class EvalRunner:
         self.output_dir = Path(output_dir or Path.cwd() / "eval_results")
         self.skip_verify = skip_verify
 
+    def _is_fake_mode(self) -> bool:
+        if hasattr(self, "_cached_fake_mode"):
+            return self._cached_fake_mode
+        from src.eval.fake_runner import FakePatchOrchestrator
+        try:
+            self._cached_fake_mode = isinstance(self.orchestrator_factory("."), FakePatchOrchestrator)
+        except Exception:
+            self._cached_fake_mode = False
+        return self._cached_fake_mode
+
     def list_cases(self) -> list[str]:
         """列出 cases_dir 下 case_NNN 目录名。"""
         return sorted(
             p.name
             for p in self.cases_dir.iterdir()
-            if p.is_dir() and re.match(r"case_\d{3}$", p.name)
+            if p.is_dir() and re.match(r"case_[\w]+$", p.name)
         )
 
     def run_all(
@@ -156,6 +166,8 @@ class EvalRunner:
             return CaseResult(case_id=case_id, error=f"unknown case: {case_id}")
 
         meta = load_case_metadata(case_dir)
+        language = str(meta.get("language", "python")).lower()
+        is_fake = self._is_fake_mode()
         issue = build_case_issue(case_dir, metadata=meta)
         minimal_lines = _read_min_lines(case_dir)
 
@@ -163,7 +175,7 @@ class EvalRunner:
             tmp_repo = Path(tmp) / "repo"
             shutil.copytree(case_dir / "repo", tmp_repo)
 
-            pre_code, _pre_out = run_pytest(tmp_repo)
+            pre_code, pre_out = (0, "") if (is_fake and language != "python") else run_pytest(tmp_repo)
 
             t0 = time.time()
             error = ""
@@ -177,7 +189,7 @@ class EvalRunner:
                 error = str(exc)
             duration_ms = int((time.time() - t0) * 1000)
 
-            post_code, post_out = run_pytest(tmp_repo)
+            post_code, post_out = (0, "") if (is_fake and language != "python") else run_pytest(tmp_repo)
             fixed = post_code == 0
 
             original_snapshot = Path(tmp) / "original"

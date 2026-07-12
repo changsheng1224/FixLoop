@@ -1,0 +1,10 @@
+Compilation error: incompatible types: String cannot be converted to int
+
+  File "App.java", line 3
+    int result = util.compute("10");
+                               ^
+  error: method compute in class Util cannot be applied to given types;
+    required: int
+    found: String
+
+Repo: eval-case-java-003

@@ -1,6 +1,6 @@
 name: java_type_error_fix
 language: java
-trigger_pattern: "error: incompatible types:|ClassCastException|NumberFormatException"
+trigger_pattern: "error: incompatible types:|ClassCastException|NumberFormatException|NullPointerException"
 priority: 10
 suggested_tools:
   - java_stack_parse
@@ -19,4 +19,4 @@ example_patch: |
   --- a/Calculator.java
   +++ b/Calculator.java
   - int value = "42";
-  + String value = "42";
+  + int value = Integer.parseInt("42");

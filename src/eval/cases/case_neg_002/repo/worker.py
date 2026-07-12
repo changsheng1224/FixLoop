@@ -1,3 +1,2 @@
-import random
-def compute():
-    return 42 if random.random() > 0.5 else 43
+def compute(x):
+    return x + 1

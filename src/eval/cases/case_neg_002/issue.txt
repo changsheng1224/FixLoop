@@ -1,2 +1,2 @@
-The test sometimes fails but not always — it might be a race condition. The output shows: "AssertionError: assert 42 == 43" but only about half the time.
+The application crashes occasionally in production. Logs show: "TypeError: unsupported operand type(s) for +: 'NoneType' and 'int'". Cannot reproduce reliably. Please fix.
 Repo: eval-case-neg-002

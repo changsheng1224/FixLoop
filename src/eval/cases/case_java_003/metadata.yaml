@@ -1,0 +1,16 @@
+case_id: case_java_003
+language: java
+issue_type: import_error
+expected_skill: java_type_error_fix
+difficulty: hard
+status: verified
+description: "跨文件方法签名不匹配: int vs String 参数类型"
+tags:
+  - java
+  - type_error
+  - multi_file
+source_files:
+  - App.java
+  - Util.java
+test_files:
+  - AppTest.java
