@@ -4,6 +4,9 @@ import time
 
 from agent_runtime.features.memory.core import MAX_EPISODIC_NOTES
 
+# kind=decision 笔记被检索 >= PROMOTE_THRESHOLD 次时自动晋升到 durable memory
+PROMOTE_THRESHOLD = 3
+
 
 def append_note(
     state: dict,
@@ -27,14 +30,25 @@ def append_note(
         "created_at": time.time(),
         "note_index": note_index,
         "kind": kind,
+        "retrieve_count": 0,
     }
     notes.append(note)
     if len(notes) > MAX_EPISODIC_NOTES:
         state["episodic_notes"] = notes[-MAX_EPISODIC_NOTES:]
 
 
-def retrieval_candidates(state: dict, query: str, limit: int = 3) -> list[dict]:
-    """按关键词/tag 对 episodic notes 打分排序，返回 top-k。"""
+def retrieval_candidates(
+    state: dict,
+    query: str,
+    limit: int = 3,
+    *,
+    durable_store: "DurableMemoryStore | None" = None,
+) -> list[dict]:
+    """按关键词/tag 对 episodic notes 打分排序，返回 top-k。
+
+    kind=decision 笔记每次命中累加 retrieve_count；达到 PROMOTE_THRESHOLD
+    时自动晋升到 durable memory（需传入 durable_store）。
+    """
     query_lower = query.lower()
     query_tokens = set(query_lower.split())
     notes = state.get("episodic_notes", [])
@@ -42,6 +56,7 @@ def retrieval_candidates(state: dict, query: str, limit: int = 3) -> list[dict]:
         return []
     scored = []
     now = time.time()
+    promotions: list[tuple[str, str]] = []
     for note in notes:
         score = 0.0
         text = note.get("text", "").lower()
@@ -58,6 +73,19 @@ def retrieval_candidates(state: dict, query: str, limit: int = 3) -> list[dict]:
             age_hours = (now - note.get("created_at", now)) / 3600
             if age_hours < 1:
                 score += 1.0 * (1 - age_hours)
+            # 决策类笔记：累计检索次数，达到阈值自动晋升
+            if note.get("kind") == "decision":
+                note["retrieve_count"] = note.get("retrieve_count", 0) + 1
+                if note["retrieve_count"] >= PROMOTE_THRESHOLD and durable_store is not None:
+                    promotions.append(("key-decisions", f"Decision: {note['text']}"))
             scored.append((score, note))
     scored.sort(key=lambda x: x[0], reverse=True)
+
+    # 执行晋升
+    if promotions and durable_store is not None:
+        try:
+            durable_store.promote(promotions)
+        except Exception:
+            pass
+
     return [{**note, "score": round(s, 2)} for s, note in scored[:limit]]
