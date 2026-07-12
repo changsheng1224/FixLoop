@@ -6,6 +6,7 @@
 3. ``HF_ENDPOINT=https://hf-mirror.com`` — 首次下载走国内镜像
 """
 
+import hashlib
 import os
 import threading
 from pathlib import Path
@@ -15,6 +16,35 @@ _SEMANTIC_LOCK = threading.Lock()
 _SEMANTIC_INIT_LOGGED = False
 _SEMANTIC_MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
 EMBED_MAX_CHARS = 800  # ~256 tokens for English（all-MiniLM-L6-v2 max_seq_length）
+_EMBED_CACHE_DIR = Path(".agent/embed_cache")
+
+
+def _embed_cache_path(content_hash: str) -> Path:
+    return _EMBED_CACHE_DIR / f"{content_hash}.npy"
+
+
+def _load_embed_cache(content_hash: str):
+    """从磁盘加载缓存的 embedding；不存在返回 None。"""
+    path = _embed_cache_path(content_hash)
+    if not path.is_file():
+        return None
+    try:
+        import numpy as np
+
+        return np.load(path)
+    except Exception:
+        return None
+
+
+def _save_embed_cache(content_hash: str, embedding):
+    """将 embedding 缓存到磁盘。"""
+    try:
+        _EMBED_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        import numpy as np
+
+        np.save(str(_embed_cache_path(content_hash)), embedding)
+    except Exception:
+        pass
 
 
 def _hf_cache_dir() -> Path:
@@ -106,7 +136,7 @@ class SemanticMemory:
         return self.model is not None
 
     def add(self, note: dict):
-        """为 note 计算 embedding 并缓存。"""
+        """为 note 计算 embedding 并缓存（优先磁盘缓存）。"""
         if not self.available:
             return
         text = note.get("text", "")
@@ -114,7 +144,13 @@ class SemanticMemory:
             return
         try:
             truncated = _truncate_head_tail(text)
+            content_hash = hashlib.sha256(truncated.encode("utf-8")).hexdigest()[:32]
+            embedding = _load_embed_cache(content_hash)
+            if embedding is not None:
+                self._notes.append({**note, "embedding": embedding})
+                return
             embedding = self.model.encode(truncated)
+            _save_embed_cache(content_hash, embedding)
             self._notes.append({**note, "embedding": embedding})
         except Exception:
             pass
