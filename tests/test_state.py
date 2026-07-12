@@ -131,3 +131,35 @@ class TestRepairPhase:
         assert "verify" in REPAIR_PHASES
         assert "done" in REPAIR_PHASES
         assert "failed" in REPAIR_PHASES
+
+
+class TestRepairStatePersistence:
+    def test_full_state_to_dict_includes_phase_and_timings(self):
+        state = RepairState(
+            issue_input="test",
+            phase="verify",
+            status="fixed",
+            retry_count=1,
+            node_timings={"phases": {"localize_ms": 100, "patch_ms": 200}},
+        )
+        data = state.to_dict()
+        assert data["phase"] == "verify"
+        assert data["status"] == "fixed"
+        assert data["retry_count"] == 1
+        assert "node_timings" in data
+
+    def test_persist_and_restore_roundtrip(self, tmp_path):
+        import json
+        state = RepairState(
+            issue_input="TypeError at calc.py:1",
+            phase="done",
+            status="fixed",
+            node_timings={"phases": {"localize_ms": 50, "verify_ms": 300}},
+        )
+        path = tmp_path / "repair_state.json"
+        path.write_text(json.dumps(state.to_dict(), ensure_ascii=False, indent=2))
+        data = json.loads(path.read_text())
+        restored = RepairState.from_dict(data)
+        assert restored.issue_input == state.issue_input
+        assert restored.status == "fixed"
+        assert restored.phase == "done"

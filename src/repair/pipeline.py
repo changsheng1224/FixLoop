@@ -466,27 +466,39 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         )
 
     def _save_repair_checkpoint(self, state) -> None:
-        """写入 L2 repair_checkpoint.json（供 --resume-repair）。"""
+        """写入 L2 repair_state.json + checkpoint.json（供 --resume-repair + 审计）。"""
         try:
             import json
             import time
             from pathlib import Path
 
             repair_dir = Path(self._repo_root) / ".agent" / "repairs"
-            repair_dir.mkdir(parents=True, exist_ok=True)
             run_id = getattr(state, "repair_run_id", "") or ""
-            path = repair_dir / (f"repair_checkpoint_{run_id}.json" if run_id else "repair_checkpoint.json")
-            payload = {
+            sub_dir = repair_dir / run_id if run_id else repair_dir
+            sub_dir.mkdir(parents=True, exist_ok=True)
+
+            # 完整 state（含 timings）
+            state_path = sub_dir / "repair_state.json"
+            state_payload = state.to_dict()
+            state_payload["saved_at"] = time.time()
+            tmp = state_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(state_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(state_path)
+
+            # 轻量 checkpoint
+            cp_path = sub_dir / "checkpoint.json"
+            cp_payload = {
                 "status": state.status,
+                "phase": state.phase,
                 "retry_count": state.retry_count,
-                "phase": state.node_timings.get("phases", {}),
                 "suspect_count": len(state.suspect_locations),
                 "patch_count": len(state.candidate_patches),
+                "timings": state.node_timings.get("phases", {}),
                 "saved_at": time.time(),
             }
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-            tmp.replace(path)
+            tmp2 = cp_path.with_suffix(".tmp")
+            tmp2.write_text(json.dumps(cp_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp2.replace(cp_path)
         except Exception:
             pass
 
