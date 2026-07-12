@@ -71,6 +71,12 @@ class DurableMemoryStore:
     def __init__(self, root: str):
         self.memory_dir = Path(root) / ".agent" / "memory"
         self.topics_dir = self.memory_dir / "topics"
+        self._topics_root = str(self.topics_dir.resolve())
+
+    def _ensure_within(self, path: Path) -> None:
+        """确保路径在 topics_dir 内（防止路径遍历攻击）。"""
+        if not str(path.resolve()).startswith(self._topics_root):
+            raise ValueError(f"路径逃逸: {path}")
 
     # ── 结构化用户画像 ──
 
@@ -124,6 +130,8 @@ class DurableMemoryStore:
         by_topic: dict[str, list[str]] = {}
         for topic, text in promotions:
             topic = self._normalize_topic(topic)
+            if topic not in DURABLE_TOPICS:
+                continue  # 拒绝未知 topic
             by_topic.setdefault(topic, []).append(text)
         for topic, texts in by_topic.items():
             topic_file = self.topics_dir / f"{topic}.md"
