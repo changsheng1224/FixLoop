@@ -360,6 +360,22 @@ FixLoop 采用**纵深防御**：Layer 1 闸口 + Layer 2 权限网关 + 容器�
 
 另：`security.py` 对 trace / artifact 做 API key 脱敏。
 
+### 6.1.1 沙箱网络策略
+
+Docker sandbox 默认 `network_mode=none`，容器内完全无网络访问。
+
+| 场景 | 行为 | 原因 |
+|------|------|------|
+| `pip install` 第三方包 | 不工作 | 无外网 |
+| `curl` / `wget` 外网资源 | 超时 | 无外网 |
+| 访问宿主机 localhost | 不工作 | 独立网络命名空间 |
+
+**Tradeoff**：`network=none` 意味着无法在容器内 `pip install` 运行时依赖（如 `requests`）。
+所有依赖必须**预装在镜像**中（`sandbox/Dockerfile.python`）。
+
+**降级路径**：Docker 不可用时自动回退到 `--skip-verify` 本地 pytest 验证，
+此时网络可达但验证在宿主机执行（非隔离）。
+
 ### 6.2 Layer 2：ToolGateway 权限表
 
 定义于 `src/middleware.py` 的 `REPAIR_PERMISSION_TABLE`：
