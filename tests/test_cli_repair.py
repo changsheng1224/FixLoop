@@ -18,7 +18,7 @@ class TestCliRepair:
             [
                 '<final>[{"file_path":"app.py","start_line":1,"end_line":1,'
                 '"reason":"堆栈","confidence":0.9}]</final>',
-                '<final>{"related_tests":[]}</final>',
+                '<final>{"related_tests":["test_app.py::test_x"]}</final>',
                 '<final>[{"file_path":"app.py","original_lines":"x = 1",'
                 '"patched_lines":"x = 2","explanation":"fix"}]</final>',
             ]
