@@ -434,9 +434,21 @@ class AgentLoop:
             )
         return None
 
+    def _check_hard_cap(self, token_meta: dict) -> str | None:
+        """Prompt 超出硬顶 8000 tokens 时返回错误消息。"""
+        total = token_meta.get("total_tokens", 0) or token_meta.get("context_sections_total", 0)
+        if total > 8000:
+            return (
+                f"<final>Prompt 大小 {total} tokens 超出硬顶限制 (8000)。"
+                "请缩短输入或使用 /reset 清空对话历史后重试。</final>"
+            )
+        return None
+
     def _xml_build_context(self, ts, user_message: str, *, step: int, callback) -> str:
         t0 = _time.time()
         prompt_text, token_meta = self.agent._build_prompt_with_meta(user_message)
+        if hard_limit := self._check_hard_cap(token_meta):
+            return hard_limit
         from agent_runtime.message_projection import (
             attach_projection_metadata,
             build_context_prefix,
@@ -631,6 +643,8 @@ class AgentLoop:
             return msg
 
         system_prompt, user_message, budget_meta = self.agent.build_for_native(user_message)
+        if hard_limit := self._check_hard_cap(budget_meta):
+            return hard_limit
         from agent_runtime.message_projection import (
             attach_projection_metadata,
             build_context_prefix,

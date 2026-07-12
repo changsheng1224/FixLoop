@@ -16,6 +16,18 @@ from agent_runtime.tools import build_tool_registry
 PrefixMode = Literal["default", "repair"]
 
 
+def _role_quota(agent_name: str = ""):
+    """按 Agent 角色返回差异化配额。"""
+    from agent_runtime.tool_executor import QuotaEnforcer
+
+    role = (agent_name or "").lower()
+    if role == "patcher":
+        return QuotaEnforcer(max_writes=5, max_shell=0, max_total=30)
+    if role in ("localizer", "retriever"):
+        return QuotaEnforcer(max_writes=0, max_shell=0, max_total=20)
+    return QuotaEnforcer()
+
+
 class Agent:
     """手写的 LLM Agent。
 
@@ -66,11 +78,10 @@ class Agent:
 
         # M4 模块：配额 + 熔断 + 语义记忆（懒加载，避免多 Agent 构造时重复阻塞）
         from agent_runtime.providers.circuit_breaker import CircuitBreaker
-        from agent_runtime.tool_executor import QuotaEnforcer
 
         self._semantic_memory = None
         self.circuit_breaker = CircuitBreaker()
-        self.quota = QuotaEnforcer()
+        self.quota = _role_quota(agent_name)
 
     @property
     def semantic_memory(self):
