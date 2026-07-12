@@ -689,6 +689,32 @@ def _summary_cache_key(old_history: list[dict]) -> str:
 
 
 def _build_l5_summary_prompt(old_history: list[dict]) -> str:
+    # 检测已有摘要 → 增量模式
+    existing = ""
+    new_items = []
+    for item in old_history:
+        content = str(item.get("content", ""))
+        if item.get("role") == "system" and content.startswith("[Earlier summary]"):
+            existing = content.replace("[Earlier summary]: ", "").strip()
+            new_items = []  # reset — 已有摘要后的是新内容
+        elif existing:
+            role = item.get("role", "unknown")
+            new_items.append(f"{role}: {content[:150]}")
+        else:
+            role = item.get("role", "unknown")
+            new_items.append(f"{role}: {content[:150]}")
+
+    if existing and new_items:
+        prompt_lines = [
+            "Update the following summary with new information in 1-2 sentences.",
+            f"Current summary: {existing}",
+            "",
+            "New items:",
+        ]
+        prompt_lines.extend(new_items[-L5_PROMPT_TAIL_ENTRIES:])
+        return "\n".join(prompt_lines)
+
+    # 全量摘要（无已有摘要）
     prompt_lines = [
         "Summarize the following conversation in 1-2 sentences.",
         "Focus on: files read, tools used, errors encountered, decisions made.",
