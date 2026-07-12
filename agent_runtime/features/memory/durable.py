@@ -181,6 +181,10 @@ class DurableMemoryStore:
                 result = _resolve_conflict(entry, new_text, authority)
                 if result in (ConflictResolution.OVERRIDE, ConflictResolution.EQUIVALENT):
                     entries[i] = new_text
+                elif result == ConflictResolution.INVALID:
+                    # 互斥版本：追加而非覆盖
+                    ver = sum(1 for e in entries if e.split("\n")[0].strip().lower() == new_subject) + 1
+                    entries.append(new_text.replace("\n", f"  # v{ver}\n", 1))
                 return entries
         entries.append(new_text)
         return entries
