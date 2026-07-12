@@ -30,9 +30,32 @@ def _load_json(text: str) -> Any | None:
 
 def parse_suspect_list(answer: str) -> list[SuspectLocation]:
     data = _load_json(answer)
-    if isinstance(data, list):
-        return [SuspectLocation.from_dict(item) for item in data]
-    return []
+    errors: list[str] = []
+    if not isinstance(data, list):
+        errors.append("输出不是 JSON 数组")
+        return _with_validation_errors([], errors)
+    result = []
+    for i, item in enumerate(data):
+        if not isinstance(item, dict):
+            errors.append(f"[{i}] 不是对象")
+            continue
+        if not item.get("file_path"):
+            errors.append(f"[{i}] 缺少必填字段 file_path")
+            continue
+        try:
+            result.append(SuspectLocation.from_dict(item))
+        except Exception as e:
+            errors.append(f"[{i}] {e}")
+    return _with_validation_errors(result, errors)
+
+
+def _with_validation_errors(result, errors: list[str]):
+    """记录 schema 校验错误到 agent_errors（供 feedback 重试）。"""
+    if errors:
+        import logging
+        log = logging.getLogger("fixloop.output_parsers")
+        log.warning("schema 校验: %s", "; ".join(errors[:3]))
+    return result
 
 
 def _normalize_related_tests(raw: list) -> list[str]:
@@ -49,11 +72,19 @@ def _normalize_related_tests(raw: list) -> list[str]:
 
 def parse_retrieved_context(answer: str) -> RetrievedContext:
     data = _load_json(answer)
-    if isinstance(data, dict):
-        if "related_tests" in data:
-            data["related_tests"] = _normalize_related_tests(data["related_tests"])
-        return RetrievedContext.from_dict(data)
-    return RetrievedContext()
+    errors: list[str] = []
+    if not isinstance(data, dict):
+        errors.append("输出不是 JSON 对象")
+        return _with_validation_errors(RetrievedContext(), errors)
+    if "related_tests" in data:
+        data["related_tests"] = _normalize_related_tests(data["related_tests"])
+    if not data.get("related_tests"):
+        errors.append("缺少 related_tests 字段")
+    try:
+        return _with_validation_errors(RetrievedContext.from_dict(data), errors)
+    except Exception as e:
+        errors.append(str(e))
+        return _with_validation_errors(RetrievedContext(), errors)
 
 
 def parse_verification(answer: str) -> VerificationResult:
