@@ -104,3 +104,30 @@ class TestRepairState:
         assert restored.suspect_locations == []
         assert restored.candidate_patches == []
         assert restored.status == "pending"
+
+
+class TestRepairPhase:
+    def test_default_phase_is_localize(self):
+        state = RepairState(issue_input="test")
+        assert state.phase == "localize"
+        assert state.status == "pending"
+
+    def test_phase_independent_of_status(self):
+        state = RepairState(issue_input="test", status="fixed")
+        assert state.phase == "localize"
+        assert state.status == "fixed"
+
+    def test_phase_roundtrip(self):
+        state = RepairState(issue_input="test", phase="retrieve")
+        data = state.to_dict()
+        restored = RepairState.from_dict(data)
+        assert restored.phase == "retrieve"
+
+    def test_phase_transitions(self):
+        from src.state import REPAIR_PHASES
+        assert "localize" in REPAIR_PHASES
+        assert "retrieve" in REPAIR_PHASES
+        assert "patch" in REPAIR_PHASES
+        assert "verify" in REPAIR_PHASES
+        assert "done" in REPAIR_PHASES
+        assert "failed" in REPAIR_PHASES

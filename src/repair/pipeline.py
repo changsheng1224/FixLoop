@@ -243,6 +243,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 log.info("Localizer + Retriever 并行开始...")
                 if phase_clock is not None:
                     phase_clock.ensure("localize")
+                state.phase = "localize"
                 t0 = time.time()
                 suspects, context, loc_timing, ret_timing = self._run_localize_and_retrieve(state)
                 wall_ms = int((time.time() - t0) * 1000)
@@ -285,6 +286,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
                     repo_snapshot = self._snapshot_repo() if self._verification_enabled() else None
                     log.info("Patcher 开始 (retry=%d)...", state.retry_count)
+                    state.phase = "patch"
                     if phase_clock is not None:
                         phase_clock.ensure("patch")
                     state.candidate_patches, patch_timing = self._run_patcher(state)
@@ -331,6 +333,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     if self._abort_repair_if_cancelled(state):
                         cancelled = True
                         break
+                    state.phase = "verify"
                     if phase_clock is not None:
                         phase_clock.ensure("verify")
                     t0 = time.time()
@@ -387,6 +390,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 self._emit_repair_cancelled(state)
 
         finalize_repair_state(state)
+        state.phase = "done" if state.status == "fixed" else "failed"
 
         total_ms = int((time.time() - t_start) * 1000)
         set_repair_total_ms(state.node_timings, total_ms)

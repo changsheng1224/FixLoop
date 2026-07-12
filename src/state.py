@@ -341,11 +341,16 @@ class VerificationResult:
         )
 
 
+# 修复阶段枚举（与终态 status 分离）
+REPAIR_PHASES = ("localize", "retrieve", "patch", "verify", "done", "failed")
+
+
 @dataclass
 class RepairState:
     """多 Agent 修复流水线的共享状态。
 
     Orchestrator 持有并驱动此状态在 Agent 间流转。
+    phase 跟踪当前阶段，status 记录终态结果。
     """
 
     issue_input: str
@@ -357,7 +362,8 @@ class RepairState:
     feedback: str = ""
     retry_count: int = 0
     max_retries: int = 3
-    status: str = "pending"  # pending / localizing / fixed / exhausted / regression / timeout / user_cancel / failed
+    phase: str = "localize"  # 当前阶段: localize|retrieve|patch|verify|done|failed
+    status: str = "pending"  # 终态: pending|fixed|failed|exhausted|timeout|user_cancel
     failure_tags: list[str] = field(default_factory=list)
     node_timings: dict = field(default_factory=dict)
     agent_errors: dict = field(default_factory=dict)
@@ -383,6 +389,7 @@ class RepairState:
             "feedback": self.feedback,
             "retry_count": self.retry_count,
             "max_retries": self.max_retries,
+            "phase": self.phase,
             "status": self.status,
             "failure_tags": list(self.failure_tags),
             "node_timings": self.node_timings,
@@ -421,6 +428,7 @@ class RepairState:
             feedback=data.get("feedback", ""),
             retry_count=data.get("retry_count", 0),
             max_retries=data.get("max_retries", 3),
+            phase=data.get("phase", "localize"),
             status=data.get("status", "pending"),
             failure_tags=list(data.get("failure_tags", [])),
             node_timings=data.get("node_timings", {}),
