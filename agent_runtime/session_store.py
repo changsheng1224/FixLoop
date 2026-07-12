@@ -35,20 +35,35 @@ class SessionStore:
             encoding="utf-8",
         )
         tmp.replace(path)
+        # 同时写 .bak 用于损坏恢复
+        try:
+            bak = path.with_suffix(".json.bak")
+            bak.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        except Exception:
+            pass
 
     def load(self, session_id: str) -> dict | None:
-        """读取指定会话。
+        """读取指定会话；损坏时尝试 .bak 恢复。
 
         Args:
             session_id: 会话 ID。
 
         Returns:
-            会话字典，不存在时返回 None。
+            会话字典，不存在或损坏恢复失败时返回 None。
         """
         path = self.sessions_dir / f"{session_id}.json"
         if not path.exists():
             return None
-        return json.loads(path.read_text(encoding="utf-8"))
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            bak = path.with_suffix(".json.bak")
+            if bak.exists():
+                try:
+                    return json.loads(bak.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+            return None
 
     def latest(self) -> str | None:
         """返回最近修改的 session id（按 mtime 排序）。
