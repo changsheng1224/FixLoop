@@ -68,7 +68,7 @@ class TestSkillValidateL2:
 
         report = validate_directory(_BUILTIN_DIR)
         assert report.ok
-        assert report.skill_count == 10
+        assert report.skill_count == 11
         assert not report.warnings  # filenames match skill names after P2-11 rename
 
     def test_strict_load_raises_on_errors(self, tmp_path: Path):
@@ -94,4 +94,4 @@ class TestSkillsCliValidate:
         code = main()
         assert code == 0
         out = capsys.readouterr().out
-        assert "OK 10 skill(s)" in out
+        assert "OK 11 skill(s)" in out

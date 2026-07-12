@@ -86,6 +86,8 @@ class TestRepairRegistry:
         assert set(registry.keys()) == {
             "grep",
             "ast_parse",
+            "java_ast_parse",
+            "java_stack_parse",
             "stack_parse",
             "git_blame",
             "git_diff",

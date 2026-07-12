@@ -117,7 +117,7 @@ class TestMatchSkill:
         from src.skills.catalog import get_default_catalog
 
         get_default_catalog.cache_clear()
-        assert len(get_default_catalog().skills) == 10
+        assert len(get_default_catalog().skills) == 11
 
 
 class TestSkillPrompt:
