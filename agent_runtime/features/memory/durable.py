@@ -181,12 +181,18 @@ class DurableMemoryStore:
 
 
 def promote_durable_memory(
-    user_message: str, final_answer: str, store: DurableMemoryStore | None = None, root: str = "."
+    user_message: str, final_answer: str, store: DurableMemoryStore | None = None, root: str = ".",
+    light_client=None,
 ) -> bool:
-    """检测用户保存意图并从回答中提取 Convention/Decision 等条目写入 durable。"""
+    """检测用户保存意图并从回答中提取 Convention/Decision 等条目写入 durable。
+
+    规则抽取失败时，可选的 light_client 做 LLM 分类（仅填 topic/key，不自由建库）。
+    """
     if not _has_save_intent(user_message):
         return False
     promotions = _extract_promotions(final_answer)
+    if not promotions and light_client is not None:
+        promotions = _llm_extract_promotions(final_answer, light_client)
     if not promotions:
         return False
     if store is None:
@@ -196,6 +202,32 @@ def promote_durable_memory(
         return False
     store.promote(valid)
     return True
+
+
+def _llm_extract_promotions(text: str, client) -> list[tuple[str, str]]:
+    """LLM 分类：将自由文本映射到预定义 topic（禁止自由建库）。"""
+    topics = ", ".join(DURABLE_TOPICS)
+    prompt = (
+        f"从以下文本提取知识条目。只输出 JSON 数组：\n"
+        f"[{{\"topic\":\"{DURABLE_TOPICS[0]}\",\"text\":\"...\"}},...]\n"
+        f"topic 只能从 [{topics}] 中选择。\n\n{text[:500]}"
+    )
+    try:
+        import json
+
+        raw = client.complete(prompt, max_new_tokens=256)
+        start = raw.find("[")
+        end = raw.rfind("]") + 1
+        if start >= 0 and end > start:
+            items = json.loads(raw[start:end])
+            return [
+                (item["topic"], item.get("text", ""))
+                for item in items
+                if item.get("topic") in DURABLE_TOPICS and item.get("text")
+            ]
+    except Exception:
+        pass
+    return []
 
 
 def _has_save_intent(user_message: str) -> bool:
