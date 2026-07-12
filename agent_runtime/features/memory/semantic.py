@@ -6,6 +6,7 @@
 3. ``HF_ENDPOINT=https://hf-mirror.com`` — 首次下载走国内镜像
 """
 
+import hashlib
 import os
 import threading
 from pathlib import Path
@@ -14,6 +15,36 @@ _SEMANTIC_MODEL = None
 _SEMANTIC_LOCK = threading.Lock()
 _SEMANTIC_INIT_LOGGED = False
 _SEMANTIC_MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
+EMBED_MAX_CHARS = 800  # ~256 tokens for English（all-MiniLM-L6-v2 max_seq_length）
+_EMBED_CACHE_DIR = Path(".agent/embed_cache")
+
+
+def _embed_cache_path(content_hash: str) -> Path:
+    return _EMBED_CACHE_DIR / f"{content_hash}.npy"
+
+
+def _load_embed_cache(content_hash: str):
+    """从磁盘加载缓存的 embedding；不存在返回 None。"""
+    path = _embed_cache_path(content_hash)
+    if not path.is_file():
+        return None
+    try:
+        import numpy as np
+
+        return np.load(path)
+    except Exception:
+        return None
+
+
+def _save_embed_cache(content_hash: str, embedding):
+    """将 embedding 缓存到磁盘。"""
+    try:
+        _EMBED_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        import numpy as np
+
+        np.save(str(_embed_cache_path(content_hash)), embedding)
+    except Exception:
+        pass
 
 
 def _hf_cache_dir() -> Path:
@@ -105,14 +136,21 @@ class SemanticMemory:
         return self.model is not None
 
     def add(self, note: dict):
-        """为 note 计算 embedding 并缓存。"""
+        """为 note 计算 embedding 并缓存（优先磁盘缓存）。"""
         if not self.available:
             return
         text = note.get("text", "")
         if not text:
             return
         try:
-            embedding = self.model.encode(text)
+            truncated = _truncate_head_tail(text)
+            content_hash = hashlib.sha256(truncated.encode("utf-8")).hexdigest()[:32]
+            embedding = _load_embed_cache(content_hash)
+            if embedding is not None:
+                self._notes.append({**note, "embedding": embedding})
+                return
+            embedding = self.model.encode(truncated)
+            _save_embed_cache(content_hash, embedding)
             self._notes.append({**note, "embedding": embedding})
         except Exception:
             pass
@@ -124,7 +162,8 @@ class SemanticMemory:
         try:
             import numpy as np
 
-            query_emb = self.model.encode(query)
+            short_query = derive_embed_query(query)
+            query_emb = self.model.encode(short_query)
             scores = []
             for note in self._notes:
                 emb = note.get("embedding")
@@ -139,6 +178,44 @@ class SemanticMemory:
             return [note for _, note in scores[:top_k]]
         except Exception:
             return []
+
+
+def _truncate_head_tail(text: str, max_chars: int = EMBED_MAX_CHARS) -> str:
+    """按 head + tail 截断长文本，保留头（异常类型）和尾（Traceback）。"""
+    text = text.strip()
+    if len(text) <= max_chars:
+        return text
+    half = max_chars // 2
+    return f"{text[:half]}\n...\n{text[-half:]}"
+
+
+def derive_embed_query(user_message: str, task_summary: str = "") -> str:
+    """从 user request 提取 embedding 搜索关键词（~100 chars）。
+
+    抽取规则：异常类型 → 文件名 → 函数名 → task_summary fallback。
+    """
+    import re
+
+    parts: list[str] = []
+    # 1. 异常类型
+    exc = re.findall(r"(\w+(?:Error|Exception|Warning))", user_message)
+    parts.extend(exc[:2])
+    # 2. 文件名
+    files = re.findall(r'File\s+"([^"]+\.py)"', user_message)
+    fnames = [f.rsplit("/", 1)[-1].rsplit("\\", 1)[-1] for f in files]
+    parts.extend(fnames[:2])
+    # 3. 函数名
+    funcs = re.findall(r"def\s+(\w+)|'(\w+)'|\"(\w+)\"|\s(\w+)\(", user_message)
+    for g in funcs:
+        name = next((x for x in g if x and len(x) > 2), None)
+        if name and name not in parts:
+            parts.append(name)
+    # 4. fallback
+    if not parts and task_summary:
+        parts.append(task_summary[:100])
+    if not parts:
+        parts.append(user_message[:100])
+    return " ".join(parts)[:200].strip()
 
 
 def retrieval_candidates_semantic(state: dict, query: str, limit: int = 3) -> list[dict]:
