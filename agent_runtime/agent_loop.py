@@ -372,6 +372,14 @@ class AgentLoop:
             )
         if callback:
             callback.on_tool_executed(tool_name, result_text)
+        # 每 tool 步 checkpoint（成功时），供 --resume 从最后成功步继续
+        if result.metadata.get("tool_status") == "success":
+            try:
+                from agent_runtime.checkpoint import create_checkpoint
+
+                create_checkpoint(self.agent, ts, ts.user_request, trigger="step_end")
+            except Exception:
+                pass
         return f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
 
     # ---- XML 路径辅助 ----
