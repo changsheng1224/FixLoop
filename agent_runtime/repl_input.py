@@ -1,8 +1,34 @@
-"""L1 REPL 输入：行尾 \\ 续行收集。"""
+"""L1 REPL 输入：行尾 \\ 续行收集 + readline 命令历史。"""
 
 from __future__ import annotations
 
+import atexit
+import os
 from typing import Callable
+
+# 启用命令历史（Unix: readline 零依赖；Windows: pyreadline3）
+_HISTFILE = os.path.expanduser(os.path.join("~", ".fixloop_history"))
+
+def _setup_history():
+    """跨平台命令历史：Unix readline / Windows pyreadline3。"""
+    if os.name == "nt":
+        try:
+            import pyreadline3 as readline
+        except ImportError:
+            return  # 静默降级 — 无历史功能
+    else:
+        try:
+            import readline
+        except ImportError:
+            return
+    try:
+        if os.path.exists(_HISTFILE):
+            readline.read_history_file(_HISTFILE)
+        atexit.register(readline.write_history_file, _HISTFILE)
+    except Exception:
+        pass
+
+_setup_history()
 
 __all__ = [
     "line_ends_with_continuation",
