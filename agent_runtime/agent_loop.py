@@ -181,6 +181,7 @@ class AgentLoop:
             create_checkpoint(self.agent, ts, ts.user_request, trigger="user_cancel")
         except Exception:
             pass
+        self._cancel_all_todos()
         return self._complete_run(ts, "<final>用户已取消当前任务。</final>")
 
     def _invoke_model_call(self, fn):
@@ -388,6 +389,7 @@ class AgentLoop:
                 create_checkpoint(self.agent, ts, ts.user_request, trigger="step_end")
             except Exception:
                 pass
+            self._advance_todo()
         return f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
 
     # ---- XML 路径辅助 ----
@@ -539,6 +541,22 @@ class AgentLoop:
                 todo["status"] = "in_progress"
                 self._emit("todo_updated", {"todo": dict(todo)})
                 break
+
+    def _advance_todo(self) -> None:
+        """将当前 in_progress → done，启动下一个 pending。"""
+        for todo in self._plan_todos:
+            if todo.get("status") == "in_progress":
+                todo["status"] = "done"
+                self._emit("todo_updated", {"todo": dict(todo)})
+                break
+        self._start_next_todo()
+
+    def _cancel_all_todos(self) -> None:
+        """将未完成 todo 全部标记为 cancelled。"""
+        for todo in self._plan_todos:
+            if todo.get("status") in ("pending", "in_progress"):
+                todo["status"] = "cancelled"
+                self._emit("todo_updated", {"todo": dict(todo)})
 
     # ---- 入口 ----
 
@@ -944,6 +962,7 @@ class AgentLoop:
                     if getattr(self.agent, "quota", None)
                     else {}
                 ),
+                "plan_todos": list(self._plan_todos),
                 "memory_health": self._build_memory_health(),
                 **report_token,
                 **report_latency,
