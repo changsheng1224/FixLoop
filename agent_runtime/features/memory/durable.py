@@ -1,6 +1,7 @@
 """持久记忆 — Durable Memory：跨会话 Markdown 文件存储。"""
 
 import re
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -43,7 +44,6 @@ class UserPreference:
 
     def __post_init__(self):
         if not self.updated_at:
-            import time
             self.updated_at = time.time()
 
     @classmethod
@@ -290,7 +290,6 @@ def _resolve_conflict(existing: str, new: str, new_authority: str = "auto") -> C
     if existing.strip().lower() == new.strip().lower():
         return ConflictResolution.EQUIVALENT
     # 从条目中提取 authority 标记
-    import re
     old_auth = "auto"
     m = re.search(r"\[authority:(\w+)\]", existing)
     if m:
@@ -304,7 +303,6 @@ def _resolve_conflict(existing: str, new: str, new_authority: str = "auto") -> C
 
 def _apply_time_decay(prefs: list[UserPreference]) -> list[UserPreference]:
     """对偏好条目应用时间衰减；低于阈值 0.1 的不再参与召回。"""
-    import time
     now = time.time()
     result = []
     for p in prefs:
