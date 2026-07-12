@@ -267,6 +267,7 @@ class ToolExecutor:
             "list_files": tools_module.ListFilesArgs,
             "read_file": tools_module.ReadFileArgs,
             "search": tools_module.SearchArgs,
+            "grep": tools_module.GrepArgs,
             "write_file": tools_module.WriteFileArgs,
             "patch_file": tools_module.PatchFileArgs,
             "run_shell": tools_module.RunShellArgs,

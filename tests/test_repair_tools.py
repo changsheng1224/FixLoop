@@ -84,6 +84,7 @@ class TestRepairRegistry:
         ctx = ToolContext(root=str(temp_workspace))
         registry = build_repair_tools(ctx)
         assert set(registry.keys()) == {
+            "grep",
             "ast_parse",
             "stack_parse",
             "git_blame",

@@ -55,6 +55,18 @@ class SearchArgs:
 
 
 @dataclass
+class GrepArgs:
+    """内容搜索（rg 优先，Python re fallback）。"""
+
+    pattern: str  # 必填
+    path: str = "."
+    glob: str = ""  # 如 *.py
+    ignore_case: bool = False
+    context_lines: int = 0
+    max_results: int = 50
+
+
+@dataclass
 class WriteFileArgs:
     """创建或覆盖文件。"""
 
@@ -287,6 +299,125 @@ def _search_python(pattern: str, target: Path, context_lines: int = 0) -> str:
     if not matches:
         return "(无匹配)"
     return "\n".join(matches)
+
+
+def tool_grep(context, args: dict) -> str:
+    """内容搜索：rg 优先，不可用时 Python re + rglob fallback。
+
+    Args 必须包含 'pattern'，可选 'path'、'glob'、'ignore_case'、'context_lines'、'max_results'。
+    输出格式: path:line:text，超 max_results 附截断提示。
+    """
+    pattern = args.get("pattern", "")
+    if not pattern:
+        return "Error: 缺少必填参数 pattern"
+    raw_path = args.get("path", ".")
+    glob_filter = args.get("glob", "") or ""
+    ignore_case = bool(args.get("ignore_case", False))
+    ctx = int(args.get("context_lines", 0) or 0)
+    max_results = int(args.get("max_results", 50) or 50)
+
+    try:
+        target = context.resolve(raw_path)
+    except ValueError as e:
+        return f"Error: {e}"
+
+    if not target.exists():
+        return f"Error: 路径不存在: {raw_path}"
+
+    # rg 优先
+    result, total = _grep_rg(pattern, target, glob_filter, ignore_case, ctx, max_results)
+    if result is not None:
+        return _format_grep_result(result, total, max_results)
+
+    # Fallback: Python re + rglob
+    result, total = _grep_python(pattern, target, glob_filter, ignore_case, ctx, max_results)
+    return _format_grep_result(result, total, max_results)
+
+
+def _grep_rg(
+    pattern: str, target: Path, glob_filter: str,
+    ignore_case: bool, context_lines: int, max_results: int,
+) -> tuple[list[str] | None, int]:
+    """rg 搜索，失败返回 None。"""
+    try:
+        cmd = ["rg", "-n", "--no-heading"]
+        if ignore_case:
+            cmd.append("-i")
+        if context_lines > 0:
+            cmd.extend(["-C", str(context_lines)])
+        if glob_filter:
+            cmd.extend(["-g", glob_filter])
+        cmd.extend([pattern, str(target)])
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode == 0:
+            lines = [l for l in result.stdout.splitlines() if l.strip()]
+            return lines, len(lines)
+        elif result.returncode == 1:
+            return [], 0
+        return None, 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None, 0
+
+
+def _grep_python(
+    pattern: str, target: Path, glob_filter: str,
+    ignore_case: bool, context_lines: int, max_results: int,
+) -> tuple[list[str], int]:
+    """Python re + rglob fallback 搜索。"""
+    import fnmatch
+    import re
+
+    flags = re.IGNORECASE if ignore_case else 0
+    try:
+        regex = re.compile(pattern, flags)
+    except re.error:
+        # 非正则字面量 → escape
+        regex = re.compile(re.escape(pattern), flags)
+
+    matches: list[str] = []
+    total = 0
+    rglob = target.rglob if glob_filter else lambda: target.rglob("*")
+
+    for filepath in (target.rglob(glob_filter) if glob_filter else target.rglob("*")):
+        if filepath.is_dir():
+            continue
+        if any(ign in filepath.parts for ign in IGNORED_PATH_NAMES):
+            continue
+        if filepath.suffix not in (".py", ".txt", ".md", ".toml", ".yaml", ".yml", ".cfg", ".ini", ".json", ".sh"):
+            continue
+        try:
+            text = filepath.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        lines_list = text.splitlines()
+        for i, line in enumerate(lines_list, 1):
+            if regex.search(line):
+                rel = filepath.relative_to(target)
+                if context_lines > 0:
+                    ctx_start = max(1, i - context_lines)
+                    ctx_end = min(len(lines_list), i + context_lines)
+                    for j in range(ctx_start, ctx_end + 1):
+                        prefix = ">" if j == i else " "
+                        matches.append(f"{rel}:{j}:{prefix} {lines_list[j - 1].strip()[:200]}")
+                        total += 1
+                else:
+                    matches.append(f"{rel}:{i}: {line.strip()[:200]}")
+                    total += 1
+                if len(matches) >= max_results * 2:  # 含上下文会有更多行
+                    break
+        if len(matches) >= max_results * 2:
+            break
+
+    return matches[:max_results], total
+
+
+def _format_grep_result(lines: list[str], total: int, max_results: int) -> str:
+    if not lines:
+        return "(无匹配)"
+    result = "\n".join(lines)
+    if total > len(lines):
+        result += f"\n... 另有 {total - len(lines)} 条匹配未显示（可缩小 path/glob 或提高 max_results）"
+    return result
 
 
 # ============================================================================
@@ -526,6 +657,15 @@ def build_tool_registry(context) -> dict:
         "execution_tier": TIER_HOST,
         "description": "按行号范围读取 UTF-8 文件。参数: path, start(默认1), end(默认200)",
         "run": lambda args: tool_read_file(context, args),
+    }
+
+    # ---- grep ----
+    registry["grep"] = {
+        "schema": auto_schema(GrepArgs),
+        "risky": False,
+        "execution_tier": TIER_HOST,
+        "description": "内容搜索（rg 优先，Python fallback）。参数: pattern, path, glob, ignore_case, context_lines, max_results",
+        "run": lambda args: tool_grep(context, args),
     }
 
     # ---- search ----
