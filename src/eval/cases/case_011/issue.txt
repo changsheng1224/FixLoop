@@ -1,0 +1,10 @@
+SyntaxError: invalid syntax
+
+CI log excerpt:
+  File "parser.py", line 3
+    def parse_line(text)
+                       ^
+SyntaxError: expected ':'
+
+Failed: test_parser.py::test_parse_line
+Repo: eval-case-011

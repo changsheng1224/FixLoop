@@ -1,0 +1,12 @@
+TypeError: unsupported operand type(s) for -: 'str' and 'float'
+
+Traceback:
+  File "test_checkout.py", line 7, in test_checkout
+    assert final_price("100", 0.1) == 90.0
+  File "checkout.py", line 3, in final_price
+    discounted = apply_discount(price, rate)
+  File "discount.py", line 3, in apply_discount
+    return price - price * rate
+TypeError: unsupported operand type(s) for -: 'str' and 'float'
+
+Repo: eval-case-014

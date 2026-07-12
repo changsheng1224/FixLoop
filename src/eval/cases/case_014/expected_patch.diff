@@ -1,0 +1,6 @@
+--- a/pricing.py
++++ b/pricing.py
+@@ -1,3 +1,3 @@
+ def get_price(raw):
+-    return raw
++    return float(raw)

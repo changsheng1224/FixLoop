@@ -1,0 +1,16 @@
+case_id: case_015
+language: python
+issue_type: import_error
+expected_skill: python_import_error_fix
+difficulty: hard
+status: verified
+description: "循环导入：a.py imports b.py imports a.py"
+tags:
+  - import_error
+  - circular
+source_files:
+  - pkg/a.py
+  - pkg/b.py
+  - pkg/__init__.py
+test_files:
+  - test_pkg.py

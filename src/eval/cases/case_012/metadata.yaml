@@ -1,0 +1,14 @@
+case_id: case_012
+language: python
+issue_type: test_failure
+expected_skill: python_test_failure_fix
+difficulty: medium
+status: verified
+description: "断言失败：返回值计算错误（off-by-one）"
+tags:
+  - test_failure
+  - logic_error
+source_files:
+  - counter.py
+test_files:
+  - test_counter.py

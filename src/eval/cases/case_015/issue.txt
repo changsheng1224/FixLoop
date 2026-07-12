@@ -1,0 +1,12 @@
+ImportError: cannot import name 'func_b' from partially initialized module 'pkg.b'
+
+Traceback:
+  File "test_pkg.py", line 1, in <module>
+    from pkg.a import func_a
+  File "pkg/a.py", line 1, in <module>
+    from pkg.b import func_b
+  File "pkg/b.py", line 1, in <module>
+    from pkg.a import func_a
+ImportError: cannot import name 'func_b' from partially initialized module 'pkg.b'
+
+Repo: eval-case-015

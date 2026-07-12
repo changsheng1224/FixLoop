@@ -1,0 +1,14 @@
+case_id: case_013
+language: python
+issue_type: value_error
+expected_skill: python_value_error_fix
+difficulty: medium
+status: verified
+description: "int() 转换非数字字符串导致 ValueError"
+tags:
+  - value_error
+  - coercion
+source_files:
+  - convert.py
+test_files:
+  - test_convert.py

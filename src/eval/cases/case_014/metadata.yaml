@@ -1,0 +1,16 @@
+case_id: case_014
+language: python
+issue_type: type_error
+expected_skill: python_type_error_fix
+difficulty: hard
+status: verified
+description: "跨模块类型转换：pricing→discount→checkout 三层调用链"
+tags:
+  - type_error
+  - multi_file
+source_files:
+  - pricing.py
+  - discount.py
+  - checkout.py
+test_files:
+  - test_checkout.py
