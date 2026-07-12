@@ -89,6 +89,8 @@ class AgentLoop:
         self._context_cut_count = 0
         self._last_cache_key = ""
         self._cache_key_changes = 0
+        self._plan_todos: list[dict] = []
+        self._todo_index = 0
 
     def _accumulate_context_stats(self, meta: dict) -> None:
         """从 context_built metadata 累积 section 统计 + cache hit rate。"""
@@ -494,6 +496,50 @@ class AgentLoop:
         retry = ParseRetry(build_recovery_prompt(failure), failure)
         return self._handle_parse_retry(ts, raw, retry, step=step)
 
+    def _generate_plan(self, user_message: str) -> list[dict]:
+        """用 light_client 或规则生成 TodoList。"""
+        # 尝试 light_client
+        light = getattr(self.agent, "light_client", None)
+        if light is not None:
+            try:
+                prompt = (
+                    "将以下任务分解为 2-5 个步骤。只输出 JSON 数组：\n"
+                    f"[{{\"id\":\"1\",\"content\":\"...\",\"status\":\"pending\"}},...]\n\n{user_message[:500]}"
+                )
+                raw = light.complete(prompt, max_new_tokens=256)
+                import json
+
+                # 提取 JSON 数组
+                start = raw.find("[")
+                end = raw.rfind("]") + 1
+                if start >= 0 and end > start:
+                    todos = json.loads(raw[start:end])
+                    if isinstance(todos, list) and todos:
+                        return todos
+            except Exception:
+                pass
+        # 规则 fallback
+        msg = user_message.lower()
+        todos = []
+        i = 1
+        if any(w in msg for w in ("error", "fix", "bug", "repair", "修复")):
+            todos.append({"id": str(i), "content": "Analyze error and locate suspect code", "status": "pending"}); i += 1
+            todos.append({"id": str(i), "content": "Retrieve related context and tests", "status": "pending"}); i += 1
+            todos.append({"id": str(i), "content": "Generate and apply fix patch", "status": "pending"}); i += 1
+            todos.append({"id": str(i), "content": "Verify fix passes tests", "status": "pending"}); i += 1
+        else:
+            todos.append({"id": str(i), "content": "Read relevant files", "status": "pending"}); i += 1
+            todos.append({"id": str(i), "content": "Analyze and respond", "status": "pending"}); i += 1
+        return todos
+
+    def _start_next_todo(self) -> None:
+        """将下一个 pending todo 标记为 in_progress。"""
+        for todo in self._plan_todos:
+            if todo.get("status") == "pending":
+                todo["status"] = "in_progress"
+                self._emit("todo_updated", {"todo": dict(todo)})
+                break
+
     # ---- 入口 ----
 
     def run(self, user_message: str, callback=None) -> str:
@@ -526,6 +572,11 @@ class AgentLoop:
                 init_run_projection(self.agent.session, user_message)
                 self.agent.record({"role": "user", "content": user_message})
                 self._gen_task_summary(user_message)
+                self._plan_todos = self._generate_plan(user_message)
+                if self._plan_todos:
+                    self.agent.session["plan_todos"] = self._plan_todos
+                    self._emit("plan_created", {"todos": list(self._plan_todos)})
+                    self._start_next_todo()
 
                 if hasattr(self.agent.model_client, "chat_with_tools"):
                     return self._run_with_native_tools(user_message, ts, callback)
