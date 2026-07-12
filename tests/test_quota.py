@@ -73,3 +73,18 @@ class TestQuotaIntegration:
 
         r = executor.execute("list_files", {"path": "."})
         assert r.metadata["tool_status"] == "success"
+
+class TestConcurrentShellLimit:
+    def test_acquire_blocks_when_full(self):
+        from agent_runtime.tool_executor import QuotaEnforcer
+        q = QuotaEnforcer(max_concurrent_shell=2)
+        assert q.acquire_shell() is True
+        assert q.acquire_shell() is True
+        assert q.acquire_shell() is False  # 第 3 个被拒
+        q.release_shell()
+        assert q.acquire_shell() is True  # 释放后可用
+
+    def test_release_without_acquire_is_safe(self):
+        from agent_runtime.tool_executor import QuotaEnforcer
+        q = QuotaEnforcer()
+        q.release_shell()  # 不应抛异常
