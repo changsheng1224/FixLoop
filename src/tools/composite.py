@@ -16,6 +16,7 @@ REPAIR_CANONICAL_TOOL_NAMES: tuple[str, ...] = (
     "find_test",
     "git_blame",
     "git_diff",
+    "grep",
     "list_files",
     "patch_file",
     "read_file",
