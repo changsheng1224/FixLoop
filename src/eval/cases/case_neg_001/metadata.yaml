@@ -1,0 +1,11 @@
+case_id: case_neg_001
+language: python
+issue_type: unknown
+expected_skill: null
+difficulty: hard
+status: verified
+description: "歧义 issue — 无足够信息定位，期望 exhausted"
+tags:
+  - negative
+  - ambiguous
+expected_outcome: exhausted

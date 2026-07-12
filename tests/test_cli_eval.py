@@ -52,7 +52,7 @@ class TestCliEval:
 
         assert main() in (0, 1)
         data = json.loads((tmp_path / "eval_report.json").read_text(encoding="utf-8"))
-        assert data["summary"]["total"] == 15
+        assert data["summary"]["total"] == 17
         assert data["summary"]["fix_rate"] >= 0.9
 
     def test_eval_requires_case_or_all(self, monkeypatch):
@@ -79,7 +79,7 @@ class TestCliEval:
 
         assert main() in (0, 1)
         data = json.loads((tmp_path / "eval_report.json").read_text(encoding="utf-8"))
-        assert data["summary"]["total"] == 15
+        assert data["summary"]["total"] == 17
 
     def test_eval_module_runner_fake(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
