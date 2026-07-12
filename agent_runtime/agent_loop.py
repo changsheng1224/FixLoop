@@ -173,6 +173,12 @@ class AgentLoop:
                 "tool_steps": ts.tool_steps,
             },
         )
+        try:
+            from agent_runtime.checkpoint import create_checkpoint
+
+            create_checkpoint(self.agent, ts, ts.user_request, trigger="user_cancel")
+        except Exception:
+            pass
         return self._complete_run(ts, "<final>用户已取消当前任务。</final>")
 
     def _invoke_model_call(self, fn):
