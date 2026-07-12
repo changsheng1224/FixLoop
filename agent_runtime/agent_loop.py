@@ -776,6 +776,17 @@ class AgentLoop:
             get_registry().counter_inc("fixloop_tool_steps_total", labels={"tier": tier})
         except Exception:
             pass
+        # Localizer 工具顺序检测：ast_parse 前应先调 stack_parse
+        agent_name = getattr(self.agent, "_agent_name", "") or ""
+        if agent_name == "localizer" and tool_name == "ast_parse":
+            history = self.agent.session.get("history", [])
+            called_tools = {h.get("tool_name") for h in history if h.get("tool_name")}
+            if "stack_parse" not in called_tools:
+                self._emit("tool_order_warning", {
+                    "agent": "localizer",
+                    "tool": "ast_parse",
+                    "expected_before": "stack_parse",
+                })
         preview = meta.get("patch_preview")
         if preview:
             self._emit("tool_preview", {"tool": tool_name, **preview})

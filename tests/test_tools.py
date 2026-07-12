@@ -139,7 +139,7 @@ class TestToolRegistry:
     def test_legal_tool_names(self, ctx):
         registry = build_tool_registry(ctx)
         names = legal_tool_names(registry)
-        expected = {"list_files", "read_file", "search", "write_file", "patch_file", "run_shell"}
+        expected = {"list_files", "read_file", "search", "grep", "write_file", "patch_file", "run_shell"}
         assert names == expected
 
 
@@ -166,3 +166,70 @@ class TestPathEscape:
         (temp_workspace / "src").mkdir(exist_ok=True)
         resolved = ctx.resolve("src")
         assert resolved.is_dir()
+
+class TestGrep:
+    def test_grep_finds_pattern(self, temp_workspace):
+        (temp_workspace / "a.py").write_text("def foo():\n    pass\n", encoding="utf-8")
+        from agent_runtime.tool_context import ToolContext
+        from agent_runtime.tools import tool_grep
+        ctx = ToolContext(root=str(temp_workspace))
+        result = tool_grep(ctx, {"pattern": "def foo", "path": "."})
+        assert "def foo" in result
+        assert "a.py:1" in result
+
+    def test_grep_no_match(self, temp_workspace):
+        (temp_workspace / "a.py").write_text("x = 1\n", encoding="utf-8")
+        from agent_runtime.tool_context import ToolContext
+        from agent_runtime.tools import tool_grep
+        ctx = ToolContext(root=str(temp_workspace))
+        assert tool_grep(ctx, {"pattern": "noSuchPattern", "path": "."}) == "(无匹配)"
+
+    def test_grep_missing_pattern(self):
+        from agent_runtime.tool_context import ToolContext
+        from agent_runtime.tools import tool_grep
+        ctx = ToolContext(root=".")
+        assert "Error" in tool_grep(ctx, {"pattern": ""})
+
+    def test_grep_glob_filter(self, temp_workspace):
+        (temp_workspace / "a.py").write_text("hello\n", encoding="utf-8")
+        (temp_workspace / "b.txt").write_text("hello\n", encoding="utf-8")
+        from agent_runtime.tool_context import ToolContext
+        from agent_runtime.tools import tool_grep
+        ctx = ToolContext(root=str(temp_workspace))
+        result = tool_grep(ctx, {"pattern": "hello", "path": ".", "glob": "*.py"})
+        assert "a.py" in result
+        assert "b.txt" not in result
+
+    def test_grep_ignore_case(self, temp_workspace):
+        (temp_workspace / "a.py").write_text("HELLO\n", encoding="utf-8")
+        from agent_runtime.tool_context import ToolContext
+        from agent_runtime.tools import tool_grep
+        ctx = ToolContext(root=str(temp_workspace))
+        result = tool_grep(ctx, {"pattern": "hello", "path": ".", "ignore_case": True})
+        assert "HELLO" in result
+
+    def test_grep_in_tool_registry(self, ctx):
+        from agent_runtime.tools import build_tool_registry
+        registry = build_tool_registry(ctx)
+        assert "grep" in registry
+        assert registry["grep"]["risky"] is False
+        assert registry["grep"]["execution_tier"] == "host"
+
+    def test_grep_in_gateway_allow_all(self):
+        from src.middleware import REPAIR_PERMISSION_TABLE
+        assert "grep" in REPAIR_PERMISSION_TABLE
+        assert "*" in REPAIR_PERMISSION_TABLE["grep"]
+
+    def test_grep_merges_adjacent_lines(self, temp_workspace):
+        (temp_workspace / "a.py").write_text(
+            "def foo():\n    x = 1\n    y = 2\n    return x + y\n",
+            encoding="utf-8",
+        )
+        from agent_runtime.tool_context import ToolContext
+        from agent_runtime.tools import tool_grep
+        ctx = ToolContext(root=str(temp_workspace))
+        result = tool_grep(ctx, {"pattern": "def |x =|y =|return", "path": "."})
+        # 4 连续行应合并为 a.py:1-4: 范围
+        assert "a.py:1-4:" in result
+        assert "1: def foo" in result
+        assert "4: return" in result

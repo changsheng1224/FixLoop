@@ -56,6 +56,8 @@ REPAIR_PERMISSION_TABLE = {
     "git_diff": {"localizer", "retriever", "patcher"},
     "find_test": {"retriever", "patcher"},
     "search": {"*"},
+    "grep": {"*"},
+    "inspect_file": {"localizer", "retriever"},
     "read_file": {"*"},
     "list_files": {"*"},
     "run_shell": set(),

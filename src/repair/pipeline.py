@@ -126,23 +126,31 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 )
             return suspects, timing
 
-        def run_retriever():
-            prompt = self._retriever_prompt([], plan=plan, issue=issue)
-            answer, timing = self._run_agent(
-                self.retriever,
-                prompt,
-                "retriever",
-                state,
-                l2_phase="retrieve",
-                l2_attempt=0,
-            )
-            return parse_retrieved_context(answer), timing
+        fast_retrieve = getattr(self, "_fast_retrieve_enabled", False)
+        retrieval_path = "rule" if fast_retrieve else "llm"
+        state.node_timings["retrieval_path"] = retrieval_path
 
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            fut_loc = pool.submit(run_localizer)
-            fut_ret = pool.submit(run_retriever)
-            suspects, loc_timing = fut_loc.result()
-            context, ret_timing = fut_ret.result()
+        if fast_retrieve:
+            suspects, loc_timing = run_localizer()
+            context, ret_timing = self._rule_retrieve(suspects, issue)
+        else:
+            def run_retriever():
+                prompt = self._retriever_prompt([], plan=plan, issue=issue)
+                answer, timing = self._run_agent(
+                    self.retriever,
+                    prompt,
+                    "retriever",
+                    state,
+                    l2_phase="retrieve",
+                    l2_attempt=0,
+                )
+                return parse_retrieved_context(answer), timing
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                fut_loc = pool.submit(run_localizer)
+                fut_ret = pool.submit(run_retriever)
+                suspects, loc_timing = fut_loc.result()
+                context, ret_timing = fut_ret.result()
 
         if not suspects:
             suspects = self._fallback_suspects_from_plan(plan, issue)
@@ -378,6 +386,68 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         self._push_repair_metrics(state)
         log.info("总耗时: %dms, status=%s", total_ms, state.status)
         return state
+
+    def _rule_retrieve(
+        self, suspects: list, issue: str
+    ) -> tuple["RetrievedContext", dict]:
+        """规则检索（不调 LLM）：从 suspects 提取函数名 → grep 搜索 → 构建 RetrievedContext。"""
+        import re
+        import time
+        from pathlib import Path
+
+        from agent_runtime.tool_context import ToolContext
+        from agent_runtime.tools import tool_grep
+        from src.state import RetrievedContext
+
+        t0 = time.time()
+        related_tests: list[str] = []
+        similar_snippets: list[dict] = []
+
+        # 从 suspects 提取搜索关键词
+        keywords: set[str] = set()
+        for s in suspects:
+            if getattr(s, "function_name", None):
+                keywords.add(s.function_name)
+            if getattr(s, "class_name", None):
+                keywords.add(s.class_name)
+        # 从 issue 中提取函数名
+        for match in re.finditer(r"def\s+(\w+)|'(\w+)'|\"(\w+)\"", issue):
+            for g in match.groups():
+                if g and len(g) > 2:
+                    keywords.add(g)
+
+        ctx = ToolContext(root=self._repo_root)
+        for kw in list(keywords)[:5]:  # 最多 5 个关键词
+            grep_out = tool_grep(ctx, {"pattern": kw, "path": ".", "glob": "*.py", "max_results": 10})
+            if grep_out and not grep_out.startswith("Error") and grep_out != "(无匹配)":
+                for line in grep_out.splitlines():
+                    parts = line.split(":", 2)
+                    if len(parts) >= 3:
+                        similar_snippets.append({
+                            "file": parts[0],
+                            "line": parts[1],
+                            "text": parts[2].strip()[:200],
+                        })
+
+        # 找对应测试文件
+        for s in suspects:
+            fname = getattr(s, "file_path", "")
+            if fname:
+                test_name = f"test_{Path(fname).stem}"
+                test_dir = repo / "tests"
+                if test_dir.is_dir():
+                    for tf in test_dir.rglob("*.py"):
+                        if test_name in tf.name:
+                            related_tests.append(str(tf.relative_to(repo)))
+
+        elapsed_ms = int((time.time() - t0) * 1000)
+        return (
+            RetrievedContext(
+                similar_snippets=similar_snippets,
+                related_tests=related_tests,
+            ),
+            {"retriever_ms": elapsed_ms, "retrieval_path": "rule"},
+        )
 
     def _push_repair_metrics(self, state) -> None:
         """推送 repair 指标到 Prometheus registry（静默失败）。"""

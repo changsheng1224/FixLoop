@@ -66,6 +66,11 @@ def main() -> int:
     p_repair.add_argument("--dry-run", action="store_true", help="演习模式")
     p_repair.add_argument("--skip-verify", action="store_true", help="跳过 Docker 验证")
     p_repair.add_argument(
+        "--fast-retrieve",
+        action="store_true",
+        help="规则检索（跳过 Retriever LLM，直接 grep）",
+    )
+    p_repair.add_argument(
         "--no-degrade",
         action="store_true",
         help="禁用 verify 耗尽后的 Single-Agent 最后一搏",
@@ -196,6 +201,11 @@ def _repair(args) -> int:
         port = args.metrics if args.metrics > 0 else 9090
         start_metrics_server(port)
         print(f"[metrics] Prometheus /metrics → http://127.0.0.1:{port}/metrics", file=sys.stderr)
+
+    if args.fast_retrieve:
+        orch._fast_retrieve_enabled = True
+        if args.verbose:
+            print("[Orchestrator] Retriever 使用规则检索（grep），跳过 LLM", file=sys.stderr)
 
     if args.dry_run:
         print("⚠ DRY-RUN MODE", file=sys.stderr)
