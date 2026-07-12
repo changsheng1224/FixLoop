@@ -3,6 +3,7 @@
 停机后产出 task_state.json + trace.jsonl + report.json（含 node_timings 耗时分布）。
 """
 
+import json
 import time as _time
 
 from agent_runtime.compression_pipeline import truncate_tool_result_for_agent
@@ -90,7 +91,6 @@ class AgentLoop:
         self._last_cache_key = ""
         self._cache_key_changes = 0
         self._plan_todos: list[dict] = []
-        self._todo_index = 0
         self._no_progress_steps = 0
 
     def _accumulate_context_stats(self, meta: dict) -> None:
@@ -528,8 +528,6 @@ class AgentLoop:
                     f"[{{\"id\":\"1\",\"content\":\"...\",\"status\":\"pending\"}},...]\n\n{user_message[:500]}"
                 )
                 raw = light.complete(prompt, max_new_tokens=256)
-                import json
-
                 # 提取 JSON 数组
                 start = raw.find("[")
                 end = raw.rfind("]") + 1
@@ -544,13 +542,13 @@ class AgentLoop:
         todos = []
         i = 1
         if any(w in msg for w in ("error", "fix", "bug", "repair", "修复")):
-            todos.append({"id": str(i), "content": "Analyze error and locate suspect code", "status": "pending"}); i += 1
-            todos.append({"id": str(i), "content": "Retrieve related context and tests", "status": "pending"}); i += 1
-            todos.append({"id": str(i), "content": "Generate and apply fix patch", "status": "pending"}); i += 1
-            todos.append({"id": str(i), "content": "Verify fix passes tests", "status": "pending"}); i += 1
+            todos.append({"id": str(i), "content": "Analyze error and locate suspect code", "status": "pending"})
+            todos.append({"id": str(i + 1), "content": "Retrieve related context and tests", "status": "pending"})
+            todos.append({"id": str(i + 2), "content": "Generate and apply fix patch", "status": "pending"})
+            todos.append({"id": str(i + 3), "content": "Verify fix passes tests", "status": "pending"})
         else:
-            todos.append({"id": str(i), "content": "Read relevant files", "status": "pending"}); i += 1
-            todos.append({"id": str(i), "content": "Analyze and respond", "status": "pending"}); i += 1
+            todos.append({"id": str(i), "content": "Read relevant files", "status": "pending"})
+            todos.append({"id": str(i + 1), "content": "Analyze and respond", "status": "pending"})
         return todos
 
     def _start_next_todo(self) -> None:
