@@ -124,9 +124,15 @@ class ToolExecutor:
                 metadata={"tool_status": "success", "dry_run": True},
             )
 
-        # ---- Gate 6.5: patch_file 预览（apply 前校验 + 摘要） ----
+        # ---- Gate 6.5: 高风险工具预览（审批时展示） ----
         patch_preview_meta = None
-        if name == "patch_file":
+        if name == "write_file":
+            raw_path = args.get("path", "")
+            content_len = len(str(args.get("content", "")))
+            mode = "追加" if args.get("append") else "新建/覆盖"
+            preview_text = f"[{mode}] {raw_path} ({content_len} 字符)"
+            patch_preview_meta = {"path": raw_path, "preview_text": preview_text}
+        elif name == "patch_file":
             patch_preview_meta, preview_err = self._build_patch_preview(args)
             if preview_err:
                 return self._rejected(
@@ -299,9 +305,9 @@ class ToolExecutor:
             return False
         # "ask" 模式
         try:
-            if patch_preview and name == "patch_file":
+            if patch_preview and name in ("patch_file", "write_file"):
                 prompt = (
-                    f"\n⚠ 审批: patch_file → {patch_preview.get('path', args.get('path', ''))}\n"
+                    f"\n⚠ 审批: {name} → {patch_preview.get('path', args.get('path', ''))}\n"
                     f"{patch_preview.get('preview_text', '')}\n"
                     f"  输入 'y' 批准，其他键拒绝: "
                 )
