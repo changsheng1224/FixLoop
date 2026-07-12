@@ -108,3 +108,16 @@ class TestToolGatewayIntegration:
         )
         assert gw.can_call("patcher", "write_file") is True
         assert gw.can_call("patcher", "ast_parse") is False
+
+class TestSharedGateway:
+    def test_gateway_is_shared_across_agents(self):
+        from src.agents.factory import _get_or_create_gateway, _shared_repair_gateway
+        import src.agents.factory as factory_mod
+
+        # 重置
+        factory_mod._shared_repair_gateway = None
+        gw1 = _get_or_create_gateway()
+        gw2 = _get_or_create_gateway()
+        assert gw1 is gw2  # 同一个实例
+        # 清理
+        factory_mod._shared_repair_gateway = None
