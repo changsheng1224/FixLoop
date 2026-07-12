@@ -91,6 +91,7 @@ class AgentLoop:
         self._cache_key_changes = 0
         self._plan_todos: list[dict] = []
         self._todo_index = 0
+        self._no_progress_steps = 0
 
     def _accumulate_context_stats(self, meta: dict) -> None:
         """从 context_built metadata 累积 section 统计 + cache hit rate。"""
@@ -390,6 +391,24 @@ class AgentLoop:
             except Exception:
                 pass
             self._advance_todo()
+            self._no_progress_steps = 0
+        else:
+            # 非成功或只读无副作用工具 → 累计无进展步数
+            meta = result.metadata if hasattr(result, "metadata") else {}
+            affected = meta.get("affected_paths", []) if isinstance(meta, dict) else []
+            if not affected:
+                self._no_progress_steps += 1
+                if self._no_progress_steps >= 3:
+                    self._emit("stall_detected", {
+                        "steps": self._no_progress_steps,
+                        "last_tool": tool_name,
+                    })
+                    # mark 当前 in_progress todo 为 blocked
+                    for todo in self._plan_todos:
+                        if todo.get("status") == "in_progress":
+                            todo["status"] = "blocked"
+                            self._emit("todo_updated", {"todo": dict(todo)})
+                            break
         return f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
 
     # ---- XML 路径辅助 ----
@@ -591,6 +610,7 @@ class AgentLoop:
                 self.agent.record({"role": "user", "content": user_message})
                 self._gen_task_summary(user_message)
                 self._plan_todos = self._generate_plan(user_message)
+                self._no_progress_steps = 0
                 if self._plan_todos:
                     self.agent.session["plan_todos"] = self._plan_todos
                     self._emit("plan_created", {"todos": list(self._plan_todos)})
