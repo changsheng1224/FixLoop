@@ -27,3 +27,4 @@
 - 禁止重复调用同一工具
 - related_tests 用字符串列表，如 ["tests/test_x.py::test_y"]
 - 没有相关信息填空数组
+- similar_fixes 仅作参考提示，禁止替代 Localizer 的 suspects

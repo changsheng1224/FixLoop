@@ -13,12 +13,19 @@ def set_task_summary(state: dict, user_message: str):
 
 
 def remember_file(state: dict, path: str):
-    """将 path 加入 recent_files LRU 列表。"""
+    """将 path 加入 recent_files LRU（last_access 时间戳决定淘汰）。"""
     files = state["working"]["recent_files"]
+    meta = state["working"].setdefault("_recent_files_meta", {})
+    now = time.time()
     if path in files:
         files.remove(path)
     files.append(path)
     state["working"]["recent_files"] = files[-MAX_RECENT_FILES:]
+    # last_access 时间戳
+    meta[path] = {"last_access": now, "added_at": meta.get(path, {}).get("added_at", now)}
+    for stale in list(meta.keys()):
+        if stale not in state["working"]["recent_files"]:
+            del meta[stale]
 
 
 def set_file_summary(state: dict, path: str, summary: str):

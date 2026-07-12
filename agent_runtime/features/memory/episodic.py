@@ -6,6 +6,8 @@ from agent_runtime.features.memory.core import MAX_EPISODIC_NOTES
 
 # kind=decision 笔记被检索 >= PROMOTE_THRESHOLD 次时自动晋升到 durable memory
 PROMOTE_THRESHOLD = 3
+# kind 分类权重：error > decision > observation
+KIND_WEIGHTS = {"error": 2.0, "decision": 1.5, "observation": 1.0}
 
 
 def append_note(
@@ -70,6 +72,7 @@ def retrieval_candidates(
             if tag in query_lower:
                 score += 2.0
         if score > 0:
+            score *= KIND_WEIGHTS.get(note.get("kind", "observation"), 1.0)
             age_hours = (now - note.get("created_at", now)) / 3600
             if age_hours < 1:
                 score += 1.0 * (1 - age_hours)

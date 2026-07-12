@@ -1,8 +1,21 @@
 """持久记忆 — Durable Memory：跨会话 Markdown 文件存储。"""
 
 import re
+import time
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
+
+
+class ConflictResolution(Enum):
+    NONE = "none"
+    EQUIVALENT = "equivalent"
+    OVERRIDE = "override"
+    INVALID = "invalid"
+
+
+# 权威序：user > agent > auto
+AUTHORITY_ORDER = {"user": 3, "agent": 2, "auto": 1}
 
 DURABLE_TOPICS = [
     "project-conventions",
@@ -27,6 +40,11 @@ class UserPreference:
     value: str
     confidence: float = 1.0
     source: str = ""
+    updated_at: float = 0.0
+
+    def __post_init__(self):
+        if not self.updated_at:
+            self.updated_at = time.time()
 
     @classmethod
     def from_line(cls, line: str) -> "UserPreference | None":
@@ -53,17 +71,26 @@ class UserPreference:
         return "| key | value | confidence | source |\n|-----|-------|------------|--------|"
 
 
+DECAY_RATE = 0.95  # 每天衰减 5%（模块级常量）
+
+
 class DurableMemoryStore:
     """跨会话 Markdown 持久记忆（.agent/memory/topics/）。"""
 
     def __init__(self, root: str):
         self.memory_dir = Path(root) / ".agent" / "memory"
         self.topics_dir = self.memory_dir / "topics"
+        self._topics_root = str(self.topics_dir.resolve())
+
+    def _ensure_within(self, path: Path) -> None:
+        """确保路径在 topics_dir 内（防止路径遍历攻击）。"""
+        if not str(path.resolve()).startswith(self._topics_root):
+            raise ValueError(f"路径逃逸: {path}")
 
     # ── 结构化用户画像 ──
 
     def get_preferences(self) -> list[UserPreference]:
-        """读取 user-preferences topic 的结构化条目。"""
+        """读取 user-preferences topic 的结构化条目（含时间衰减）。"""
         entries = self._read_topic(self.topics_dir / "user-preferences.md")
         prefs = []
         in_table = False
@@ -79,7 +106,7 @@ class DurableMemoryStore:
                     prefs.append(pref)
             else:
                 in_table = False
-        return prefs
+        return _apply_time_decay(prefs)
 
     def upsert_preference(self, pref: UserPreference) -> None:
         """写入或更新一个用户偏好条目（按 key 去重）。"""
@@ -112,6 +139,8 @@ class DurableMemoryStore:
         by_topic: dict[str, list[str]] = {}
         for topic, text in promotions:
             topic = self._normalize_topic(topic)
+            if topic not in DURABLE_TOPICS:
+                continue  # 拒绝未知 topic
             by_topic.setdefault(topic, []).append(text)
         for topic, texts in by_topic.items():
             topic_file = self.topics_dir / f"{topic}.md"
@@ -162,11 +191,17 @@ class DurableMemoryStore:
             path.unlink()
 
     @staticmethod
-    def _upsert_entry(entries: list[str], new_text: str) -> list[str]:
-        new_subject = new_text.split("\n")[0].strip()
+    def _upsert_entry(entries: list[str], new_text: str, authority: str = "auto") -> list[str]:
+        new_subject = new_text.split("\n")[0].strip().lower()
         for i, entry in enumerate(entries):
-            if entry.split("\n")[0].strip().lower() == new_subject.lower():
-                entries[i] = new_text
+            if entry.split("\n")[0].strip().lower() == new_subject:
+                result = _resolve_conflict(entry, new_text, authority)
+                if result in (ConflictResolution.OVERRIDE, ConflictResolution.EQUIVALENT):
+                    entries[i] = new_text
+                elif result == ConflictResolution.INVALID:
+                    # 互斥版本：追加而非覆盖
+                    ver = sum(1 for e in entries if e.split("\n")[0].strip().lower() == new_subject) + 1
+                    entries.append(new_text.replace("\n", f"  # v{ver}\n", 1))
                 return entries
         entries.append(new_text)
         return entries
@@ -181,12 +216,18 @@ class DurableMemoryStore:
 
 
 def promote_durable_memory(
-    user_message: str, final_answer: str, store: DurableMemoryStore | None = None, root: str = "."
+    user_message: str, final_answer: str, store: DurableMemoryStore | None = None, root: str = ".",
+    light_client=None,
 ) -> bool:
-    """检测用户保存意图并从回答中提取 Convention/Decision 等条目写入 durable。"""
+    """检测用户保存意图并从回答中提取 Convention/Decision 等条目写入 durable。
+
+    规则抽取失败时，可选的 light_client 做 LLM 分类（仅填 topic/key，不自由建库）。
+    """
     if not _has_save_intent(user_message):
         return False
     promotions = _extract_promotions(final_answer)
+    if not promotions and light_client is not None:
+        promotions = _llm_extract_promotions(final_answer, light_client)
     if not promotions:
         return False
     if store is None:
@@ -196,6 +237,32 @@ def promote_durable_memory(
         return False
     store.promote(valid)
     return True
+
+
+def _llm_extract_promotions(text: str, client) -> list[tuple[str, str]]:
+    """LLM 分类：将自由文本映射到预定义 topic（禁止自由建库）。"""
+    topics = ", ".join(DURABLE_TOPICS)
+    prompt = (
+        f"从以下文本提取知识条目。只输出 JSON 数组：\n"
+        f"[{{\"topic\":\"{DURABLE_TOPICS[0]}\",\"text\":\"...\"}},...]\n"
+        f"topic 只能从 [{topics}] 中选择。\n\n{text[:500]}"
+    )
+    try:
+        import json
+
+        raw = client.complete(prompt, max_new_tokens=256)
+        start = raw.find("[")
+        end = raw.rfind("]") + 1
+        if start >= 0 and end > start:
+            items = json.loads(raw[start:end])
+            return [
+                (item["topic"], item.get("text", ""))
+                for item in items
+                if item.get("topic") in DURABLE_TOPICS and item.get("text")
+            ]
+    except Exception:
+        pass
+    return []
 
 
 def _has_save_intent(user_message: str) -> bool:
@@ -214,6 +281,37 @@ def _extract_promotions(text: str) -> list[tuple[str, str]]:
                     promotions.append((topic, f"{prefix} {body}"))
                 break
     return promotions
+
+
+def _resolve_conflict(existing: str, new: str, new_authority: str = "auto") -> ConflictResolution:
+    """冲突状态机：比较新旧条目，按权威序决定是否覆盖。"""
+    if not existing:
+        return ConflictResolution.NONE
+    if existing.strip().lower() == new.strip().lower():
+        return ConflictResolution.EQUIVALENT
+    # 从条目中提取 authority 标记
+    old_auth = "auto"
+    m = re.search(r"\[authority:(\w+)\]", existing)
+    if m:
+        old_auth = m.group(1)
+    new_rank = AUTHORITY_ORDER.get(new_authority, 1)
+    old_rank = AUTHORITY_ORDER.get(old_auth, 1)
+    if new_rank > old_rank:
+        return ConflictResolution.OVERRIDE
+    return ConflictResolution.INVALID
+
+
+def _apply_time_decay(prefs: list[UserPreference]) -> list[UserPreference]:
+    """对偏好条目应用时间衰减；低于阈值 0.1 的不再参与召回。"""
+    now = time.time()
+    result = []
+    for p in prefs:
+        days = (now - p.updated_at) / 86400
+        if days > 1:
+            p.confidence = round(p.confidence * (DECAY_RATE ** days), 3)
+        if p.confidence >= 0.1:
+            result.append(p)
+    return result
 
 
 def reject_durable_reason(text: str) -> str:
