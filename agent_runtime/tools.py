@@ -388,10 +388,45 @@ def _grep_python(
     return matches[:max_results], total
 
 
+def _merge_adjacent_lines(lines: list[str]) -> list[str]:
+    """合并同文件连续行号为范围（file:start-end:），去重降噪。"""
+    import re
+
+    if not lines:
+        return []
+    merged: list[str] = []
+    # 解析为 (file, line, text) 三元组
+    parsed: list[tuple[str, int, str]] = []
+    for ln in lines:
+        m = re.match(r"^(.+?):(\d+):(.+)$", ln)
+        if m:
+            parsed.append((m.group(1), int(m.group(2)), m.group(3).strip()))
+
+    i = 0
+    while i < len(parsed):
+        fname, lnum, text = parsed[i]
+        # 找连续同文件行
+        j = i + 1
+        while j < len(parsed) and parsed[j][0] == fname and parsed[j][1] == parsed[j - 1][1] + 1:
+            j += 1
+        if j - i >= 3:
+            # 3 行及以上合并为范围
+            merged.append(f"{fname}:{parsed[i][1]}-{parsed[j - 1][1]}:")
+            for k in range(i, j):
+                merged.append(f"  {parsed[k][1]}: {parsed[k][2]}")
+        else:
+            for k in range(i, j):
+                merged.append(f"{parsed[k][0]}:{parsed[k][1]}: {parsed[k][2]}")
+        i = j
+
+    return merged
+
+
 def _format_grep_result(lines: list[str], total: int, max_results: int) -> str:
     if not lines:
         return "(无匹配)"
-    result = "\n".join(lines)
+    merged = _merge_adjacent_lines(lines)
+    result = "\n".join(merged)
     if total > len(lines):
         result += f"\n... 另有 {total - len(lines)} 条匹配未显示（可缩小 path/glob 或提高 max_results）"
     return result

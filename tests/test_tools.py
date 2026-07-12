@@ -219,3 +219,17 @@ class TestGrep:
         from src.middleware import REPAIR_PERMISSION_TABLE
         assert "grep" in REPAIR_PERMISSION_TABLE
         assert "*" in REPAIR_PERMISSION_TABLE["grep"]
+
+    def test_grep_merges_adjacent_lines(self, temp_workspace):
+        (temp_workspace / "a.py").write_text(
+            "def foo():\n    x = 1\n    y = 2\n    return x + y\n",
+            encoding="utf-8",
+        )
+        from agent_runtime.tool_context import ToolContext
+        from agent_runtime.tools import tool_grep
+        ctx = ToolContext(root=str(temp_workspace))
+        result = tool_grep(ctx, {"pattern": "def |x =|y =|return", "path": "."})
+        # 4 连续行应合并为 a.py:1-4: 范围
+        assert "a.py:1-4:" in result
+        assert "1: def foo" in result
+        assert "4: return" in result
