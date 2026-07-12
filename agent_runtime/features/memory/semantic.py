@@ -124,7 +124,8 @@ class SemanticMemory:
         try:
             import numpy as np
 
-            query_emb = self.model.encode(query)
+            short_query = derive_embed_query(query)
+            query_emb = self.model.encode(short_query)
             scores = []
             for note in self._notes:
                 emb = note.get("embedding")
@@ -139,6 +140,35 @@ class SemanticMemory:
             return [note for _, note in scores[:top_k]]
         except Exception:
             return []
+
+
+def derive_embed_query(user_message: str, task_summary: str = "") -> str:
+    """从 user request 提取 embedding 搜索关键词（~100 chars）。
+
+    抽取规则：异常类型 → 文件名 → 函数名 → task_summary fallback。
+    """
+    import re
+
+    parts: list[str] = []
+    # 1. 异常类型
+    exc = re.findall(r"(\w+(?:Error|Exception|Warning))", user_message)
+    parts.extend(exc[:2])
+    # 2. 文件名
+    files = re.findall(r'File\s+"([^"]+\.py)"', user_message)
+    fnames = [f.rsplit("/", 1)[-1].rsplit("\\", 1)[-1] for f in files]
+    parts.extend(fnames[:2])
+    # 3. 函数名
+    funcs = re.findall(r"def\s+(\w+)|'(\w+)'|\"(\w+)\"|\s(\w+)\(", user_message)
+    for g in funcs:
+        name = next((x for x in g if x and len(x) > 2), None)
+        if name and name not in parts:
+            parts.append(name)
+    # 4. fallback
+    if not parts and task_summary:
+        parts.append(task_summary[:100])
+    if not parts:
+        parts.append(user_message[:100])
+    return " ".join(parts)[:200].strip()
 
 
 def retrieval_candidates_semantic(state: dict, query: str, limit: int = 3) -> list[dict]:
