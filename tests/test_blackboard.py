@@ -78,3 +78,15 @@ class TestOrchestratorConflictAPI:
         bb = Blackboard()
         bb.write("suspect:calc.py:42", {"confidence": 0.8}, source_agent="localizer")
         assert resolve_blackboard_conflicts(bb) == []
+
+class TestSuspectDedupe:
+    def test_dedupes_same_file_line(self):
+        from src.repair.blackboard_merge import dedupe_suspects
+        from src.state import SuspectLocation
+
+        s1 = SuspectLocation(file_path="a.py", start_line=1, end_line=1, confidence=0.5)
+        s2 = SuspectLocation(file_path="a.py", start_line=1, end_line=1, confidence=0.9)
+        s3 = SuspectLocation(file_path="b.py", start_line=2, end_line=2, confidence=0.7)
+        result = dedupe_suspects([s1, s2, s3])
+        assert len(result) == 2
+        assert result[0].confidence == 0.9  # takes higher confidence
