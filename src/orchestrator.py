@@ -518,8 +518,12 @@ class Orchestrator(RepairPipelineMixin):
             state.node_timings["total_tool_steps"] = summary["total_tool_steps"]
         # 分 Agent latency
         latency_by_agent: dict[str, dict] = {}
-        for name, client in clients.items():
-            if hasattr(client, "latency_stats"):
+        for agent in (self.localizer, self.retriever, self.patcher):
+            if agent is None:
+                continue
+            client = getattr(agent, "model_client", None)
+            name = getattr(agent, "_agent_name", "") or "agent"
+            if client and hasattr(client, "latency_stats"):
                 latency_by_agent[name] = client.latency_stats()
         if latency_by_agent:
             state.node_timings["latency_by_agent"] = latency_by_agent
