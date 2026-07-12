@@ -264,10 +264,40 @@ class Orchestrator(RepairPipelineMixin):
         )
         plan.language = language
         plan.language_source = source
-        plan.intent_parser = "rule"
+
+        # LLM fallback: 规则无法确定 issue_type 时用 light_client 分类
+        if not plan.issue_type or plan.issue_type == "unknown":
+            llm_type = self._llm_classify_issue(issue)
+            if llm_type:
+                plan.issue_type = llm_type
+                plan.intent_parser = "llm"
+            else:
+                plan.intent_parser = "rule"
+        else:
+            plan.intent_parser = "rule"
         apply_prompt_routing(plan)
 
         return plan
+
+    def _llm_classify_issue(self, issue: str) -> str | None:
+        """用 light_client 将歧义 issue 分类为已知 issue_type。"""
+        light = getattr(self, "_light_client", None)
+        if light is None:
+            return None
+        types = ", ".join(ROUTED_ISSUE_TYPES)
+        prompt = (
+            f"Classify this software issue into exactly one category: {types}.\n"
+            f"Reply with ONLY the category name.\n\n{issue[:800]}"
+        )
+        try:
+            raw = light.complete(prompt, max_new_tokens=32)
+            for word in raw.strip().split():
+                word = word.strip(".,;:\"'").lower()
+                if word in ROUTED_ISSUE_TYPES:
+                    return word
+        except Exception:
+            pass
+        return None
 
     def _parse_file_line(self, issue: str, file_path: str) -> int:
         """从 issue 文本提取行号（支持 file.py:42 或 line 42）。"""
