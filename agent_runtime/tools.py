@@ -209,31 +209,8 @@ def tool_read_file(context, args: dict) -> str:
 
 
 def tool_search(context, args: dict) -> str:
-    """代码搜索：优先使用 ripgrep，不可用时 fallback 到纯 Python。
-
-    Args 必须包含 'pattern'，可选 'path'、'context_lines'。
-    """
-    pattern = args.get("pattern", "")
-    if not pattern:
-        return "Error: 缺少必填参数 pattern"
-    raw_path = args.get("path", ".")
-    ctx = int(args.get("context_lines", 0))
-
-    try:
-        target = context.resolve(raw_path)
-    except ValueError as e:
-        return f"Error: {e}"
-
-    if not target.exists():
-        return f"Error: 路径不存在: {raw_path}"
-
-    # 优先使用 ripgrep
-    result = _search_rg(pattern, target, context_lines=ctx)
-    if result is not None:
-        return result
-
-    # Fallback: 纯 Python 搜索
-    return _search_python(pattern, target, context_lines=ctx)
+    """代码搜索（已委托 grep，保留兼容名。新调用请直接用 grep）。"""
+    return tool_grep(context, args)
 
 
 def _search_rg(pattern: str, target: Path, context_lines: int = 0) -> str | None:
