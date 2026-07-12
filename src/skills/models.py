@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from src.tools.composite import REPAIR_CANONICAL_TOOL_NAMES
 
-ALLOWED_SKILL_LANGUAGES = frozenset({"python", "javascript"})
+ALLOWED_SKILL_LANGUAGES = frozenset({"python", "javascript", "java"})
 SKILL_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 KNOWN_SKILL_TOOLS = frozenset(REPAIR_CANONICAL_TOOL_NAMES)
 
