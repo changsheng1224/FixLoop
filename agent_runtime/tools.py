@@ -213,71 +213,6 @@ def tool_search(context, args: dict) -> str:
     return tool_grep(context, args)
 
 
-def _search_rg(pattern: str, target: Path, context_lines: int = 0) -> str | None:
-    """尝试用 ripgrep 搜索，失败返回 None。"""
-    try:
-        cmd = ["rg", "-n", "--smart-case"]
-        if context_lines > 0:
-            cmd.extend(["-C", str(context_lines)])
-        cmd.extend([pattern, str(target)])
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        if result.returncode == 0:
-            lines = result.stdout.strip().splitlines()[:50]
-            if not lines or not lines[0]:
-                return "(无匹配)"
-            return "\n".join(lines)
-        elif result.returncode == 1:
-            return "(无匹配)"
-        return None
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return None
-
-
-def _search_python(pattern: str, target: Path, context_lines: int = 0) -> str:
-    """纯 Python 搜索：逐文件遍历匹配。"""
-    pattern_lower = pattern.lower()
-    matches = []
-    seen = set()  # (file, line) 去重
-
-    for filepath in target.rglob("*"):
-        if len(matches) >= 50:
-            break
-        if filepath.is_dir():
-            continue
-        if any(ign in filepath.parts for ign in IGNORED_PATH_NAMES):
-            continue
-        if filepath.suffix not in (".py", ".txt", ".md", ".toml", ".yaml", ".yml", ".cfg", ".ini"):
-            continue
-
-        try:
-            text = filepath.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
-            continue
-
-        lines_list = text.splitlines()
-        total = len(lines_list)
-        for i, line in enumerate(lines_list, 1):
-            if pattern_lower in line.lower():
-                rel = filepath.relative_to(target)
-                # 上下文范围
-                ctx_start = max(1, i - context_lines)
-                ctx_end = min(total, i + context_lines)
-                for j in range(ctx_start, ctx_end + 1):
-                    key = (str(rel), j)
-                    if key not in seen:
-                        seen.add(key)
-                        prefix = ">" if j == i else " "
-                        matches.append(f"{rel}:{j}:{prefix} {lines_list[j - 1].strip()[:200]}")
-                        if len(matches) >= 50:
-                            break
-                if len(matches) >= 50:
-                    break
-
-    if not matches:
-        return "(无匹配)"
-    return "\n".join(matches)
-
-
 def tool_grep(context, args: dict) -> str:
     """内容搜索：rg 优先，不可用时 Python re + rglob fallback。
 
@@ -341,7 +276,6 @@ def _grep_python(
     ignore_case: bool, context_lines: int, max_results: int,
 ) -> tuple[list[str], int]:
     """Python re + rglob fallback 搜索。"""
-    import fnmatch
     import re
 
     flags = re.IGNORECASE if ignore_case else 0

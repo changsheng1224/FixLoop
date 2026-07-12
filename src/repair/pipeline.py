@@ -392,10 +392,11 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
     ) -> tuple["RetrievedContext", dict]:
         """规则检索（不调 LLM）：从 suspects 提取函数名 → grep 搜索 → 构建 RetrievedContext。"""
         import re
-        import subprocess
         import time
         from pathlib import Path
 
+        from agent_runtime.tool_context import ToolContext
+        from agent_runtime.tools import tool_grep
         from src.state import RetrievedContext
 
         t0 = time.time()
@@ -415,24 +416,18 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 if g and len(g) > 2:
                     keywords.add(g)
 
-        repo = Path(self._repo_root)
+        ctx = ToolContext(root=self._repo_root)
         for kw in list(keywords)[:5]:  # 最多 5 个关键词
-            try:
-                result = subprocess.run(
-                    ["rg", "-n", "--no-heading", "-g", "*.py", kw, str(repo)],
-                    capture_output=True, text=True, timeout=10,
-                )
-                if result.returncode == 0:
-                    for line in result.stdout.strip().splitlines()[:10]:
-                        parts = line.split(":", 2)
-                        if len(parts) >= 3:
-                            similar_snippets.append({
-                                "file": parts[0],
-                                "line": parts[1],
-                                "text": parts[2].strip()[:200],
-                            })
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-                pass
+            grep_out = tool_grep(ctx, {"pattern": kw, "path": ".", "glob": "*.py", "max_results": 10})
+            if grep_out and not grep_out.startswith("Error") and grep_out != "(无匹配)":
+                for line in grep_out.splitlines():
+                    parts = line.split(":", 2)
+                    if len(parts) >= 3:
+                        similar_snippets.append({
+                            "file": parts[0],
+                            "line": parts[1],
+                            "text": parts[2].strip()[:200],
+                        })
 
         # 找对应测试文件
         for s in suspects:
