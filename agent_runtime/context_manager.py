@@ -111,9 +111,10 @@ class ContextManager:
         "memory",
         "relevant",
         "history",
+        "state",
     )
     NATIVE_SYSTEM_ORDER = ("system", "tools")
-    DYNAMIC_ORDER = ("skills", "workspace", "memory", "relevant", "history")
+    DYNAMIC_ORDER = ("skills", "workspace", "memory", "relevant", "history", "state")
 
     def __init__(self, agent, total_budget: int | None = None):
         self.agent = agent
@@ -214,6 +215,11 @@ class ContextManager:
             scaled_section_budget(BUDGET_PREFIX, section_cap or total),
         )
         filler.add_section(
+            "state",
+            self._get_state(),
+            200,  # state 段固定 200 token 预算
+        )
+        filler.add_section(
             "memory",
             self._get_memory(),
             scaled_section_budget(BUDGET_MEMORY, section_cap or total),
@@ -296,6 +302,19 @@ class ContextManager:
         if role:
             parts.append(role)
         return "\n\n".join(parts)
+
+    def _get_state(self) -> str:
+        """返回当前 task state 摘要（plan 进度 + phase）。"""
+        todos = self.agent.session.get("plan_todos", [])
+        if not todos:
+            return ""
+        total = len(todos)
+        done = sum(1 for t in todos if t.get("status") == "done")
+        in_prog = [t["content"] for t in todos if t.get("status") == "in_progress"]
+        parts = [f"Task progress: {done}/{total} steps done"]
+        if in_prog:
+            parts.append(f"Current: {in_prog[0]}")
+        return " | ".join(parts)
 
     def _get_workspace(self) -> str:
         workspace_text = getattr(self.agent._prefix, "workspace_text", "")
