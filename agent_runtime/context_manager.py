@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from agent_runtime.compression_pipeline import (
     DEFAULT_TOOL_TRUNCATION,
     L5_TRIGGER_RATIO,
@@ -89,6 +91,37 @@ class TokenBudget:
         return max(0, self.total_limit - used)
 
 
+class _DiskCache(dict):
+    """dict-like 磁盘缓存（key → .agent/summary_cache/<hash>.txt）。"""
+
+    def __init__(self, cache_dir: Path):
+        super().__init__()
+        self._dir = cache_dir
+        self._dir.mkdir(parents=True, exist_ok=True)
+        self._load()
+
+    @staticmethod
+    def _hash_key(key: str) -> str:
+        import hashlib
+        return hashlib.sha256(key.encode()).hexdigest()[:16]
+
+    def _path(self, key: str) -> Path:
+        return self._dir / f"{self._hash_key(key)}.txt"
+
+    def _load(self):
+        for p in self._dir.glob("*.txt"):
+            try:
+                super().__setitem__(p.stem, p.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        try:
+            self._path(key).write_text(str(value), encoding="utf-8")
+        except Exception:
+            pass
+
 class ContextManager:
     """Prompt 组装器：按预算拼接 section，超限时自动裁剪。
 
@@ -111,9 +144,10 @@ class ContextManager:
         "memory",
         "relevant",
         "history",
+        "state",
     )
     NATIVE_SYSTEM_ORDER = ("system", "tools")
-    DYNAMIC_ORDER = ("skills", "workspace", "memory", "relevant", "history")
+    DYNAMIC_ORDER = ("skills", "workspace", "memory", "relevant", "history", "state")
 
     def __init__(self, agent, total_budget: int | None = None):
         self.agent = agent
@@ -123,7 +157,8 @@ class ContextManager:
         model = getattr(getattr(agent, "config", None), "model", "deepseek-v4-pro")
         provider = getattr(getattr(agent, "config", None), "provider", "deepseek")
         self.budget = TokenBudget(model=model, total_limit=limit, provider=provider)
-        self._summary_cache: dict[str, str] = {}
+        cache_dir = Path(getattr(agent, "_cwd", ".")) / ".agent" / "summary_cache"
+        self._summary_cache: dict[str, str] = _DiskCache(cache_dir)
         self.tier_policy = TierPolicy.from_agent(agent)
 
     def build(self, user_message: str) -> tuple[str, dict]:
@@ -214,6 +249,11 @@ class ContextManager:
             scaled_section_budget(BUDGET_PREFIX, section_cap or total),
         )
         filler.add_section(
+            "state",
+            self._get_state(),
+            200,  # state 段固定 200 token 预算
+        )
+        filler.add_section(
             "memory",
             self._get_memory(),
             scaled_section_budget(BUDGET_MEMORY, section_cap or total),
@@ -296,6 +336,19 @@ class ContextManager:
         if role:
             parts.append(role)
         return "\n\n".join(parts)
+
+    def _get_state(self) -> str:
+        """返回当前 task state 摘要（plan 进度 + phase）。"""
+        todos = self.agent.session.get("plan_todos", [])
+        if not todos:
+            return ""
+        total = len(todos)
+        done = sum(1 for t in todos if t.get("status") == "done")
+        in_prog = [t["content"] for t in todos if t.get("status") == "in_progress"]
+        parts = [f"Task progress: {done}/{total} steps done"]
+        if in_prog:
+            parts.append(f"Current: {in_prog[0]}")
+        return " | ".join(parts)
 
     def _get_workspace(self) -> str:
         workspace_text = getattr(self.agent._prefix, "workspace_text", "")

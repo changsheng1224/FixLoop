@@ -14,6 +14,26 @@ SkillMode = Literal["off", "index", "full"]
 DEFAULT_PIN_ROLES = frozenset({"user"})
 PIN_CONTENT_MARKERS = ("[Earlier summary]",)
 PIN_ERROR_KEYWORDS = ("Traceback", "Fail", "FAILED", "error:")
+
+
+def _load_orchestrator_pin_markers() -> tuple[str, ...]:
+    """从 tier_pins.yaml 加载 orchestrator_pin_fields 作为 L0 钉扎标记。"""
+    from pathlib import Path
+
+    import yaml
+
+    path = Path(__file__).parent / "tier_pins.yaml"
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        fields = data.get("orchestrator_pin_fields", [])
+        return tuple(str(f) for f in fields if f)
+    except Exception:
+        return ()
+
+
+_orch_pins = _load_orchestrator_pin_markers()
+PIN_CONTENT_MARKERS = PIN_CONTENT_MARKERS + _orch_pins
 LOW_VALUE_SYSTEM_PHRASES = ("工具调用格式错误",)
 
 REJECTED_TOOL_MARKERS = (
@@ -78,6 +98,10 @@ def is_pinned_history_item(item: dict, policy: TierPolicy) -> bool:
     content = str(item.get("content", ""))
     if any(marker in content for marker in PIN_CONTENT_MARKERS):
         return True
+    # orchestrator pin fields: 匹配 content 中以 "field:" 开头的行（如 "issue: ..."）
+    for field in _orch_pins:
+        if field in content[:50] or f"\n{field}:" in content.lower()[:200]:
+            return True
     if any(keyword in content for keyword in PIN_ERROR_KEYWORDS):
         return True
     if item.get("_snip") or item.get("_collapsed"):

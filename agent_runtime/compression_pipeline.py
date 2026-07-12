@@ -689,6 +689,32 @@ def _summary_cache_key(old_history: list[dict]) -> str:
 
 
 def _build_l5_summary_prompt(old_history: list[dict]) -> str:
+    # 检测已有摘要 → 增量模式
+    existing = ""
+    new_items = []
+    for item in old_history:
+        content = str(item.get("content", ""))
+        if item.get("role") == "system" and content.startswith("[Earlier summary]"):
+            existing = content.replace("[Earlier summary]: ", "").strip()
+            new_items = []  # reset — 已有摘要后的是新内容
+        elif existing:
+            role = item.get("role", "unknown")
+            new_items.append(f"{role}: {content[:150]}")
+        else:
+            role = item.get("role", "unknown")
+            new_items.append(f"{role}: {content[:150]}")
+
+    if existing and new_items:
+        prompt_lines = [
+            "Update the following summary with new information in 1-2 sentences.",
+            f"Current summary: {existing}",
+            "",
+            "New items:",
+        ]
+        prompt_lines.extend(new_items[-L5_PROMPT_TAIL_ENTRIES:])
+        return "\n".join(prompt_lines)
+
+    # 全量摘要（无已有摘要）
     prompt_lines = [
         "Summarize the following conversation in 1-2 sentences.",
         "Focus on: files read, tools used, errors encountered, decisions made.",
@@ -783,6 +809,23 @@ def run_compression_pipeline(
         trigger_tokens=l5_trigger_tokens,
         history_window=window,
     )
+
+    # 收集触发事件进 trace
+    events = []
+    for level in ("l2", "l3", "l4", "l5"):
+        if pipe_meta.get(f"{level}_triggered"):
+            stage = pipe_meta.get(level, "")
+            tokens_before = pipe_meta.get(f"{level}_tokens_before", 0)
+            tokens_after = pipe_meta.get(f"{level}_tokens_after", 0)
+            ratio = round(tokens_after / max(tokens_before, 1), 3) if tokens_before else 0
+            events.append({
+                "level": level.upper(),
+                "stage": stage,
+                "ratio": ratio,
+                "section": "history",
+            })
+    if events:
+        pipe_meta["compression_events"] = events
 
     return projected
 

@@ -220,16 +220,42 @@ class Agent:
         return cm.build(user_message)
 
     def record(self, item: dict):
-        """向会话历史追加一条记录。
+        """向会话历史追加一条记录（canonical JSONL）。
 
         Args:
             item: 包含 role 和 content 的字典；user 消息会递增 turn_id。
         """
+        import json
+        from pathlib import Path
+
         from agent_runtime.turn_tracking import stamp_turn_id
 
+        stamped = stamp_turn_id(self.session, item)
+        # 双写：session 内存 + history.jsonl 追加
         self.session.setdefault("history", [])
         self.session.setdefault("_turn_counter", 0)
-        self.session["history"].append(stamp_turn_id(self.session, item))
+        self.session["history"].append(stamped)
+        # JSONL 追加
+        try:
+            path = Path(self._cwd) / ".agent" / "history.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(stamped, ensure_ascii=False, default=str) + "\n")
+        except Exception:
+            pass
+
+    def read_history(self) -> list[dict]:
+        """从 history.jsonl 读取历史投影（回退 session 内存）。"""
+        import json
+        from pathlib import Path
+
+        path = Path(self._cwd) / ".agent" / "history.jsonl"
+        if path.is_file():
+            try:
+                return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            except Exception:
+                pass
+        return self.session.get("history", [])
 
     def execute_tool(self, name: str, args: dict):
         """执行指定工具：经 ToolGateway.dispatch（若配置）→ ToolExecutor 闸口。"""

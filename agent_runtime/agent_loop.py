@@ -110,6 +110,10 @@ class AgentLoop:
         if self._last_cache_key and cache_key != self._last_cache_key:
             self._cache_key_changes += 1
         self._last_cache_key = cache_key
+        # emit 压缩触发事件
+        pipe = meta.get("compression_pipeline") or {}
+        for ev in pipe.get("compression_events", []):
+            self._emit("compression_triggered", ev)
 
     def _build_memory_health(self) -> dict:
         """构建 report.json 中的 memory_health 字段。"""
