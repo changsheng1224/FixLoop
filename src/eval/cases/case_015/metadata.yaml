@@ -1,16 +1,17 @@
-case_id: case_004
+case_id: case_015
 language: python
 issue_type: import_error
 expected_skill: python_import_error_fix
-difficulty: medium
+difficulty: hard
 status: verified
-estimated_duration_s: 40
-description: "模块路径错误或缺少 __init__.py"
+description: "循环导入：a.py imports b.py imports a.py"
 tags:
   - requires_retriever
   - import_error
-  - package_layout
+  - circular
 source_files:
-  - app.py
+  - pkg/a.py
+  - pkg/b.py
+  - pkg/__init__.py
 test_files:
-  - test_app.py
+  - test_pkg.py

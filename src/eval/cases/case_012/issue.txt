@@ -1,0 +1,9 @@
+pytest failure log:
+
+    def test_count_words():
+        result = count_words("hello world")
+>       assert result == 2
+E       AssertionError: assert 3 == 2
+
+Failed: test_counter.py::test_count_words
+Repo: eval-case-012

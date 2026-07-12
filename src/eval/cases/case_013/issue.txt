@@ -1,0 +1,9 @@
+ValueError: invalid literal for int() with base 10: '12.5'
+
+CI log excerpt:
+  File "convert.py", line 3, in to_int
+    return int(value)
+ValueError: invalid literal for int() with base 10: '12.5'
+
+Failed: test_convert.py::test_to_int_float_str
+Repo: eval-case-013

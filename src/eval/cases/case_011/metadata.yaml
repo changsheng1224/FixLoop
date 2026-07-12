@@ -1,0 +1,13 @@
+case_id: case_011
+language: python
+issue_type: syntax_error
+expected_skill: python_syntax_error_fix
+difficulty: easy
+status: verified
+description: "函数定义缺少冒号导致 SyntaxError"
+tags:
+  - syntax_error
+source_files:
+  - parser.py
+test_files:
+  - test_parser.py

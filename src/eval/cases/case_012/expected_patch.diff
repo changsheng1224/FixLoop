@@ -1,0 +1,6 @@
+--- a/counter.py
++++ b/counter.py
+@@ -1,3 +1,3 @@
+ def count_words(text):
+-    return len(text)  # BUG: 应为 len(text.split())
++    return len(text.split())
