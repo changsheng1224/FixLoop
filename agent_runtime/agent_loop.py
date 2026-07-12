@@ -173,6 +173,12 @@ class AgentLoop:
                 "tool_steps": ts.tool_steps,
             },
         )
+        try:
+            from agent_runtime.checkpoint import create_checkpoint
+
+            create_checkpoint(self.agent, ts, ts.user_request, trigger="user_cancel")
+        except Exception:
+            pass
         return self._complete_run(ts, "<final>用户已取消当前任务。</final>")
 
     def _invoke_model_call(self, fn):
@@ -372,6 +378,14 @@ class AgentLoop:
             )
         if callback:
             callback.on_tool_executed(tool_name, result_text)
+        # 每 tool 步 checkpoint（成功时），供 --resume 从最后成功步继续
+        if result.metadata.get("tool_status") == "success":
+            try:
+                from agent_runtime.checkpoint import create_checkpoint
+
+                create_checkpoint(self.agent, ts, ts.user_request, trigger="step_end")
+            except Exception:
+                pass
         return f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
 
     # ---- XML 路径辅助 ----

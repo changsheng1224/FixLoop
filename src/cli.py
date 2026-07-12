@@ -76,6 +76,11 @@ def main() -> int:
         help="禁用 verify 耗尽后的 Single-Agent 最后一搏",
     )
     p_repair.add_argument(
+        "--resume-repair",
+        default=None,
+        help="从指定 run_id 的 repair checkpoint 续跑",
+    )
+    p_repair.add_argument(
         "--metrics",
         type=int,
         nargs="?",
