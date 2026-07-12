@@ -110,21 +110,26 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
         def run_localizer():
             prompt = self._localizer_prompt(plan, issue)
-            answer, timing = self._run_agent(
-                self.localizer,
-                prompt,
-                "localizer",
-                state,
-                l2_phase="localize",
-                l2_attempt=0,
-            )
-            suspects = parse_suspect_list(answer)
-            if not suspects:
-                log.warning(
-                    "[localizer] 0 suspects, raw[:500]=%r",
-                    answer.strip()[:500],
+            for retry in range(2):
+                answer, timing = self._run_agent(
+                    self.localizer,
+                    prompt,
+                    "localizer",
+                    state,
+                    l2_phase="localize",
+                    l2_attempt=retry,
                 )
-            return suspects, timing
+                suspects = parse_suspect_list(answer)
+                if suspects:
+                    return suspects, timing
+                if retry < 1:
+                    log.warning(
+                        "[localizer] parse 失败 (retry %d), raw[:200]=%r",
+                        retry + 1, answer.strip()[:200],
+                    )
+                    prompt += "\n\n【重试】上次输出未包含有效 JSON。请严格按 SuspectList JSON 格式输出。"
+            log.warning("[localizer] 2 次重试后仍无有效 suspects")
+            return [], timing
 
         fast_retrieve = getattr(self, "_fast_retrieve_enabled", False)
         retrieval_path = "rule" if fast_retrieve else "llm"
@@ -136,15 +141,21 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         else:
             def run_retriever():
                 prompt = self._retriever_prompt([], plan=plan, issue=issue)
-                answer, timing = self._run_agent(
-                    self.retriever,
-                    prompt,
-                    "retriever",
-                    state,
-                    l2_phase="retrieve",
-                    l2_attempt=0,
-                )
-                return parse_retrieved_context(answer), timing
+                for retry in range(2):
+                    answer, timing = self._run_agent(
+                        self.retriever,
+                        prompt,
+                        "retriever",
+                        state,
+                        l2_phase="retrieve",
+                        l2_attempt=retry,
+                    )
+                    ctx = parse_retrieved_context(answer)
+                    if ctx.related_tests:
+                        return ctx, timing
+                    if retry < 1:
+                        prompt += "\n\n【重试】上次输出未包含有效 JSON。请严格按 RetrievedContext JSON 格式输出。"
+                return ctx, timing
 
             with ThreadPoolExecutor(max_workers=2) as pool:
                 fut_loc = pool.submit(run_localizer)
