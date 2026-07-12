@@ -380,6 +380,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         total_ms = int((time.time() - t_start) * 1000)
         set_repair_total_ms(state.node_timings, total_ms)
         finalize_phases(state.node_timings)
+        self._save_repair_checkpoint(state)
         self._attach_token_usage(state)
         self._attach_rejection_stats(state)
         self._end_repair_trace(state)
@@ -448,6 +449,31 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             ),
             {"retriever_ms": elapsed_ms, "retrieval_path": "rule"},
         )
+
+    def _save_repair_checkpoint(self, state) -> None:
+        """写入 L2 repair_checkpoint.json（供 --resume-repair）。"""
+        try:
+            import json
+            import time
+            from pathlib import Path
+
+            repair_dir = Path(self._repo_root) / ".agent" / "repairs"
+            repair_dir.mkdir(parents=True, exist_ok=True)
+            run_id = getattr(state, "repair_run_id", "") or ""
+            path = repair_dir / (f"repair_checkpoint_{run_id}.json" if run_id else "repair_checkpoint.json")
+            payload = {
+                "status": state.status,
+                "retry_count": state.retry_count,
+                "phase": state.node_timings.get("phases", {}),
+                "suspect_count": len(state.suspect_locations),
+                "patch_count": len(state.candidate_patches),
+                "saved_at": time.time(),
+            }
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(path)
+        except Exception:
+            pass
 
     def _push_repair_metrics(self, state) -> None:
         """推送 repair 指标到 Prometheus registry（静默失败）。"""
