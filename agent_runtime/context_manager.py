@@ -100,11 +100,13 @@ class _DiskCache(dict):
         self._dir.mkdir(parents=True, exist_ok=True)
         self._load()
 
-    def _path(self, key: str) -> Path:
+    @staticmethod
+    def _hash_key(key: str) -> str:
         import hashlib
+        return hashlib.sha256(key.encode()).hexdigest()[:16]
 
-        h = hashlib.sha256(key.encode()).hexdigest()[:16]
-        return self._dir / f"{h}.txt"
+    def _path(self, key: str) -> Path:
+        return self._dir / f"{self._hash_key(key)}.txt"
 
     def _load(self):
         for p in self._dir.glob("*.txt"):
@@ -119,13 +121,6 @@ class _DiskCache(dict):
             self._path(key).write_text(str(value), encoding="utf-8")
         except Exception:
             pass
-
-    def __getitem__(self, key):
-        return super().__getitem__(key)
-
-    def get(self, key, default=None):
-        return super().get(key, default)
-
 
 class ContextManager:
     """Prompt 组装器：按预算拼接 section，超限时自动裁剪。
