@@ -1,0 +1,6 @@
+Exception in thread "main" java.lang.NullPointerException: Cannot invoke method on null object
+  at Service.process(Service.java:6)
+  at ServiceTest.main(ServiceTest.java:4)
+
+Failed: ServiceTest.java
+Repo: eval-case-java-002

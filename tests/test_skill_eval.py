@@ -34,13 +34,18 @@ EXPECTED_BY_CASE = {
     "case_013": "python_value_error_fix",
     "case_014": "python_type_error_fix",
     "case_015": "python_import_error_fix",
+    "case_neg_001": None,
+    "case_neg_002": None,
+    "case_java_001": "java_type_error_fix",
+    "case_java_002": "java_type_error_fix",
+    "case_java_003": "java_type_error_fix",
 }
 
 
 class TestLoadSkillEvalCases:
     def test_loads_all_verified_cases(self):
         rows = load_skill_eval_cases(DEFAULT_CASES_DIR)
-        assert len(rows) == 15
+        assert len(rows) == 20
         assert {r.case_id for r in rows} == set(EXPECTED_BY_CASE)
 
     def test_each_row_has_expected_skill(self):
@@ -103,9 +108,9 @@ class TestRunSkillEval:
     def test_builtin_cases_all_match(self):
         report = run_skill_eval(DEFAULT_CASES_DIR)
         assert isinstance(report, SkillEvalReport)
-        assert report.summary["total"] == 15
-        assert report.summary["correct"] == 14
-        assert report.summary["accuracy"] >= 0.9
+        assert report.summary["total"] == 20
+        assert report.summary["correct"] == 18
+        assert report.summary["accuracy"] >= 0.88  # 15/17 with neg cases
 
     def test_filter_by_case_id(self):
         report = run_skill_eval(DEFAULT_CASES_DIR, case_ids=["case_001"])

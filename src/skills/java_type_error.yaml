@@ -1,0 +1,22 @@
+name: java_type_error_fix
+language: java
+trigger_pattern: "error: incompatible types:|ClassCastException|NumberFormatException|NullPointerException"
+priority: 10
+suggested_tools:
+  - java_stack_parse
+  - java_ast_parse
+  - grep
+  - read_file
+example_issue: |
+  error: incompatible types: int cannot be converted to String
+    int value = "42";
+  Compilation failed: Calculator.java:15
+guidance:
+  - "检查变量声明类型与实际赋值类型是否匹配"
+  - "使用 Integer.parseInt() 或 String.valueOf() 转换"
+  - "查看方法签名中的参数类型是否正确"
+example_patch: |
+  --- a/Calculator.java
+  +++ b/Calculator.java
+  - int value = "42";
+  + int value = Integer.parseInt("42");

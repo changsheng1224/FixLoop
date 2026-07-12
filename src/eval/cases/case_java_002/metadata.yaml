@@ -1,0 +1,14 @@
+case_id: case_java_002
+language: java
+issue_type: null_pointer
+expected_skill: java_type_error_fix
+difficulty: medium
+status: verified
+description: "NullPointerException — 未初始化对象引用"
+tags:
+  - java
+  - null_pointer
+source_files:
+  - Service.java
+test_files:
+  - ServiceTest.java

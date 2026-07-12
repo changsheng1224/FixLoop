@@ -1,0 +1,11 @@
+case_id: case_neg_002
+language: python
+issue_type: unknown
+expected_skill: null
+difficulty: hard
+status: verified
+description: "间歇性失败 — 非确定性 bug，期望 exhausted"
+tags:
+  - negative
+  - flaky
+expected_outcome: exhausted

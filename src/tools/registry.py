@@ -13,6 +13,8 @@ from src.tools.git_tools import (
     git_blame,
     git_diff,
 )
+from src.tools.java_ast_parser import JavaAstParseArgs, java_ast_parse
+from src.tools.java_stack_parser import JavaStackParseArgs, java_stack_parse
 from src.tools.stack_parser import StackParseArgs, stack_parse
 
 
@@ -79,6 +81,24 @@ def build_repair_tools(context) -> dict:
         "execution_tier": TIER_HOST,
         "description": "定位函数的对应测试文件与用例。参数: function_name, file_path",
         "run": lambda args: find_test_for_function(context, args),
+    }
+
+    # ---- java_ast_parse ----
+    registry["java_ast_parse"] = {
+        "schema": auto_schema(JavaAstParseArgs),
+        "risky": False,
+        "execution_tier": TIER_HOST,
+        "description": "解析 Java 文件为结构化类/方法列表。参数: path",
+        "run": lambda args: java_ast_parse(context, args),
+    }
+
+    # ---- java_stack_parse ----
+    registry["java_stack_parse"] = {
+        "schema": auto_schema(JavaStackParseArgs),
+        "risky": False,
+        "execution_tier": TIER_HOST,
+        "description": "解析 Java 异常堆栈。参数: traceback",
+        "run": lambda args: java_stack_parse(context, args),
     }
 
     return registry

@@ -1,0 +1,5 @@
+--- a/Calculator.java
++++ b/Calculator.java
+@@ -3,2 +3,2 @@
+-    int value = "42";
++    int value = Integer.parseInt("42");

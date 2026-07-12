@@ -18,6 +18,8 @@ REPAIR_CANONICAL_TOOL_NAMES: tuple[str, ...] = (
     "git_diff",
     "grep",
     "inspect_file",
+    "java_ast_parse",
+    "java_stack_parse",
     "list_files",
     "patch_file",
     "read_file",

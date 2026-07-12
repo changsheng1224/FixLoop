@@ -1,0 +1,2 @@
+The application crashes occasionally in production. Logs show: "TypeError: unsupported operand type(s) for +: 'NoneType' and 'int'". Cannot reproduce reliably. Please fix.
+Repo: eval-case-neg-002
