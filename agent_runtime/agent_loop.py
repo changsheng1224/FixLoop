@@ -23,8 +23,12 @@ from agent_runtime.parse_recovery import (
 from agent_runtime.providers.retry_policy import RateLimitExceededError
 from agent_runtime.react_phases import ReactPhase, ReactPath
 from agent_runtime.step_clock import StepClock, StepTimeoutError
+from agent_runtime.step_guard import StepContext, StepGuard
 from agent_runtime.stop_reasons import StopReason
 from agent_runtime.cancellation import CancelledError, run_with_cancellation
+
+# StepGuard stall 检测：仅"可能修改文件"的工具才计入停滞
+_MODIFYING_TOOLS = frozenset({"write_file", "patch_file", "run_shell"})
 
 
 def _log_loop(msg: str) -> None:
@@ -92,6 +96,7 @@ class AgentLoop:
         self._cache_key_changes = 0
         self._plan_todos: list[dict] = []
         self._no_progress_steps = 0
+        self._step_guard = StepGuard()
 
     def _accumulate_context_stats(self, meta: dict) -> None:
         """从 context_built metadata 累积 section 统计 + cache hit rate。"""
@@ -230,6 +235,7 @@ class AgentLoop:
                 tool=recording.get("tool"),
                 callback=recording.get("callback"),
             )
+            self._notify("on_final_answer", recording.get("callback"), text=answer)
         self._emit_run_finished(ts)
         self._finalize_run(ts)
         return answer
@@ -290,6 +296,17 @@ class AgentLoop:
         )
         ts.node_timings["ttft_ms_total"] = int(ts.node_timings.get("ttft_ms_total", 0) or 0) + ttft_total
 
+    def _notify(self, method: str, callback, **kwargs: object) -> None:
+        """统一回调入口：XML 与 Native 路径共用。
+
+        若 callback 为 None 或未实现 method，静默跳过。
+        """
+        if callback is None:
+            return
+        fn = getattr(callback, method, None)
+        if fn is not None:
+            fn(**kwargs)
+
     def _notify_react_phase(
         self,
         phase,
@@ -305,11 +322,14 @@ class AgentLoop:
             "react_phase",
             build_react_phase_payload(phase, step=step, path=path, tool=tool),
         )
-        if callback is None:
-            return
-        on_phase = getattr(callback, "on_react_phase", None)
-        if on_phase is not None:
-            on_phase(str(phase), step, self.max_steps, tool=tool or "")
+        self._notify(
+            "on_react_phase",
+            callback,
+            phase=str(phase),
+            step=step,
+            max_steps=self.max_steps,
+            tool=tool or "",
+        )
 
     def _step_timeout_limit_s(self) -> int:
         return int(getattr(self.agent.config, "step_timeout_s", 0) or 0)
@@ -333,6 +353,14 @@ class AgentLoop:
         """执行工具、写 trace/history，返回下一轮 user_message。"""
         if (msg := self._abort_if_cancelled(ts, phase="pre_tool", in_flight=tool_name)) is not None:
             raise CancelledError("user", answer=msg)
+        self._notify(
+            "on_pre_tool",
+            callback,
+            step=step,
+            tool_name=tool_name,
+            tool_args=tool_args,
+            path=str(path),
+        )
         if emit_acting:
             self._notify_react_phase(
                 ReactPhase.ACTING,
@@ -360,8 +388,17 @@ class AgentLoop:
         if (msg := self._abort_if_cancelled(ts, phase="post_tool", in_flight=tool_name)) is not None:
             raise CancelledError("user", answer=msg)
         result_text = result.content if hasattr(result, "content") else str(result)
-        result_text = truncate_tool_result_for_agent(self.agent, tool_name, result_text)
         te_ms = int((_time.time() - t0) * 1000)
+        self._notify(
+            "on_post_tool",
+            callback,
+            step=step,
+            tool_name=tool_name,
+            result_preview=result_text[:200],
+            elapsed_ms=te_ms,
+            path=str(path),
+        )
+        result_text = truncate_tool_result_for_agent(self.agent, tool_name, result_text)
         ts.node_timings.setdefault("tool_exec_ms", 0)
         ts.node_timings["tool_exec_ms"] += te_ms
         _log_loop(f"  [loop] {tool_name} tool={te_ms}ms\n")
@@ -384,10 +421,25 @@ class AgentLoop:
                 tool=tool_name,
                 callback=callback,
             )
-        if callback:
-            callback.on_tool_executed(tool_name, result_text)
+        # 确定工具执行状态
+        tool_status = "OK"
+        if result.metadata.get("tool_status") != "success":
+            if "Error" in result_text:
+                tool_status = "FAIL"
+            elif "[DRY RUN]" in result_text:
+                tool_status = "DRY"
+        self._notify(
+            "on_tool_executed",
+            callback,
+            step=step,
+            name=tool_name,
+            result_preview=result_text,
+            elapsed_ms=te_ms,
+            status=tool_status,
+        )
         # 每 tool 步 checkpoint（成功时），供 --resume 从最后成功步继续
-        if result.metadata.get("tool_status") == "success":
+        tool_success = result.metadata.get("tool_status") == "success"
+        if tool_success:
             try:
                 from agent_runtime.checkpoint import create_checkpoint
 
@@ -395,24 +447,44 @@ class AgentLoop:
             except Exception:
                 pass
             self._advance_todo()
-            self._no_progress_steps = 0
-        else:
-            # 非成功或只读无副作用工具 → 累计无进展步数
-            meta = result.metadata if hasattr(result, "metadata") else {}
-            affected = meta.get("affected_paths", []) if isinstance(meta, dict) else []
-            if not affected:
-                self._no_progress_steps += 1
-                if self._no_progress_steps >= 3:
-                    self._emit("stall_detected", {
-                        "steps": self._no_progress_steps,
-                        "last_tool": tool_name,
-                    })
-                    # mark 当前 in_progress todo 为 blocked
-                    for todo in self._plan_todos:
-                        if todo.get("status") == "in_progress":
-                            todo["status"] = "blocked"
-                            self._emit("todo_updated", {"todo": dict(todo)})
-                            break
+
+        # StepGuard 步进健康评估（stall + goal drift）— 每步都评估
+        # 读类工具不产生 affected_paths 是正常的，不应计入 stall
+        meta = result.metadata if hasattr(result, "metadata") else {}
+        affected = meta.get("affected_paths", []) if isinstance(meta, dict) else []
+        self._no_progress_steps = self._step_guard.stall_count
+        guard_has_affected = bool(affected) or tool_name not in _MODIFYING_TOOLS
+        verdict = self._step_guard.evaluate(
+            StepContext(
+                tool_name=tool_name,
+                tool_args=tool_args,
+                has_affected=guard_has_affected,
+            )
+        )
+        if verdict is not None:
+            if verdict.reason:
+                # 终止级判决
+                self._emit(
+                    "stall_detected" if verdict.reason == StopReason.STALL else "goal_drift",
+                    {
+                        "reason": verdict.reason,
+                        "detail": verdict.detail,
+                        "steps": self._step_guard.stall_count,
+                        "drift_steps": self._step_guard.drift_count,
+                    },
+                )
+                for todo in self._plan_todos:
+                    if todo.get("status") == "in_progress":
+                        todo["status"] = "blocked"
+                        self._emit("todo_updated", {"todo": dict(todo)})
+                        break
+                ts.stop_with_reason(verdict.reason, "stopped", detail=verdict.detail)
+                self.stop_reason = verdict.reason
+                # 返回纯文本；调用方检测 self.stop_reason 作为终止信号
+                return verdict.replan_hint or f"任务终止：{verdict.detail}"
+            else:
+                # warning 级（drift 预警，不终止）
+                self._emit("goal_drift_warning", {"detail": verdict.detail})
         return f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
 
     # ---- XML 路径辅助 ----
@@ -625,6 +697,11 @@ class AgentLoop:
                 self._gen_task_summary(user_message)
                 self._plan_todos = self._generate_plan(user_message)
                 self._no_progress_steps = 0
+                # 重置 StepGuard + 注入任务上下文
+                self._step_guard.reset(
+                    task_summary=self._get_task_summary_text(),
+                    suspect_files=self._extract_suspect_files(),
+                )
                 if self._plan_todos:
                     self.agent.session["plan_todos"] = self._plan_todos
                     self._emit("plan_created", {"todos": list(self._plan_todos)})
@@ -678,7 +755,7 @@ class AgentLoop:
                     step_clock = StepClock(step_timeout_s)
                 step_clock.check(step=step, path="native")
                 if callback is not None:
-                    callback.on_step_start(step, self.max_steps)
+                    self._notify("on_step_start", callback, step=step, max_steps=self.max_steps, path="native")
             elif phase == ReactPhase.ACTING:
                 step_clock.check(step=step, path="native")
             self._notify_react_phase(
@@ -709,6 +786,10 @@ class AgentLoop:
 
         t0 = _time.time()
         self._emit("model_request_start", {"step": 1, "attempt": 1})
+        self._notify(
+            "on_pre_model", callback, step=1,
+            prompt_preview=user_message[:200], path="native",
+        )
         try:
             result = self._invoke_model_call(
                 lambda: self.agent.model_client.chat_with_tools(
@@ -745,6 +826,10 @@ class AgentLoop:
 
         elapsed_ms = int((_time.time() - t0) * 1000)
         ts.node_timings["model_call_ms"] = elapsed_ms
+        self._notify(
+            "on_post_model", callback, step=1,
+            raw_preview=answer[:200], elapsed_ms=elapsed_ms, path="native",
+        )
 
         if answer.strip() == NATIVE_MAX_TURNS_MESSAGE:
             ts.stop_step_limit(self.max_steps)
@@ -754,7 +839,9 @@ class AgentLoop:
             )
 
         self.agent.record({"role": "assistant", "content": answer})
-        ts.finish_success(answer)
+        # 若 StepGuard 已设置 stop_reason（stall/goal_drift），保留之
+        if not self.stop_reason:
+            ts.finish_success(answer)
         _log_loop(f"  [loop] final ({elapsed_ms}ms total)\n")
         return self._complete_run(
             ts,
@@ -778,10 +865,14 @@ class AgentLoop:
             if (msg := self._maybe_step_timeout(ts, step_clock, step, "xml")) is not None:
                 return msg
             if callback is not None:
-                callback.on_step_start(step, self.max_steps)
+                self._notify("on_step_start", callback, step=step, max_steps=self.max_steps, path="xml")
 
             prompt_text = self._xml_build_context(ts, user_message, step=step, callback=callback)
 
+            self._notify(
+                "on_pre_model", callback, step=step,
+                prompt_preview=prompt_text[:200], path="xml",
+            )
             try:
                 raw, t1 = self._xml_call_model(ts, prompt_text, step=step)
             except CancelledError:
@@ -794,11 +885,16 @@ class AgentLoop:
             if (msg := self._abort_if_cancelled(ts, phase="post_model")) is not None:
                 return msg
 
+            t_parse = int((_time.time() - t1) * 1000)
+            self._notify(
+                "on_post_model", callback, step=step,
+                raw_preview=raw[:200], elapsed_ms=t_parse, path="xml",
+            )
+
             if (msg := self._maybe_step_timeout(ts, step_clock, step, "xml")) is not None:
                 return msg
 
             kind, payload = self.agent.parse(raw)
-            t_parse = int((_time.time() - t1) * 1000)
 
             if kind == "final":
                 _log_loop(f"  [loop] final ({t_parse}ms parse)\n")
@@ -831,6 +927,12 @@ class AgentLoop:
                     )
                 except CancelledError as e:
                     return e.answer
+                if self.stop_reason:
+                    # StepGuard 触发终止（stall / goal_drift）
+                    return self._complete_run(
+                        ts, user_message,
+                        recording={"step": step, "path": "xml", "callback": callback},
+                    )
                 continue
 
             if kind == "retry":
@@ -887,6 +989,36 @@ class AgentLoop:
             summary = user_message[:300]
 
         set_task_summary(self.agent.session["memory"], summary)
+
+    def _get_task_summary_text(self) -> str:
+        """从 session memory 读取当前任务摘要。"""
+        mem = self.agent.session.get("memory", {})
+        working = mem.get("working", {})
+        return working.get("task_summary", "") or ""
+
+    def _extract_suspect_files(self) -> set[str]:
+        """从 plan_todos + task_summary + traceback 中提取 suspect 文件名。"""
+        import re
+
+        files: set[str] = set()
+        # 1. 从 plan_todos 提取（如 content 含文件名）
+        for todo in self._plan_todos:
+            content = todo.get("content", "")
+            for m in re.findall(r"[\w/\-]+\.py", content):
+                files.add(m.split("/")[-1].split("\\")[-1])
+
+        # 2. 从 task_summary 提取
+        task = self._get_task_summary_text()
+        for m in re.findall(r"[\w/\-]+\.py", task):
+            files.add(m.split("/")[-1].split("\\")[-1])
+
+        # 3. 从 traceback（在 user request 中）提取
+        user_req = self._task_state.user_request if self._task_state else ""
+        tb_match = re.search(r'File\s+"([^"]+)"', user_req)
+        if tb_match:
+            files.add(tb_match.group(1).split("/")[-1].split("\\")[-1])
+
+        return files
 
     def _get_store(self):
         if self._store is None:
