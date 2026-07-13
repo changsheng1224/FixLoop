@@ -4,16 +4,24 @@
     task_state.json — 运行状态（原子写）
     trace.jsonl     — 逐事件时间线（JSONL 追加，>阈值自动 gzip）
     report.json     — 运行摘要（原子写）
+
+trace 保留策略：默认 30 天 TTL（FIXLOOP_RUN_TTL_DAYS 可配，0=禁用）。
+start_run() 时自动清理过期目录。
 """
 
 import gzip
 import json
 import os
+import shutil
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
 # trace.jsonl 超此行数自动 gzip 归档（FIXLOOP_TRACE_GZIP_LINES 可配，0=禁用）
 _DEFAULT_TRACE_GZIP_LINES = 1000
+
+# run 目录默认保留天数（FIXLOOP_RUN_TTL_DAYS 可覆盖，0=禁用自动清理）
+_DEFAULT_RUN_TTL_DAYS = 30
 
 
 def _trace_gzip_threshold() -> int:
@@ -59,8 +67,45 @@ class RunStore:
         self.root = Path(root)
         self.runs_dir = self.root / ".agent" / "runs"
 
+    @property
+    def ttl_days(self) -> int:
+        """run 目录保留天数（FIXLOOP_RUN_TTL_DAYS 环境变量，默认 30，0=禁用）。"""
+        val = os.environ.get("FIXLOOP_RUN_TTL_DAYS", str(_DEFAULT_RUN_TTL_DAYS))
+        try:
+            return int(val)
+        except ValueError:
+            return _DEFAULT_RUN_TTL_DAYS
+
+    def cleanup_older_than(self, days: int | None = None) -> int:
+        """删除超过指定天数的旧 run 目录。
+
+        Args:
+            days: 保留天数。None 使用 ttl_days。
+
+        Returns:
+            删除的目录数量。
+        """
+        days = days if days is not None else self.ttl_days
+        if days <= 0:
+            return 0
+        if not self.runs_dir.is_dir():
+            return 0
+
+        cutoff = time.time() - days * 86400
+        deleted = 0
+        for run_dir in self.runs_dir.iterdir():
+            if not run_dir.is_dir():
+                continue
+            try:
+                if run_dir.stat().st_mtime < cutoff:
+                    shutil.rmtree(run_dir)
+                    deleted += 1
+            except OSError:
+                pass
+        return deleted
+
     def start_run(self, task_state) -> Path:
-        """创建 run 目录。
+        """创建 run 目录（自动清理过期 runs）。
 
         Args:
             task_state: TaskState 实例（用于获取 run_id）。
@@ -71,7 +116,8 @@ class RunStore:
         return self.start_run_by_id(task_state.run_id)
 
     def start_run_by_id(self, run_id: str) -> Path:
-        """按 run_id 创建 run 目录。"""
+        """按 run_id 创建 run 目录（自动清理过期 runs）。"""
+        self.cleanup_older_than()
         run_dir = self.runs_dir / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         return run_dir
