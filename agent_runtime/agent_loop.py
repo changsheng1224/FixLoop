@@ -423,7 +423,6 @@ class AgentLoop:
                 callback=callback,
             )
         self.agent.update_memory_after_tool(tool_name, tool_args, result_text)
-        self.agent.record({"role": "tool", "content": result_text, "tool_name": tool_name})
         self._record_tool_outcome(tool_name, result, ts)
         if emit_recording:
             self._notify_react_phase(
@@ -507,13 +506,23 @@ class AgentLoop:
                         todo["status"] = "blocked"
                         self._emit("todo_updated", {"todo": dict(todo)})
                         break
+                # stall 不终止：注入 replan 提示让模型自行调整
+                if verdict.reason == StopReason.STALL:
+                    hint = (
+                        f"\n\n⚠ 进展停滞（连续 {self._step_guard.stall_count} 步无文件变更）。"
+                        "请检查当前 todo 列表，考虑重新规划或尝试不同策略。"
+                    )
+                    result_text = result_text + hint
+                    self.agent.record({"role": "tool", "content": result_text, "tool_name": tool_name})
+                    return f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
+                # goal_drift 仍终止
                 ts.stop_with_reason(verdict.reason, "stopped", detail=verdict.detail)
                 self.stop_reason = verdict.reason
-                # 返回纯文本；调用方检测 self.stop_reason 作为终止信号
                 return verdict.replan_hint or f"任务终止：{verdict.detail}"
             else:
                 # warning 级（drift 预警，不终止）
                 self._emit("goal_drift_warning", {"detail": verdict.detail})
+        self.agent.record({"role": "tool", "content": result_text, "tool_name": tool_name})
         return f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
 
     # ---- XML 路径辅助 ----
