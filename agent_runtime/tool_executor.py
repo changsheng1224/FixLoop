@@ -147,9 +147,15 @@ class ToolExecutor:
                     f"Error: 补丁预览失败: {preview_err}",
                 )
 
-        # ---- Gate 7: 审批检查 ----
+        # ---- Gate 7: 分级审批检查 ----
         gate7_meta = None
-        if name in self._high_risk_tools:
+        tier = self._approval_tier(name)
+        if tier == self._APPROVAL_TIER_DENY:
+            return self._rejected(
+                7, "approval_denied",
+                f"Error: 工具 '{name}' 已被禁止执行。",
+            )
+        if tier == self._APPROVAL_TIER_ASK:
             if not self._approve(name, args, patch_preview_meta):
                 if token is not None and token.is_cancelled:
                     return self._rejected_cancel("Error: 任务已取消（审批中断）。")
@@ -269,9 +275,32 @@ class ToolExecutor:
             return self._rejected(3, code, f"Error: 路径校验失败: {e}")
         return None
 
+    # Gate 7 分级审批：auto(读类)/ask(写类)/deny(禁止)
+    _APPROVAL_TIER_AUTO = "auto"
+    _APPROVAL_TIER_ASK = "ask"
+    _APPROVAL_TIER_DENY = "deny"
+
+    _READ_TOOLS_FOR_APPROVAL = frozenset({
+        "read_file", "list_files", "search", "grep", "ast_parse",
+        "inspect_file", "find_test", "git_blame", "git_diff",
+    })
+    _ASK_TOOLS = frozenset({"write_file", "patch_file"})
+    _DENY_TOOLS = frozenset({"run_shell"})
+
+    @classmethod
+    def _approval_tier(cls, name: str) -> str:
+        """返回工具的分级审批等级。"""
+        if name in cls._READ_TOOLS_FOR_APPROVAL:
+            return cls._APPROVAL_TIER_AUTO
+        if name in cls._ASK_TOOLS:
+            return cls._APPROVAL_TIER_ASK
+        if name in cls._DENY_TOOLS:
+            return cls._APPROVAL_TIER_DENY
+        return cls._APPROVAL_TIER_ASK  # 未知工具默认须审批
+
     def _collect_high_risk(self) -> set[str]:
-        """收集所有标记为 risky=True 的工具名。"""
-        return {name for name, spec in self.agent.tools.items() if spec.get("risky")}
+        """collect_high_risk 已废弃，保留兼容 stub。"""
+        return self._ASK_TOOLS | self._DENY_TOOLS
 
     def _get_args_class(self, name: str) -> type | None:
         """根据工具名返回对应的参数 dataclass。"""
@@ -343,6 +372,8 @@ class ToolExecutor:
                 )
             response = input(prompt)
             return response.strip().lower() == "y"
+        except (OSError, EOFError):
+            return False  # 非交互环境 → 拒绝
         except KeyboardInterrupt:
             token = getattr(self.agent, "cancel_token", None)
             if token is not None:
