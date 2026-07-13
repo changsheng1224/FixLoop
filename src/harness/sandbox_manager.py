@@ -37,12 +37,16 @@ def sandbox_tmpfs_mounts() -> dict[str, str]:
 
 
 def sandbox_container_run_kwargs(image: str) -> dict:
-    """``containers.run`` 参数：网络/资源/只读 rootfs + 双 tmpfs。"""
+    """``containers.run`` 参数：网络/资源/只读 rootfs + 双 tmpfs。
+
+    Security: privileged=False，不挂载 docker.sock（禁止 Docker-in-Docker）。
+    """
     return {
         "image": image,
         "command": ["sleep", "infinity"],
         "entrypoint": "",
         "read_only": True,
+        "privileged": False,
         "tmpfs": sandbox_tmpfs_mounts(),
         "mem_limit": "4g",
         "cpu_quota": 200000,
@@ -50,6 +54,20 @@ def sandbox_container_run_kwargs(image: str) -> dict:
         "detach": True,
         "remove": True,
     }
+
+
+def assert_no_docker_sock(kwargs: dict) -> None:
+    """验证容器参数不含 docker.sock 挂载（禁止 Docker-in-Docker）。
+
+    Raises:
+        ValueError: 若发现 docker.sock 挂载。
+    """
+    volumes = kwargs.get("volumes", {}) or {}
+    binds = kwargs.get("binds", []) or []
+    all_paths = list(volumes.keys()) + list(binds)
+    for path in all_paths:
+        if "docker.sock" in str(path):
+            raise ValueError(f"docker.sock mount is forbidden: {path}")
 
 
 def sandbox_pip_install_command() -> str:

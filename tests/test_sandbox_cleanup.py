@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from src.harness.sandbox_manager import SandboxContext
+import pytest
+
+from src.harness.sandbox_manager import (
+    SandboxContext,
+    assert_no_docker_sock,
+    sandbox_container_run_kwargs,
+)
 
 
 class MockContainer:
@@ -95,3 +101,37 @@ class TestSandboxContext:
         # 即使异常，destroy 仍执行
         assert container.killed
         assert container.removed
+
+
+# ---------------------------------------------------------------------------
+# 禁止特权与 Docker-in-Docker（V1.4-Bonus14b）
+# ---------------------------------------------------------------------------
+
+
+class TestNoPrivilege:
+    def test_kwargs_has_privileged_false(self):
+        kwargs = sandbox_container_run_kwargs("python:3.12-slim")
+        assert kwargs.get("privileged") is False
+
+    def test_kwargs_no_docker_sock(self):
+        kwargs = sandbox_container_run_kwargs("python:3.12-slim")
+        volumes = kwargs.get("volumes", {}) or {}
+        for path in volumes:
+            assert "docker.sock" not in str(path)
+
+    def test_assert_no_docker_sock_passes_on_clean_kwargs(self):
+        kwargs = sandbox_container_run_kwargs("test")
+        assert_no_docker_sock(kwargs)
+
+    def test_assert_no_docker_sock_raises_on_violation(self):
+        kwargs = {"volumes": {"/var/run/docker.sock": {"bind": "/var/run/docker.sock"}}}
+        with pytest.raises(ValueError, match="docker.sock"):
+            assert_no_docker_sock(kwargs)
+
+    def test_read_only_is_true(self):
+        kwargs = sandbox_container_run_kwargs("test")
+        assert kwargs.get("read_only") is True
+
+    def test_network_mode_is_none(self):
+        kwargs = sandbox_container_run_kwargs("test")
+        assert kwargs.get("network_mode") == "none"
