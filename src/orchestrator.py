@@ -60,6 +60,12 @@ DEFAULT_REPAIR_TIMEOUT_S = 180
 from collections import namedtuple
 _IssueTypeRule = namedtuple("_IssueTypeRule", ["name", "pattern", "issue_type"])
 
+# 反馈环结构化 section（V1.4-Bonus8a）
+_FeedbackSection = namedtuple("_FeedbackSection", ["title", "content", "priority", "max_len"])
+_MAX_PATCH_DIFF_CHARS = 600
+_MAX_FAILURE_LOG_CHARS = 300
+_MAX_BUILD_LOG_CHARS = 300
+
 _ISSUE_TYPE_RULES: list[_IssueTypeRule] = [
     # test_failure 必须在 explicit_exception 之前：
     # "FAILED test_app.py::test_add - AssertionError" 应识别为 test_failure 而非 type_error
@@ -881,18 +887,73 @@ class Orchestrator(RepairPipelineMixin):
             except Exception:
                 pass
 
-    def _build_feedback(self, result: "VerificationResult") -> str:
-        """构建失败反馈文本。"""
-        lines = ["补丁验证失败。"]
-        if result.build_log:
-            lines.append(f"构建日志: {result.build_log[:300]}")
+    def _build_feedback(
+        self, result: "VerificationResult", *, state: RepairState | None = None
+    ) -> str:
+        """构建结构化反馈文本（V1.4-Bonus8a）。
+
+        Sections（按优先级排列）:
+        1. regression_hint — 上轮引入回归时的回滚提示
+        2. previous_patches — 上轮失败的 patch diff
+        3. failure_logs — 失败测试日志
+        4. build_log — 构建日志
+        5. guidance — 后续操作指导
+        """
+        sections: list[_FeedbackSection] = []
+
+        # 1. regression hint
+        if state is not None:
+            from src.repair.termination import introduced_regression
+            if introduced_regression(state):
+                sections.append(_FeedbackSection(
+                    "回滚提示", "上轮补丁引入了回归（原本通过的测试现在失败）。"
+                    "请先还原受影响的无关文件，只修改 suspect 范围内的文件。", 10, 200,
+                ))
+
+        # 2. previous patches
+        if state is not None and state.candidate_patches:
+            patch_lines: list[str] = []
+            for i, p in enumerate(state.candidate_patches[:2], 1):
+                diff = p.diff[: _MAX_PATCH_DIFF_CHARS] if p.diff else "(空)"
+                patch_lines.append(f"补丁{i} ({p.file_path}):\n{diff}")
+            if patch_lines:
+                sections.append(_FeedbackSection(
+                    "上轮改动", "\n\n".join(patch_lines), 20, _MAX_PATCH_DIFF_CHARS * 2,
+                ))
+
+        # 3. failure logs
         if result.failure_logs:
-            lines.append("失败测试:")
-            for log in result.failure_logs[:5]:
-                lines.append(f"  - {log[:300]}")
-        lines.append(
-            "请根据失败日志修改补丁。使用 patch_file 直接修改文件，然后输出 CandidatePatch JSON。"
-        )
+            logs = "\n".join(
+                f"  - {log[:_MAX_FAILURE_LOG_CHARS]}"
+                for log in result.failure_logs[:5]
+            )
+            sections.append(_FeedbackSection("失败测试", logs, 30, _MAX_FAILURE_LOG_CHARS * 5))
+
+        # 4. build log
+        if result.build_log:
+            sections.append(_FeedbackSection(
+                "构建日志", result.build_log[:_MAX_BUILD_LOG_CHARS], 25, _MAX_BUILD_LOG_CHARS,
+            ))
+
+        # 按 priority 排序后组装
+        sections.sort(key=lambda s: s.priority)
+        lines = ["补丁验证失败。"]
+        for sec in sections:
+            text = sec.content[:sec.max_len] if sec.content else ""
+            if text:
+                lines.append(f"\n[{sec.title}]\n{text}")
+
+        # 5. guidance
+        if state is not None and state.retry_count > 0:
+            lines.append(
+                f"\n[指导]\n已尝试 {state.retry_count + 1} 次修复。"
+                "请根据以上日志调整补丁，使用 patch_file 直接修改文件。"
+            )
+        else:
+            lines.append(
+                "\n[指导]\n请根据以上日志修改补丁。"
+                "使用 patch_file 直接修改文件，然后输出 CandidatePatch JSON。"
+            )
         return "\n".join(lines)
 
     # ---- Prompt 构建 ----

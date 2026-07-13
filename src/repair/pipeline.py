@@ -365,7 +365,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                         self._restore_repo_snapshot(repo_snapshot)
                     else:
                         self._revert_changes(state)
-                    state.feedback = self._build_feedback(state.verification_result)
+                    state.feedback = self._build_feedback(
+                        state.verification_result, state=state,
+                    )
                     self._write_feedback_to_blackboard(state.feedback)
                     state.retry_count += 1
 
