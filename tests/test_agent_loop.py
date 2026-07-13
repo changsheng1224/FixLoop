@@ -471,3 +471,232 @@ class TestTtftObservability:
         assert qu is not None, "report.json missing quota_usage"
         assert qu["total"]["used"] >= 0
         assert qu["total"]["limit"] == 50
+
+
+# ---------------------------------------------------------------------------
+# final_answer schema 校验（V1.4-Bonus2c）
+# ---------------------------------------------------------------------------
+
+
+class TestFinalAnswerValidation:
+    """final_answer JSON schema 校验 + 重试。"""
+
+    def test_valid_json_passes(self, config, workspace):
+        """合法 JSON final answer 直接通过。"""
+        config.json_mode = True
+        agent = _make_agent(
+            ['<final>{"file_path":"app.py","line":42}</final>'],
+            config, workspace,
+        )
+        answer = agent.ask("find bug")
+        assert "file_path" in answer
+        assert "app.py" in answer
+
+    def test_invalid_json_retries(self, config, workspace):
+        """非法 JSON → recovery prompt → 模型重试。"""
+        config.json_mode = True
+        agent = _make_agent(
+            [
+                "<final>not json</final>",           # ← 第 1 次失败
+                '<final>{"file_path":"app.py"}</final>',  # ← 重试成功
+            ],
+            config, workspace,
+        )
+        answer = agent.ask("find bug")
+        # 最终应接受第二次合法输出
+        assert "file_path" in answer
+
+    def test_invalid_json_exhausted_retries(self, config, workspace):
+        """重试耗尽后接受原样（不无限循环）。"""
+        config.json_mode = True
+        agent = _make_agent(
+            [
+                "<final>bad1</final>",
+                "<final>bad2</final>",
+                "<final>bad3</final>",  # 第 3 次 — 重试耗尽
+            ],
+            config, workspace,
+        )
+        answer = agent.ask("find bug")
+        # 耗尽后接受最后一次输出
+        assert "bad3" in answer
+
+    def test_schema_missing_fields_retries(self, config, workspace):
+        """缺少必填字段 → recovery prompt 含字段名。"""
+        config.json_mode = True
+        config.final_schema = {"file_path": "str", "line": "int"}
+        agent = _make_agent(
+            [
+                '<final>{"file_path":"app.py"}</final>',  # ← 缺 line
+                '<final>{"file_path":"app.py","line":42}</final>',  # ← 补齐后通过
+            ],
+            config, workspace,
+        )
+        answer = agent.ask("find bug")
+        assert "line" in answer
+
+    def test_schema_wrong_type_retries(self, config, workspace):
+        """字段类型错误 → recovery prompt 含类型信息。"""
+        config.json_mode = True
+        config.final_schema = {"file_path": "str", "line": "int"}
+        agent = _make_agent(
+            [
+                '<final>{"file_path":"app.py","line":"not_a_number"}</final>',
+                '<final>{"file_path":"app.py","line":42}</final>',
+            ],
+            config, workspace,
+        )
+        answer = agent.ask("find bug")
+        assert '"line":42' in answer or '"line": 42' in answer
+
+    def test_no_schema_passes_any_json(self, config, workspace):
+        """无 final_schema 时仅校验 JSON 语法。"""
+        config.json_mode = True
+        # 无 schema → 任意合法 JSON 都通过
+        agent = _make_agent(
+            ['<final>{"any":"thing","foo":123}</final>'],
+            config, workspace,
+        )
+        answer = agent.ask("do something")
+        assert "any" in answer
+
+    def test_json_retry_emits_trace(self, config, workspace):
+        """JSON 重试发出 trace 事件。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        config.json_mode = True
+        client = FakeModelClient([
+            "<final>bad</final>",
+            '<final>{"ok":true}</final>',
+        ])
+        agent = Agent(config=config, model_client=client, workspace=workspace)
+        loop = AgentLoop(agent)
+
+        events = []
+        loop._emit = lambda name, data=None: events.append((name, data))
+        answer = loop.run("test")
+
+        assert "ok" in answer
+        json_retries = [e for e in events if e[0] == "json_retry"]
+        assert len(json_retries) == 1
+        assert json_retries[0][1]["attempt"] == 1
+
+    def test_non_json_mode_skips_validation(self, config, workspace):
+        """非 json_mode 时跳过校验，即使配置了 schema。"""
+        config.json_mode = False
+        config.final_schema = {"file_path": "str"}
+        agent = _make_agent(
+            ["<final>this is plain text, not json</final>"],
+            config, workspace,
+        )
+        answer = agent.ask("explain")
+        # 纯文本答案直接通过
+        assert "plain text" in answer
+
+    def test_json_array_final_passes(self, config, workspace):
+        """JSON 数组（如 SuspectList）也通过语法校验。"""
+        config.json_mode = True
+        agent = _make_agent(
+            ['<final>[{"file":"a.py","line":1}]</final>'],
+            config, workspace,
+        )
+        answer = agent.ask("find bugs")
+        assert "a.py" in answer
+
+
+# ---------------------------------------------------------------------------
+# CoT 提取（V1.4-Bonus2d）
+# ---------------------------------------------------------------------------
+
+
+class TestCoTStripping:
+    """_strip_cot 思考内容剥离。"""
+
+    def test_strips_think_tags(self):
+        """移除 <think>...</think> 标签块。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        raw = "<think>Let me analyze first...</think>\n<final>done</final>"
+        cleaned = AgentLoop._strip_cot(raw)
+        assert "<think>" not in cleaned
+        assert "analyze" not in cleaned
+        assert "<final>done</final>" in cleaned
+
+    def test_strips_text_before_first_tag(self):
+        """移除第一个结构化标签前的自然语言前缀。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        raw = "I need to read the file first.\n\n<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"app.py\"}}</tool>"
+        cleaned = AgentLoop._strip_cot(raw)
+        assert "I need to read" not in cleaned
+        assert "<tool>" in cleaned
+
+    def test_preserves_plain_final_when_no_tags(self):
+        """纯文本 final answer（无标签）：保留原样。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        raw = "The bug is in app.py line 42."
+        cleaned = AgentLoop._strip_cot(raw)
+        assert cleaned == raw
+
+    def test_strips_think_and_prefix_together(self):
+        """同时移除 <think> 和前缀文本。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        raw = (
+            "<think>reasoning step 1</think>\n"
+            "Now I'll search for the error...\n"
+            "<tool>{\"name\":\"search\",\"args\":{\"pattern\":\"error\"}}</tool>"
+        )
+        cleaned = AgentLoop._strip_cot(raw)
+        assert "reasoning" not in cleaned
+        assert "Now I'll search" not in cleaned
+        assert "<tool>" in cleaned
+
+    def test_empty_after_strip_returns_original(self):
+        """清洗后为空时回退到原始文本。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        raw = "<think>only thinking, no action</think>"
+        cleaned = AgentLoop._strip_cot(raw)
+        # 清洗后只剩空白 → 返回原始文本
+        assert "only thinking" in cleaned
+
+    def test_multiline_think_tag(self):
+        """多行 <think> 块正确剥离。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        raw = "<think>\nline 1\nline 2\nline 3\n</think>\n<final>{\"ok\":true}</final>"
+        cleaned = AgentLoop._strip_cot(raw)
+        assert "line 1" not in cleaned
+        assert "line 2" not in cleaned
+        assert "ok" in cleaned
+
+    def test_stripping_in_agent_ask(self, config, workspace):
+        """Agent.ask() 端到端：CoT 被剥离，不进 history。"""
+        agent = _make_agent(
+            [
+                '<tool>{"name":"read_file","args":{"path":"app.py"}}</tool>',
+                "Now I see the bug. Let me fix it.\n<final>fixed</final>",
+            ],
+            config, workspace,
+        )
+        answer = agent.ask("find and fix bug")
+        assert "fixed" in answer
+        # history 中不应包含 CoT 前缀
+        history = agent.session.get("history", [])
+        for h in history:
+            content = str(h.get("content", ""))
+            if h.get("role") == "assistant":
+                # 不应包含思考前缀
+                assert "Now I see the bug" not in content
+
+    def test_final_only_without_prefix_unchanged(self, config, workspace):
+        """无 CoT 的 final answer 完全不变。"""
+        agent = _make_agent(
+            ["<final>fixed</final>"],
+            config, workspace,
+        )
+        answer = agent.ask("fix bug")
+        assert answer == "fixed"
+

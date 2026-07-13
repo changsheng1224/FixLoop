@@ -47,3 +47,11 @@ class AgentConfig(BaseModel):
     approval: str = Field(default="ask", description="高风险工具审批策略: auto / ask / never")
     temperature: float = Field(default=0.2, ge=0.0, le=2.0, description="模型温度")
     json_mode: bool = Field(default=False, description="启用 JSON 输出引导（repair agent 专用）")
+    final_schema: dict[str, str] | None = Field(
+        default=None,
+        description=(
+            "final answer 结构校验：{字段名: 类型}，如 {'file_path':'str','line':'int'}。"
+            "类型: str/int/float/bool/list/dict。仅 json_mode=True 时生效。"
+            "校验失败 → recovery prompt + 回到 Acting（最多 2 次重试）。"
+        ),
+    )
