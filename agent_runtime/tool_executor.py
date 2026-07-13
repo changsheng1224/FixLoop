@@ -288,18 +288,34 @@ class ToolExecutor:
         }
         return mapping.get(name)
 
+    # 读类工具：仅按 (name, path) 语义去重（不比较 start/end/pattern 等参数）
+    _READ_TOOLS = frozenset({"read_file", "list_files", "search", "grep", "ast_parse",
+                              "inspect_file", "find_test", "git_blame", "git_diff"})
+
     def _is_duplicate(self, name: str, args: dict) -> bool:
-        """检查最近 2 次工具调用的 name+args 是否与本次完全相同。"""
+        """检查最近 2 次调用是否重复。
+
+        - 读类工具：相同 tool_name + 相同 path → 语义重复
+        - 写类工具：name + args 完全匹配 → 精确重复
+        """
         history = self.agent.session.get("history", [])
-        # 提取有 tool_name 的记录
         tool_calls = [h for h in history if h.get("tool_name")]
         recent = tool_calls[-2:]
         if len(recent) < 2:
             return False
 
-        same_name = recent[0].get("tool_name") == recent[1].get("tool_name") == name
-        same_args = recent[0].get("tool_args") == recent[1].get("tool_args") == args
-        return same_name and same_args
+        if name in self._READ_TOOLS:
+            same_name = recent[0].get("tool_name") == recent[1].get("tool_name") == name
+            same_path = (
+                recent[0].get("tool_args", {}).get("path", "")
+                == recent[1].get("tool_args", {}).get("path", "")
+                == args.get("path", "")
+            )
+            return same_name and same_path
+        else:
+            same_name = recent[0].get("tool_name") == recent[1].get("tool_name") == name
+            same_args = recent[0].get("tool_args") == recent[1].get("tool_args") == args
+            return same_name and same_args
 
     def _approve(self, name: str, args: dict, patch_preview: dict | None = None) -> bool:
         """审批检查。

@@ -207,3 +207,86 @@ class TestExecutionTier:
         from agent_runtime.tool_rejection import TOOL_TRACE_PUBLIC_KEYS
 
         assert "execution_tier" in TOOL_TRACE_PUBLIC_KEYS
+
+
+# ---------------------------------------------------------------------------
+# Gate 5 语义 duplicate（V1.4-Bonus11a）
+# ---------------------------------------------------------------------------
+
+
+class TestGate5SemanticDuplicate:
+    def test_read_tool_same_path_different_args_duplicate(self):
+        """read_file 相同 path 不同 start → 语义重复。"""
+        agent = _make_agent()
+        agent.session["history"] = [
+            {"tool_name": "read_file", "tool_args": {"path": "app.py", "start": 1, "end": 50}},
+            {"tool_name": "read_file", "tool_args": {"path": "app.py", "start": 51, "end": 100}},
+        ]
+        exe = ToolExecutor(agent, approval_policy="auto")
+        assert exe._is_duplicate("read_file", {"path": "app.py", "start": 101, "end": 150})
+
+    def test_read_tool_different_path_not_duplicate(self):
+        """read_file 不同 path → 不重复。"""
+        agent = _make_agent()
+        agent.session["history"] = [
+            {"tool_name": "read_file", "tool_args": {"path": "app.py"}},
+            {"tool_name": "read_file", "tool_args": {"path": "utils.py"}},
+        ]
+        exe = ToolExecutor(agent, approval_policy="auto")
+        assert not exe._is_duplicate("read_file", {"path": "config.py"})
+
+    def test_write_tool_exact_match_duplicate(self):
+        """write_file 相同 args → 精确重复。"""
+        agent = _make_agent()
+        agent.session["history"] = [
+            {"tool_name": "write_file",
+             "tool_args": {"path": "app.py", "content": "x=1"}},
+            {"tool_name": "write_file",
+             "tool_args": {"path": "app.py", "content": "x=1"}},
+        ]
+        exe = ToolExecutor(agent, approval_policy="auto")
+        assert exe._is_duplicate("write_file", {"path": "app.py", "content": "x=1"})
+
+    def test_write_tool_different_content_not_duplicate(self):
+        """write_file 相同 path 不同 content → 不重复。"""
+        agent = _make_agent()
+        agent.session["history"] = [
+            {"tool_name": "write_file",
+             "tool_args": {"path": "app.py", "content": "x=1"}},
+            {"tool_name": "write_file",
+             "tool_args": {"path": "app.py", "content": "x=2"}},
+        ]
+        exe = ToolExecutor(agent, approval_policy="auto")
+        assert not exe._is_duplicate("write_file", {"path": "app.py", "content": "x=3"})
+
+    def test_less_than_two_calls_not_duplicate(self):
+        agent = _make_agent()
+        agent.session["history"] = [
+            {"tool_name": "read_file", "tool_args": {"path": "app.py"}},
+        ]
+        exe = ToolExecutor(agent, approval_policy="auto")
+        assert not exe._is_duplicate("read_file", {"path": "app.py"})
+
+    def test_search_same_path_different_pattern_duplicate(self):
+        """search 相同 path → 语义重复。"""
+        agent = _make_agent()
+        agent.session["history"] = [
+            {"tool_name": "search", "tool_args": {"path": "src", "pattern": "foo"}},
+            {"tool_name": "search", "tool_args": {"path": "src", "pattern": "bar"}},
+        ]
+        exe = ToolExecutor(agent, approval_policy="auto")
+        assert exe._is_duplicate("search", {"path": "src", "pattern": "baz"})
+
+
+def _make_agent():
+    from agent_runtime.workspace import WorkspaceContext
+    import tempfile
+
+    tmp = tempfile.mkdtemp()
+    ws = WorkspaceContext.build(tmp)
+    return Agent(
+        config=AgentConfig(approval="auto"),
+        model_client=FakeModelClient(outputs=["<final>ok</final>"]),
+        workspace=ws,
+        cwd=tmp,
+    )
