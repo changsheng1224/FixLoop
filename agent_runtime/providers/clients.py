@@ -10,7 +10,14 @@ import urllib.request
 
 from agent_runtime.model_timing import ModelCallTiming
 from agent_runtime.providers.http_timing import read_http_body_with_timing
+from agent_runtime.errors import EmptyModelResponse
 from agent_runtime.providers.session_usage import SessionUsageMixin
+
+
+def _check_empty_response(raw: str, model: str = "") -> None:
+    """检查模型响应是否为空；空时抛出 EmptyModelResponse。"""
+    if not (raw or "").strip():
+        raise EmptyModelResponse(model=model, detail="模型返回空响应")
 
 
 class FakeModelClient(SessionUsageMixin):
@@ -58,6 +65,7 @@ class FakeModelClient(SessionUsageMixin):
         result = self._outputs[self._index]
         self._index += 1
         self._record_usage(prompt, result)
+        _check_empty_response(result)
         out_tokens = max(1, len(result) // 4)
         timing = ModelCallTiming(ttft_ms=0, total_ms=0, output_tokens=out_tokens)
         self.last_call_timing = timing
@@ -418,7 +426,9 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
                 )
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
                     raw_bytes, ttft_ms, total_ms = read_http_body_with_timing(response)
-                data = json.loads(raw_bytes.decode("utf-8"))
+                raw_text = raw_bytes.decode("utf-8")
+                _check_empty_response(raw_text, model=self.model)
+                data = json.loads(raw_text)
                 from agent_runtime.token_accounting import parse_provider_usage
 
                 parsed = parse_provider_usage(data.get("usage"))
@@ -596,7 +606,9 @@ class OllamaModelClient:
         )
         with urllib.request.urlopen(request, timeout=self.timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        return data.get("response", "")
+        result = data.get("response", "")
+        _check_empty_response(result, model=self.model)
+        return result
 
     def complete_stream(
         self,
@@ -681,7 +693,9 @@ class OpenAICompatibleModelClient:
         )
         with urllib.request.urlopen(request, timeout=self.timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        return self._extract_text(data)
+        result = self._extract_text(data)
+        _check_empty_response(result, model=self.model)
+        return result
 
     def complete_stream(self, prompt: str, max_new_tokens: int = 512, on_chunk=None, cancel_token=None):
         """OpenAI Responses API 流式调用。"""

@@ -89,6 +89,61 @@ class AgentCallback:
 ProgressCallback = AgentCallback  # 旧名可用
 
 
+# ---- Callback 链 ----
+
+class CallbackChain(AgentCallback):
+    """回调链：按序调用多个 AgentCallback，任一异常 log + 继续。
+
+    AgentLoop 只持有 Chain；CLIProgressCallback 固定为链末。
+    """
+
+    def __init__(self, callbacks: list[AgentCallback], *, fail_fast: bool = False):
+        self._callbacks = list(callbacks)
+        self._fail_fast = fail_fast
+
+    def add(self, cb: AgentCallback) -> None:
+        self._callbacks.append(cb)
+
+    def _notify_chain(self, method: str, **kwargs: object) -> None:
+        import logging
+
+        logger = logging.getLogger("fixloop.callbacks")
+        for cb in self._callbacks:
+            try:
+                fn = getattr(cb, method, None)
+                if fn is not None:
+                    fn(**kwargs)
+            except Exception:
+                logger.warning("CallbackChain: %s in %s failed", method, type(cb).__name__)
+                if self._fail_fast:
+                    raise
+
+    # 自动代理所有钩子
+    def on_step_start(self, step: int, max_steps: int, *, path: str = "") -> None:
+        self._notify_chain("on_step_start", step=step, max_steps=max_steps, path=path)
+
+    def on_final_answer(self, text: str) -> None:
+        self._notify_chain("on_final_answer", text=text)
+
+    def on_pre_model(self, step: int, prompt_preview: str, *, path: str = "") -> None:
+        self._notify_chain("on_pre_model", step=step, prompt_preview=prompt_preview, path=path)
+
+    def on_post_model(self, step: int, raw_preview: str, elapsed_ms: int, *, path: str = "") -> None:
+        self._notify_chain("on_post_model", step=step, raw_preview=raw_preview, elapsed_ms=elapsed_ms, path=path)
+
+    def on_pre_tool(self, step: int, tool_name: str, tool_args: dict, *, path: str = "") -> None:
+        self._notify_chain("on_pre_tool", step=step, tool_name=tool_name, tool_args=tool_args, path=path)
+
+    def on_post_tool(self, step: int, tool_name: str, result_preview: str, elapsed_ms: int, *, path: str = "") -> None:
+        self._notify_chain("on_post_tool", step=step, tool_name=tool_name, result_preview=result_preview, elapsed_ms=elapsed_ms, path=path)
+
+    def on_tool_executed(self, step: int, name: str, result_preview: str, elapsed_ms: int, status: str) -> None:
+        self._notify_chain("on_tool_executed", step=step, name=name, result_preview=result_preview, elapsed_ms=elapsed_ms, status=status)
+
+    def on_react_phase(self, phase: str, step: int, max_steps: int, *, tool: str = "") -> None:
+        self._notify_chain("on_react_phase", phase=phase, step=step, max_steps=max_steps, tool=tool)
+
+
 # ---- CLI 终端实现 ----
 
 class CLIProgressCallback(AgentCallback):

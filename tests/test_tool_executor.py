@@ -327,6 +327,57 @@ class TestGate7ApprovalTiers:
         assert "禁止执行" in result.content
 
 
+# ---------------------------------------------------------------------------
+# Gate 5.5 死循环检测（V1.5-Bonus1）
+# ---------------------------------------------------------------------------
+
+
+class TestLoopDetection:
+    def test_single_call_no_detection(self, agent):
+        exe = ToolExecutor(agent, approval_policy="auto")
+        result = exe.execute_gated("read_file", {"path": "app.py"})
+        assert result.metadata.get("tool_error_code") != "loop_detected"
+
+    def test_three_same_calls_triggers(self, agent):
+        """连续 3 次相同调用 → loop_detected。"""
+        agent.config.loop_detect_threshold = 3
+        exe = ToolExecutor(agent, approval_policy="auto")
+        args = {"path": "app.py"}
+        exe.execute_gated("read_file", args)
+        exe.execute_gated("read_file", args)
+        result = exe.execute_gated("read_file", args)
+        assert result.metadata.get("tool_error_code") == "loop_detected"
+
+    def test_different_args_no_detection(self, agent):
+        agent.config.loop_detect_threshold = 3
+        exe = ToolExecutor(agent, approval_policy="auto")
+        exe.execute_gated("read_file", {"path": "app.py"})
+        exe.execute_gated("read_file", {"path": "utils.py"})
+        exe.execute_gated("read_file", {"path": "config.py"})
+        # 不同 path → 不触发
+        result = exe.execute_gated("read_file", {"path": "app.py"})
+        assert result.metadata.get("tool_error_code") != "loop_detected"
+
+    def test_threshold_zero_disables(self, agent):
+        agent.config.loop_detect_threshold = 0
+        exe = ToolExecutor(agent, approval_policy="auto")
+        args = {"path": "app.py"}
+        for _ in range(5):
+            result = exe.execute_gated("read_file", args)
+        assert result.metadata.get("tool_error_code") != "loop_detected"
+
+    def test_interleaved_tool_resets_window(self, agent):
+        agent.config.loop_detect_threshold = 3
+        exe = ToolExecutor(agent, approval_policy="auto")
+        exe.execute_gated("read_file", {"path": "app.py"})
+        exe.execute_gated("read_file", {"path": "app.py"})
+        exe.execute_gated("search", {"pattern": "TODO"})  # 不同工具
+        exe.execute_gated("read_file", {"path": "app.py"})
+        # 窗口内只有 2 次 read app.py → 不触发
+        result = exe.execute_gated("read_file", {"path": "app.py"})
+        assert result.metadata.get("tool_error_code") != "loop_detected"
+
+
 def _make_agent():
     from agent_runtime.workspace import WorkspaceContext
     import tempfile

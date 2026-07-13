@@ -47,6 +47,12 @@ class AgentConfig(BaseModel):
     approval: str = Field(default="ask", description="高风险工具审批策略: auto / ask / never")
     temperature: float = Field(default=0.2, ge=0.0, le=2.0, description="模型温度")
     json_mode: bool = Field(default=False, description="启用 JSON 输出引导（repair agent 专用）")
+    loop_detect_threshold: int = Field(
+        default=3,
+        ge=0,
+        le=10,
+        description="死循环检测阈值：滑动窗口内同一 (tool, args_hash) 次数≥K 时触发。0=禁用",
+    )
     final_schema: dict[str, str] | None = Field(
         default=None,
         description=(

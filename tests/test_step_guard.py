@@ -316,19 +316,18 @@ class TestStepGuardInAgentLoop:
         assert loop._step_guard is not None
         assert loop._step_guard.stall_count == 0
 
-    def test_stall_terminates_loop(self, temp_workspace):
-        """连续 N 步修改类工具无 affected → stall 终止。"""
+    def test_stall_marks_todo_blocked(self, temp_workspace):
+        """连续 N 步无进展 → todo blocked + 停滞提示（不终止循环）。"""
         from agent_runtime.agent_loop import AgentLoop
         from agent_runtime.config import AgentConfig
         from agent_runtime.providers.clients import FakeModelClient
         from agent_runtime.runtime import Agent
         from agent_runtime.workspace import WorkspaceContext
 
-        # run_shell 是修改类工具，echo 不会产生 affected_paths
         outputs = [
-            '<tool>{"name":"run_shell","args":{"command":"echo step1"}}</tool>',
-            '<tool>{"name":"run_shell","args":{"command":"echo step2"}}</tool>',
-            '<tool>{"name":"run_shell","args":{"command":"echo step3"}}</tool>',
+            '<tool>{"name":"write_file","args":{"path":"a.txt","content":"x"}}</tool>',
+            '<tool>{"name":"write_file","args":{"path":"b.txt","content":"y"}}</tool>',
+            '<tool>{"name":"write_file","args":{"path":"c.txt","content":"z"}}</tool>',
             "<final>done</final>",
         ]
         config = AgentConfig(provider="fake", max_steps=10, approval="auto")
@@ -338,12 +337,14 @@ class TestStepGuardInAgentLoop:
             model_client=FakeModelClient(outputs=outputs),
             workspace=ws,
         )
+        agent.dry_run = True  # dry_run → write_file 不实际写文件，无 affected_paths
         loop = AgentLoop(agent)
 
-        # 设低阈值以加速测试
         loop._step_guard = StepGuard(stall_threshold=3)
         loop._step_guard.reset(task_summary="fix 问题", suspect_files=set())
 
         answer = loop.run("fix 问题")
-        # 应在第 3 步 stall 终止
-        assert "stall" in loop.stop_reason or "停滞" in answer
+        # stall 不终止，replan 提示注入到 tool 结果中
+        history = agent.session.get("history", [])
+        tool_msgs = [h["content"] for h in history if h.get("role") == "tool"]
+        assert any("停滞" in m for m in tool_msgs), f"tool msgs: {tool_msgs[:3]}"

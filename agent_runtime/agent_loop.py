@@ -98,6 +98,8 @@ class AgentLoop:
         self._no_progress_steps = 0
         self._step_guard = StepGuard()
         self._json_retry_count = 0
+        self._empty_retries = 0
+        self.MAX_EMPTY_RETRIES = 3
 
     def _accumulate_context_stats(self, meta: dict) -> None:
         """从 context_built metadata 累积 section 统计 + cache hit rate。"""
@@ -412,7 +414,6 @@ class AgentLoop:
                 callback=callback,
             )
         self.agent.update_memory_after_tool(tool_name, tool_args, result_text)
-        self.agent.record({"role": "tool", "content": result_text, "tool_name": tool_name})
         self._record_tool_outcome(tool_name, result, ts)
         if emit_recording:
             self._notify_react_phase(
@@ -438,6 +439,25 @@ class AgentLoop:
             elapsed_ms=te_ms,
             status=tool_status,
         )
+        # 死循环检测：Gate 5.5 rejection → 升级为 stop
+        error_code = result.metadata.get("tool_error_code", "")
+        if error_code == "loop_detected":
+            from agent_runtime.tool_executor import _canonical_args_hash
+
+            self._emit("loop_detected", {
+                "tool": tool_name,
+                "args_hash": _canonical_args_hash(tool_name, tool_args),
+                "window_size": int(
+                    getattr(self.agent.config, "loop_detect_threshold", 3) or 3
+                ),
+            })
+            ts.stop_with_reason(
+                StopReason.CIRCUIT_BREAKER, "stopped",
+                detail=f"死循环检测: {tool_name} 连续高频调用",
+            )
+            self.stop_reason = StopReason.CIRCUIT_BREAKER
+            return ts.final_answer or f"任务因死循环检测终止（{tool_name}）。"
+
         # 每 tool 步 checkpoint（成功时），供 --resume 从最后成功步继续
         tool_success = result.metadata.get("tool_status") == "success"
         if tool_success:
@@ -479,13 +499,23 @@ class AgentLoop:
                         todo["status"] = "blocked"
                         self._emit("todo_updated", {"todo": dict(todo)})
                         break
+                # stall 不终止：注入 replan 提示让模型自行调整
+                if verdict.reason == StopReason.STALL:
+                    hint = (
+                        f"\n\n⚠ 进展停滞（连续 {self._step_guard.stall_count} 步无文件变更）。"
+                        "请检查当前 todo 列表，考虑重新规划或尝试不同策略。"
+                    )
+                    result_text = result_text + hint
+                    self.agent.record({"role": "tool", "content": result_text, "tool_name": tool_name})
+                    return f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
+                # goal_drift 仍终止
                 ts.stop_with_reason(verdict.reason, "stopped", detail=verdict.detail)
                 self.stop_reason = verdict.reason
-                # 返回纯文本；调用方检测 self.stop_reason 作为终止信号
                 return verdict.replan_hint or f"任务终止：{verdict.detail}"
             else:
                 # warning 级（drift 预警，不终止）
                 self._emit("goal_drift_warning", {"detail": verdict.detail})
+        self.agent.record({"role": "tool", "content": result_text, "tool_name": tool_name})
         return f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
 
     # ---- XML 路径辅助 ----
@@ -551,14 +581,38 @@ class AgentLoop:
         )
         meta = getattr(self, "_last_token_meta", None) or {}
         cache_key = str(meta.get("prompt_cache_key", "") or "")
-        raw = self._invoke_model_call(
-            lambda: self.agent.circuit_breaker.call(
-                self.agent.model_client.complete,
-                prompt_text,
-                max_new_tokens=self.agent.config.max_new_tokens,
-                prompt_cache_key=cache_key,
-            )
-        )
+        from agent_runtime.errors import EmptyModelResponse
+
+        for empty_try in range(self.MAX_EMPTY_RETRIES):
+            try:
+                raw = self._invoke_model_call(
+                    lambda: self.agent.circuit_breaker.call(
+                        self.agent.model_client.complete,
+                        prompt_text,
+                        max_new_tokens=self.agent.config.max_new_tokens,
+                        prompt_cache_key=cache_key,
+                    )
+                )
+                break  # 成功，退出重试循环
+            except EmptyModelResponse:
+                self._empty_retries += 1
+                self._emit("empty_model_response", {
+                    "attempt": empty_try + 1,
+                    "step": step,
+                })
+                if empty_try < self.MAX_EMPTY_RETRIES - 1:
+                    _time.sleep(0.5 * (empty_try + 1))
+                else:
+                    ts.stop_with_reason(
+                        StopReason.API_ERROR, "stopped",
+                        detail="empty_model_response_exhausted",
+                    )
+                    self.stop_reason = StopReason.API_ERROR
+                    raise CancelledError("api_error", answer=(
+                        "<final>API 错误: 模型连续返回空响应，已重试 "
+                        f"{self.MAX_EMPTY_RETRIES} 次。</final>"
+                    ))
+
         ts.node_timings.setdefault("model_call_ms", 0)
         ts.node_timings["model_call_ms"] += int((_time.time() - t1) * 1000)
         self._record_model_timings(
@@ -603,8 +657,40 @@ class AgentLoop:
 
     def _xml_invalid_tool_retry(self, ts, payload, *, raw: str, step: int) -> str:
         failure = failure_invalid_tool_payload(payload)
-        retry = ParseRetry(build_recovery_prompt(failure), failure)
+        last = self._last_successful_tool_call()
+        prompt = build_recovery_prompt(failure, last_tool_call=last)
+        retry = ParseRetry(prompt, failure, has_last_tool_anchor=last is not None)
         return self._handle_parse_retry(ts, raw, retry, step=step)
+
+    def _last_successful_tool_call(self) -> dict | None:
+        """从 session history 中找上一次成功的 tool 调用。"""
+        history = self.agent.session.get("history", [])
+        for h in reversed(history):
+            if h.get("role") == "tool" and h.get("tool_name"):
+                return {"name": h["tool_name"], "args": h.get("tool_args", {})}
+        return None
+
+    def _plan_phase(self, user_message: str, *, skip_plan: bool = False) -> None:
+        """Plan 阶段：生成 TodoList 并写入 session。
+
+        Args:
+            user_message: 用户输入。
+            skip_plan: L2 repair 等场景跳过 plan（避免额外 LLM 调用）。
+        """
+        if skip_plan:
+            self._emit("plan_phase", {"source": "skipped"})
+            self._plan_todos = []
+            return
+
+        todos = self._generate_plan(user_message)
+        self._plan_todos = todos
+        if todos:
+            self.agent.session["plan_todos"] = todos
+            self._emit("plan_phase", {"source": "llm" if getattr(self.agent, "light_client", None) else "rule", "count": len(todos)})
+            self._emit("plan_created", {"todos": list(todos)})
+            self._start_next_todo()
+        else:
+            self._emit("plan_phase", {"source": "empty"})
 
     def _generate_plan(self, user_message: str) -> list[dict]:
         """用 light_client 或规则生成 TodoList。"""
@@ -617,7 +703,6 @@ class AgentLoop:
                     f"[{{\"id\":\"1\",\"content\":\"...\",\"status\":\"pending\"}},...]\n\n{user_message[:500]}"
                 )
                 raw = light.complete(prompt, max_new_tokens=256)
-                # 提取 JSON 数组
                 start = raw.find("[")
                 end = raw.rfind("]") + 1
                 if start >= 0 and end > start:
@@ -666,7 +751,7 @@ class AgentLoop:
 
     # ---- 入口 ----
 
-    def run(self, user_message: str, callback=None) -> str:
+    def run(self, user_message: str, callback=None, *, skip_plan: bool = False) -> str:
         from agent_runtime.log_context import log_context
         from agent_runtime.task_state import TaskState
 
@@ -696,17 +781,13 @@ class AgentLoop:
                 init_run_projection(self.agent.session, user_message)
                 self.agent.record({"role": "user", "content": user_message})
                 self._gen_task_summary(user_message)
-                self._plan_todos = self._generate_plan(user_message)
+                self._plan_phase(user_message, skip_plan=skip_plan)
                 self._no_progress_steps = 0
                 # 重置 StepGuard + 注入任务上下文
                 self._step_guard.reset(
                     task_summary=self._get_task_summary_text(),
                     suspect_files=self._extract_suspect_files(),
                 )
-                if self._plan_todos:
-                    self.agent.session["plan_todos"] = self._plan_todos
-                    self._emit("plan_created", {"todos": list(self._plan_todos)})
-                    self._start_next_todo()
 
                 if hasattr(self.agent.model_client, "chat_with_tools"):
                     answer = self._run_with_native_tools(user_message, ts, callback)
@@ -884,7 +965,9 @@ class AgentLoop:
             )
             try:
                 raw, t1 = self._xml_call_model(ts, prompt_text, step=step)
-            except CancelledError:
+            except CancelledError as e:
+                if e.answer:
+                    return e.answer
                 return self._finish_user_cancel(ts, phase="model_wait")
             except Exception as e:
                 if (msg := self._stop_for_api_error(ts, e)) is not None:
@@ -918,7 +1001,24 @@ class AgentLoop:
                         "attempt": self._json_retry_count,
                         "error": err_msg,
                     })
-                    user_message = err_msg
+                    # 走 ParseRetry → _handle_parse_retry，回到 Acting
+                    from agent_runtime.parse_recovery import (
+                        ParseFailure,
+                        ParseRetry,
+                        build_recovery_prompt,
+                    )
+                    failure = ParseFailure(
+                        kind="json_in_tool",
+                        snippet=final_text[:500],
+                        error_offset=None,
+                        error_message=err_msg,
+                        hint="final answer JSON 格式错误",
+                    )
+                    retry = ParseRetry(
+                        build_recovery_prompt(failure),
+                        failure,
+                    )
+                    user_message = self._handle_parse_retry(ts, raw, retry, step=step)
                     continue
                 self._json_retry_count = 0
                 self.agent.record({"role": "assistant", "content": final_text})
@@ -1051,8 +1151,6 @@ class AgentLoop:
         Returns:
             (ok, error_message)。ok=True 表示通过，error_message 为 recovery 提示。
         """
-        import json as _json
-
         config = self.agent.config
         if not config.json_mode:
             return True, ""
@@ -1060,8 +1158,8 @@ class AgentLoop:
 
         # L1: JSON 语法
         try:
-            data = _json.loads(text)
-        except _json.JSONDecodeError as e:
+            data = json.loads(text)
+        except json.JSONDecodeError as e:
             return False, (
                 f"上一轮 final answer 不是合法 JSON（{e}）。"
                 "请严格输出 JSON 格式的最终答案，不要包裹在 markdown 代码块中。"

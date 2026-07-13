@@ -3,11 +3,14 @@
 使用 FakeModelClient 预设输出序列，不调真实 API。
 """
 
+import tempfile
+
 import pytest
 
 from agent_runtime.config import AgentConfig
 from agent_runtime.providers.clients import FakeModelClient, FakeNativeToolClient
 from agent_runtime.runtime import Agent
+from agent_runtime.workspace import WorkspaceContext
 
 
 @pytest.fixture
@@ -135,7 +138,7 @@ class TestAgentLoopStopConditions:
         system_msgs = [
             h["content"] for h in agent.session["history"] if h["role"] == "system"
         ]
-        assert any("解析失败" in m for m in system_msgs)
+        assert any("④" in m for m in system_msgs)  # 四段式 prompt
 
     def test_parse_retry_emits_trace(self, config, workspace, temp_workspace):
         """解析失败 recovery 写入 trace parse_retry 事件。"""
@@ -603,6 +606,30 @@ class TestFinalAnswerValidation:
         answer = agent.ask("find bugs")
         assert "a.py" in answer
 
+    def test_final_answer_failure_returns_to_acting(self, config, workspace):
+        """畸形 final → ParseRetry → 再次 model 调用而非结束（V1.5-Bonus1i）。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        config.json_mode = True
+        agent = _make_agent(
+            [
+                "<final>bad json</final>",          # 失败 → retry
+                '<final>{"ok":true}</final>',       # 成功
+            ],
+            config, workspace,
+        )
+        loop = AgentLoop(agent)
+        events = []
+
+        def capture(name, data=None):
+            events.append(name)
+
+        loop._emit = capture
+        answer = loop.run("test")
+        assert "ok" in answer
+        # 应有 json_retry 事件，且不应直接结束
+        assert "json_retry" in events
+
 
 # ---------------------------------------------------------------------------
 # CoT 提取（V1.4-Bonus2d）
@@ -699,4 +726,233 @@ class TestCoTStripping:
         )
         answer = agent.ask("fix bug")
         assert answer == "fixed"
+
+
+# ---------------------------------------------------------------------------
+# 死循环检测（V1.5-Bonus1）
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Plan/TodoList 强化（V1.5-Bonus1b）
+# ---------------------------------------------------------------------------
+
+
+class TestPlanPhase:
+    def test_plan_phase_emits_events(self, config, workspace):
+        """普通 ask 产生 plan_phase + plan_created 事件。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        agent = _make_agent(["<final>done</final>"], config, workspace)
+        loop = AgentLoop(agent)
+        events = []
+
+        def capture(name, data=None):
+            events.append(name)
+
+        loop._emit = capture
+        answer = loop.run("fix the bug in app.py")
+        assert "done" in answer
+        assert "plan_phase" in events
+        assert "plan_created" in events
+
+    def test_skip_plan_no_llm_call(self, config, workspace):
+        """skip_plan=True 时不生成 plan，无 plan_created。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        agent = _make_agent(["<final>done</final>"], config, workspace)
+        loop = AgentLoop(agent)
+        events = []
+
+        def capture(name, data=None):
+            events.append(name)
+
+        loop._emit = capture
+        answer = loop.run("fix the bug", skip_plan=True)
+        assert "done" in answer
+        assert "plan_phase" in events  # 应有 skipped 事件
+        assert "plan_created" not in events  # 无实际 plan
+
+    def test_skip_plan_emits_skipped_trace(self, config, workspace):
+        """skip_plan 时 plan_phase 携带 source=skipped。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        agent = _make_agent(["<final>done</final>"], config, workspace)
+        loop = AgentLoop(agent)
+        events = []
+
+        def capture(name, data=None):
+            events.append((name, data))
+
+        loop._emit = capture
+        loop.run("fix bug", skip_plan=True)
+        plan_events = [e for e in events if e[0] == "plan_phase"]
+        assert len(plan_events) == 1
+        assert plan_events[0][1]["source"] == "skipped"
+
+    def test_agent_ask_passes_skip_plan(self, config, workspace):
+        """Agent.ask(skip_plan=True) 传递到 loop.run()。"""
+        agent = _make_agent(["<final>done</final>"], config, workspace)
+        # 通过 Agent.ask 接口
+        answer = agent.ask("fix bug", skip_plan=True)
+        assert "done" in answer
+
+
+# ---------------------------------------------------------------------------
+# 空模型响应 → 重试（V1.5-Bonus1c）
+# ---------------------------------------------------------------------------
+
+
+class TestEmptyModelResponse:
+    def test_empty_then_success(self, config, workspace):
+        """一次空响应后重试成功。"""
+        outputs = [
+            "",  # 空响应
+            "<final>fixed</final>",
+        ]
+        agent = _make_agent(outputs, config, workspace)
+        answer = agent.ask("fix bug")
+        assert "fixed" in answer
+
+    def test_consecutive_empty_stops_with_api_error(self, config, workspace):
+        """连续空响应 → api_error。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        outputs = ["", "", "", "<final>never</final>"]
+        agent = _make_agent(outputs, config, workspace)
+        loop = AgentLoop(agent)
+        answer = loop.run("fix bug")
+        assert "API" in answer or "api_error" in loop.stop_reason or "空" in answer
+
+
+class TestLoopDetection:
+    def test_loop_detected_stops_with_circuit_breaker(self, config, workspace):
+        """连续 3 次相同 read_file → circuit_breaker stop。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        config.loop_detect_threshold = 3
+        agent = _make_agent(
+            [
+                '<tool>{"name":"read_file","args":{"path":"app.py"}}</tool>',
+                '<tool>{"name":"read_file","args":{"path":"app.py"}}</tool>',
+                '<tool>{"name":"read_file","args":{"path":"app.py"}}</tool>',
+                "<final>done</final>",
+            ],
+            config, workspace,
+        )
+        loop = AgentLoop(agent)
+        answer = loop.run("read app.py three times")
+        assert "死循环" in answer or "circuit" in loop.stop_reason
+
+    def test_different_args_no_loop_detection(self, config, workspace):
+        """不同 path → 不触发死循环。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        config.loop_detect_threshold = 3
+        agent = _make_agent(
+            [
+                '<tool>{"name":"read_file","args":{"path":"a.py"}}</tool>',
+                '<tool>{"name":"read_file","args":{"path":"b.py"}}</tool>',
+                '<tool>{"name":"read_file","args":{"path":"c.py"}}</tool>',
+                "<final>done</final>",
+            ],
+            config, workspace,
+        )
+        loop = AgentLoop(agent)
+        answer = loop.run("read files")
+        assert "done" in answer
+
+
+# ---------------------------------------------------------------------------
+# 流式模型 cancel（V1.5-Bonus1e）
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Native context_built 对齐（V1.5-Bonus1h）
+# ---------------------------------------------------------------------------
+
+
+class TestNativeContextBuilt:
+    def test_native_context_built_event_exists(self, config, workspace):
+        """Native 路径 emit context_built 事件且含 sections 键。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        agent = _make_agent(
+            ["<final>done</final>"],
+            config, workspace,
+        )
+        # 使用 NativeFakeClient 走 Native 路径
+        from agent_runtime.providers.clients import FakeNativeToolClient
+
+        agent2 = Agent(
+            config=config,
+            model_client=FakeNativeToolClient(outputs=["<final>done</final>"]),
+            workspace=workspace,
+            cwd=str(workspace.repo_root),
+        )
+        loop = AgentLoop(agent2)
+        events = []
+
+        def capture(name, data=None):
+            events.append((name, data))
+
+        loop._emit = capture
+        answer = loop.run("test native context built")
+        assert "done" in answer
+
+        ctx_events = [e for e in events if e[0] == "context_built"]
+        assert len(ctx_events) >= 1, f"expected context_built event, got events: {[e[0] for e in events]}"
+        payload = ctx_events[0][1]
+        assert "total_tokens" in payload or "context_sections" in payload
+
+
+class TestStreamingCancel:
+    def test_cancel_during_stream_stops_early(self):
+        """流式输出中途 cancel → CancelledError → user_cancel stop。"""
+        from agent_runtime.agent_loop import AgentLoop
+        from agent_runtime.cancellation import CancellationToken
+
+        class MockStreamClient:
+            """流式 mock：模拟 chunk 输出并在中途被 cancel。"""
+            def __init__(self):
+                self.cancelled = False
+
+            def complete_stream(self, prompt, *, max_new_tokens=512, cancel_token=None, on_chunk=None):
+                chunks = ["chunk1", "chunk2", "chunk3", "chunk4"]
+                parts = []
+                for c in chunks:
+                    if cancel_token is not None and cancel_token.is_cancelled:
+                        from agent_runtime.cancellation import CancelledError
+                        raise CancelledError(cancel_token.reason)
+                    parts.append(c)
+                return "".join(parts)
+
+            def complete(self, prompt, max_new_tokens=512, prompt_cache_key=""):
+                return "<final>done</final>"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = WorkspaceContext.build(tmp)
+            config = AgentConfig(provider="ollama", max_steps=5)
+            client = MockStreamClient()
+            agent = Agent(config=config, model_client=client, workspace=ws, cwd=tmp)
+
+            # 设置 cancel token 并在 ask 期间 cancel
+            token = CancellationToken()
+            agent.cancel_token = token
+
+            # 在另一个线程中延迟 cancel
+            import threading
+            def delayed_cancel():
+                import time
+                time.sleep(0.05)
+                token.cancel()
+
+            t = threading.Thread(target=delayed_cancel)
+            t.start()
+
+            answer = agent.ask("test streaming cancel")
+            t.join()
+            # cancel 后应返回 cancel 相关结果
+            assert "cancel" in answer.lower() or "取消" in answer or "用户" in answer
 
