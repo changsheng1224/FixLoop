@@ -31,6 +31,15 @@ from agent_runtime.cancellation import CancelledError, run_with_cancellation
 _MODIFYING_TOOLS = frozenset({"write_file", "patch_file", "run_shell"})
 
 
+def _canonical_hash_for_trace(tool_name: str, args: dict) -> str:
+    """死循环 trace 用的 args hash。"""
+    import hashlib
+    import json
+
+    payload = json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(f"{tool_name}:{payload}".encode()).hexdigest()[:12]
+
+
 def _log_loop(msg: str) -> None:
     """Loop 阶段 debug 日志（受 --log-level 控制）。"""
     from agent_runtime.logging_setup import get_logger
@@ -438,6 +447,23 @@ class AgentLoop:
             elapsed_ms=te_ms,
             status=tool_status,
         )
+        # 死循环检测：Gate 5.5 rejection → 升级为 stop
+        error_code = result.metadata.get("tool_error_code", "")
+        if error_code == "loop_detected":
+            self._emit("loop_detected", {
+                "tool": tool_name,
+                "args_hash": _canonical_hash_for_trace(tool_name, tool_args),
+                "window_size": int(
+                    getattr(self.agent.config, "loop_detect_threshold", 3) or 3
+                ),
+            })
+            ts.stop_with_reason(
+                StopReason.CIRCUIT_BREAKER, "stopped",
+                detail=f"死循环检测: {tool_name} 连续高频调用",
+            )
+            self.stop_reason = StopReason.CIRCUIT_BREAKER
+            return ts.final_answer or f"任务因死循环检测终止（{tool_name}）。"
+
         # 每 tool 步 checkpoint（成功时），供 --resume 从最后成功步继续
         tool_success = result.metadata.get("tool_status") == "success"
         if tool_success:

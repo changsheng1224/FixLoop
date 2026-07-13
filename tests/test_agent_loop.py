@@ -700,3 +700,46 @@ class TestCoTStripping:
         answer = agent.ask("fix bug")
         assert answer == "fixed"
 
+
+# ---------------------------------------------------------------------------
+# 死循环检测（V1.5-Bonus1）
+# ---------------------------------------------------------------------------
+
+
+class TestLoopDetection:
+    def test_loop_detected_stops_with_circuit_breaker(self, config, workspace):
+        """连续 3 次相同 read_file → circuit_breaker stop。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        config.loop_detect_threshold = 3
+        agent = _make_agent(
+            [
+                '<tool>{"name":"read_file","args":{"path":"app.py"}}</tool>',
+                '<tool>{"name":"read_file","args":{"path":"app.py"}}</tool>',
+                '<tool>{"name":"read_file","args":{"path":"app.py"}}</tool>',
+                "<final>done</final>",
+            ],
+            config, workspace,
+        )
+        loop = AgentLoop(agent)
+        answer = loop.run("read app.py three times")
+        assert "死循环" in answer or "circuit" in loop.stop_reason
+
+    def test_different_args_no_loop_detection(self, config, workspace):
+        """不同 path → 不触发死循环。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        config.loop_detect_threshold = 3
+        agent = _make_agent(
+            [
+                '<tool>{"name":"read_file","args":{"path":"a.py"}}</tool>',
+                '<tool>{"name":"read_file","args":{"path":"b.py"}}</tool>',
+                '<tool>{"name":"read_file","args":{"path":"c.py"}}</tool>',
+                "<final>done</final>",
+            ],
+            config, workspace,
+        )
+        loop = AgentLoop(agent)
+        answer = loop.run("read files")
+        assert "done" in answer
+

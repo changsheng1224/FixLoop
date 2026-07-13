@@ -46,6 +46,16 @@ class ToolExecutionResult:
     #   diff_summary: str
 
 
+def _canonical_args_hash(tool_name: str, args: dict) -> str:
+    """计算参数的稳定 hash（排序 key，忽略 runtime 差异）。"""
+    import hashlib
+    import json
+
+    canonical = json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
+    raw = f"{tool_name}:{canonical}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:12]
+
+
 class ToolExecutor:
     """工具执行闸口。
 
@@ -66,6 +76,8 @@ class ToolExecutor:
         self.dry_run = dry_run
         self._quota = quota
         self._high_risk_tools = self._collect_high_risk()
+        # 死循环检测滑动窗口
+        self._call_window: list[str] = []
 
     def execute_gated(self, name: str, args: dict) -> ToolExecutionResult:
         """按序执行 Executor 闸口（Gate 1–9），不含 Gateway 权限层。"""
@@ -122,6 +134,21 @@ class ToolExecutor:
                 f"Error: 重复调用检测：'{name}' 与最近调用完全相同，可能是死循环。"
                 f"请尝试不同的参数或切换到其他工具。",
             )
+
+        # ---- Gate 5.5: 死循环检测（滑动窗口内相同 tool+args_hash ≥ K） ----
+        threshold = int(getattr(self.agent.config, "loop_detect_threshold", 0) or 0)
+        if threshold > 0:
+            call_hash = _canonical_args_hash(name, args)
+            self._call_window.append(call_hash)
+            if len(self._call_window) > threshold:
+                self._call_window = self._call_window[-threshold:]
+            if self._call_window.count(call_hash) >= threshold:
+                return self._rejected(
+                    5,
+                    "loop_detected",
+                    f"Error: 死循环检测——'{name}' 已连续或高频调用 {threshold} 次。"
+                    f"请尝试不同的工具或策略。",
+                )
 
         # ---- Gate 6: Dry-Run 模式（在审批之前，因为不实际修改） ----
         if self.dry_run:
