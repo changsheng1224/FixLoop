@@ -48,6 +48,7 @@ class Agent:
         tool_dispatch=None,
         prefix_mode: PrefixMode = "default",
         l1_prefix=None,
+        warm_context=None,
     ):
         self.config = config
         self.model_client = model_client
@@ -60,6 +61,7 @@ class Agent:
         self._tool_dispatch = tool_dispatch
         self._prefix_mode: PrefixMode = prefix_mode
         self._l1_prefix = l1_prefix
+        self._warm_context = warm_context  # 预热上下文（可选），供 ContextManager 复用
         self.shared_run_id: str | None = None
         self._last_budget_meta: dict = {}
         self.cancel_token = None
