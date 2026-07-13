@@ -97,6 +97,7 @@ class AgentLoop:
         self._plan_todos: list[dict] = []
         self._no_progress_steps = 0
         self._step_guard = StepGuard()
+        self._json_retry_count = 0
 
     def _accumulate_context_stats(self, meta: dict) -> None:
         """从 context_built metadata 累积 section 统计 + cache hit rate。"""
@@ -839,6 +840,10 @@ class AgentLoop:
             )
 
         self.agent.record({"role": "assistant", "content": answer})
+        # final_answer schema 校验（Native 路径：仅校验 + trace，不重试）
+        ok, err_msg = self._validate_final_answer(answer)
+        if not ok:
+            self._emit("json_validation_warning", {"error": err_msg})
         # 若 StepGuard 已设置 stop_reason（stall/goal_drift），保留之
         if not self.stop_reason:
             ts.finish_success(answer)
@@ -898,11 +903,22 @@ class AgentLoop:
 
             if kind == "final":
                 _log_loop(f"  [loop] final ({t_parse}ms parse)\n")
-                self.agent.record({"role": "assistant", "content": str(payload)})
-                ts.finish_success(str(payload))
+                final_text = str(payload)
+                ok, err_msg = self._validate_final_answer(final_text)
+                if not ok and self._json_retry_count < self.MAX_JSON_RETRIES:
+                    self._json_retry_count += 1
+                    self._emit("json_retry", {
+                        "attempt": self._json_retry_count,
+                        "error": err_msg,
+                    })
+                    user_message = err_msg
+                    continue
+                self._json_retry_count = 0
+                self.agent.record({"role": "assistant", "content": final_text})
+                ts.finish_success(final_text)
                 return self._complete_run(
                     ts,
-                    str(payload),
+                    final_text,
                     recording={"step": step, "path": "xml", "callback": callback},
                 )
 
@@ -1019,6 +1035,53 @@ class AgentLoop:
             files.add(tb_match.group(1).split("/")[-1].split("\\")[-1])
 
         return files
+
+    MAX_JSON_RETRIES = 2
+
+    def _validate_final_answer(self, text: str) -> tuple[bool, str]:
+        """校验 final answer 的 JSON 语法与可选 schema。
+
+        Returns:
+            (ok, error_message)。ok=True 表示通过，error_message 为 recovery 提示。
+        """
+        import json as _json
+
+        config = self.agent.config
+        if not config.json_mode:
+            return True, ""
+        schema = config.final_schema
+
+        # L1: JSON 语法
+        try:
+            data = _json.loads(text)
+        except _json.JSONDecodeError as e:
+            return False, (
+                f"上一轮 final answer 不是合法 JSON（{e}）。"
+                "请严格输出 JSON 格式的最终答案，不要包裹在 markdown 代码块中。"
+            )
+
+        # L2: Schema 字段校验
+        if schema:
+            missing = [f for f in schema if f not in data]
+            if missing:
+                return False, (
+                    f"上一轮 final answer 缺少必填字段: {missing}。"
+                    f"请输出包含 {list(schema.keys())} 的完整 JSON。"
+                )
+            type_map = {"str": str, "int": int, "float": (int, float), "bool": bool,
+                        "list": list, "dict": dict}
+            for field, ftype in schema.items():
+                expected = type_map.get(ftype)
+                if expected is None:
+                    continue
+                value = data.get(field)
+                if value is not None and not isinstance(value, expected):
+                    return False, (
+                        f"字段 '{field}' 应为 {ftype} 类型，实际为 {type(value).__name__}。"
+                        "请修正后重新输出。"
+                    )
+
+        return True, ""
 
     def _get_store(self):
         if self._store is None:

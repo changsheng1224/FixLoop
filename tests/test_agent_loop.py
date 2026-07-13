@@ -471,3 +471,135 @@ class TestTtftObservability:
         assert qu is not None, "report.json missing quota_usage"
         assert qu["total"]["used"] >= 0
         assert qu["total"]["limit"] == 50
+
+
+# ---------------------------------------------------------------------------
+# final_answer schema 校验（V1.4-Bonus2c）
+# ---------------------------------------------------------------------------
+
+
+class TestFinalAnswerValidation:
+    """final_answer JSON schema 校验 + 重试。"""
+
+    def test_valid_json_passes(self, config, workspace):
+        """合法 JSON final answer 直接通过。"""
+        config.json_mode = True
+        agent = _make_agent(
+            ['<final>{"file_path":"app.py","line":42}</final>'],
+            config, workspace,
+        )
+        answer = agent.ask("find bug")
+        assert "file_path" in answer
+        assert "app.py" in answer
+
+    def test_invalid_json_retries(self, config, workspace):
+        """非法 JSON → recovery prompt → 模型重试。"""
+        config.json_mode = True
+        agent = _make_agent(
+            [
+                "<final>not json</final>",           # ← 第 1 次失败
+                '<final>{"file_path":"app.py"}</final>',  # ← 重试成功
+            ],
+            config, workspace,
+        )
+        answer = agent.ask("find bug")
+        # 最终应接受第二次合法输出
+        assert "file_path" in answer
+
+    def test_invalid_json_exhausted_retries(self, config, workspace):
+        """重试耗尽后接受原样（不无限循环）。"""
+        config.json_mode = True
+        agent = _make_agent(
+            [
+                "<final>bad1</final>",
+                "<final>bad2</final>",
+                "<final>bad3</final>",  # 第 3 次 — 重试耗尽
+            ],
+            config, workspace,
+        )
+        answer = agent.ask("find bug")
+        # 耗尽后接受最后一次输出
+        assert "bad3" in answer
+
+    def test_schema_missing_fields_retries(self, config, workspace):
+        """缺少必填字段 → recovery prompt 含字段名。"""
+        config.json_mode = True
+        config.final_schema = {"file_path": "str", "line": "int"}
+        agent = _make_agent(
+            [
+                '<final>{"file_path":"app.py"}</final>',  # ← 缺 line
+                '<final>{"file_path":"app.py","line":42}</final>',  # ← 补齐后通过
+            ],
+            config, workspace,
+        )
+        answer = agent.ask("find bug")
+        assert "line" in answer
+
+    def test_schema_wrong_type_retries(self, config, workspace):
+        """字段类型错误 → recovery prompt 含类型信息。"""
+        config.json_mode = True
+        config.final_schema = {"file_path": "str", "line": "int"}
+        agent = _make_agent(
+            [
+                '<final>{"file_path":"app.py","line":"not_a_number"}</final>',
+                '<final>{"file_path":"app.py","line":42}</final>',
+            ],
+            config, workspace,
+        )
+        answer = agent.ask("find bug")
+        assert '"line":42' in answer or '"line": 42' in answer
+
+    def test_no_schema_passes_any_json(self, config, workspace):
+        """无 final_schema 时仅校验 JSON 语法。"""
+        config.json_mode = True
+        # 无 schema → 任意合法 JSON 都通过
+        agent = _make_agent(
+            ['<final>{"any":"thing","foo":123}</final>'],
+            config, workspace,
+        )
+        answer = agent.ask("do something")
+        assert "any" in answer
+
+    def test_json_retry_emits_trace(self, config, workspace):
+        """JSON 重试发出 trace 事件。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        config.json_mode = True
+        client = FakeModelClient([
+            "<final>bad</final>",
+            '<final>{"ok":true}</final>',
+        ])
+        agent = Agent(config=config, model_client=client, workspace=workspace)
+        loop = AgentLoop(agent)
+
+        events = []
+        loop._emit = lambda name, data=None: events.append((name, data))
+        answer = loop.run("test")
+
+        assert "ok" in answer
+        json_retries = [e for e in events if e[0] == "json_retry"]
+        assert len(json_retries) == 1
+        assert json_retries[0][1]["attempt"] == 1
+
+    def test_non_json_mode_skips_validation(self, config, workspace):
+        """非 json_mode 时跳过校验，即使配置了 schema。"""
+        config.json_mode = False
+        config.final_schema = {"file_path": "str"}
+        agent = _make_agent(
+            ["<final>this is plain text, not json</final>"],
+            config, workspace,
+        )
+        answer = agent.ask("explain")
+        # 纯文本答案直接通过
+        assert "plain text" in answer
+
+    def test_json_array_final_passes(self, config, workspace):
+        """JSON 数组（如 SuspectList）也通过语法校验。"""
+        config.json_mode = True
+        agent = _make_agent(
+            ['<final>[{"file":"a.py","line":1}]</final>'],
+            config, workspace,
+        )
+        answer = agent.ask("find bugs")
+        assert "a.py" in answer
+
