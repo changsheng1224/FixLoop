@@ -21,6 +21,9 @@ dev = [
     "pytest-cov>=4.0",
     "ruff>=0.5",
 ]
+encrypt = [
+    "cryptography>=40.0",
+]
 
 [build-system]
 requires = ["setuptools>=75.0"]
