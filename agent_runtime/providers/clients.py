@@ -413,6 +413,7 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
                         "Content-Type": "application/json",
                         "x-api-key": self.api_key,
                         "anthropic-version": "2023-06-01",
+                        "Connection": "keep-alive",
                     },
                 )
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
