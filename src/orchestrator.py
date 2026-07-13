@@ -435,6 +435,25 @@ class Orchestrator(RepairPipelineMixin):
         """
         return load_role_prompt("patcher", patcher_variant_for(plan))
 
+    @staticmethod
+    def _inject_repair_task_summary(agent, state: RepairState) -> None:
+        """将 _parse_issue 的结构化摘要注入 Agent working memory。
+
+        供 L1 memory 检索（§4.4）使用。
+        """
+        plan = state.repair_plan
+        if plan is None:
+            return
+        from agent_runtime.features.memory import set_task_summary
+
+        parts = [f"[{plan.issue_type}]"]
+        if plan.reasoning:
+            parts.append(plan.reasoning[:200])
+        if plan.suspect_files:
+            parts.append(f"files: {', '.join(plan.suspect_files[:3])}")
+        summary = " ".join(parts)
+        set_task_summary(agent.session["memory"], summary)
+
     def _run_agent(
         self,
         agent,
@@ -447,6 +466,10 @@ class Orchestrator(RepairPipelineMixin):
     ) -> tuple[str, dict]:
         """执行 Agent 调用（Verifier 用，保留 Agent loop）。"""
         from agent_runtime.log_context import log_context
+
+        # 注入 repair 任务上下文到 Agent working memory
+        if agent is not None and state is not None and state.repair_plan is not None:
+            self._inject_repair_task_summary(agent, state)
 
         t0 = time.time()
         run_id = getattr(agent, "shared_run_id", None)

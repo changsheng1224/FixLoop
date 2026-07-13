@@ -6,7 +6,7 @@ from src.agents.localizer import create_localizer
 from src.agents.patcher import create_patcher
 from src.agents.retriever import create_retriever
 from src.orchestrator import Orchestrator, apply_patch_to_text
-from src.state import CandidatePatch, RepairPlan, SuspectLocation
+from src.state import CandidatePatch, RepairPlan, RepairState, SuspectLocation
 
 
 class TestOrchestrator:
@@ -547,3 +547,105 @@ class TestParseIssueTypeRules:
         )
         assert plan.issue_type == "logic_error"
         assert plan.intent_parser == "rule:logic_error"
+
+
+# ---------------------------------------------------------------------------
+# _inject_repair_task_summary（V1.4-Bonus7b）
+# ---------------------------------------------------------------------------
+
+
+class TestInjectTaskSummary:
+    def test_injects_summary_into_agent_memory(self, temp_workspace):
+        """_inject_repair_task_summary 将结构化摘要写入 Agent working memory。"""
+        from agent_runtime.config import AgentConfig
+        from agent_runtime.providers.clients import FakeModelClient
+        from agent_runtime.runtime import Agent
+        from agent_runtime.workspace import WorkspaceContext
+
+        ws = WorkspaceContext.build(str(temp_workspace))
+        agent = Agent(
+            config=AgentConfig(),
+            model_client=FakeModelClient(outputs=["<final>ok</final>"]),
+            workspace=ws,
+            cwd=str(temp_workspace),
+        )
+        state = RepairState(issue_input="fix bug")
+        state.repair_plan = RepairPlan(
+            issue_type="type_error",
+            reasoning="app.py:42",
+            suspect_files=["app.py", "test_app.py"],
+        )
+
+        Orchestrator._inject_repair_task_summary(agent, state)
+
+        mem = agent.session.get("memory", {}).get("working", {})
+        summary = mem.get("task_summary", "")
+        assert "type_error" in summary
+        assert "app.py" in summary
+
+    def test_no_plan_skips_injection(self, temp_workspace):
+        """repair_plan=None 时静默跳过。"""
+        from agent_runtime.config import AgentConfig
+        from agent_runtime.providers.clients import FakeModelClient
+        from agent_runtime.runtime import Agent
+        from agent_runtime.workspace import WorkspaceContext
+
+        ws = WorkspaceContext.build(str(temp_workspace))
+        agent = Agent(
+            config=AgentConfig(),
+            model_client=FakeModelClient(outputs=["<final>ok</final>"]),
+            workspace=ws,
+            cwd=str(temp_workspace),
+        )
+        state = RepairState(issue_input="fix bug")
+        state.repair_plan = None
+
+        # 不应抛异常
+        Orchestrator._inject_repair_task_summary(agent, state)
+
+    def test_inject_includes_issue_type(self, temp_workspace):
+        from agent_runtime.config import AgentConfig
+        from agent_runtime.providers.clients import FakeModelClient
+        from agent_runtime.runtime import Agent
+        from agent_runtime.workspace import WorkspaceContext
+
+        ws = WorkspaceContext.build(str(temp_workspace))
+        agent = Agent(
+            config=AgentConfig(),
+            model_client=FakeModelClient(outputs=["<final>ok</final>"]),
+            workspace=ws,
+            cwd=str(temp_workspace),
+        )
+        state = RepairState(issue_input="fix bug")
+        state.repair_plan = RepairPlan(
+            issue_type="test_failure",
+            reasoning="test_add failed",
+            suspect_files=["test_app.py"],
+        )
+
+        Orchestrator._inject_repair_task_summary(agent, state)
+        summary = agent.session["memory"]["working"]["task_summary"]
+        assert "[test_failure]" in summary
+
+    def test_inject_truncates_long_reasoning(self, temp_workspace):
+        from agent_runtime.config import AgentConfig
+        from agent_runtime.providers.clients import FakeModelClient
+        from agent_runtime.runtime import Agent
+        from agent_runtime.workspace import WorkspaceContext
+
+        ws = WorkspaceContext.build(str(temp_workspace))
+        agent = Agent(
+            config=AgentConfig(),
+            model_client=FakeModelClient(outputs=["<final>ok</final>"]),
+            workspace=ws,
+            cwd=str(temp_workspace),
+        )
+        state = RepairState(issue_input="fix bug")
+        state.repair_plan = RepairPlan(
+            issue_type="logic_error",
+            reasoning="x" * 300,  # 超 200 字符
+        )
+
+        Orchestrator._inject_repair_task_summary(agent, state)
+        summary = agent.session["memory"]["working"]["task_summary"]
+        assert len(summary) < 350  # 被截断
