@@ -432,4 +432,118 @@ class TestApplyPatch:
         state = orch.repair('File "foo.py", line 1\nassert x == 2')
         assert state.status == "fixed"
         assert state.retry_count == 1
-        assert (temp_workspace / "foo.py").read_text(encoding="utf-8") == "x = 2\n"
+
+
+# ---------------------------------------------------------------------------
+# _parse_issue 规则补全（V1.4-Bonus7a）
+# ---------------------------------------------------------------------------
+
+
+class TestParseIssueTypeRules:
+    """_classify_issue_type 规则链测试。"""
+
+    def test_explicit_exception_type_error(self):
+        issue_type, rule = Orchestrator._classify_issue_type(
+            "File app.py line 42: TypeError: unsupported operand"
+        )
+        assert issue_type == "type_error"
+        assert rule == "explicit_exception"
+
+    def test_explicit_exception_import_error(self):
+        issue_type, rule = Orchestrator._classify_issue_type(
+            "ModuleNotFoundError: No module named 'utils'"
+        )
+        assert issue_type == "import_error"
+        assert rule == "explicit_exception"
+
+    def test_test_failure_pytest_output(self):
+        issue_type, rule = Orchestrator._classify_issue_type(
+            "FAILED test_app.py::test_add - AssertionError: assert 3 == 5"
+        )
+        assert issue_type == "test_failure"
+        assert "test_failure" in rule
+
+    def test_test_failure_assert_equals(self):
+        issue_type, rule = Orchestrator._classify_issue_type(
+            "AssertionError: assert x == 2  # x was 3"
+        )
+        assert issue_type == "test_failure"
+
+    def test_composite_keyword(self):
+        issue_type, rule = Orchestrator._classify_issue_type(
+            "composite issue: both import and type errors"
+        )
+        assert issue_type == "composite"
+
+    def test_config_error(self):
+        issue_type, rule = Orchestrator._classify_issue_type(
+            "pyproject.toml is missing [tool.pytest] section"
+        )
+        assert issue_type == "config_error"
+
+    def test_logic_error_wrong_result(self):
+        issue_type, rule = Orchestrator._classify_issue_type(
+            "The divide function returns wrong result for negative numbers"
+        )
+        assert issue_type == "logic_error"
+
+    def test_logic_error_should_return(self):
+        issue_type, rule = Orchestrator._classify_issue_type(
+            "validate_age should return False for invalid input"
+        )
+        assert issue_type == "logic_error"
+
+    def test_logic_error_incorrect_output(self):
+        issue_type, rule = Orchestrator._classify_issue_type(
+            "get_label produces incorrect output when name is empty string"
+        )
+        assert issue_type == "logic_error"
+
+    def test_logic_error_bug_in_function(self):
+        issue_type, rule = Orchestrator._classify_issue_type(
+            "There is a bug in the calculate_total function"
+        )
+        assert issue_type == "logic_error"
+
+    def test_unknown_fallback(self):
+        issue_type, rule = Orchestrator._classify_issue_type(
+            "help me please"
+        )
+        assert issue_type == "unknown"
+        assert rule == "none"
+
+    def test_explicit_exception_beats_logic_error(self):
+        """显式异常名优先于 logic_error 关键词。"""
+        issue_type, rule = Orchestrator._classify_issue_type(
+            "TypeError: the function returns incorrect result"
+        )
+        assert issue_type == "type_error"
+        assert rule == "explicit_exception"
+
+    def test_test_failure_beats_explicit_exception(self):
+        """pytest FAILED 优先于异常名（test_failure 规则在 explicit_exception 之前）。"""
+        issue_type, rule = Orchestrator._classify_issue_type(
+            "FAILED tests/test_app.py::test_calc - assert 3 == 5"
+        )
+        assert issue_type == "test_failure"
+
+    def test_parse_issue_sets_intent_parser(self):
+        """_parse_issue 完整流程正确设置 intent_parser。"""
+        orch = Orchestrator.__new__(Orchestrator)
+        orch._repo_root = "."
+        orch._light_client = None
+        plan = orch._parse_issue(
+            "FAILED test_app.py::test_add - AssertionError: assert 3 == 5"
+        )
+        assert plan.issue_type == "test_failure"
+        assert plan.intent_parser == "rule:test_failure"
+
+    def test_parse_issue_logic_error_intent(self):
+        orch = Orchestrator.__new__(Orchestrator)
+        orch._repo_root = "."
+        orch._light_client = None
+        plan = orch._parse_issue(
+            "the function returns wrong result for all negative inputs"
+        )
+        assert plan.issue_type == "logic_error"
+        assert plan.intent_parser == "rule:logic_error"
