@@ -844,6 +844,45 @@ class TestLoopDetection:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Native context_built 对齐（V1.5-Bonus1h）
+# ---------------------------------------------------------------------------
+
+
+class TestNativeContextBuilt:
+    def test_native_context_built_event_exists(self, config, workspace):
+        """Native 路径 emit context_built 事件且含 sections 键。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        agent = _make_agent(
+            ["<final>done</final>"],
+            config, workspace,
+        )
+        # 使用 NativeFakeClient 走 Native 路径
+        from agent_runtime.providers.clients import FakeNativeToolClient
+
+        agent2 = Agent(
+            config=config,
+            model_client=FakeNativeToolClient(outputs=["<final>done</final>"]),
+            workspace=workspace,
+            cwd=str(workspace.repo_root),
+        )
+        loop = AgentLoop(agent2)
+        events = []
+
+        def capture(name, data=None):
+            events.append((name, data))
+
+        loop._emit = capture
+        answer = loop.run("test native context built")
+        assert "done" in answer
+
+        ctx_events = [e for e in events if e[0] == "context_built"]
+        assert len(ctx_events) >= 1, f"expected context_built event, got events: {[e[0] for e in events]}"
+        payload = ctx_events[0][1]
+        assert "total_tokens" in payload or "context_sections" in payload
+
+
 class TestStreamingCancel:
     def test_cancel_during_stream_stops_early(self):
         """流式输出中途 cancel → CancelledError → user_cancel stop。"""
