@@ -142,14 +142,19 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             def run_retriever():
                 prompt = self._retriever_prompt([], plan=plan, issue=issue)
                 for retry in range(2):
-                    answer, timing = self._run_agent(
-                        self.retriever,
-                        prompt,
-                        "retriever",
-                        state,
-                        l2_phase="retrieve",
-                        l2_attempt=retry,
-                    )
+                    try:
+                        answer, timing = self._run_agent(
+                            self.retriever,
+                            prompt,
+                            "retriever",
+                            state,
+                            l2_phase="retrieve",
+                            l2_attempt=retry,
+                        )
+                    except Exception:
+                        # LLM 异常 → 降级到规则检索
+                        log.warning("[retriever] LLM 调用异常，降级到规则检索")
+                        return None, {"total_ms": 0, "internal": {}, "degrade": True}
                     ctx = parse_retrieved_context(answer)
                     if ctx.related_tests:
                         return ctx, timing
@@ -162,6 +167,13 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 fut_ret = pool.submit(run_retriever)
                 suspects, loc_timing = fut_loc.result()
                 context, ret_timing = fut_ret.result()
+
+            # LLM retriever 失败/空结果 → 自动降级到规则检索
+            if context is None or not getattr(context, "related_tests", None):
+                log.info("[retriever] 降级: LLM → 规则检索 (grep)")
+                context, ret_timing = self._rule_retrieve(suspects, issue)
+                retrieval_path = "degrade"
+                state.node_timings["retrieval_path"] = retrieval_path
 
         if not suspects:
             suspects = self._fallback_suspects_from_plan(plan, issue)
@@ -476,11 +488,11 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             fname = getattr(s, "file_path", "")
             if fname:
                 test_name = f"test_{Path(fname).stem}"
-                test_dir = repo / "tests"
+                test_dir = Path(self._repo_root) / "tests"
                 if test_dir.is_dir():
                     for tf in test_dir.rglob("*.py"):
                         if test_name in tf.name:
-                            related_tests.append(str(tf.relative_to(repo)))
+                            related_tests.append(str(tf.relative_to(Path(self._repo_root))))
 
         elapsed_ms = int((time.time() - t0) * 1000)
         return (

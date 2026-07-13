@@ -743,3 +743,35 @@ class TestBuildFeedback:
         result = VerificationResult(all_passed=False)
         feedback = orch._build_feedback(result)
         assert "[指导]" in feedback  # 至少包含指导
+
+
+# ---------------------------------------------------------------------------
+# Retriever 降级规则检索（V1.4-Bonus12b）
+# ---------------------------------------------------------------------------
+
+
+class TestRetrieverDegrade:
+    def test_rule_retrieve_returns_context(self, temp_workspace):
+        """_rule_retrieve 在无 LLM 时也能返回 RetrievedContext。"""
+        orch = Orchestrator.__new__(Orchestrator)
+        orch._repo_root = str(temp_workspace)
+        (temp_workspace / "app.py").write_text("def add(a,b): return a+b\n")
+        suspects = [
+            SuspectLocation(file_path="app.py", start_line=1, end_line=10,
+                            function_name="add", reason="traceback"),
+        ]
+        ctx, timing = orch._rule_retrieve(suspects, "TypeError in add")
+        assert ctx is not None
+
+    def test_rule_retrieve_has_required_fields(self, temp_workspace):
+        """_rule_retrieve 返回的 context 包含 required fields。"""
+        orch = Orchestrator.__new__(Orchestrator)
+        orch._repo_root = str(temp_workspace)
+        (temp_workspace / "app.py").write_text("def process(x): return x\n")
+        suspects = [
+            SuspectLocation(file_path="app.py", start_line=1, end_line=10,
+                            function_name="process", reason="stack"),
+        ]
+        ctx, timing = orch._rule_retrieve(suspects, "error in process")
+        assert hasattr(ctx, "related_tests")
+        assert hasattr(ctx, "similar_snippets")
