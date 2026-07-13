@@ -81,7 +81,7 @@ def build_context_sections(
     ctx["tools"] = int(impl.get("tools", 0) or 0)
     ctx["skills"] = int(impl.get("skills", 0) or 0)
     ctx["memory"] = int(impl.get("memory", 0) or 0)
-    ctx["knowledge"] = int(implementation_sections.get("relevant", 0) or 0)
+    ctx["knowledge"] = int(implementation_sections.get("knowledge", 0) or 0)
     ctx["state"] = count_state_section(agent, budget)
     ctx["history"] = int(implementation_sections.get("history", 0) or 0)
     ctx["task"] = int(implementation_sections.get("request", 0) or 0)

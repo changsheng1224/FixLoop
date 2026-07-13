@@ -45,7 +45,7 @@ BUDGET_SYSTEM = 700
 BUDGET_TOOLS = 900
 BUDGET_SKILLS = 400
 BUDGET_MEMORY = 800
-BUDGET_RELEVANT = 600
+BUDGET_KNOWLEDGE = 600  # 持久知识检索（episodic notes + durable facts）
 BUDGET_HISTORY = 2600
 KEEP_RECENT_HISTORY = 6  # 最近 N 条历史完整保留
 
@@ -131,9 +131,9 @@ class ContextManager:
     3. skills     — 调用示例 + L2 role
     4. workspace  — Workspace 快照（可变）
     5. memory     (~800 tokens)  — 工作记忆
-    6. relevant   (~600 tokens)  — 相关记忆条目
-    7. history    — 对话/工具调用历史（预算随 prompt_budget 缩放）
-    8. request    — 当前用户输入（L1 截断后）
+    6. knowledge (~600 tokens)  — 持久知识检索（episodic + durable）
+    7. history   — 对话/工具调用历史（预算随 prompt_budget 缩放）
+    8. request   — 当前用户输入（L1 截断后）
     """
 
     SECTION_ORDER = (
@@ -142,12 +142,12 @@ class ContextManager:
         "skills",
         "workspace",
         "memory",
-        "relevant",
+        "knowledge",   # 持久知识检索（episodic notes + durable facts）
         "history",
         "state",
     )
     NATIVE_SYSTEM_ORDER = ("system", "tools")
-    DYNAMIC_ORDER = ("skills", "workspace", "memory", "relevant", "history", "state")
+    DYNAMIC_ORDER = ("skills", "workspace", "memory", "knowledge", "history", "state")
 
     def __init__(self, agent, total_budget: int | None = None):
         self.agent = agent
@@ -259,9 +259,9 @@ class ContextManager:
             scaled_section_budget(BUDGET_MEMORY, section_cap or total),
         )
         filler.add_section(
-            "relevant",
-            self._get_relevant(user_message),
-            scaled_section_budget(BUDGET_RELEVANT, section_cap or total),
+            "knowledge",
+            self._get_knowledge(user_message),
+            scaled_section_budget(BUDGET_KNOWLEDGE, section_cap or total),
         )
         history_text = self._get_compressed_history(metadata)
         metadata["_history_section_text"] = history_text
@@ -358,7 +358,12 @@ class ContextManager:
         return workspace.text() if workspace else ""
 
     def _get_memory(self) -> str:
-        """Working Memory：当前任务 + 最近文件 + 文件摘要。"""
+        """Memory 段：当前任务的临时工作记忆（task_summary + recent_files + file_summaries）。
+
+        与 knowledge 段的区别：
+        - memory：本次任务的临时上下文，每轮 ask() 重置。
+        - knowledge：跨会话持久知识（episodic notes + durable facts），持久化存储。
+        """
         snap = run_memory_snapshot(self.agent.session)
         mem = snap if snap is not None else self.agent.session.get("memory", {})
         working = mem.get("working", {})
@@ -383,8 +388,8 @@ class ContextManager:
 
         return "\n".join(parts) if parts else ""
 
-    def _get_relevant(self, query: str = "") -> str:
-        """Episodic + Durable Memory 检索：与当前查询相关的笔记和持久知识。"""
+    def _get_knowledge(self, query: str = "") -> str:
+        """Knowledge 段：episodic notes + durable facts 检索结果。"""
         query = run_user_query(self.agent.session, query)
         if not query:
             return ""

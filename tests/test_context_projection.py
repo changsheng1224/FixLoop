@@ -55,7 +55,7 @@ class TestBuildContextSections:
         assert ctx["task"] == meta["sections"]["request"]
         assert ctx["task"] > 0
 
-    def test_knowledge_maps_from_relevant(self, agent):
+    def test_knowledge_maps_from_knowledge_section(self, agent):
         agent.session.setdefault("memory", {})["episodic"] = [
             {"text": "prior fix for import error in utils", "score": 0.9}
         ]
@@ -63,8 +63,8 @@ class TestBuildContextSections:
         cm = ContextManager(agent)
         _, meta = cm.build("import error in utils")
         ctx = build_context_sections(meta["sections"], agent=agent, budget=budget)
-        if meta["sections"].get("relevant"):
-            assert ctx["knowledge"] == meta["sections"]["relevant"]
+        if meta["sections"].get("knowledge"):
+            assert ctx["knowledge"] == meta["sections"]["knowledge"]
 
     def test_state_zero_without_plan_todos(self, agent):
         budget = TokenBudget(provider="fake", total_limit=6000)
