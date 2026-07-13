@@ -1122,7 +1122,8 @@ class AgentLoop:
             return
         from agent_runtime.features.memory.dream import dream_summary_to_trace, run_memory_dream
 
-        stats = run_memory_dream(mem)
+        root = getattr(self.agent, "_cwd", "") or ""
+        stats = run_memory_dream(mem, durable_root=root)
         if any(stats.get(k, 0) for k in ("deduped", "expired", "trimmed")):
             self._emit("memory_dream", dream_summary_to_trace(stats))
 

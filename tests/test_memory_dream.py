@@ -6,7 +6,11 @@ import time
 
 import pytest
 
+import tempfile
+from pathlib import Path
+
 from agent_runtime.features.memory.dream import (
+    MAX_DURABLE_ENTRIES_PER_TOPIC,
     MemoryDreamer,
     _DEFAULT_TTL_DAYS,
     dream_summary_to_trace,
@@ -189,6 +193,87 @@ class TestDreamSummaryToTrace:
         assert trace["expired"] == 1
         assert trace["total_before"] == 10
         assert trace["total_after"] == 7
+
+
+# ---------------------------------------------------------------------------
+# Durable GC
+# ---------------------------------------------------------------------------
+
+
+class TestDurableGC:
+    def test_within_limit_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _setup_topics_dir(tmp, 5)
+            state = default_memory_state()
+            dreamer = MemoryDreamer(state, durable_root=tmp)
+            removed = dreamer._gc_durable(max_entries=10)
+            assert removed == 0
+            entries = _count_entries(Path(tmp))
+            assert entries == 5
+
+    def test_exceeds_limit_evicts_oldest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _setup_topics_dir(tmp, 25)
+            state = default_memory_state()
+            dreamer = MemoryDreamer(state, durable_root=tmp)
+            removed = dreamer._gc_durable(max_entries=MAX_DURABLE_ENTRIES_PER_TOPIC)
+            assert removed == 5  # 25 - 20
+            entries = _count_entries(Path(tmp))
+            assert entries == MAX_DURABLE_ENTRIES_PER_TOPIC
+
+    def test_preserves_headers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _setup_topics_dir(tmp, 30)
+            state = default_memory_state()
+            dreamer = MemoryDreamer(state, durable_root=tmp)
+            dreamer._gc_durable(max_entries=10)
+            md = _topic_file(Path(tmp))
+            content = md.read_text(encoding="utf-8")
+            assert content.startswith("# Key Decisions")
+
+    def test_no_topics_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = default_memory_state()
+            dreamer = MemoryDreamer(state, durable_root=tmp)
+            assert dreamer._gc_durable(max_entries=10) == 0
+
+    def test_gc_in_run_triggers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _setup_topics_dir(tmp, 25)
+            state = default_memory_state()
+            stats = run_memory_dream(state, durable_root=tmp)
+            assert stats["durable_gc"] == 5
+
+    def test_max_entries_zero_disables(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _setup_topics_dir(tmp, 25)
+            state = default_memory_state()
+            dreamer = MemoryDreamer(state, durable_root=tmp)
+            stats = dreamer.run(max_durable=0)  # 显式禁用 GC
+            assert stats["durable_gc"] == 0
+
+
+def _setup_topics_dir(root: str, entry_count: int) -> Path:
+    topics = Path(root) / ".agent" / "memory" / "topics"
+    topics.mkdir(parents=True, exist_ok=True)
+    md = topics / "key-decisions.md"
+    lines = ["# Key Decisions", ""]
+    for i in range(entry_count):
+        lines.append(f"- Decision {i}: use pytest for testing")
+    md.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return topics
+
+
+def _topic_file(topics_root: Path) -> Path:
+    return topics_root / ".agent" / "memory" / "topics" / "key-decisions.md"
+
+
+def _count_entries(topics_root: Path) -> int:
+    md = _topic_file(topics_root)
+    if not md.is_file():
+        return 0
+    lines = md.read_text(encoding="utf-8").splitlines()
+    return sum(1 for l in lines if l.strip() and not l.startswith("#"))
 
 
 # ---------------------------------------------------------------------------
