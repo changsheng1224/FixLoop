@@ -1011,7 +1011,24 @@ class AgentLoop:
                         "attempt": self._json_retry_count,
                         "error": err_msg,
                     })
-                    user_message = err_msg
+                    # 走 ParseRetry → _handle_parse_retry，回到 Acting
+                    from agent_runtime.parse_recovery import (
+                        ParseFailure,
+                        ParseRetry,
+                        build_recovery_prompt,
+                    )
+                    failure = ParseFailure(
+                        kind="json_in_tool",
+                        snippet=final_text[:500],
+                        error_offset=None,
+                        error_message=err_msg,
+                        hint="final answer JSON 格式错误",
+                    )
+                    retry = ParseRetry(
+                        build_recovery_prompt(failure),
+                        failure,
+                    )
+                    user_message = self._handle_parse_retry(ts, raw, retry, step=step)
                     continue
                 self._json_retry_count = 0
                 self.agent.record({"role": "assistant", "content": final_text})

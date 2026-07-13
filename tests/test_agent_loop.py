@@ -606,6 +606,30 @@ class TestFinalAnswerValidation:
         answer = agent.ask("find bugs")
         assert "a.py" in answer
 
+    def test_final_answer_failure_returns_to_acting(self, config, workspace):
+        """畸形 final → ParseRetry → 再次 model 调用而非结束（V1.5-Bonus1i）。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        config.json_mode = True
+        agent = _make_agent(
+            [
+                "<final>bad json</final>",          # 失败 → retry
+                '<final>{"ok":true}</final>',       # 成功
+            ],
+            config, workspace,
+        )
+        loop = AgentLoop(agent)
+        events = []
+
+        def capture(name, data=None):
+            events.append(name)
+
+        loop._emit = capture
+        answer = loop.run("test")
+        assert "ok" in answer
+        # 应有 json_retry 事件，且不应直接结束
+        assert "json_retry" in events
+
 
 # ---------------------------------------------------------------------------
 # CoT 提取（V1.4-Bonus2d）
