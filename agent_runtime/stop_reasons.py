@@ -26,12 +26,13 @@ class StopReason(StrEnum):
     API_ERROR = "api_error"
     USER_CANCEL = "user_cancel"
     STALL = "stall"
+    GOAL_DRIFT = "goal_drift"
 
 
 CANONICAL_STOP_REASONS = frozenset(member.value for member in StopReason)
 
-# bonus 已列但尚未接线 — 枚举预留，normalize 时保持原值
-RESERVED_STOP_REASONS = frozenset({StopReason.STALL.value})
+# 尚未接线的预留枚举 — normalize 时保持原值
+RESERVED_STOP_REASONS: frozenset[str] = frozenset()
 
 
 def is_canonical_stop_reason(value: str) -> bool:
