@@ -4,6 +4,7 @@ from src.state import (
     CandidatePatch,
     RepairPlan,
     RepairState,
+    RepairSubTask,
     RetrievedContext,
     SuspectLocation,
     VerificationResult,
@@ -173,3 +174,52 @@ class TestBlackboardSnapshot:
         data = state.to_dict()
         assert "blackboard_snapshot" in data
         assert data["blackboard_snapshot"]["conflicts"] == []
+
+
+# ---------------------------------------------------------------------------
+# RepairSubTask（V1.4-Bonus15b）
+# ---------------------------------------------------------------------------
+
+
+class TestRepairSubTask:
+    def test_create_minimal(self):
+        st = RepairSubTask(id="fix_import", goal="add missing import")
+        assert st.id == "fix_import"
+        assert st.suspect_files == []
+        assert st.depends_on == []
+
+    def test_roundtrip_to_from_dict(self):
+        st = RepairSubTask(id="s1", goal="fix", suspect_files=["a.py"], depends_on=["s0"])
+        d = st.to_dict()
+        st2 = RepairSubTask.from_dict(d)
+        assert st2.id == "s1"
+        assert st2.suspect_files == ["a.py"]
+        assert st2.depends_on == ["s0"]
+
+
+class TestRepairPlanSubtasks:
+    def test_default_empty(self):
+        plan = RepairPlan(issue_type="type_error")
+        assert plan.subtasks == []
+
+    def test_with_subtasks(self):
+        plan = RepairPlan(
+            issue_type="composite",
+            subtasks=[
+                RepairSubTask(id="1", goal="fix import", suspect_files=["a.py"]),
+                RepairSubTask(id="2", goal="fix type", suspect_files=["b.py"], depends_on=["1"]),
+            ],
+        )
+        assert len(plan.subtasks) == 2
+        assert plan.subtasks[1].depends_on == ["1"]
+
+    def test_roundtrip_with_subtasks(self):
+        plan = RepairPlan(
+            issue_type="composite",
+            subtasks=[RepairSubTask(id="1", goal="fix")]
+        )
+        d = plan.to_dict()
+        assert len(d["subtasks"]) == 1
+        plan2 = RepairPlan.from_dict(d)
+        assert len(plan2.subtasks) == 1
+        assert plan2.subtasks[0].id == "1"

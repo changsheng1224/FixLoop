@@ -145,6 +145,40 @@ class SuspectLocation:
 
 
 @dataclass
+class RepairSubTask:
+    """可独立修复的子问题（V1.4-Bonus15b）。
+
+    Attributes:
+        id: 子任务标识（如 "fix_import"）。
+        goal: 子任务目标描述。
+        suspect_files: 该子任务的嫌疑文件列表。
+        depends_on: 依赖的其他子任务 id 列表。
+    """
+
+    id: str
+    goal: str
+    suspect_files: list[str] = field(default_factory=list)
+    depends_on: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "goal": self.goal,
+            "suspect_files": list(self.suspect_files),
+            "depends_on": list(self.depends_on),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "RepairSubTask":
+        return cls(
+            id=data.get("id", ""),
+            goal=data.get("goal", ""),
+            suspect_files=list(data.get("suspect_files", [])),
+            depends_on=list(data.get("depends_on", [])),
+        )
+
+
+@dataclass
 class RepairPlan:
     """修复计划——由 Orchestrator 解析 Issue 后产出。
 
@@ -167,6 +201,7 @@ class RepairPlan:
     reasoning: str = ""
     prompt_variants: dict[str, str] = field(default_factory=dict)
     intent_parser: str = ""
+    subtasks: list[RepairSubTask] = field(default_factory=list)
     schema_version: str = "1.0"
 
     def to_dict(self) -> dict:
@@ -181,6 +216,7 @@ class RepairPlan:
             "reasoning": self.reasoning,
             "prompt_variants": dict(self.prompt_variants),
             "intent_parser": self.intent_parser,
+            "subtasks": [s.to_dict() for s in self.subtasks],
             "schema_version": self.schema_version,
         }
 
@@ -200,6 +236,10 @@ class RepairPlan:
             reasoning=data.get("reasoning", ""),
             prompt_variants=dict(data.get("prompt_variants") or {}),
             intent_parser=data.get("intent_parser", ""),
+            subtasks=[
+                RepairSubTask.from_dict(s)
+                for s in data.get("subtasks", [])
+            ],
             schema_version=data.get("schema_version", "1.0"),
         )
 

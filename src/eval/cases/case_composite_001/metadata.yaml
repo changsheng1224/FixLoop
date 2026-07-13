@@ -1,0 +1,30 @@
+case_id: case_composite_001
+language: python
+issue_type: composite
+expected_skill: python_composite_fix
+difficulty: hard
+status: draft
+description: "composite 多文件多bug — calc.py类型转换+validator.py空值检查"
+tags:
+  - composite
+  - multi_file
+source_files:
+  - calc.py
+  - validator.py
+test_files:
+  - test_calc.py
+  - test_validator.py
+expected_patch: |
+  --- a/calc.py
+  +++ b/calc.py
+  @@ -1 +1,3 @@
+  -def add(a,b): return a+b
+  +def add(a,b):
+  +    return int(a) + int(b)
+  --- a/validator.py
+  +++ b/validator.py
+  @@ -1,4 +1,5 @@
+   def validate_name(name):
+  +    if not name:
+  +        raise ValueError("name required")
+       return name.strip()

@@ -205,6 +205,11 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         self._init_repair_blackboard()
         log.info("Orchestrator 开始")
 
+        # 阶段级读写锁：localize/retrieve 共享读，patcher 独占写
+        from src.repair.phase_guard import PhaseReadWriteLock
+
+        phase_lock = PhaseReadWriteLock()
+
         cancelled = False
         phase_timed_out = False
         phase_clock = self._make_phase_clock()
@@ -277,7 +282,8 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     phase_clock.ensure("localize")
                 state.phase = "localize"
                 t0 = time.time()
-                suspects, context, loc_timing, ret_timing = self._run_localize_and_retrieve(state)
+                with phase_lock.read():
+                    suspects, context, loc_timing, ret_timing = self._run_localize_and_retrieve(state)
                 wall_ms = int((time.time() - t0) * 1000)
                 if phase_clock is not None:
                     phase_clock.consume("localize", wall_ms)
@@ -318,10 +324,24 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
                     repo_snapshot = self._snapshot_repo() if self._verification_enabled() else None
                     log.info("Patcher 开始 (retry=%d)...", state.retry_count)
+
+                    # 冷却轮：连续相同失败 → 降低 temperature
+                    cooldown = getattr(self, "_verify_cooldown", None)
+                    saved_temp = None
+                    if cooldown is not None and cooldown.cooldown_active:
+                        saved_temp = self.patcher.config.temperature
+                        self.patcher.config.temperature = cooldown.suggested_temperature
+                        log.info("[cooldown] temperature: %.1f → %.1f", saved_temp,
+                                 cooldown.suggested_temperature)
+
                     state.phase = "patch"
                     if phase_clock is not None:
                         phase_clock.ensure("patch")
-                    state.candidate_patches, patch_timing = self._run_patcher(state)
+                    with phase_lock.write():
+                        state.candidate_patches, patch_timing = self._run_patcher(state)
+
+                    if saved_temp is not None:
+                        self.patcher.config.temperature = saved_temp
                     if phase_clock is not None:
                         phase_clock.consume("patch", patch_timing["total_ms"])
                     if patch_timing.get("user_cancel") or self._abort_repair_if_cancelled(state):
@@ -389,6 +409,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
                     if state.verification_result.all_passed:
                         state.status = RepairTerminalStatus.FIXED
+                        cooldown = getattr(self, "_verify_cooldown", None)
+                        if cooldown is not None:
+                            cooldown.record_success()
                         break
 
                     _record_pytest_exit(state, self._repo_root, "post_patch_pytest_code")
@@ -401,6 +424,19 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                         state.verification_result, state=state,
                     )
                     self._write_feedback_to_blackboard(state.feedback)
+
+                    # Verify 失败冷却轮：连续相同失败 → 降 temperature + 提示
+                    cooldown = getattr(self, "_verify_cooldown", None)
+                    if cooldown is None:
+                        from src.repair.verify_cooldown import VerifyCooldown
+
+                        cooldown = VerifyCooldown()
+                        self._verify_cooldown = cooldown
+                    cooldown.record_failure(
+                        state.verification_result.failure_logs
+                    )
+                    if cooldown.cooldown_active:
+                        state.feedback += f"\n\n{cooldown.cooldown_hint}"
                     state.retry_count += 1
 
                 if (
