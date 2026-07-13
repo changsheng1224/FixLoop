@@ -14,12 +14,16 @@ class ToolGateway:
         self._table = {}
         for tool, agents in permission_table.items():
             self._table[tool] = agents if isinstance(agents, set) else set(agents)
+        self._restricted: set[str] = set()
 
     def can_call(self, agent_name: str, tool_name: str) -> bool:
         """检查 agent 是否被授权调用 tool。"""
         allowed = self._table.get(tool_name)
         if allowed is None:
             return False
+        # 受限 agent 不享受通配符
+        if agent_name in self._restricted:
+            return agent_name in allowed
         return "*" in allowed or agent_name in allowed
 
     def dispatch(self, agent_name: str, tool_name: str, execute_fn):
@@ -41,6 +45,22 @@ class ToolGateway:
         """撤销 agent 对 tool 的调用权限。"""
         if tool_name in self._table and agent_name in self._table[tool_name]:
             self._table[tool_name].discard(agent_name)
+
+    def restrict_to(self, agent_name: str, allowed_tools: list[str]) -> None:
+        """将 agent 的工具权限限制在 allowed_tools 白名单内。
+
+        标记 agent 为受限（跳过通配符匹配）；grant 白名单工具；revoke 非白名单工具。
+        """
+        self._restricted.add(agent_name)
+        allowed = set(allowed_tools)
+        for tool_name in list(self._table.keys()):
+            if tool_name in allowed:
+                self._table[tool_name].add(agent_name)
+            else:
+                self._table[tool_name].discard(agent_name)
+        for tool_name in allowed:
+            if tool_name not in self._table:
+                self._table[tool_name] = {agent_name}
 
 
 # ---- 共享权限表 ----
