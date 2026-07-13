@@ -76,6 +76,7 @@ def compute_metrics(results: list[CaseResult]) -> EvalReport:
     skill_metrics = skill_metrics_from_case_results(results)
     pk = compute_pass_at_k(results)
     perf = compute_performance_matrix(results)
+    judge = compute_judge_summary(results)
     report = EvalReport(
         cases=results,
         summary=_summary_metrics(results),
@@ -84,6 +85,7 @@ def compute_metrics(results: list[CaseResult]) -> EvalReport:
         skill_metrics=skill_metrics,
         pass_at_k=pk,
         performance=perf,
+        judge_summary=judge,
     )
     if by_variant:
         report.by_variant = by_variant
@@ -135,6 +137,33 @@ def _p50(values: list[int]) -> int:
     if n % 2 == 0:
         return (s[n // 2 - 1] + s[n // 2]) // 2
     return s[n // 2]
+
+
+def compute_judge_summary(results: list[CaseResult]) -> dict:
+    """汇总 LLM-as-Judge 评分并与 patch_precision 对照。
+
+    仅统计 judge_score > 0 的 case（未启用 judge 时为空）。
+    """
+    judged = [r for r in results if r.judge_score > 0]
+    if not judged:
+        return {}
+
+    from src.eval.judge import JudgeClient
+
+    avg_score = round(sum(r.judge_score for r in judged) / len(judged), 2)
+    aligned = 0
+    for r in judged:
+        precision = r.minimal_lines / max(r.actual_lines, 1)
+        comparison = JudgeClient.compare_with_precision(r.judge_score, precision)
+        if comparison == "aligned":
+            aligned += 1
+
+    return {
+        "judged_cases": len(judged),
+        "avg_judge_score": avg_score,
+        "aligned_with_precision": aligned,
+        "alignment_rate": round(aligned / len(judged), 4) if judged else 0.0,
+    }
 
 
 def compute_pass_at_k(results: list[CaseResult]) -> dict[str, float]:

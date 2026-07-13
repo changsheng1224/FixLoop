@@ -50,6 +50,11 @@ def main(argv: list[str] | None = None) -> int:
         metavar="K",
         help="Pass@k 评测：每个 case 重复 K 次（默认 1）。报告 pass@1/pass@3",
     )
+    parser.add_argument(
+        "--with-judge",
+        action="store_true",
+        help="启用 LLM-as-Judge 评分（需 API key）",
+    )
     args = parser.parse_args(argv)
     setup_logging_from_args(args)
 
@@ -75,6 +80,7 @@ def main(argv: list[str] | None = None) -> int:
         skip_verify=args.skip_verify,
         resume=args.resume,
         pass_at_k=args.pass_at_k,
+        with_judge=args.with_judge,
     )
     print_eval_report(report, verbose=args.verbose, report_path=report_path)
     return code
