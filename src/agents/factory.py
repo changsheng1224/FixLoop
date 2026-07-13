@@ -16,13 +16,15 @@ MultiAgentRole = Literal["localizer", "retriever", "patcher", "verifier"]
 RepairAgentRole = Literal["localizer", "retriever", "patcher", "verifier", "baseline"]
 
 _shared_repair_gateway: ToolGateway | None = None
+_shared_gateway_root: str = ""
 
 
-def _get_or_create_gateway() -> ToolGateway:
-    """返回共享的 ToolGateway 实例（同一 workspace 复用）。"""
-    global _shared_repair_gateway
-    if _shared_repair_gateway is None:
-        _shared_repair_gateway = build_repair_gateway()
+def _get_or_create_gateway(repo_root: str = "") -> ToolGateway:
+    """返回共享的 ToolGateway 实例（同一 workspace 复用，含 tools.yaml manifest）。"""
+    global _shared_repair_gateway, _shared_gateway_root
+    if _shared_repair_gateway is None or (repo_root and repo_root != _shared_gateway_root):
+        _shared_repair_gateway = build_repair_gateway(repo_root)
+        _shared_gateway_root = repo_root
     return _shared_repair_gateway
 
 
@@ -81,7 +83,7 @@ def create_repair_agent(
         light = None
     else:
         defaults = _AGENT_DEFAULTS[role]
-        gw = _get_or_create_gateway()
+        gw = _get_or_create_gateway(root)
         if role == "verifier":
             gw.grant("verifier", "sandbox_build")
             gw.grant("verifier", "sandbox_test")
