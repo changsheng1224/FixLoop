@@ -83,7 +83,7 @@ def count_changed_lines(patch_text: str) -> int:
 
 
 def extract_agent_timings(node_timings: dict | None) -> dict:
-    """从 RepairState.node_timings 提取评测关心的耗时字段。"""
+    """从 RepairState.node_timings 提取评测关心的耗时与性能字段。"""
     if not node_timings:
         return {}
     from src.repair.timing_schema import PHASES, get_phase_ms, phase_ms_key
@@ -109,11 +109,38 @@ def extract_agent_timings(node_timings: dict | None) -> dict:
     for key in legacy_keys:
         if key in node_timings:
             result[key] = node_timings[key]
+
+    # 性能矩阵字段（V1.4-Bonus5c）
+    token_usage = node_timings.get("token_usage") or {}
+    if isinstance(token_usage, dict):
+        sections = token_usage.get("sections") or token_usage.get("token_usage") or {}
+        result["context_tokens"] = sum(
+            int(v) for v in sections.values()
+        ) if isinstance(sections, dict) else 0
+        result["cache_hit_rate"] = float(token_usage.get("cache_hit_rate", 0) or 0)
+    result["total_tool_steps"] = int(
+        node_timings.get("total_tool_steps", 0)
+        or node_timings.get("tool_steps", 0)
+        or 0
+    )
+    # p50 ttft 从 agent_reports 延迟计算（此处存原始值）
+    ttft_vals = node_timings.get("ttft_ms")
+    if ttft_vals is None:
+        ttft_by_agent = node_timings.get("latency_by_agent") or {}
+        ttft_vals = [
+            int(v.get("ttft_ms", 0) or 0)
+            for v in ttft_by_agent.values()
+            if isinstance(v, dict) and v.get("ttft_ms")
+        ]
+    if ttft_vals:
+        result["ttft_values"] = list(ttft_vals) if isinstance(ttft_vals, list) else [ttft_vals]
     return result
 
 
 class EvalRunner:
     """评测运行器。"""
+
+    CHECKPOINT_FILENAME = ".checkpoint.json"
 
     def __init__(
         self,
@@ -126,6 +153,52 @@ class EvalRunner:
         self.cases_dir = Path(cases_dir or DEFAULT_CASES_DIR)
         self.output_dir = Path(output_dir or Path.cwd() / "eval_results")
         self.skip_verify = skip_verify
+
+    @property
+    def _checkpoint_path(self) -> Path:
+        return self.output_dir / self.CHECKPOINT_FILENAME
+
+    def _load_checkpoint(self) -> set[tuple[str, str, int]]:
+        """加载已完成的 (case_id, variant, rep) 集合。
+
+        文件不存在或损坏时返回空集合。
+        """
+        cp = self._checkpoint_path
+        if not cp.is_file():
+            return set()
+        try:
+            entries = json.loads(cp.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return set()
+        result = set()
+        for e in entries:
+            result.add((
+                str(e.get("case_id", "")),
+                str(e.get("variant", "")),
+                int(e.get("rep", 0)),
+            ))
+        return result
+
+    def _save_checkpoint_entry(self, case_id: str, variant: str = "", rep: int = 0) -> None:
+        """追加一条 checkpoint 记录（逐行安全追加）。"""
+        cp = self._checkpoint_path
+        cp.parent.mkdir(parents=True, exist_ok=True)
+        entries = []
+        if cp.is_file():
+            try:
+                entries = json.loads(cp.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                entries = []
+        entries.append({"case_id": case_id, "variant": variant, "rep": rep})
+        tmp = cp.with_suffix(".tmp")
+        tmp.write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(cp)
+
+    def _clear_checkpoint(self) -> None:
+        """删除 checkpoint 文件（全部完成时调用）。"""
+        cp = self._checkpoint_path
+        if cp.is_file():
+            cp.unlink()
 
     def _is_fake_mode(self) -> bool:
         if hasattr(self, "_cached_fake_mode"):
@@ -149,14 +222,49 @@ class EvalRunner:
         self,
         case_ids: list[str] | None = None,
         report_path: Path | None = None,
+        *,
+        resume: bool = False,
+        variant: str = "",
+        rep: int = 0,
+        repetitions: int = 1,
     ) -> EvalReport:
-        """运行多个 Case，写入 eval_report.json 并返回聚合报告。"""
+        """运行多个 Case，写入 eval_report.json 并返回聚合报告。
+
+        Args:
+            case_ids: 待运行的 case ID 列表。None 时运行全部。
+            report_path: 报告输出路径。None 时自动生成。
+            resume: 启用断点续跑（跳过 checkpoint 中已完成的 case）。
+            variant: 变体名（预留，供 ablation/Pass@k 使用）。
+            rep: 重复序号（预留，供 Pass@k 使用）。
+            repetitions: 每个 case 重复运行次数（Pass@k）。默认 1。
+        """
         ids = case_ids or self.list_cases()
-        results = [self.run_case(case_id) for case_id in ids]
+        completed = self._load_checkpoint() if resume else set()
+
+        results: list[CaseResult] = []
+        for case_id in ids:
+            for run_idx in range(repetitions):
+                if resume and (case_id, variant, run_idx) in completed:
+                    continue
+                result = self.run_case(case_id)
+                result.run_index = run_idx
+                results.append(result)
+                if resume:
+                    self._save_checkpoint_entry(
+                        case_id, variant=variant, rep=run_idx,
+                    )
+
+        if resume and not results:
+            print("[eval] 所有 case 已完成", file=sys.stderr)
+            return build_eval_report([])
+
         report = build_eval_report(results)
         out = report_path or (self.output_dir / "eval_report.json")
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(report.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+
+        if resume:
+            self._clear_checkpoint()
         return report
 
     def run_case(self, case_id: str) -> CaseResult:

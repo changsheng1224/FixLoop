@@ -74,16 +74,98 @@ def compute_metrics(results: list[CaseResult]) -> EvalReport:
     from src.eval.skill_metrics import skill_metrics_from_case_results
 
     skill_metrics = skill_metrics_from_case_results(results)
+    pk = compute_pass_at_k(results)
+    perf = compute_performance_matrix(results)
     report = EvalReport(
         cases=results,
         summary=_summary_metrics(results),
         by_type=_bucket_metrics(results, lambda r: r.issue_type),
         by_difficulty=_bucket_metrics(results, lambda r: r.difficulty),
         skill_metrics=skill_metrics,
+        pass_at_k=pk,
+        performance=perf,
     )
     if by_variant:
         report.by_variant = by_variant
     return report
+
+
+def compute_performance_matrix(results: list[CaseResult]) -> dict:
+    """计算性能矩阵：context_tokens, cache_hit_rate, p50_ttft_ms, tool_steps, repair_retries。
+
+    数据来源：CaseResult.agent_timings（由 extract_agent_timings 填充）。
+    """
+    if not results:
+        return {
+            "avg_context_tokens": 0,
+            "avg_cache_hit_rate": 0.0,
+            "p50_ttft_ms": 0,
+            "avg_tool_steps": 0.0,
+            "avg_repair_retries": 0.0,
+        }
+
+    total = len(results)
+    context_tokens = [r.agent_timings.get("context_tokens", 0) or 0 for r in results]
+    cache_hits = [r.agent_timings.get("cache_hit_rate", 0) or 0 for r in results]
+    tool_steps = [r.agent_timings.get("total_tool_steps", 0) or 0 for r in results]
+    retries = [r.retry_count for r in results]
+
+    # p50 ttft：从所有 case 的 ttft_values 中收集并取中位数
+    all_ttft: list[int] = []
+    for r in results:
+        vals = r.agent_timings.get("ttft_values", []) or []
+        all_ttft.extend(int(v) for v in vals if v)
+    p50_ttft = _p50(all_ttft) if all_ttft else 0
+
+    return {
+        "avg_context_tokens": round(sum(context_tokens) / total, 2),
+        "avg_cache_hit_rate": round(sum(cache_hits) / total, 4),
+        "p50_ttft_ms": p50_ttft,
+        "avg_tool_steps": round(sum(tool_steps) / total, 2),
+        "avg_repair_retries": round(sum(retries) / total, 2),
+    }
+
+
+def _p50(values: list[int]) -> int:
+    """计算中位数（p50）。"""
+    if not values:
+        return 0
+    s = sorted(values)
+    n = len(s)
+    if n % 2 == 0:
+        return (s[n // 2 - 1] + s[n // 2]) // 2
+    return s[n // 2]
+
+
+def compute_pass_at_k(results: list[CaseResult]) -> dict[str, float]:
+    """计算 Pass@k 指标。
+
+    对每个 case_id，收集所有 run_index 的结果。若任一 run 通过（fixed=True），
+    则该 case 在 k 下通过。返回 {"pass@1": ..., "pass@3": ...}。
+
+    k 值取 min(最大 run_index+1, 目标 k)。
+    若所有 case 都只有 1 次 run，则 pass@3 = pass@1。
+    """
+    if not results:
+        return {"pass@1": 0.0, "pass@3": 0.0}
+
+    # 按 case_id 分组
+    by_case: dict[str, list[CaseResult]] = {}
+    for r in results:
+        by_case.setdefault(r.case_id, []).append(r)
+
+    total_cases = len(by_case)
+
+    def _pass_at(k: int) -> float:
+        passed = 0
+        for case_id, runs in by_case.items():
+            # 取前 k 个 run（或全部）
+            samples = runs[:k]
+            if any(r.fixed for r in samples):
+                passed += 1
+        return round(passed / total_cases, 4) if total_cases > 0 else 0.0
+
+    return {"pass@1": _pass_at(1), "pass@3": _pass_at(3)}
 
 
 def _markdown_table(headers: list[str], rows: list[list[str]]) -> str:
