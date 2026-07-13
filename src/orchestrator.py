@@ -490,7 +490,7 @@ class Orchestrator(RepairPipelineMixin):
             )
         try:
             with log_context(run_id=run_id, agent=agent_name):
-                answer = agent.ask(prompt)
+                answer = agent.ask(prompt, skip_plan=True)
         except Exception as e:
             if state is not None:
                 state.agent_errors[agent_name] = str(e)

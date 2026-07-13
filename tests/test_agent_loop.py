@@ -706,6 +706,71 @@ class TestCoTStripping:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Plan/TodoList 强化（V1.5-Bonus1b）
+# ---------------------------------------------------------------------------
+
+
+class TestPlanPhase:
+    def test_plan_phase_emits_events(self, config, workspace):
+        """普通 ask 产生 plan_phase + plan_created 事件。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        agent = _make_agent(["<final>done</final>"], config, workspace)
+        loop = AgentLoop(agent)
+        events = []
+
+        def capture(name, data=None):
+            events.append(name)
+
+        loop._emit = capture
+        answer = loop.run("fix the bug in app.py")
+        assert "done" in answer
+        assert "plan_phase" in events
+        assert "plan_created" in events
+
+    def test_skip_plan_no_llm_call(self, config, workspace):
+        """skip_plan=True 时不生成 plan，无 plan_created。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        agent = _make_agent(["<final>done</final>"], config, workspace)
+        loop = AgentLoop(agent)
+        events = []
+
+        def capture(name, data=None):
+            events.append(name)
+
+        loop._emit = capture
+        answer = loop.run("fix the bug", skip_plan=True)
+        assert "done" in answer
+        assert "plan_phase" in events  # 应有 skipped 事件
+        assert "plan_created" not in events  # 无实际 plan
+
+    def test_skip_plan_emits_skipped_trace(self, config, workspace):
+        """skip_plan 时 plan_phase 携带 source=skipped。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        agent = _make_agent(["<final>done</final>"], config, workspace)
+        loop = AgentLoop(agent)
+        events = []
+
+        def capture(name, data=None):
+            events.append((name, data))
+
+        loop._emit = capture
+        loop.run("fix bug", skip_plan=True)
+        plan_events = [e for e in events if e[0] == "plan_phase"]
+        assert len(plan_events) == 1
+        assert plan_events[0][1]["source"] == "skipped"
+
+    def test_agent_ask_passes_skip_plan(self, config, workspace):
+        """Agent.ask(skip_plan=True) 传递到 loop.run()。"""
+        agent = _make_agent(["<final>done</final>"], config, workspace)
+        # 通过 Agent.ask 接口
+        answer = agent.ask("fix bug", skip_plan=True)
+        assert "done" in answer
+
+
 class TestLoopDetection:
     def test_loop_detected_stops_with_circuit_breaker(self, config, workspace):
         """连续 3 次相同 read_file → circuit_breaker stop。"""

@@ -632,8 +632,32 @@ class AgentLoop:
         retry = ParseRetry(build_recovery_prompt(failure), failure)
         return self._handle_parse_retry(ts, raw, retry, step=step)
 
+    def _plan_phase(self, user_message: str, *, skip_plan: bool = False) -> None:
+        """Plan 阶段：生成 TodoList 并写入 session。
+
+        Args:
+            user_message: 用户输入。
+            skip_plan: L2 repair 等场景跳过 plan（避免额外 LLM 调用）。
+        """
+        if skip_plan:
+            self._emit("plan_phase", {"source": "skipped"})
+            self._plan_todos = []
+            return
+
+        todos = self._generate_plan(user_message)
+        self._plan_todos = todos
+        if todos:
+            self.agent.session["plan_todos"] = todos
+            self._emit("plan_phase", {"source": "llm" if getattr(self.agent, "light_client", None) else "rule", "count": len(todos)})
+            self._emit("plan_created", {"todos": list(todos)})
+            self._start_next_todo()
+        else:
+            self._emit("plan_phase", {"source": "empty"})
+
     def _generate_plan(self, user_message: str) -> list[dict]:
         """用 light_client 或规则生成 TodoList。"""
+        import json as _json
+
         # 尝试 light_client
         light = getattr(self.agent, "light_client", None)
         if light is not None:
@@ -643,11 +667,10 @@ class AgentLoop:
                     f"[{{\"id\":\"1\",\"content\":\"...\",\"status\":\"pending\"}},...]\n\n{user_message[:500]}"
                 )
                 raw = light.complete(prompt, max_new_tokens=256)
-                # 提取 JSON 数组
                 start = raw.find("[")
                 end = raw.rfind("]") + 1
                 if start >= 0 and end > start:
-                    todos = json.loads(raw[start:end])
+                    todos = _json.loads(raw[start:end])
                     if isinstance(todos, list) and todos:
                         return todos
             except Exception:
@@ -692,7 +715,7 @@ class AgentLoop:
 
     # ---- 入口 ----
 
-    def run(self, user_message: str, callback=None) -> str:
+    def run(self, user_message: str, callback=None, *, skip_plan: bool = False) -> str:
         from agent_runtime.log_context import log_context
         from agent_runtime.task_state import TaskState
 
@@ -722,17 +745,13 @@ class AgentLoop:
                 init_run_projection(self.agent.session, user_message)
                 self.agent.record({"role": "user", "content": user_message})
                 self._gen_task_summary(user_message)
-                self._plan_todos = self._generate_plan(user_message)
+                self._plan_phase(user_message, skip_plan=skip_plan)
                 self._no_progress_steps = 0
                 # 重置 StepGuard + 注入任务上下文
                 self._step_guard.reset(
                     task_summary=self._get_task_summary_text(),
                     suspect_files=self._extract_suspect_files(),
                 )
-                if self._plan_todos:
-                    self.agent.session["plan_todos"] = self._plan_todos
-                    self._emit("plan_created", {"todos": list(self._plan_todos)})
-                    self._start_next_todo()
 
                 if hasattr(self.agent.model_client, "chat_with_tools"):
                     answer = self._run_with_native_tools(user_message, ts, callback)
