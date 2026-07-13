@@ -83,7 +83,7 @@ def count_changed_lines(patch_text: str) -> int:
 
 
 def extract_agent_timings(node_timings: dict | None) -> dict:
-    """从 RepairState.node_timings 提取评测关心的耗时字段。"""
+    """从 RepairState.node_timings 提取评测关心的耗时与性能字段。"""
     if not node_timings:
         return {}
     from src.repair.timing_schema import PHASES, get_phase_ms, phase_ms_key
@@ -109,6 +109,31 @@ def extract_agent_timings(node_timings: dict | None) -> dict:
     for key in legacy_keys:
         if key in node_timings:
             result[key] = node_timings[key]
+
+    # 性能矩阵字段（V1.4-Bonus5c）
+    token_usage = node_timings.get("token_usage") or {}
+    if isinstance(token_usage, dict):
+        sections = token_usage.get("sections") or token_usage.get("token_usage") or {}
+        result["context_tokens"] = sum(
+            int(v) for v in sections.values()
+        ) if isinstance(sections, dict) else 0
+        result["cache_hit_rate"] = float(token_usage.get("cache_hit_rate", 0) or 0)
+    result["total_tool_steps"] = int(
+        node_timings.get("total_tool_steps", 0)
+        or node_timings.get("tool_steps", 0)
+        or 0
+    )
+    # p50 ttft 从 agent_reports 延迟计算（此处存原始值）
+    ttft_vals = node_timings.get("ttft_ms")
+    if ttft_vals is None:
+        ttft_by_agent = node_timings.get("latency_by_agent") or {}
+        ttft_vals = [
+            int(v.get("ttft_ms", 0) or 0)
+            for v in ttft_by_agent.values()
+            if isinstance(v, dict) and v.get("ttft_ms")
+        ]
+    if ttft_vals:
+        result["ttft_values"] = list(ttft_vals) if isinstance(ttft_vals, list) else [ttft_vals]
     return result
 
 

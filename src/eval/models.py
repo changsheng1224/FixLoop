@@ -75,6 +75,7 @@ class EvalReport:
     by_variant: dict = field(default_factory=dict)
     skill_metrics: dict = field(default_factory=dict)
     pass_at_k: dict = field(default_factory=dict)
+    performance: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """序列化为 JSON 可写 dict（含 summary 与 cases 列表）。"""
@@ -90,4 +91,6 @@ class EvalReport:
             data["skill_metrics"] = self.skill_metrics
         if self.pass_at_k:
             data["pass_at_k"] = self.pass_at_k
+        if self.performance:
+            data["performance"] = self.performance
         return data
