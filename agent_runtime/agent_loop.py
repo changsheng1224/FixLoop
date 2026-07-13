@@ -656,10 +656,18 @@ class AgentLoop:
 
     def _xml_invalid_tool_retry(self, ts, payload, *, raw: str, step: int) -> str:
         failure = failure_invalid_tool_payload(payload)
-        retry = ParseRetry(build_recovery_prompt(failure), failure)
+        last = self._last_successful_tool_call()
+        prompt = build_recovery_prompt(failure, last_tool_call=last)
+        retry = ParseRetry(prompt, failure, has_last_tool_anchor=last is not None)
         return self._handle_parse_retry(ts, raw, retry, step=step)
 
-    def _plan_phase(self, user_message: str, *, skip_plan: bool = False) -> None:
+    def _last_successful_tool_call(self) -> dict | None:
+        """从 session history 中找上一次成功的 tool 调用。"""
+        history = self.agent.session.get("history", [])
+        for h in reversed(history):
+            if h.get("role") == "tool" and h.get("tool_name"):
+                return {"name": h["tool_name"], "args": h.get("tool_args", {})}
+        return None
         """Plan 阶段：生成 TodoList 并写入 session。
 
         Args:
