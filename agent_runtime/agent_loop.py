@@ -31,15 +31,6 @@ from agent_runtime.cancellation import CancelledError, run_with_cancellation
 _MODIFYING_TOOLS = frozenset({"write_file", "patch_file", "run_shell"})
 
 
-def _canonical_hash_for_trace(tool_name: str, args: dict) -> str:
-    """死循环 trace 用的 args hash。"""
-    import hashlib
-    import json
-
-    payload = json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
-    return hashlib.sha256(f"{tool_name}:{payload}".encode()).hexdigest()[:12]
-
-
 def _log_loop(msg: str) -> None:
     """Loop 阶段 debug 日志（受 --log-level 控制）。"""
     from agent_runtime.logging_setup import get_logger
@@ -451,9 +442,11 @@ class AgentLoop:
         # 死循环检测：Gate 5.5 rejection → 升级为 stop
         error_code = result.metadata.get("tool_error_code", "")
         if error_code == "loop_detected":
+            from agent_runtime.tool_executor import _canonical_args_hash
+
             self._emit("loop_detected", {
                 "tool": tool_name,
-                "args_hash": _canonical_hash_for_trace(tool_name, tool_args),
+                "args_hash": _canonical_args_hash(tool_name, tool_args),
                 "window_size": int(
                     getattr(self.agent.config, "loop_detect_threshold", 3) or 3
                 ),
@@ -588,7 +581,6 @@ class AgentLoop:
         )
         meta = getattr(self, "_last_token_meta", None) or {}
         cache_key = str(meta.get("prompt_cache_key", "") or "")
-        import time as _time_module
         from agent_runtime.errors import EmptyModelResponse
 
         for empty_try in range(self.MAX_EMPTY_RETRIES):
@@ -609,7 +601,7 @@ class AgentLoop:
                     "step": step,
                 })
                 if empty_try < self.MAX_EMPTY_RETRIES - 1:
-                    _time_module.sleep(0.5 * (empty_try + 1))
+                    _time.sleep(0.5 * (empty_try + 1))
                 else:
                     ts.stop_with_reason(
                         StopReason.API_ERROR, "stopped",
@@ -702,8 +694,6 @@ class AgentLoop:
 
     def _generate_plan(self, user_message: str) -> list[dict]:
         """用 light_client 或规则生成 TodoList。"""
-        import json as _json
-
         # 尝试 light_client
         light = getattr(self.agent, "light_client", None)
         if light is not None:
@@ -716,7 +706,7 @@ class AgentLoop:
                 start = raw.find("[")
                 end = raw.rfind("]") + 1
                 if start >= 0 and end > start:
-                    todos = _json.loads(raw[start:end])
+                    todos = json.loads(raw[start:end])
                     if isinstance(todos, list) and todos:
                         return todos
             except Exception:
@@ -1161,8 +1151,6 @@ class AgentLoop:
         Returns:
             (ok, error_message)。ok=True 表示通过，error_message 为 recovery 提示。
         """
-        import json as _json
-
         config = self.agent.config
         if not config.json_mode:
             return True, ""
@@ -1170,8 +1158,8 @@ class AgentLoop:
 
         # L1: JSON 语法
         try:
-            data = _json.loads(text)
-        except _json.JSONDecodeError as e:
+            data = json.loads(text)
+        except json.JSONDecodeError as e:
             return False, (
                 f"上一轮 final answer 不是合法 JSON（{e}）。"
                 "请严格输出 JSON 格式的最终答案，不要包裹在 markdown 代码块中。"
