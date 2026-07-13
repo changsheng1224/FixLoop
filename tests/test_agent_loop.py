@@ -771,6 +771,33 @@ class TestPlanPhase:
         assert "done" in answer
 
 
+# ---------------------------------------------------------------------------
+# 空模型响应 → 重试（V1.5-Bonus1c）
+# ---------------------------------------------------------------------------
+
+
+class TestEmptyModelResponse:
+    def test_empty_then_success(self, config, workspace):
+        """一次空响应后重试成功。"""
+        outputs = [
+            "",  # 空响应
+            "<final>fixed</final>",
+        ]
+        agent = _make_agent(outputs, config, workspace)
+        answer = agent.ask("fix bug")
+        assert "fixed" in answer
+
+    def test_consecutive_empty_stops_with_api_error(self, config, workspace):
+        """连续空响应 → api_error。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        outputs = ["", "", "", "<final>never</final>"]
+        agent = _make_agent(outputs, config, workspace)
+        loop = AgentLoop(agent)
+        answer = loop.run("fix bug")
+        assert "API" in answer or "api_error" in loop.stop_reason or "空" in answer
+
+
 class TestLoopDetection:
     def test_loop_detected_stops_with_circuit_breaker(self, config, workspace):
         """连续 3 次相同 read_file → circuit_breaker stop。"""

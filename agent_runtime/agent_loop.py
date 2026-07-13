@@ -107,6 +107,8 @@ class AgentLoop:
         self._no_progress_steps = 0
         self._step_guard = StepGuard()
         self._json_retry_count = 0
+        self._empty_retries = 0
+        self.MAX_EMPTY_RETRIES = 3
 
     def _accumulate_context_stats(self, meta: dict) -> None:
         """从 context_built metadata 累积 section 统计 + cache hit rate。"""
@@ -577,14 +579,39 @@ class AgentLoop:
         )
         meta = getattr(self, "_last_token_meta", None) or {}
         cache_key = str(meta.get("prompt_cache_key", "") or "")
-        raw = self._invoke_model_call(
-            lambda: self.agent.circuit_breaker.call(
-                self.agent.model_client.complete,
-                prompt_text,
-                max_new_tokens=self.agent.config.max_new_tokens,
-                prompt_cache_key=cache_key,
-            )
-        )
+        import time as _time_module
+        from agent_runtime.errors import EmptyModelResponse
+
+        for empty_try in range(self.MAX_EMPTY_RETRIES):
+            try:
+                raw = self._invoke_model_call(
+                    lambda: self.agent.circuit_breaker.call(
+                        self.agent.model_client.complete,
+                        prompt_text,
+                        max_new_tokens=self.agent.config.max_new_tokens,
+                        prompt_cache_key=cache_key,
+                    )
+                )
+                break  # 成功，退出重试循环
+            except EmptyModelResponse:
+                self._empty_retries += 1
+                self._emit("empty_model_response", {
+                    "attempt": empty_try + 1,
+                    "step": step,
+                })
+                if empty_try < self.MAX_EMPTY_RETRIES - 1:
+                    _time_module.sleep(0.5 * (empty_try + 1))
+                else:
+                    ts.stop_with_reason(
+                        StopReason.API_ERROR, "stopped",
+                        detail="empty_model_response_exhausted",
+                    )
+                    self.stop_reason = StopReason.API_ERROR
+                    raise CancelledError("api_error", answer=(
+                        "<final>API 错误: 模型连续返回空响应，已重试 "
+                        f"{self.MAX_EMPTY_RETRIES} 次。</final>"
+                    ))
+
         ts.node_timings.setdefault("model_call_ms", 0)
         ts.node_timings["model_call_ms"] += int((_time.time() - t1) * 1000)
         self._record_model_timings(
@@ -929,7 +956,9 @@ class AgentLoop:
             )
             try:
                 raw, t1 = self._xml_call_model(ts, prompt_text, step=step)
-            except CancelledError:
+            except CancelledError as e:
+                if e.answer:
+                    return e.answer
                 return self._finish_user_cancel(ts, phase="model_wait")
             except Exception as e:
                 if (msg := self._stop_for_api_error(ts, e)) is not None:
