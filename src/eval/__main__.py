@@ -38,6 +38,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="CI 模式：--all --fake --skip-verify，输出到 eval_results/ci",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="断点续跑：跳过已完成的 case（读取 eval_results/.checkpoint.json）",
+    )
     args = parser.parse_args(argv)
     setup_logging_from_args(args)
 
@@ -61,6 +66,7 @@ def main(argv: list[str] | None = None) -> int:
         verbose=args.verbose,
         fake=args.fake,
         skip_verify=args.skip_verify,
+        resume=args.resume,
     )
     print_eval_report(report, verbose=args.verbose, report_path=report_path)
     return code
