@@ -6,7 +6,7 @@ from src.agents.localizer import create_localizer
 from src.agents.patcher import create_patcher
 from src.agents.retriever import create_retriever
 from src.orchestrator import Orchestrator, apply_patch_to_text
-from src.state import CandidatePatch, RepairPlan, RepairState, SuspectLocation
+from src.state import CandidatePatch, RepairPlan, RepairState, SuspectLocation, VerificationResult
 
 
 class TestOrchestrator:
@@ -649,3 +649,97 @@ class TestInjectTaskSummary:
         Orchestrator._inject_repair_task_summary(agent, state)
         summary = agent.session["memory"]["working"]["task_summary"]
         assert len(summary) < 350  # 被截断
+
+
+# ---------------------------------------------------------------------------
+# _build_feedback 反馈环增强（V1.4-Bonus8a）
+# ---------------------------------------------------------------------------
+
+
+class TestBuildFeedback:
+    def test_basic_failure_feedback(self):
+        """基本验证失败反馈含指导信息。"""
+        orch = Orchestrator.__new__(Orchestrator)
+        result = VerificationResult(
+            all_passed=False,
+            failure_logs=["test_add FAILED: assert 3 == 5"],
+        )
+        feedback = orch._build_feedback(result)
+        assert "补丁验证失败" in feedback
+        assert "失败测试" in feedback
+        assert "test_add" in feedback
+        assert "[指导]" in feedback
+
+    def test_includes_previous_patches(self):
+        """包含上轮失败的 patch diff。"""
+        orch = Orchestrator.__new__(Orchestrator)
+        result = VerificationResult(all_passed=False)
+        state = RepairState(issue_input="fix")
+        state.candidate_patches = [
+            CandidatePatch(file_path="app.py", diff="--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-x = 1\n+x = 2"),
+        ]
+        feedback = orch._build_feedback(result, state=state)
+        assert "上轮改动" in feedback
+        assert "app.py" in feedback
+        assert "x = 2" in feedback
+
+    def test_includes_regression_hint(self):
+        """regression 检测时包含回滚提示。"""
+        orch = Orchestrator.__new__(Orchestrator)
+        result = VerificationResult(all_passed=False)
+        state = RepairState(issue_input="fix")
+        state.node_timings["introduced_regression"] = True
+        feedback = orch._build_feedback(result, state=state)
+        assert "回滚提示" in feedback
+        assert "回归" in feedback
+
+    def test_includes_build_log(self):
+        orch = Orchestrator.__new__(Orchestrator)
+        result = VerificationResult(
+            all_passed=False,
+            build_log="ERROR: pip install failed",
+        )
+        feedback = orch._build_feedback(result)
+        assert "构建日志" in feedback
+        assert "pip install" in feedback
+
+    def test_includes_retry_count_guidance(self):
+        orch = Orchestrator.__new__(Orchestrator)
+        result = VerificationResult(all_passed=False)
+        state = RepairState(issue_input="fix")
+        state.retry_count = 2
+        feedback = orch._build_feedback(result, state=state)
+        assert "3 次" in feedback  # retry_count=2 → "已尝试 3 次"
+
+    def test_sections_ordered_by_priority(self):
+        """Sections 按 priority 排序。"""
+        orch = Orchestrator.__new__(Orchestrator)
+        result = VerificationResult(
+            all_passed=False,
+            failure_logs=["test failed"],
+            build_log="build error",
+        )
+        state = RepairState(issue_input="fix")
+        state.node_timings["introduced_regression"] = True
+        state.candidate_patches = [
+            CandidatePatch(file_path="x.py", diff="..."),
+        ]
+
+        feedback = orch._build_feedback(result, state=state)
+        # 回滚提示 (priority=10) 应在 上轮改动 (20) 之前
+        assert feedback.index("回滚提示") < feedback.index("上轮改动")
+        # 上轮改动 (20) 应在 失败测试 (30) 之前
+        assert feedback.index("上轮改动") < feedback.index("失败测试")
+
+    def test_no_state_handled_gracefully(self):
+        """state=None 时不抛异常。"""
+        orch = Orchestrator.__new__(Orchestrator)
+        result = VerificationResult(all_passed=False)
+        feedback = orch._build_feedback(result, state=None)
+        assert "补丁验证失败" in feedback
+
+    def test_empty_result(self):
+        orch = Orchestrator.__new__(Orchestrator)
+        result = VerificationResult(all_passed=False)
+        feedback = orch._build_feedback(result)
+        assert "[指导]" in feedback  # 至少包含指导
