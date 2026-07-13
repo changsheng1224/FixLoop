@@ -41,6 +41,7 @@ class AgentProfile:
 O = TypeVar("O", bound=Orchestrator)
 
 __all__ = [
+    "AgentProfile",
     "create_model_client",
     "load_dotenv",
     "make_orchestrator_factory",

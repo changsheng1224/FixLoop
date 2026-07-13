@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import hashlib
 
+__all__ = ["VerifyCooldown"]
+
 _COOLDOWN_MAX_CONSECUTIVE = 2  # 连续 N 次相同失败触发冷却
 _TEMPERATURE_REDUCTION = 0.5   # 冷却时 temperature 降至此值
 

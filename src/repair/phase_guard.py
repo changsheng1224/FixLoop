@@ -30,6 +30,7 @@ class PhaseReadWriteLock:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._readers = 0
+        self._write_active = False
         self._write_pending = threading.Condition(self._lock)
 
     @contextmanager
@@ -51,16 +52,15 @@ class PhaseReadWriteLock:
         with self._lock:
             while self._readers > 0:
                 self._write_pending.wait()
-            # 阻塞新 reader
-            self._readers = -1  # sentinel: write pending
+            self._write_active = True
         try:
             yield
         finally:
             with self._lock:
-                self._readers = 0
+                self._write_active = False
                 self._write_pending.notify_all()
 
     @property
     def active_readers(self) -> int:
         with self._lock:
-            return max(self._readers, 0)
+            return self._readers
