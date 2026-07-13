@@ -64,6 +64,16 @@ REPAIR_PERMISSION_TABLE = {
 }
 
 
-def build_repair_gateway() -> ToolGateway:
-    """返回 Layer 2 修复流水线默认 ToolGateway。"""
-    return ToolGateway(REPAIR_PERMISSION_TABLE)
+def build_repair_gateway(repo_root: str = "") -> ToolGateway:
+    """返回 Layer 2 修复流水线默认 ToolGateway。
+
+    若 ``.agent/tools.yaml`` 存在，加载用户自定义权限并与内置合并。
+    """
+    table = dict(REPAIR_PERMISSION_TABLE)
+    if repo_root:
+        from src.tools.manifest import load_tools_manifest, merge_permission_table
+
+        user_table = load_tools_manifest(repo_root)
+        if user_table:
+            table = merge_permission_table(table, user_table)
+    return ToolGateway(table)
