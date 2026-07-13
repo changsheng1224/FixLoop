@@ -169,6 +169,19 @@ def main() -> int:
         help="Skill YAML 目录（默认 src/skills）",
     )
 
+    p_cleanup = sub.add_parser("cleanup", help="清理过期的 trace runs")
+    p_cleanup.add_argument(
+        "--repo", default=".", help="仓库路径"
+    )
+    p_cleanup.add_argument(
+        "--older-than", type=int, default=None,
+        help="删除超过 N 天的 run（默认 FIXLOOP_RUN_TTL_DAYS 或 30）",
+    )
+    p_cleanup.add_argument(
+        "--dry-run", action="store_true",
+        help="仅列出待删除目录，不实际删除",
+    )
+
     args = parser.parse_args()
     setup_logging_from_args(args)
     if args.command == "repair":
@@ -181,6 +194,8 @@ def main() -> int:
         return _ablation(args)
     if args.command == "skills":
         return _skills(args)
+    if args.command == "cleanup":
+        return _cleanup(args)
     parser.print_help()
     return 1
 
@@ -428,6 +443,36 @@ def _print_repair_result(state, verbose: bool) -> None:
             )
     else:
         print(f"❌ 修复未完成 (status={state.status})")
+
+
+def _cleanup(args) -> int:
+    """CLI cleanup 命令：删除过期的 trace run 目录。"""
+    from agent_runtime.run_store import RunStore
+
+    repo = str(Path(args.repo).resolve())
+    store = RunStore(root=repo)
+
+    if args.dry_run:
+        print(f"[cleanup] DRY-RUN — 不会实际删除", file=sys.stderr)
+
+    older_than = args.older_than if args.older_than is not None else store.ttl_days
+    if older_than <= 0:
+        print("[cleanup] TTL=0，跳过清理", file=sys.stderr)
+        return 0
+
+    if args.dry_run:
+        cutoff = __import__("time").time() - older_than * 86400
+        count = 0
+        for run_dir in store.runs_dir.iterdir():
+            if run_dir.is_dir() and run_dir.stat().st_mtime < cutoff:
+                print(f"  [dry-run] 将删除: {run_dir.name}")
+                count += 1
+        print(f"[cleanup] 共 {count} 个过期 run（dry-run）", file=sys.stderr)
+        return 0
+
+    deleted = store.cleanup_older_than(days=older_than)
+    print(f"[cleanup] 已删除 {deleted} 个过期 run（保留 {older_than} 天）", file=sys.stderr)
+    return 0
 
 
 if __name__ == "__main__":
