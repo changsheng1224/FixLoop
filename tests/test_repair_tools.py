@@ -107,3 +107,88 @@ class TestRepairRegistry:
             spec = registry.get(name)
             assert spec is not None
             assert spec.get("execution_tier") == "host", f"{name} should be host tier"
+
+
+# ---------------------------------------------------------------------------
+# L2 registry 与 auto_schema 一致性（V1.4-Bonus10c）
+# ---------------------------------------------------------------------------
+
+
+class TestRegistrySchemaConsistency:
+    def test_all_canonical_tools_registered(self):
+        """REPAIR_CANONICAL_TOOL_NAMES 中的所有工具都已注册。"""
+        from src.tools.composite import REPAIR_CANONICAL_TOOL_NAMES, build_repair_canonical_tools
+
+        ctx = ToolContext(root=".")
+        tools = build_repair_canonical_tools(ctx)
+        registered = set(tools.keys())
+        missing = set(REPAIR_CANONICAL_TOOL_NAMES) - registered
+        assert not missing, f"未注册的 canonical 工具: {missing}"
+
+    def test_repair_tools_have_required_fields(self):
+        """build_repair_tools 的每个条目含必需字段。"""
+        ctx = ToolContext(root=".")
+        tools = build_repair_tools(ctx)
+        required = {"schema", "risky", "execution_tier", "description", "run"}
+        for name, spec in tools.items():
+            missing = required - set(spec.keys())
+            assert not missing, f"{name}: 缺少字段 {missing}"
+
+    def test_schema_matches_auto_schema(self):
+        """手动声明的 schema 与 auto_schema(Args) 一致。"""
+        from agent_runtime.schema_utils import auto_schema
+        from agent_runtime.tools import GrepArgs
+        from src.tools.ast_parser import AstParseArgs
+        from src.tools.find_test import FindTestArgs
+        from src.tools.git_tools import GitBlameArgs, GitDiffArgs
+        from src.tools.java_ast_parser import JavaAstParseArgs
+        from src.tools.java_stack_parser import JavaStackParseArgs
+        from src.tools.stack_parser import StackParseArgs
+
+        ctx = ToolContext(root=".")
+        tools = build_repair_tools(ctx)
+
+        args_map = {
+            "grep": GrepArgs,
+            "ast_parse": AstParseArgs,
+            "stack_parse": StackParseArgs,
+            "git_blame": GitBlameArgs,
+            "git_diff": GitDiffArgs,
+            "find_test": FindTestArgs,
+            "java_ast_parse": JavaAstParseArgs,
+            "java_stack_parse": JavaStackParseArgs,
+        }
+
+        for name, args_class in args_map.items():
+            spec = tools.get(name)
+            assert spec is not None, f"{name}: 未注册"
+            expected = auto_schema(args_class)
+            actual = spec["schema"]
+            assert expected == actual, (
+                f"{name}: schema 不一致\n  auto_schema: {expected}\n  registry: {actual}"
+            )
+
+    def test_description_mentions_required_params(self):
+        """description 至少提及 schema 中的必填参数名。"""
+        ctx = ToolContext(root=".")
+        tools = build_repair_tools(ctx)
+        for name, spec in tools.items():
+            schema = spec.get("schema", {})
+            required = [k for k, v in schema.items() if "=" not in str(v)]
+            desc = spec.get("description", "")
+            for param in required:
+                assert param in desc, f"{name}: description 缺少参数 '{param}'"
+
+    def test_no_null_run_functions(self):
+        """所有工具的 run 不为 None。"""
+        ctx = ToolContext(root=".")
+        tools = build_repair_tools(ctx)
+        for name, spec in tools.items():
+            assert spec.get("run") is not None, f"{name}: run 为 None"
+
+    def test_execution_tier_valid(self):
+        ctx = ToolContext(root=".")
+        tools = build_repair_tools(ctx)
+        for name, spec in tools.items():
+            tier = spec.get("execution_tier", "")
+            assert tier in ("host", "container"), f"{name}: 无效 tier '{tier}'"
