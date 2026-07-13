@@ -12,14 +12,21 @@ class AstParseArgs:
     """ast_parse 参数。"""
 
     path: str  # 必填
+    start_line: int = 0  # 可选：局部分析起始行
+    end_line: int = 0    # 可选：局部分析结束行
+
+
+_DEFAULT_CONTEXT_LINES = 20
 
 
 def ast_parse(context, args: dict) -> str:
     """解析 Python 文件为结构化函数/类/方法列表。
 
+    支持局部分析：提供 start_line/end_line 时仅输出附近节点。
+
     Args:
         context: ToolContext 实例。
-        args: 包含 'path' 字段的字典。
+        args: 包含 'path' 字段的字典，可选 'start_line'/'end_line'。
 
     Returns:
         JSON 字符串列表。
@@ -46,11 +53,23 @@ def ast_parse(context, args: dict) -> str:
     except Exception as e:
         return f"Error: {e}"
 
+    start_line = int(args.get("start_line", 0) or 0)
+    end_line = int(args.get("end_line", 0) or 0)
+
     results = []
     for node in ast.walk(tree):
         info = _extract_node(node)
         if info:
             results.append(info)
+
+    # 局部分析：仅保留 suspect 行附近的节点
+    if start_line > 0 and end_line >= start_line:
+        window_start = max(1, start_line - _DEFAULT_CONTEXT_LINES)
+        window_end = end_line + _DEFAULT_CONTEXT_LINES
+        results = [
+            r for r in results
+            if r["lineno"] <= window_end and (r["end_lineno"] or r["lineno"]) >= window_start
+        ]
 
     return json.dumps(results, ensure_ascii=False, indent=2)
 
