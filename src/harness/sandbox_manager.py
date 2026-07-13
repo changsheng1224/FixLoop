@@ -208,9 +208,32 @@ class SandboxManager:
         )
 
     def destroy(self, sandbox: Sandbox):
-        """销毁容器。"""
+        """销毁容器并移除持久层（kill + remove --force）。"""
         try:
             container = self.docker.containers.get(sandbox.id)
             container.kill()
+            container.remove(force=True)
         except Exception:
             pass
+
+
+class SandboxContext:
+    """Sandbox 上下文管理器：__exit__ 中 guaranteed destroy。
+
+    Usage::
+
+        with SandboxContext(mgr, sandbox) as sb:
+            # sb is the sandbox; use for verify
+            ...
+        # sandbox destroyed + removed here
+    """
+
+    def __init__(self, mgr: SandboxManager, sandbox: Sandbox):
+        self._mgr = mgr
+        self._sandbox = sandbox
+
+    def __enter__(self) -> Sandbox:
+        return self._sandbox
+
+    def __exit__(self, *exc) -> None:
+        self._mgr.destroy(self._sandbox)
