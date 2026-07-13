@@ -887,6 +887,9 @@ class AgentLoop:
                     return msg
                 raise
 
+            # CoT 提取：剥离思考内容后再进 history
+            raw = self._strip_cot(raw)
+
             if (msg := self._abort_if_cancelled(ts, phase="post_model")) is not None:
                 return msg
 
@@ -1082,6 +1085,31 @@ class AgentLoop:
                     )
 
         return True, ""
+
+    @staticmethod
+    def _strip_cot(raw: str) -> str:
+        """剥离模型输出中的思考内容（CoT），返回清洗后的文本。
+
+        两步：
+        1. 移除 ``<think>...</think>`` 标签块（DeepSeek-R1 / OpenAI o1）
+        2. 移除第一个 ``<tool>`` 或 ``<final>`` 标签前的自然语言前缀
+
+        若清洗后为空，返回原始文本（安全回退）。
+        """
+        import re
+
+        # Step 1: 移除显式 <think> 标签
+        cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+
+        # Step 2: 移除第一个结构化标签前的自然语言前缀
+        m = re.search(r"<(tool|final)>", cleaned)
+        if m and m.start() > 0:
+            prefix = cleaned[:m.start()].strip()
+            if prefix:
+                cleaned = cleaned[m.start():]
+
+        cleaned = cleaned.strip()
+        return cleaned if cleaned else raw.strip()
 
     def _get_store(self):
         if self._store is None:

@@ -603,3 +603,100 @@ class TestFinalAnswerValidation:
         answer = agent.ask("find bugs")
         assert "a.py" in answer
 
+
+# ---------------------------------------------------------------------------
+# CoT 提取（V1.4-Bonus2d）
+# ---------------------------------------------------------------------------
+
+
+class TestCoTStripping:
+    """_strip_cot 思考内容剥离。"""
+
+    def test_strips_think_tags(self):
+        """移除 <think>...</think> 标签块。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        raw = "<think>Let me analyze first...</think>\n<final>done</final>"
+        cleaned = AgentLoop._strip_cot(raw)
+        assert "<think>" not in cleaned
+        assert "analyze" not in cleaned
+        assert "<final>done</final>" in cleaned
+
+    def test_strips_text_before_first_tag(self):
+        """移除第一个结构化标签前的自然语言前缀。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        raw = "I need to read the file first.\n\n<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"app.py\"}}</tool>"
+        cleaned = AgentLoop._strip_cot(raw)
+        assert "I need to read" not in cleaned
+        assert "<tool>" in cleaned
+
+    def test_preserves_plain_final_when_no_tags(self):
+        """纯文本 final answer（无标签）：保留原样。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        raw = "The bug is in app.py line 42."
+        cleaned = AgentLoop._strip_cot(raw)
+        assert cleaned == raw
+
+    def test_strips_think_and_prefix_together(self):
+        """同时移除 <think> 和前缀文本。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        raw = (
+            "<think>reasoning step 1</think>\n"
+            "Now I'll search for the error...\n"
+            "<tool>{\"name\":\"search\",\"args\":{\"pattern\":\"error\"}}</tool>"
+        )
+        cleaned = AgentLoop._strip_cot(raw)
+        assert "reasoning" not in cleaned
+        assert "Now I'll search" not in cleaned
+        assert "<tool>" in cleaned
+
+    def test_empty_after_strip_returns_original(self):
+        """清洗后为空时回退到原始文本。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        raw = "<think>only thinking, no action</think>"
+        cleaned = AgentLoop._strip_cot(raw)
+        # 清洗后只剩空白 → 返回原始文本
+        assert "only thinking" in cleaned
+
+    def test_multiline_think_tag(self):
+        """多行 <think> 块正确剥离。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        raw = "<think>\nline 1\nline 2\nline 3\n</think>\n<final>{\"ok\":true}</final>"
+        cleaned = AgentLoop._strip_cot(raw)
+        assert "line 1" not in cleaned
+        assert "line 2" not in cleaned
+        assert "ok" in cleaned
+
+    def test_stripping_in_agent_ask(self, config, workspace):
+        """Agent.ask() 端到端：CoT 被剥离，不进 history。"""
+        agent = _make_agent(
+            [
+                '<tool>{"name":"read_file","args":{"path":"app.py"}}</tool>',
+                "Now I see the bug. Let me fix it.\n<final>fixed</final>",
+            ],
+            config, workspace,
+        )
+        answer = agent.ask("find and fix bug")
+        assert "fixed" in answer
+        # history 中不应包含 CoT 前缀
+        history = agent.session.get("history", [])
+        for h in history:
+            content = str(h.get("content", ""))
+            if h.get("role") == "assistant":
+                # 不应包含思考前缀
+                assert "Now I see the bug" not in content
+
+    def test_final_only_without_prefix_unchanged(self, config, workspace):
+        """无 CoT 的 final answer 完全不变。"""
+        agent = _make_agent(
+            ["<final>fixed</final>"],
+            config, workspace,
+        )
+        answer = agent.ask("fix bug")
+        assert answer == "fixed"
+
