@@ -53,6 +53,7 @@ def create_repair_agent(
     *,
     dry_run: bool = False,
     l1_prefix=None,
+    warm_context=None,
 ) -> Agent:
     """创建指定角色的修复 Agent（含 baseline 单 Agent 变体）。
 
@@ -98,6 +99,7 @@ def create_repair_agent(
         prefix_mode="repair",
         dry_run=dry_run,
         l1_prefix=l1_prefix,
+        warm_context=warm_context,
     )
 
 
