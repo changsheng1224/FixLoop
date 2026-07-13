@@ -56,6 +56,29 @@ __all__ = ["Orchestrator", "apply_patch_to_text"]
 
 DEFAULT_REPAIR_TIMEOUT_S = 180
 
+# issue_type 分类规则链（按序匹配，首次命中即返回）
+from collections import namedtuple
+_IssueTypeRule = namedtuple("_IssueTypeRule", ["name", "pattern", "issue_type"])
+
+_ISSUE_TYPE_RULES: list[_IssueTypeRule] = [
+    # test_failure 必须在 explicit_exception 之前：
+    # "FAILED test_app.py::test_add - AssertionError" 应识别为 test_failure 而非 type_error
+    _IssueTypeRule("test_failure",
+                   r"(?i)(FAILED\s+\S*test|AssertionError|assert\s+\S+\s*[=!<>])",
+                   "test_failure"),
+    _IssueTypeRule("explicit_exception", r"\w+(?:Error|Exception|Warning)", None),
+    _IssueTypeRule("composite_keyword", r"(?i)composite", "composite"),
+    _IssueTypeRule("config_error", r"(?i)pyproject\.toml|\[tool\.", "config_error"),
+    _IssueTypeRule("logic_error",
+                   r"(?i)(wrong\s+(result|output|return|value)|"
+                   r"incorrect\s+(result|output|behavio)|"
+                   r"should\s+(return|be|have)|"
+                   r"expected\s+\S+\s+but|"
+                   r"unexpected\s+(result|behavio)|"
+                   r"\bbug\b.*\b(function|logic|code)\b)",
+                   "logic_error"),
+]
+
 
 class Orchestrator(RepairPipelineMixin):
     """纯 Python 修复编排器。
@@ -219,20 +242,33 @@ class Orchestrator(RepairPipelineMixin):
         )
 
     def _parse_issue(self, issue: str) -> RepairPlan:
-        """正则解析 Issue 文本，提取语言/异常类型/文件名。"""
+        """正则解析 Issue 文本，提取语言/异常类型/文件名。
+
+        分类优先级（_ISSUE_TYPE_RULES 规则链）：
+        1. explicit_exception → classify_exception 归一化
+        2. test_failure → pytest 断言失败
+        3. composite_keyword → 多错误组合
+        4. config_error → pyproject.toml 配置
+        5. logic_error → 无异常名的错误行为描述
+        6. unknown → LLM fallback
+        """
         plan = RepairPlan(language="python")
 
+        # 规则链分类
+        issue_type, rule_name = self._classify_issue_type(issue)
+        plan.issue_type = issue_type
+        # composite 特殊处理：ImportError+TypeError 组合
         has_import_err = bool(re.search(r"ModuleNotFoundError|ImportError", issue, re.IGNORECASE))
         has_type_err = bool(re.search(r"TypeError", issue, re.IGNORECASE))
-        if re.search(r"composite", issue, re.IGNORECASE) or (has_import_err and has_type_err):
+        if has_import_err and has_type_err:
             plan.issue_type = "composite"
-        else:
-            exc_match = re.search(r"(\w+(?:Error|Exception|Warning))", issue)
-            if exc_match:
-                exc_type = exc_match.group(1)
-                plan.issue_type = classify_exception(exc_type)
-            if re.search(r"pyproject\.toml|\[tool\.", issue, re.IGNORECASE):
-                plan.issue_type = "config_error"
+            rule_name = "composite_dual"
+
+        if rule_name in ("test_failure", "composite_keyword", "config_error", "logic_error",
+                          "composite_dual"):
+            plan.intent_parser = f"rule:{rule_name}"
+        elif rule_name == "explicit_exception":
+            plan.intent_parser = "rule"
 
         for file_match in re.finditer(r'File\s+"([^"]+)"', issue):
             name = file_match.group(1).replace("\\", "/")
@@ -271,13 +307,28 @@ class Orchestrator(RepairPipelineMixin):
             if llm_type:
                 plan.issue_type = llm_type
                 plan.intent_parser = "llm"
-            else:
+            elif not plan.intent_parser:
                 plan.intent_parser = "rule"
-        else:
+        elif not plan.intent_parser:
             plan.intent_parser = "rule"
         apply_prompt_routing(plan)
 
         return plan
+
+    @staticmethod
+    def _classify_issue_type(issue: str) -> tuple[str, str]:
+        """规则链分类：依次匹配 _ISSUE_TYPE_RULES，首次命中返回 (issue_type, rule_name)。
+
+        explicit_exception 命中时调用 classify_exception 归一化异常类名。
+        """
+        for rule in _ISSUE_TYPE_RULES:
+            m = re.search(rule.pattern, issue)
+            if not m:
+                continue
+            if rule.name == "explicit_exception":
+                return classify_exception(m.group(0)), rule.name
+            return rule.issue_type, rule.name
+        return "unknown", "none"
 
     def _llm_classify_issue(self, issue: str) -> str | None:
         """用 light_client 将歧义 issue 分类为已知 issue_type。"""
@@ -384,6 +435,25 @@ class Orchestrator(RepairPipelineMixin):
         """
         return load_role_prompt("patcher", patcher_variant_for(plan))
 
+    @staticmethod
+    def _inject_repair_task_summary(agent, state: RepairState) -> None:
+        """将 _parse_issue 的结构化摘要注入 Agent working memory。
+
+        供 L1 memory 检索（§4.4）使用。
+        """
+        plan = state.repair_plan
+        if plan is None:
+            return
+        from agent_runtime.features.memory import set_task_summary
+
+        parts = [f"[{plan.issue_type}]"]
+        if plan.reasoning:
+            parts.append(plan.reasoning[:200])
+        if plan.suspect_files:
+            parts.append(f"files: {', '.join(plan.suspect_files[:3])}")
+        summary = " ".join(parts)
+        set_task_summary(agent.session["memory"], summary)
+
     def _run_agent(
         self,
         agent,
@@ -396,6 +466,10 @@ class Orchestrator(RepairPipelineMixin):
     ) -> tuple[str, dict]:
         """执行 Agent 调用（Verifier 用，保留 Agent loop）。"""
         from agent_runtime.log_context import log_context
+
+        # 注入 repair 任务上下文到 Agent working memory
+        if agent is not None and state is not None and state.repair_plan is not None:
+            self._inject_repair_task_summary(agent, state)
 
         t0 = time.time()
         run_id = getattr(agent, "shared_run_id", None)
