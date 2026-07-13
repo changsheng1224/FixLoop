@@ -37,12 +37,16 @@ def sandbox_tmpfs_mounts() -> dict[str, str]:
 
 
 def sandbox_container_run_kwargs(image: str) -> dict:
-    """``containers.run`` 参数：网络/资源/只读 rootfs + 双 tmpfs。"""
+    """``containers.run`` 参数：网络/资源/只读 rootfs + 双 tmpfs。
+
+    Security: privileged=False，不挂载 docker.sock（禁止 Docker-in-Docker）。
+    """
     return {
         "image": image,
         "command": ["sleep", "infinity"],
         "entrypoint": "",
         "read_only": True,
+        "privileged": False,
         "tmpfs": sandbox_tmpfs_mounts(),
         "mem_limit": "4g",
         "cpu_quota": 200000,
@@ -50,6 +54,20 @@ def sandbox_container_run_kwargs(image: str) -> dict:
         "detach": True,
         "remove": True,
     }
+
+
+def assert_no_docker_sock(kwargs: dict) -> None:
+    """验证容器参数不含 docker.sock 挂载（禁止 Docker-in-Docker）。
+
+    Raises:
+        ValueError: 若发现 docker.sock 挂载。
+    """
+    volumes = kwargs.get("volumes", {}) or {}
+    binds = kwargs.get("binds", []) or []
+    all_paths = list(volumes.keys()) + list(binds)
+    for path in all_paths:
+        if "docker.sock" in str(path):
+            raise ValueError(f"docker.sock mount is forbidden: {path}")
 
 
 def sandbox_pip_install_command() -> str:
@@ -208,9 +226,32 @@ class SandboxManager:
         )
 
     def destroy(self, sandbox: Sandbox):
-        """销毁容器。"""
+        """销毁容器并移除持久层（kill + remove --force）。"""
         try:
             container = self.docker.containers.get(sandbox.id)
             container.kill()
+            container.remove(force=True)
         except Exception:
             pass
+
+
+class SandboxContext:
+    """Sandbox 上下文管理器：__exit__ 中 guaranteed destroy。
+
+    Usage::
+
+        with SandboxContext(mgr, sandbox) as sb:
+            # sb is the sandbox; use for verify
+            ...
+        # sandbox destroyed + removed here
+    """
+
+    def __init__(self, mgr: SandboxManager, sandbox: Sandbox):
+        self._mgr = mgr
+        self._sandbox = sandbox
+
+    def __enter__(self) -> Sandbox:
+        return self._sandbox
+
+    def __exit__(self, *exc) -> None:
+        self._mgr.destroy(self._sandbox)
