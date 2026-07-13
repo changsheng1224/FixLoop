@@ -99,7 +99,7 @@ class TestDurableRetrieval:
         cm = ContextManager(agent2)
         _, meta = cm.build("what tokenizer do we use?")
 
-        # ContextManager 的 _get_relevant 查询了 durable memory
+        # ContextManager 的 _get_knowledge 查询了 durable memory
         # 验证 prompt 中包含持久知识
         prompt, _ = cm.build("tiktoken")
         assert "tiktoken" in prompt.lower()

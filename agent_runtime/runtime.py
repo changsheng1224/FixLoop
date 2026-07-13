@@ -62,6 +62,7 @@ class Agent:
         self._prefix_mode: PrefixMode = prefix_mode
         self._l1_prefix = l1_prefix
         self._warm_context = warm_context  # 预热上下文（可选），供 ContextManager 复用
+        self._budget = None  # 共享 TokenBudget（可选），RepairBudgetContext 注入
         self.shared_run_id: str | None = None
         self._last_budget_meta: dict = {}
         self.cancel_token = None
