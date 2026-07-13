@@ -240,6 +240,15 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 state.node_timings["skill_resolve_ms"] = skill_ms
                 log.info("parse_issue: %dms, skill_resolve: %dms", parse_ms, skill_ms)
 
+                # 读取相似修复先例（repair precedent 读写一体）
+                if state.repair_plan and state.repair_plan.issue_type:
+                    from src.repair.precedent import RepairPrecedentStore
+
+                    store = RepairPrecedentStore(self._repo_root)
+                    similar = store.load_similar(state.repair_plan.issue_type)
+                    if similar:
+                        state.node_timings["similar_fixes"] = similar
+
                 log.info("Localizer + Retriever 并行开始...")
                 if phase_clock is not None:
                     phase_clock.ensure("localize")
@@ -394,6 +403,18 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         finalize_repair_state(state)
         state.phase = "done" if state.status == "fixed" else "failed"
 
+        # 修复成功 → 写入先例（repair precedent 读写一体）
+        if state.status == "fixed" and state.repair_plan and state.repair_plan.issue_type:
+            try:
+                from src.repair.precedent import RepairPrecedentStore
+
+                store = RepairPrecedentStore(self._repo_root)
+                summary = _build_precedent_summary(state)
+                case_id = getattr(self, "_case_id", "") or ""
+                store.upsert(state.repair_plan.issue_type, summary, case_id=case_id)
+            except Exception:
+                pass
+
         total_ms = int((time.time() - t_start) * 1000)
         set_repair_total_ms(state.node_timings, total_ms)
         finalize_phases(state.node_timings)
@@ -530,3 +551,19 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     pass
         except Exception:
             pass
+
+
+def _build_precedent_summary(state) -> str:
+    """从 RepairState 构建先例摘要（≤200 chars）。"""
+    parts: list[str] = []
+    if state.repair_plan:
+        if state.repair_plan.reasoning:
+            parts.append(state.repair_plan.reasoning[:80])
+        if state.repair_plan.suspect_files:
+            parts.append("files:" + ",".join(state.repair_plan.suspect_files[:2]))
+    if state.candidate_patches:
+        p = state.candidate_patches[0]
+        diff_preview = (p.diff or "")[:80].replace("\n", " ")
+        if diff_preview:
+            parts.append(f"patch:{diff_preview}")
+    return " ".join(parts)[:200] or "fix applied"
