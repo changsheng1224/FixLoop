@@ -245,7 +245,10 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     from src.repair.precedent import RepairPrecedentStore
 
                     store = RepairPrecedentStore(self._repo_root)
-                    similar = store.load_similar(state.repair_plan.issue_type)
+                    similar = store.load_similar(
+                        state.repair_plan.issue_type,
+                        query=issue,
+                    )
                     if similar:
                         state.node_timings["similar_fixes"] = similar
 

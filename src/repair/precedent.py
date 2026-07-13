@@ -16,6 +16,7 @@ from pathlib import Path
 
 _PRECEDENT_TOPIC = "dependency-facts"
 _PRECEDENT_MARKER = "Precedent:"
+_DEFAULT_SIMILARITY_THRESHOLD = 0.4
 
 
 def _precedent_topic_path(repo_root: str) -> Path:
@@ -30,12 +31,21 @@ class RepairPrecedentStore:
 
     # ---- 读 ----
 
-    def load_similar(self, issue_type: str, limit: int = 3) -> list[dict]:
-        """读取与指定 issue_type 匹配的相似修复先例。
+    def load_similar(
+        self,
+        issue_type: str,
+        *,
+        limit: int = 3,
+        query: str = "",
+        threshold: float = _DEFAULT_SIMILARITY_THRESHOLD,
+    ) -> list[dict]:
+        """读取相似修复先例，按语义相似度过滤。
 
         Args:
-            issue_type: 问题类型（type_error / import_error / logic_error...）。
+            issue_type: 问题类型。
             limit: 最多返回条数。
+            query: 语义相似度查询文本（如当前 issue）。空则不过滤。
+            threshold: 最低语义相似度。低于此值不返回。
 
         Returns:
             匹配的先例列表（按时间倒序）。
@@ -43,7 +53,43 @@ class RepairPrecedentStore:
         entries = self._read_all()
         matched = [e for e in entries if e.get("issue_type") == issue_type]
         matched.sort(key=lambda e: e.get("ts", 0), reverse=True)
+
+        if query and matched:
+            matched = self._semantic_filter(query, matched, threshold)
         return matched[:limit]
+
+    # ---- 语义闸口 ----
+
+    @staticmethod
+    def _semantic_filter(
+        query: str, precedents: list[dict], threshold: float
+    ) -> list[dict]:
+        """用 SemanticMemory cosine 相似度过滤低置信度先例。"""
+        try:
+            from agent_runtime.features.memory.semantic import SemanticMemory
+
+            sem = SemanticMemory()
+            if not sem.available:
+                return precedents  # 模型不可用时不过滤
+            import numpy as np
+
+            query_emb = sem.model.encode(query[:800])
+            filtered: list[tuple[float, dict]] = []
+            for p in precedents:
+                summary = p.get("summary", "")
+                if not summary:
+                    continue
+                summary_emb = sem.model.encode(summary[:800])
+                sim = float(
+                    np.dot(query_emb, summary_emb)
+                    / (np.linalg.norm(query_emb) * np.linalg.norm(summary_emb))
+                )
+                if sim >= threshold:
+                    filtered.append((sim, p))
+            filtered.sort(key=lambda x: x[0], reverse=True)
+            return [p for _, p in filtered]
+        except Exception:
+            return precedents  # 任何异常 → 不过滤
 
     def load_all(self) -> list[dict]:
         """读取全部先例（用于调试/报告）。"""

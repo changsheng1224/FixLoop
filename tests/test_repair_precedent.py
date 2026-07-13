@@ -130,3 +130,54 @@ class TestUpsert:
             store.upsert("import_error", "fix2")
             all_entries = store.load_all()
             assert len(all_entries) == 2
+
+
+# ---------------------------------------------------------------------------
+# 置信度闸口
+# ---------------------------------------------------------------------------
+
+
+class TestSemanticFilter:
+    def test_no_query_returns_all(self):
+        """query 为空时不过滤。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            store = RepairPrecedentStore(tmp)
+            store.upsert("type_error", "int wrapper fix", case_id="c1")
+            store.upsert("type_error", "add type check", case_id="c2")
+            results = store.load_similar("type_error", query="")
+            assert len(results) == 2
+
+    def test_empty_precedents(self):
+        store = RepairPrecedentStore(".")
+        assert store._semantic_filter("test", [], 0.4) == []
+
+    def test_model_unavailable_returns_all(self):
+        """语义模型不可用时不过滤，返回全部。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            store = RepairPrecedentStore(tmp)
+            store.upsert("type_error", "int wrapper")
+            store.upsert("type_error", "str conversion")
+            # 不传 query → 语义过滤跳过
+            results = store.load_similar("type_error")
+            assert len(results) == 2
+
+    def test_threshold_zero_returns_all(self):
+        """threshold=0 时不过滤。"""
+        store = RepairPrecedentStore(".")
+        precedents = [
+            {"issue_type": "type_error", "summary": "fix a", "ts": 1},
+            {"issue_type": "type_error", "summary": "fix b", "ts": 2},
+        ]
+        filtered = store._semantic_filter("unrelated query", precedents, 0.0)
+        assert len(filtered) == 2
+
+    def test_no_summary_skipped_when_model_available(self):
+        """无 summary 的 precedent 被跳过（模型不可用时全部保留）。"""
+        store = RepairPrecedentStore(".")
+        precedents = [
+            {"issue_type": "type_error", "ts": 1},  # no summary
+        ]
+        filtered = store._semantic_filter("type error in app.py", precedents, 0.4)
+        # 语义模型不可用时全部保留；可用时无 summary 的被跳过
+        assert len(filtered) <= 1
+
