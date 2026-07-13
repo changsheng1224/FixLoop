@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
 
@@ -19,6 +20,23 @@ from src.agents.retriever import create_retriever
 from src.agents.verifier import create_verifier
 from src.orchestrator import Orchestrator
 from src.tools.composite import build_repair_canonical_tools
+
+# 动态 Agent 裁剪：根据 issue_type 决定哪些 Agent 参与修复
+# simple = 仅 Localizer + Patcher（跳过 Retriever）
+# full    = 全部四个 Agent
+_SIMPLE_ISSUE_TYPES = frozenset({"import_error", "syntax_error"})
+
+
+@dataclass(frozen=True)
+class AgentProfile:
+    """问题类型对应的 Agent 参与配置。"""
+    with_retriever: bool = True
+
+    @classmethod
+    def for_issue_type(cls, issue_type: str) -> "AgentProfile":
+        if issue_type in _SIMPLE_ISSUE_TYPES:
+            return cls(with_retriever=False)
+        return cls(with_retriever=True)
 
 O = TypeVar("O", bound=Orchestrator)
 
@@ -53,9 +71,10 @@ def wire_orchestrator(
     repo_path: str,
     *,
     orch_class: type[O] = Orchestrator,
-    with_retriever: bool = True,
+    with_retriever: bool | None = None,
     skip_verify: bool = False,
     dry_run: bool = False,
+    agent_profile: AgentProfile | None = None,
 ) -> O:
     """装配 Localizer / Retriever / Patcher / 可选 Verifier（Agent 池化预热）。
 
@@ -75,6 +94,12 @@ def wire_orchestrator(
         approval="auto",
         repo_root=repo,
     )
+
+    # 动态 Agent 裁剪
+    if with_retriever is None and agent_profile is not None:
+        with_retriever = agent_profile.with_retriever
+    elif with_retriever is None:
+        with_retriever = True
 
     # 预热 tokenizer + 创建共享预算上下文
     wc = create_warm_context(model="deepseek-v4-pro", provider="deepseek")
