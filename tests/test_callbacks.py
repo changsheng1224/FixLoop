@@ -316,3 +316,102 @@ class TestProgressCallbackAlias:
         from agent_runtime.callbacks import ProgressCallback
 
         assert issubclass(CLIProgressCallback, ProgressCallback)
+
+
+# ---------------------------------------------------------------------------
+# CallbackChain（V1.5-Bonus1g）
+# ---------------------------------------------------------------------------
+
+
+class TestCallbackChain:
+    def test_chain_calls_all_callbacks_in_order(self):
+        from agent_runtime.callbacks import AgentCallback, CallbackChain
+
+        order: list[str] = []
+
+        class A(AgentCallback):
+            def on_step_start(self, step, max_steps, *, path=""):
+                order.append("A")
+
+        class B(AgentCallback):
+            def on_step_start(self, step, max_steps, *, path=""):
+                order.append("B")
+
+        class C(AgentCallback):
+            def on_step_start(self, step, max_steps, *, path=""):
+                order.append("C")
+
+        chain = CallbackChain([A(), B(), C()])
+        chain.on_step_start(1, 5, path="xml")
+        assert order == ["A", "B", "C"]
+
+    def test_exception_in_one_callback_does_not_stop_chain(self):
+        from agent_runtime.callbacks import AgentCallback, CallbackChain
+
+        called: list[str] = []
+
+        class Bad(AgentCallback):
+            def on_step_start(self, step, max_steps, *, path=""):
+                called.append("bad")
+                raise RuntimeError("boom")
+
+        class Good(AgentCallback):
+            def on_step_start(self, step, max_steps, *, path=""):
+                called.append("good")
+
+        chain = CallbackChain([Bad(), Good()])
+        chain.on_step_start(1, 5, path="xml")
+        assert called == ["bad", "good"]
+
+    def test_fail_fast_raises(self):
+        from agent_runtime.callbacks import AgentCallback, CallbackChain
+        import pytest
+
+        called: list[str] = []
+
+        class Bad(AgentCallback):
+            def on_step_start(self, step, max_steps, *, path=""):
+                called.append("bad")
+                raise RuntimeError("boom")
+
+        class Good(AgentCallback):
+            def on_step_start(self, step, max_steps, *, path=""):
+                called.append("good")
+
+        chain = CallbackChain([Bad(), Good()], fail_fast=True)
+        with pytest.raises(RuntimeError):
+            chain.on_step_start(1, 5, path="xml")
+        assert called == ["bad"]
+
+    def test_add_appends_callback(self):
+        from agent_runtime.callbacks import AgentCallback, CallbackChain
+
+        order: list[str] = []
+
+        class A(AgentCallback):
+            def on_step_start(self, step, max_steps, *, path=""):
+                order.append("A")
+
+        class B(AgentCallback):
+            def on_step_start(self, step, max_steps, *, path=""):
+                order.append("B")
+
+        chain = CallbackChain([A()])
+        chain.add(B())
+        chain.on_step_start(1, 5, path="xml")
+        assert order == ["A", "B"]
+
+    def test_unimplemented_method_skipped(self):
+        from agent_runtime.callbacks import AgentCallback, CallbackChain
+
+        tracker: list[str] = []
+
+        class OnlyPreTool(AgentCallback):
+            def on_pre_tool(self, step, tool_name, tool_args, *, path=""):
+                tracker.append("pre_tool")
+
+        chain = CallbackChain([OnlyPreTool()])
+        chain.on_step_start(1, 5, path="xml")  # 未实现 on_step_start
+        assert tracker == []
+        chain.on_pre_tool(1, "grep", {}, path="xml")
+        assert tracker == ["pre_tool"]
