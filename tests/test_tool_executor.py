@@ -1,6 +1,7 @@
 """ToolExecutor 7 道闸口单测。"""
 
 import pytest
+from pathlib import Path
 
 from agent_runtime.config import AgentConfig
 from agent_runtime.providers.clients import FakeModelClient
@@ -179,11 +180,12 @@ class TestExecutionTier:
         assert result.metadata["tool_status"] == "success"
         assert result.metadata.get("execution_tier") == "host"
 
-    def test_run_shell_is_host_tier(self, agent):
+    def test_run_shell_is_denied_by_gate7(self, agent):
         executor = ToolExecutor(agent=agent, approval_policy="auto")
         result = executor.execute("run_shell", {"command": "echo hello", "timeout": 5})
-        assert result.metadata["tool_status"] == "success"
-        assert result.metadata.get("execution_tier") == "host"
+        # Gate 7 deny tier → run_shell 被禁止
+        assert result.metadata["tool_status"] == "rejected"
+        assert result.metadata.get("gate_id") == 7
 
     def test_write_file_is_host_tier(self, agent):
         executor = ToolExecutor(agent=agent, approval_policy="auto")
@@ -207,3 +209,133 @@ class TestExecutionTier:
         from agent_runtime.tool_rejection import TOOL_TRACE_PUBLIC_KEYS
 
         assert "execution_tier" in TOOL_TRACE_PUBLIC_KEYS
+
+
+# ---------------------------------------------------------------------------
+# Gate 5 语义 duplicate（V1.4-Bonus11a）
+# ---------------------------------------------------------------------------
+
+
+class TestGate5SemanticDuplicate:
+    def test_read_tool_same_path_different_args_duplicate(self):
+        """read_file 相同 path 不同 start → 语义重复。"""
+        agent = _make_agent()
+        agent.session["history"] = [
+            {"tool_name": "read_file", "tool_args": {"path": "app.py", "start": 1, "end": 50}},
+            {"tool_name": "read_file", "tool_args": {"path": "app.py", "start": 51, "end": 100}},
+        ]
+        exe = ToolExecutor(agent, approval_policy="auto")
+        assert exe._is_duplicate("read_file", {"path": "app.py", "start": 101, "end": 150})
+
+    def test_read_tool_different_path_not_duplicate(self):
+        """read_file 不同 path → 不重复。"""
+        agent = _make_agent()
+        agent.session["history"] = [
+            {"tool_name": "read_file", "tool_args": {"path": "app.py"}},
+            {"tool_name": "read_file", "tool_args": {"path": "utils.py"}},
+        ]
+        exe = ToolExecutor(agent, approval_policy="auto")
+        assert not exe._is_duplicate("read_file", {"path": "config.py"})
+
+    def test_write_tool_exact_match_duplicate(self):
+        """write_file 相同 args → 精确重复。"""
+        agent = _make_agent()
+        agent.session["history"] = [
+            {"tool_name": "write_file",
+             "tool_args": {"path": "app.py", "content": "x=1"}},
+            {"tool_name": "write_file",
+             "tool_args": {"path": "app.py", "content": "x=1"}},
+        ]
+        exe = ToolExecutor(agent, approval_policy="auto")
+        assert exe._is_duplicate("write_file", {"path": "app.py", "content": "x=1"})
+
+    def test_write_tool_different_content_not_duplicate(self):
+        """write_file 相同 path 不同 content → 不重复。"""
+        agent = _make_agent()
+        agent.session["history"] = [
+            {"tool_name": "write_file",
+             "tool_args": {"path": "app.py", "content": "x=1"}},
+            {"tool_name": "write_file",
+             "tool_args": {"path": "app.py", "content": "x=2"}},
+        ]
+        exe = ToolExecutor(agent, approval_policy="auto")
+        assert not exe._is_duplicate("write_file", {"path": "app.py", "content": "x=3"})
+
+    def test_less_than_two_calls_not_duplicate(self):
+        agent = _make_agent()
+        agent.session["history"] = [
+            {"tool_name": "read_file", "tool_args": {"path": "app.py"}},
+        ]
+        exe = ToolExecutor(agent, approval_policy="auto")
+        assert not exe._is_duplicate("read_file", {"path": "app.py"})
+
+    def test_search_same_path_different_pattern_duplicate(self):
+        """search 相同 path → 语义重复。"""
+        agent = _make_agent()
+        agent.session["history"] = [
+            {"tool_name": "search", "tool_args": {"path": "src", "pattern": "foo"}},
+            {"tool_name": "search", "tool_args": {"path": "src", "pattern": "bar"}},
+        ]
+        exe = ToolExecutor(agent, approval_policy="auto")
+        assert exe._is_duplicate("search", {"path": "src", "pattern": "baz"})
+
+
+# ---------------------------------------------------------------------------
+# Gate 7 分级审批（V1.4-Bonus11b）
+# ---------------------------------------------------------------------------
+
+
+class TestGate7ApprovalTiers:
+    def test_read_tools_are_auto(self):
+        for name in ToolExecutor._READ_TOOLS_FOR_APPROVAL:
+            assert ToolExecutor._approval_tier(name) == ToolExecutor._APPROVAL_TIER_AUTO, name
+
+    def test_write_tools_are_ask(self):
+        for name in ToolExecutor._ASK_TOOLS:
+            assert ToolExecutor._approval_tier(name) == ToolExecutor._APPROVAL_TIER_ASK, name
+
+    def test_run_shell_is_deny(self):
+        assert ToolExecutor._approval_tier("run_shell") == ToolExecutor._APPROVAL_TIER_DENY
+
+    def test_unknown_tool_defaults_to_ask(self):
+        assert ToolExecutor._approval_tier("unknown_tool") == ToolExecutor._APPROVAL_TIER_ASK
+
+    def test_auto_tool_executes_without_approval(self):
+        """读类工具 Gate 7 自动通过（不要求审批）。"""
+        agent = _make_agent()
+        (Path(agent._cwd) / "app.py").write_text("x=1\n", encoding="utf-8")
+        exe = ToolExecutor(agent, approval_policy="ask")  # policy=ask 但读类应 auto
+        result = exe.execute_gated("read_file", {"path": "app.py"})
+        assert "Error" not in result.content or "审批" not in result.content
+
+    def test_write_file_asks_approval(self):
+        """写类工具在 ask policy 下要求审批（stdin 不可用 → 被拒）。"""
+        agent = _make_agent()
+        (Path(agent._cwd) / "app.py").write_text("x=1\n", encoding="utf-8")
+        exe = ToolExecutor(agent, approval_policy="ask")
+        # stdin is not available in test → approval denied
+        result = exe.execute_gated("write_file", {"path": "app.py", "content": "x=2\n"})
+        assert result.metadata.get("tool_status") == "rejected"
+        assert result.metadata.get("gate_id") == 7
+
+    def test_deny_tool_rejected(self):
+        """deny 工具直接拒绝。"""
+        agent = _make_agent()
+        exe = ToolExecutor(agent, approval_policy="auto")
+        result = exe.execute_gated("run_shell", {"command": "echo hi"})
+        assert result.metadata.get("gate_id") == 7
+        assert "禁止执行" in result.content
+
+
+def _make_agent():
+    from agent_runtime.workspace import WorkspaceContext
+    import tempfile
+
+    tmp = tempfile.mkdtemp()
+    ws = WorkspaceContext.build(tmp)
+    return Agent(
+        config=AgentConfig(approval="auto"),
+        model_client=FakeModelClient(outputs=["<final>ok</final>"]),
+        workspace=ws,
+        cwd=tmp,
+    )

@@ -147,9 +147,15 @@ class ToolExecutor:
                     f"Error: 补丁预览失败: {preview_err}",
                 )
 
-        # ---- Gate 7: 审批检查 ----
+        # ---- Gate 7: 分级审批检查 ----
         gate7_meta = None
-        if name in self._high_risk_tools:
+        tier = self._approval_tier(name)
+        if tier == self._APPROVAL_TIER_DENY:
+            return self._rejected(
+                7, "approval_denied",
+                f"Error: 工具 '{name}' 已被禁止执行。",
+            )
+        if tier == self._APPROVAL_TIER_ASK:
             if not self._approve(name, args, patch_preview_meta):
                 if token is not None and token.is_cancelled:
                     return self._rejected_cancel("Error: 任务已取消（审批中断）。")
@@ -269,9 +275,32 @@ class ToolExecutor:
             return self._rejected(3, code, f"Error: 路径校验失败: {e}")
         return None
 
+    # Gate 7 分级审批：auto(读类)/ask(写类)/deny(禁止)
+    _APPROVAL_TIER_AUTO = "auto"
+    _APPROVAL_TIER_ASK = "ask"
+    _APPROVAL_TIER_DENY = "deny"
+
+    _READ_TOOLS_FOR_APPROVAL = frozenset({
+        "read_file", "list_files", "search", "grep", "ast_parse",
+        "inspect_file", "find_test", "git_blame", "git_diff",
+    })
+    _ASK_TOOLS = frozenset({"write_file", "patch_file"})
+    _DENY_TOOLS = frozenset({"run_shell"})
+
+    @classmethod
+    def _approval_tier(cls, name: str) -> str:
+        """返回工具的分级审批等级。"""
+        if name in cls._READ_TOOLS_FOR_APPROVAL:
+            return cls._APPROVAL_TIER_AUTO
+        if name in cls._ASK_TOOLS:
+            return cls._APPROVAL_TIER_ASK
+        if name in cls._DENY_TOOLS:
+            return cls._APPROVAL_TIER_DENY
+        return cls._APPROVAL_TIER_ASK  # 未知工具默认须审批
+
     def _collect_high_risk(self) -> set[str]:
-        """收集所有标记为 risky=True 的工具名。"""
-        return {name for name, spec in self.agent.tools.items() if spec.get("risky")}
+        """collect_high_risk 已废弃，保留兼容 stub。"""
+        return self._ASK_TOOLS | self._DENY_TOOLS
 
     def _get_args_class(self, name: str) -> type | None:
         """根据工具名返回对应的参数 dataclass。"""
@@ -288,18 +317,34 @@ class ToolExecutor:
         }
         return mapping.get(name)
 
+    # 读类工具：仅按 (name, path) 语义去重（不比较 start/end/pattern 等参数）
+    _READ_TOOLS = frozenset({"read_file", "list_files", "search", "grep", "ast_parse",
+                              "inspect_file", "find_test", "git_blame", "git_diff"})
+
     def _is_duplicate(self, name: str, args: dict) -> bool:
-        """检查最近 2 次工具调用的 name+args 是否与本次完全相同。"""
+        """检查最近 2 次调用是否重复。
+
+        - 读类工具：相同 tool_name + 相同 path → 语义重复
+        - 写类工具：name + args 完全匹配 → 精确重复
+        """
         history = self.agent.session.get("history", [])
-        # 提取有 tool_name 的记录
         tool_calls = [h for h in history if h.get("tool_name")]
         recent = tool_calls[-2:]
         if len(recent) < 2:
             return False
 
-        same_name = recent[0].get("tool_name") == recent[1].get("tool_name") == name
-        same_args = recent[0].get("tool_args") == recent[1].get("tool_args") == args
-        return same_name and same_args
+        if name in self._READ_TOOLS:
+            same_name = recent[0].get("tool_name") == recent[1].get("tool_name") == name
+            same_path = (
+                recent[0].get("tool_args", {}).get("path", "")
+                == recent[1].get("tool_args", {}).get("path", "")
+                == args.get("path", "")
+            )
+            return same_name and same_path
+        else:
+            same_name = recent[0].get("tool_name") == recent[1].get("tool_name") == name
+            same_args = recent[0].get("tool_args") == recent[1].get("tool_args") == args
+            return same_name and same_args
 
     def _approve(self, name: str, args: dict, patch_preview: dict | None = None) -> bool:
         """审批检查。
@@ -327,6 +372,8 @@ class ToolExecutor:
                 )
             response = input(prompt)
             return response.strip().lower() == "y"
+        except (OSError, EOFError):
+            return False  # 非交互环境 → 拒绝
         except KeyboardInterrupt:
             token = getattr(self.agent, "cancel_token", None)
             if token is not None:
