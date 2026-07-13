@@ -252,6 +252,14 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 state.node_timings["skill_resolve_ms"] = skill_ms
                 log.info("parse_issue: %dms, skill_resolve: %dms", parse_ms, skill_ms)
 
+                # matched skill → suggested_tools 约束 Gateway
+                if matched and matched.suggested_tools:
+                    from src.agents.factory import _get_or_create_gateway
+
+                    gw = _get_or_create_gateway()
+                    for role in ("localizer", "retriever", "patcher"):
+                        gw.restrict_to(role, matched.suggested_tools)
+
                 # 读取相似修复先例（repair precedent 读写一体）
                 if state.repair_plan and state.repair_plan.issue_type:
                     from src.repair.precedent import RepairPrecedentStore
