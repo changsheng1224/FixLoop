@@ -148,11 +148,13 @@ class EvalRunner:
         cases_dir: str | Path | None = None,
         output_dir: str | Path | None = None,
         skip_verify: bool = False,
+        judge_client=None,
     ):
         self.orchestrator_factory = orchestrator_factory
         self.cases_dir = Path(cases_dir or DEFAULT_CASES_DIR)
         self.output_dir = Path(output_dir or Path.cwd() / "eval_results")
         self.skip_verify = skip_verify
+        self.judge_client = judge_client
 
     @property
     def _checkpoint_path(self) -> Path:
@@ -337,6 +339,12 @@ class EvalRunner:
                 skill_result_fields_from_plan(plan, meta)
             )
 
+            judge_score, judge_reason = 0, ""
+            if self.judge_client and actual_patch:
+                judge_score, judge_reason = self.judge_client.evaluate(
+                    issue, actual_patch,
+                )
+
             return CaseResult(
                 case_id=case_id,
                 issue_type=str(meta.get("issue_type", "")),
@@ -359,6 +367,8 @@ class EvalRunner:
                 total_tokens=total_tokens,
                 token_usage=token_usage if isinstance(token_usage, dict) else {},
                 permission_denied_by_tool=permission_denied_by_tool,
+                judge_score=judge_score,
+                judge_reason=judge_reason,
             )
 
 

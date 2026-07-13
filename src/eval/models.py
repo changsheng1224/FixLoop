@@ -32,6 +32,8 @@ class CaseResult:
     matched_skill: str | None = None
     skill_match: bool = False
     skill_labeled: bool = False
+    judge_score: int = 0
+    judge_reason: str = ""
 
     def to_dict(self) -> dict:
         """序列化为 JSON 可写 dict。"""
@@ -61,6 +63,9 @@ class CaseResult:
             data["expected_skill"] = self.expected_skill
             data["matched_skill"] = self.matched_skill
             data["skill_match"] = self.skill_match
+        if self.judge_score > 0:
+            data["judge_score"] = self.judge_score
+            data["judge_reason"] = self.judge_reason
         return data
 
 
@@ -76,6 +81,7 @@ class EvalReport:
     skill_metrics: dict = field(default_factory=dict)
     pass_at_k: dict = field(default_factory=dict)
     performance: dict = field(default_factory=dict)
+    judge_summary: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """序列化为 JSON 可写 dict（含 summary 与 cases 列表）。"""
@@ -93,4 +99,6 @@ class EvalReport:
             data["pass_at_k"] = self.pass_at_k
         if self.performance:
             data["performance"] = self.performance
+        if self.judge_summary:
+            data["judge_summary"] = self.judge_summary
         return data

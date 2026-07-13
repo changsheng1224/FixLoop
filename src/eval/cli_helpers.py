@@ -75,6 +75,7 @@ def run_eval(
     markdown: str | None = None,
     resume: bool = False,
     pass_at_k: int = 1,
+    with_judge: bool = False,
 ) -> tuple[EvalReport, Path, int]:
     """执行 eval 子命令：跑 Case、写报告，返回 (report, path, exit_code)。"""
     output_dir, report_path = resolve_report_path(output)
@@ -84,11 +85,22 @@ def run_eval(
     else:
         factory = make_orchestrator_factory(skip_verify=skip_verify, model_client=model_client)
 
+    judge_client = None
+    if with_judge:
+        from agent_runtime.bootstrap import create_model_client
+        from src.eval.judge import JudgeClient
+        try:
+            light = create_model_client(provider="deepseek")
+            judge_client = JudgeClient(light)
+        except Exception:
+            print("[eval] --with-judge: 无法创建 judge client，跳过", file=sys.stderr)
+
     runner = EvalRunner(
         orchestrator_factory=factory,
         cases_dir=cases_dir,
         output_dir=output_dir,
         skip_verify=skip_verify,
+        judge_client=judge_client,
     )
     ids = runner.list_cases() if case_ids is None else case_ids
     report = runner.run_all(ids, report_path=report_path, resume=resume,

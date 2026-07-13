@@ -1,0 +1,1 @@
+Fix the division by zero bug in calculator.py. The divide function should raise ValueError when b=0.

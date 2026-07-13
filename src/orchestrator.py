@@ -718,7 +718,7 @@ class Orchestrator(RepairPipelineMixin):
         if not patches:
             log.debug("[patcher] 0 patches parsed, raw[:300]=%r", raw.strip()[:300])
 
-        applied_patches = self._apply_patches_on_disk(patches)
+        applied_patches = self._apply_patches_on_disk(patches, state=state)
         if patches and not applied_patches:
             log.warning("[patcher] 补丁解析成功但未写入任何文件")
             state.agent_errors["patcher_apply"] = "apply_failed"
@@ -731,7 +731,20 @@ class Orchestrator(RepairPipelineMixin):
             "total_ms": total_ms,
         }
 
-    def _apply_patches_on_disk(self, patches: list[CandidatePatch]) -> list[CandidatePatch]:
+    def _apply_patches_on_disk(
+        self, patches: list[CandidatePatch], *, state=None
+    ) -> list[CandidatePatch]:
+        # faithfulness 闸口：过滤操作无关文件的幻觉 patch
+        if state is not None:
+            from src.repair.failure_tags import check_patch_faithfulness
+            patches, rejected = check_patch_faithfulness(patches, state)
+            if rejected:
+                state.agent_errors["patcher_hallucinated_file"] = rejected[0]
+                import sys
+                print(
+                    f"  [patcher] ⚠ faithfulness gate: 拒绝无关文件 patch {rejected}",
+                    file=sys.stderr, flush=True,
+                )
         return self._patch_applier().apply_patches(patches)
 
     def _run_verifier(self, state: RepairState) -> "VerificationResult":
