@@ -389,6 +389,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
                     if state.verification_result.all_passed:
                         state.status = RepairTerminalStatus.FIXED
+                        cooldown = getattr(self, "_verify_cooldown", None)
+                        if cooldown is not None:
+                            cooldown.record_success()
                         break
 
                     _record_pytest_exit(state, self._repo_root, "post_patch_pytest_code")
@@ -401,6 +404,19 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                         state.verification_result, state=state,
                     )
                     self._write_feedback_to_blackboard(state.feedback)
+
+                    # Verify 失败冷却轮：连续相同失败 → 降 temperature + 提示
+                    cooldown = getattr(self, "_verify_cooldown", None)
+                    if cooldown is None:
+                        from src.repair.verify_cooldown import VerifyCooldown
+
+                        cooldown = VerifyCooldown()
+                        self._verify_cooldown = cooldown
+                    cooldown.record_failure(
+                        state.verification_result.failure_logs
+                    )
+                    if cooldown.cooldown_active:
+                        state.feedback += f"\n\n{cooldown.cooldown_hint}"
                     state.retry_count += 1
 
                 if (
