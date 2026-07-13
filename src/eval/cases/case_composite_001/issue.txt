@@ -1,0 +1,7 @@
+The project has two issues that need fixing:
+
+1. calc.py: the add() function returns string concatenation instead of integer addition when passed string arguments like add("10", 3).
+
+2. validator.py: the validate_name() function crashes with AttributeError when passed an empty string or None.
+
+Fix both issues.
