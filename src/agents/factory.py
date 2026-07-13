@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Literal
 
 from agent_runtime.config import AgentConfig
+from agent_runtime.repair_budget import _DEFAULT_ALLOCATIONS
 from agent_runtime.runtime import Agent
 from agent_runtime.tool_context import ToolContext
 from src.middleware import ToolGateway, build_repair_gateway
@@ -29,11 +30,16 @@ BASELINE_SYSTEM_PROMPT = (
     "你是代码修复专家。分析错误、定位代码、生成补丁、在容器内验证修复。你可以使用所有工具。"
 )
 
+# 分 Agent 预算表 — prompt_budget 从 RepairBudgetContext 统一来源读取
 _AGENT_DEFAULTS: dict[MultiAgentRole, dict] = {
-    "localizer": {"max_steps": 6, "max_new_tokens": 4096},
-    "retriever": {"max_steps": 4, "max_new_tokens": 2048},
-    "patcher": {"max_steps": 6, "max_new_tokens": 4096},
-    "verifier": {"max_steps": 4, "max_new_tokens": 4096},
+    "localizer": {"max_steps": 6, "max_new_tokens": 4096,
+                  "prompt_budget": _DEFAULT_ALLOCATIONS["localizer"]},
+    "retriever": {"max_steps": 4, "max_new_tokens": 2048,
+                  "prompt_budget": _DEFAULT_ALLOCATIONS["retriever"]},
+    "patcher":   {"max_steps": 6, "max_new_tokens": 4096,
+                  "prompt_budget": _DEFAULT_ALLOCATIONS["patcher"]},
+    "verifier":  {"max_steps": 4, "max_new_tokens": 4096,
+                  "prompt_budget": _DEFAULT_ALLOCATIONS["verifier"]},
 }
 
 

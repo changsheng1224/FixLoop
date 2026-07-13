@@ -175,6 +175,60 @@ class TestContextManagerWithBudget:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# 分 Agent 预算表 — 统一来源验证
+# ---------------------------------------------------------------------------
+
+
+class TestAgentBudgetDefaults:
+    """_AGENT_DEFAULTS.prompt_budget 与 _DEFAULT_ALLOCATIONS 一致。"""
+
+    def test_factory_defaults_match_allocations(self):
+        from src.agents.factory import _AGENT_DEFAULTS as FACTORY_DEFAULTS
+
+        for role, alloc in _DEFAULT_ALLOCATIONS.items():
+            if role in FACTORY_DEFAULTS:
+                assert FACTORY_DEFAULTS[role]["prompt_budget"] == alloc, (
+                    f"{role}: factory prompt_budget={FACTORY_DEFAULTS[role]['prompt_budget']} "
+                    f"!= allocation={alloc}"
+                )
+
+    def test_all_roles_have_prompt_budget(self):
+        from src.agents.factory import _AGENT_DEFAULTS as FACTORY_DEFAULTS
+
+        for role, defaults in FACTORY_DEFAULTS.items():
+            assert "prompt_budget" in defaults, (
+                f"{role} 缺少 prompt_budget 字段"
+            )
+            assert defaults["prompt_budget"] > 0, (
+                f"{role} prompt_budget 应为正数"
+            )
+
+    def test_localizer_budget_is_2k(self):
+        from src.agents.factory import _AGENT_DEFAULTS as FACTORY_DEFAULTS
+        assert FACTORY_DEFAULTS["localizer"]["prompt_budget"] == 2000
+
+    def test_patcher_budget_is_4k(self):
+        from src.agents.factory import _AGENT_DEFAULTS as FACTORY_DEFAULTS
+        assert FACTORY_DEFAULTS["patcher"]["prompt_budget"] == 4000
+
+    def test_create_repair_agent_uses_role_budget(self, temp_workspace):
+        """create_repair_agent 产出 Agent 的 prompt_budget 正确。"""
+        from src.agents.factory import create_repair_agent
+        from agent_runtime.workspace import WorkspaceContext
+
+        ws = WorkspaceContext.build(str(temp_workspace))
+        client = FakeModelClient(outputs=["<final>ok</final>"])
+
+        for role, expected in [("localizer", 2000), ("retriever", 3000),
+                                ("patcher", 4000), ("verifier", 1000)]:
+            agent = create_repair_agent(role, client, ws, cwd=str(temp_workspace),
+                                        approval="auto", dry_run=True)
+            assert agent.config.prompt_budget == expected, (
+                f"{role}: expected prompt_budget={expected}, got={agent.config.prompt_budget}"
+            )
+
+
 class TestBudgetE2E:
     def test_repair_budget_flows_to_context_manager(self):
         """RepairBudgetContext.sub_budget → Agent._budget → ContextManager。"""
