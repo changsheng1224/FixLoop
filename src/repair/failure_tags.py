@@ -72,6 +72,7 @@ def _is_parse_fail(state: RepairState) -> bool:
 
 
 def _is_wrong_file(state: RepairState) -> bool:
+    """任一 patch 文件不在 allowed 集合中 → 幻觉/改错文件。"""
     if not state.candidate_patches:
         return False
     allowed = allowed_patch_files(state)
@@ -80,7 +81,8 @@ def _is_wrong_file(state: RepairState) -> bool:
     patch_paths = {_normalize_path(p.file_path) for p in state.candidate_patches if p.file_path}
     if not patch_paths:
         return False
-    return patch_paths.isdisjoint(allowed)
+    # patch 文件必须 ⊆ allowed（任一不在即为 wrong_file）
+    return not patch_paths.issubset(allowed)
 
 
 def classify_failure_tags(state: RepairState) -> list[FailureTag]:
@@ -96,6 +98,33 @@ def classify_failure_tags(state: RepairState) -> list[FailureTag]:
     if _is_wrong_file(state):
         return [FailureTag.WRONG_FILE]
     return []
+
+
+def check_patch_faithfulness(
+    patches: list, state
+) -> tuple[list, list[str]]:
+    """闸口：过滤掉操作无关文件的幻觉 patch。
+
+    Args:
+        patches: CandidatePatch 列表。
+        state: RepairState（获取 suspect + related_tests）。
+
+    Returns:
+        (allowed_patches, rejected_files) — 通过闸口的 patch + 被拒绝的文件路径。
+    """
+    allowed = allowed_patch_files(state)
+    if not allowed:
+        return list(patches), []
+
+    kept: list = []
+    rejected: list[str] = []
+    for p in patches:
+        path = _normalize_path(p.file_path) if p.file_path else ""
+        if path and path not in allowed:
+            rejected.append(path)
+        else:
+            kept.append(p)
+    return kept, rejected
 
 
 def apply_failure_tags(state: RepairState) -> None:

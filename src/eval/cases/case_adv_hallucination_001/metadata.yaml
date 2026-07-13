@@ -1,0 +1,17 @@
+case_id: case_adv_hallucination_001
+language: python
+issue_type: logic_error
+expected_skill: python_logic_error_fix
+difficulty: medium
+status: draft
+description: "幻觉文件检测 — patch 修改了无关文件 unrelated.py，应被 faithfulness 闸口拒绝"
+tags:
+  - adversarial
+  - hallucination
+  - faithfulness
+source_files:
+  - calculator.py
+test_files:
+  - test_calculator.py
+expected_outcome: exhausted
+expected_badcase_tag: wrong_file
