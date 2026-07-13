@@ -123,6 +123,67 @@ def _get_semantic_model():
             return None
 
 
+class ChunkedMemoryNote:
+    """语料 chunk + max-pool 检索（V1.4-Bonus9）。
+
+    超长文本按 EMBED_MAX_CHARS 分段 → 每段独立 embed。
+    search 时 query 与所有 chunk 的 cosine 取 max（max-pool）。
+    """
+
+    def __init__(self, text: str, note: dict, model, max_chars: int = EMBED_MAX_CHARS):
+        self._text = text
+        self._note = note
+        self._chunks: list[dict] = []
+        self._model = model
+        self._max_chars = max_chars
+        self._embed_chunks()
+
+    @property
+    def chunks(self) -> list[dict]:
+        return list(self._chunks)
+
+    @property
+    def note(self) -> dict:
+        return dict(self._note)
+
+    def _embed_chunks(self) -> None:
+        text = self._text.strip()
+        if not text or self._model is None:
+            return
+        # 按 max_chars 分段
+        segments = _chunk_text(text, self._max_chars)
+        for seg in segments:
+            try:
+                emb = None
+                content_hash = hashlib.sha256(seg.encode("utf-8")).hexdigest()[:32]
+                cached = _load_embed_cache(content_hash)
+                if cached is not None:
+                    emb = cached
+                else:
+                    emb = self._model.encode(seg)
+                    _save_embed_cache(content_hash, emb)
+                self._chunks.append({"text": seg[:200], "embedding": emb})
+            except Exception:
+                pass
+
+    def max_similarity(self, query_embedding) -> float:
+        """计算 query 与所有 chunk 的最大 cosine 相似度。"""
+        import numpy as np
+
+        best = 0.0
+        for ch in self._chunks:
+            emb = ch.get("embedding")
+            if emb is None:
+                continue
+            sim = float(
+                np.dot(query_embedding, emb)
+                / (np.linalg.norm(query_embedding) * np.linalg.norm(emb))
+            )
+            if sim > best:
+                best = sim
+        return best
+
+
 class SemanticMemory:
     """基于 SentenceTransformer embedding 的 episodic 语义检索。"""
 
@@ -136,27 +197,33 @@ class SemanticMemory:
         return self.model is not None
 
     def add(self, note: dict):
-        """为 note 计算 embedding 并缓存（优先磁盘缓存）。"""
+        """为 note 计算 embedding 并缓存（短文本单 embed，长文本 chunk+max-pool）。"""
         if not self.available:
             return
         text = note.get("text", "")
         if not text:
             return
         try:
-            truncated = _truncate_head_tail(text)
-            content_hash = hashlib.sha256(truncated.encode("utf-8")).hexdigest()[:32]
-            embedding = _load_embed_cache(content_hash)
-            if embedding is not None:
+            if len(text) <= EMBED_MAX_CHARS:
+                # 短文本：单 embedding
+                truncated = _truncate_head_tail(text)
+                content_hash = hashlib.sha256(truncated.encode("utf-8")).hexdigest()[:32]
+                embedding = _load_embed_cache(content_hash)
+                if embedding is not None:
+                    self._notes.append({**note, "embedding": embedding})
+                    return
+                embedding = self.model.encode(truncated)
+                _save_embed_cache(content_hash, embedding)
                 self._notes.append({**note, "embedding": embedding})
-                return
-            embedding = self.model.encode(truncated)
-            _save_embed_cache(content_hash, embedding)
-            self._notes.append({**note, "embedding": embedding})
+            else:
+                # 长文本：chunk + max-pool
+                cmn = ChunkedMemoryNote(text, note, self.model)
+                self._notes.append(cmn)
         except Exception:
             pass
 
     def search(self, query: str, top_k: int = 3) -> list[dict]:
-        """按 cosine 相似度检索 top_k notes（sim > 0.3）。"""
+        """按 cosine 相似度检索 top_k notes（sim > 0.3，chunk note 使用 max-pool）。"""
         if not self.available or not self._notes:
             return []
         try:
@@ -166,18 +233,45 @@ class SemanticMemory:
             query_emb = self.model.encode(short_query)
             scores = []
             for note in self._notes:
-                emb = note.get("embedding")
-                if emb is None:
-                    continue
-                sim = float(
-                    np.dot(query_emb, emb) / (np.linalg.norm(query_emb) * np.linalg.norm(emb))
-                )
-                if sim > 0.3:
-                    scores.append((sim, note))
+                if isinstance(note, ChunkedMemoryNote):
+                    sim = note.max_similarity(query_emb)
+                    if sim > 0.3:
+                        scores.append((sim, note.note))
+                else:
+                    emb = note.get("embedding")
+                    if emb is None:
+                        continue
+                    sim = float(
+                        np.dot(query_emb, emb)
+                        / (np.linalg.norm(query_emb) * np.linalg.norm(emb))
+                    )
+                    if sim > 0.3:
+                        scores.append((sim, note))
             scores.sort(key=lambda x: x[0], reverse=True)
             return [note for _, note in scores[:top_k]]
         except Exception:
             return []
+
+
+def _chunk_text(text: str, max_chars: int = EMBED_MAX_CHARS) -> list[str]:
+    """将长文本按 max_chars 分段（在空白边界切分，避免截断单词）。"""
+    text = text.strip()
+    if len(text) <= max_chars:
+        return [text]
+    chunks: list[str] = []
+    while len(text) > max_chars:
+        # 在 max_chars 范围内找最近的空白边界
+        cut = max_chars
+        for sep in ("\n", ". ", " "):
+            idx = text.rfind(sep, 0, max_chars)
+            if idx > max_chars // 2:
+                cut = idx + len(sep)
+                break
+        chunks.append(text[:cut].strip())
+        text = text[cut:].strip()
+    if text:
+        chunks.append(text)
+    return chunks
 
 
 def _truncate_head_tail(text: str, max_chars: int = EMBED_MAX_CHARS) -> str:

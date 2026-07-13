@@ -709,8 +709,12 @@ class AgentLoop:
                     self._start_next_todo()
 
                 if hasattr(self.agent.model_client, "chat_with_tools"):
-                    return self._run_with_native_tools(user_message, ts, callback)
-                return self._run_with_text_parsing(user_message, ts, callback)
+                    answer = self._run_with_native_tools(user_message, ts, callback)
+                else:
+                    answer = self._run_with_text_parsing(user_message, ts, callback)
+                # Memory Dream: ask() 结束后自动维护记忆
+                self._run_memory_dream()
+                return answer
         finally:
             cb.remove_listener(self._circuit_trace_listener)
 
@@ -1110,6 +1114,18 @@ class AgentLoop:
 
         cleaned = cleaned.strip()
         return cleaned if cleaned else raw.strip()
+
+    def _run_memory_dream(self) -> None:
+        """Agent ask() 结束后执行 Memory Dream：去重 + 过期 + 裁剪。"""
+        mem = self.agent.session.get("memory")
+        if not mem:
+            return
+        from agent_runtime.features.memory.dream import dream_summary_to_trace, run_memory_dream
+
+        root = getattr(self.agent, "_cwd", "") or ""
+        stats = run_memory_dream(mem, durable_root=root)
+        if any(stats.get(k, 0) for k in ("deduped", "expired", "trimmed")):
+            self._emit("memory_dream", dream_summary_to_trace(stats))
 
     def _get_store(self):
         if self._store is None:
