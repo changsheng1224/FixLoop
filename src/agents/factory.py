@@ -54,6 +54,7 @@ def create_repair_agent(
     dry_run: bool = False,
     l1_prefix=None,
     warm_context=None,
+    budget=None,
 ) -> Agent:
     """创建指定角色的修复 Agent（含 baseline 单 Agent 变体）。
 
@@ -86,7 +87,7 @@ def create_repair_agent(
     json_mode = role in ("localizer", "patcher", "retriever")
     if json_mode:
         system_prompt += "\n\n【输出格式】只输出合法 JSON（不要包裹在 ```json 或 <final> 中）。"
-    return Agent(
+    agent = Agent(
         config=AgentConfig(provider="deepseek", approval=approval, json_mode=json_mode, **defaults),
         model_client=model_client,
         workspace=workspace,
@@ -101,6 +102,9 @@ def create_repair_agent(
         l1_prefix=l1_prefix,
         warm_context=warm_context,
     )
+    if budget is not None:
+        agent._budget = budget
+    return agent
 
 
 def create_localizer(

@@ -149,14 +149,19 @@ class ContextManager:
     NATIVE_SYSTEM_ORDER = ("system", "tools")
     DYNAMIC_ORDER = ("skills", "workspace", "memory", "knowledge", "history", "state")
 
-    def __init__(self, agent, total_budget: int | None = None):
+    def __init__(self, agent, total_budget: int | None = None, *, budget: TokenBudget | None = None):
         self.agent = agent
-        limit = total_budget
-        if limit is None:
-            limit = getattr(getattr(agent, "config", None), "prompt_budget", TOTAL_BUDGET)
-        model = getattr(getattr(agent, "config", None), "model", "deepseek-v4-pro")
-        provider = getattr(getattr(agent, "config", None), "provider", "deepseek")
-        self.budget = TokenBudget(model=model, total_limit=limit, provider=provider)
+        if budget is not None:
+            self.budget = budget
+        elif getattr(agent, "_budget", None) is not None:
+            self.budget = agent._budget
+        else:
+            limit = total_budget
+            if limit is None:
+                limit = getattr(getattr(agent, "config", None), "prompt_budget", TOTAL_BUDGET)
+            model = getattr(getattr(agent, "config", None), "model", "deepseek-v4-pro")
+            provider = getattr(getattr(agent, "config", None), "provider", "deepseek")
+            self.budget = TokenBudget(model=model, total_limit=limit, provider=provider)
         cache_dir = Path(getattr(agent, "_cwd", ".")) / ".agent" / "summary_cache"
         self._summary_cache: dict[str, str] = _DiskCache(cache_dir)
         self.tier_policy = TierPolicy.from_agent(agent)

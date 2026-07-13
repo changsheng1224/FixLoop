@@ -9,6 +9,7 @@ from typing import TypeVar
 
 from agent_runtime.bootstrap import create_model_client, load_dotenv
 from agent_runtime.prompt_prefix import build_repair_l1_prefix
+from agent_runtime.repair_budget import RepairBudgetContext
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.warm_context import create_warm_context
 from agent_runtime.workspace import WorkspaceContext
@@ -75,23 +76,30 @@ def wire_orchestrator(
         repo_root=repo,
     )
 
-    # 预热 tokenizer（后续所有 Agent 的 ContextManager 命中模块级缓存）
+    # 预热 tokenizer + 创建共享预算上下文
     wc = create_warm_context(model="deepseek-v4-pro", provider="deepseek")
+    budget_ctx = RepairBudgetContext.create(model="deepseek-v4-pro", provider="deepseek")
 
-    agent_kw: dict = {"l1_prefix": l1, "dry_run": dry_run, "warm_context": wc}
+    base_kw: dict = {"l1_prefix": l1, "dry_run": dry_run, "warm_context": wc}
+
+    def _agent_kw(role: str) -> dict:
+        """构建角色专属 kwargs（含子预算）。"""
+        kw = dict(base_kw)
+        kw["budget"] = budget_ctx.sub_budget(role)
+        return kw
 
     # 并行预建 localizer + retriever（ThreadPoolExecutor）
     with ThreadPoolExecutor(max_workers=2) as pool:
-        fut_loc = pool.submit(create_localizer, client, ws, repo, **agent_kw)
+        fut_loc = pool.submit(create_localizer, client, ws, repo, **_agent_kw("localizer"))
         fut_ret = (
-            pool.submit(create_retriever, client, ws, repo, **agent_kw)
+            pool.submit(create_retriever, client, ws, repo, **_agent_kw("retriever"))
             if with_retriever
             else None
         )
         localizer = fut_loc.result()
         retriever = fut_ret.result() if fut_ret else None
 
-    patcher = create_patcher(client, ws, cwd=repo, **agent_kw)
+    patcher = create_patcher(client, ws, cwd=repo, **_agent_kw("patcher"))
     orch = orch_class(
         localizer,
         retriever,
@@ -99,8 +107,9 @@ def wire_orchestrator(
         use_pytest_verify=not skip_verify,
         l1_prompt_cache_key=l1.hash,
     )
+    orch._budget_ctx = budget_ctx
     if not skip_verify:
-        verifier = try_create_verifier(client, ws, repo, **agent_kw)
+        verifier = try_create_verifier(client, ws, repo, **_agent_kw("verifier"))
         if verifier:
             orch.verifier = verifier
     return orch
