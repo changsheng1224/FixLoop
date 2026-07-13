@@ -201,6 +201,7 @@ class EvalRunner:
         resume: bool = False,
         variant: str = "",
         rep: int = 0,
+        repetitions: int = 1,
     ) -> EvalReport:
         """运行多个 Case，写入 eval_report.json 并返回聚合报告。
 
@@ -210,31 +211,27 @@ class EvalRunner:
             resume: 启用断点续跑（跳过 checkpoint 中已完成的 case）。
             variant: 变体名（预留，供 ablation/Pass@k 使用）。
             rep: 重复序号（预留，供 Pass@k 使用）。
+            repetitions: 每个 case 重复运行次数（Pass@k）。默认 1。
         """
         ids = case_ids or self.list_cases()
-        if resume:
-            completed = self._load_checkpoint()
-            pending = [
-                cid for cid in ids
-                if (cid, variant, rep) not in completed
-            ]
-            if len(pending) < len(ids):
-                print(
-                    f"[eval] --resume: 已完成 {len(ids) - len(pending)}/{len(ids)} 个 case，"
-                    f"剩余 {len(pending)} 个",
-                    file=sys.stderr,
-                )
-            ids = pending
-            if not ids:
-                print("[eval] 所有 case 已完成", file=sys.stderr)
-                return build_eval_report([])
+        completed = self._load_checkpoint() if resume else set()
 
         results: list[CaseResult] = []
         for case_id in ids:
-            result = self.run_case(case_id)
-            results.append(result)
-            if resume:
-                self._save_checkpoint_entry(case_id, variant=variant, rep=rep)
+            for run_idx in range(repetitions):
+                if resume and (case_id, variant, run_idx) in completed:
+                    continue
+                result = self.run_case(case_id)
+                result.run_index = run_idx
+                results.append(result)
+                if resume:
+                    self._save_checkpoint_entry(
+                        case_id, variant=variant, rep=run_idx,
+                    )
+
+        if resume and not results:
+            print("[eval] 所有 case 已完成", file=sys.stderr)
+            return build_eval_report([])
 
         report = build_eval_report(results)
         out = report_path or (self.output_dir / "eval_report.json")

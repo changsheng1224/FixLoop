@@ -74,16 +74,49 @@ def compute_metrics(results: list[CaseResult]) -> EvalReport:
     from src.eval.skill_metrics import skill_metrics_from_case_results
 
     skill_metrics = skill_metrics_from_case_results(results)
+    pk = compute_pass_at_k(results)
     report = EvalReport(
         cases=results,
         summary=_summary_metrics(results),
         by_type=_bucket_metrics(results, lambda r: r.issue_type),
         by_difficulty=_bucket_metrics(results, lambda r: r.difficulty),
         skill_metrics=skill_metrics,
+        pass_at_k=pk,
     )
     if by_variant:
         report.by_variant = by_variant
     return report
+
+
+def compute_pass_at_k(results: list[CaseResult]) -> dict[str, float]:
+    """计算 Pass@k 指标。
+
+    对每个 case_id，收集所有 run_index 的结果。若任一 run 通过（fixed=True），
+    则该 case 在 k 下通过。返回 {"pass@1": ..., "pass@3": ...}。
+
+    k 值取 min(最大 run_index+1, 目标 k)。
+    若所有 case 都只有 1 次 run，则 pass@3 = pass@1。
+    """
+    if not results:
+        return {"pass@1": 0.0, "pass@3": 0.0}
+
+    # 按 case_id 分组
+    by_case: dict[str, list[CaseResult]] = {}
+    for r in results:
+        by_case.setdefault(r.case_id, []).append(r)
+
+    total_cases = len(by_case)
+
+    def _pass_at(k: int) -> float:
+        passed = 0
+        for case_id, runs in by_case.items():
+            # 取前 k 个 run（或全部）
+            samples = runs[:k]
+            if any(r.fixed for r in samples):
+                passed += 1
+        return round(passed / total_cases, 4) if total_cases > 0 else 0.0
+
+    return {"pass@1": _pass_at(1), "pass@3": _pass_at(3)}
 
 
 def _markdown_table(headers: list[str], rows: list[list[str]]) -> str:

@@ -52,6 +52,18 @@ def _add_eval_run_args(parser: argparse.ArgumentParser) -> None:
         metavar="PATH",
         help="生成 Markdown 指标报告（默认 output/report.md）",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="断点续跑：跳过已完成的 case",
+    )
+    parser.add_argument(
+        "--pass-at-k",
+        type=int,
+        default=1,
+        metavar="K",
+        help="Pass@k 评测：每个 case 重复 K 次（默认 1）",
+    )
 
 
 def main() -> int:
@@ -270,6 +282,8 @@ def _eval(args) -> int:
         fake=args.fake,
         skip_verify=skip_verify,
         markdown=getattr(args, "markdown", None),
+        resume=getattr(args, "resume", False),
+        pass_at_k=getattr(args, "pass_at_k", 1),
     )
     print_eval_report(report, verbose=args.verbose, report_path=report_path)
     return code

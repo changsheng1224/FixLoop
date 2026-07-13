@@ -74,6 +74,7 @@ def run_eval(
     model_client=None,
     markdown: str | None = None,
     resume: bool = False,
+    pass_at_k: int = 1,
 ) -> tuple[EvalReport, Path, int]:
     """执行 eval 子命令：跑 Case、写报告，返回 (report, path, exit_code)。"""
     output_dir, report_path = resolve_report_path(output)
@@ -90,7 +91,8 @@ def run_eval(
         skip_verify=skip_verify,
     )
     ids = runner.list_cases() if case_ids is None else case_ids
-    report = runner.run_all(ids, report_path=report_path, resume=resume)
+    report = runner.run_all(ids, report_path=report_path, resume=resume,
+                            repetitions=pass_at_k)
 
     if markdown is not None:
         from src.eval.metrics import write_metrics_markdown

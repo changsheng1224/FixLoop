@@ -43,6 +43,13 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="断点续跑：跳过已完成的 case（读取 eval_results/.checkpoint.json）",
     )
+    parser.add_argument(
+        "--pass-at-k",
+        type=int,
+        default=1,
+        metavar="K",
+        help="Pass@k 评测：每个 case 重复 K 次（默认 1）。报告 pass@1/pass@3",
+    )
     args = parser.parse_args(argv)
     setup_logging_from_args(args)
 
@@ -67,6 +74,7 @@ def main(argv: list[str] | None = None) -> int:
         fake=args.fake,
         skip_verify=args.skip_verify,
         resume=args.resume,
+        pass_at_k=args.pass_at_k,
     )
     print_eval_report(report, verbose=args.verbose, report_path=report_path)
     return code
