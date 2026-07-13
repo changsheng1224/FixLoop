@@ -668,6 +668,8 @@ class AgentLoop:
             if h.get("role") == "tool" and h.get("tool_name"):
                 return {"name": h["tool_name"], "args": h.get("tool_args", {})}
         return None
+
+    def _plan_phase(self, user_message: str, *, skip_plan: bool = False) -> None:
         """Plan 阶段：生成 TodoList 并写入 session。
 
         Args:

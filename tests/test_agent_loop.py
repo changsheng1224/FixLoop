@@ -3,11 +3,14 @@
 使用 FakeModelClient 预设输出序列，不调真实 API。
 """
 
+import tempfile
+
 import pytest
 
 from agent_runtime.config import AgentConfig
 from agent_runtime.providers.clients import FakeModelClient, FakeNativeToolClient
 from agent_runtime.runtime import Agent
+from agent_runtime.workspace import WorkspaceContext
 
 
 @pytest.fixture
@@ -135,7 +138,7 @@ class TestAgentLoopStopConditions:
         system_msgs = [
             h["content"] for h in agent.session["history"] if h["role"] == "system"
         ]
-        assert any("解析失败" in m for m in system_msgs)
+        assert any("④" in m for m in system_msgs)  # 四段式 prompt
 
     def test_parse_retry_emits_trace(self, config, workspace, temp_workspace):
         """解析失败 recovery 写入 trace parse_retry 事件。"""
@@ -834,4 +837,59 @@ class TestLoopDetection:
         loop = AgentLoop(agent)
         answer = loop.run("read files")
         assert "done" in answer
+
+
+# ---------------------------------------------------------------------------
+# 流式模型 cancel（V1.5-Bonus1e）
+# ---------------------------------------------------------------------------
+
+
+class TestStreamingCancel:
+    def test_cancel_during_stream_stops_early(self):
+        """流式输出中途 cancel → CancelledError → user_cancel stop。"""
+        from agent_runtime.agent_loop import AgentLoop
+        from agent_runtime.cancellation import CancellationToken
+
+        class MockStreamClient:
+            """流式 mock：模拟 chunk 输出并在中途被 cancel。"""
+            def __init__(self):
+                self.cancelled = False
+
+            def complete_stream(self, prompt, *, max_new_tokens=512, cancel_token=None, on_chunk=None):
+                chunks = ["chunk1", "chunk2", "chunk3", "chunk4"]
+                parts = []
+                for c in chunks:
+                    if cancel_token is not None and cancel_token.is_cancelled:
+                        from agent_runtime.cancellation import CancelledError
+                        raise CancelledError(cancel_token.reason)
+                    parts.append(c)
+                return "".join(parts)
+
+            def complete(self, prompt, max_new_tokens=512, prompt_cache_key=""):
+                return "<final>done</final>"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = WorkspaceContext.build(tmp)
+            config = AgentConfig(provider="ollama", max_steps=5)
+            client = MockStreamClient()
+            agent = Agent(config=config, model_client=client, workspace=ws, cwd=tmp)
+
+            # 设置 cancel token 并在 ask 期间 cancel
+            token = CancellationToken()
+            agent.cancel_token = token
+
+            # 在另一个线程中延迟 cancel
+            import threading
+            def delayed_cancel():
+                import time
+                time.sleep(0.05)
+                token.cancel()
+
+            t = threading.Thread(target=delayed_cancel)
+            t.start()
+
+            answer = agent.ask("test streaming cancel")
+            t.join()
+            # cancel 后应返回 cancel 相关结果
+            assert "cancel" in answer.lower() or "取消" in answer or "用户" in answer
 
