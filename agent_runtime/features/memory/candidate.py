@@ -265,29 +265,27 @@ class CandidateGateResult:
 def gate_candidate(
     candidate: Candidate,
     existing_entries: list[str],
-    authority: str = "auto",
+    authority: str = "",
 ) -> CandidateGateResult:
     """写 durable 前的冲突门控。
 
-    Args:
-        candidate: 待写入的候选条目。
-        existing_entries: 同 topic 已有条目列表。
-        authority: 写入者权威级别（auto/agent/user）。
-
-    Returns:
-        CandidateGateResult: 门控结果。
+    按权威序（user > agent > auto）判定：高权威可覆盖低权威，反之拒绝。
+    未指定 authority 时从 candidate.source 自动推断。
     """
+    from agent_runtime.features.memory.durable import _resolve_conflict, _subject_key, source_to_authority
+
+    if not authority:
+        authority = source_to_authority(candidate.source)
+
     if candidate.topic not in ALLOWED_TOPICS:
         return CandidateGateResult(allowed=False, reason=f"非法 topic: {candidate.topic}")
 
     candidate_text = candidate.promotion[1]
-    candidate_subject = candidate_text.split("\n")[0].strip().lower()
+    candidate_subject = _subject_key(candidate_text)
 
     for i, entry in enumerate(existing_entries):
-        existing_subject = entry.split("\n")[0].strip().lower()
+        existing_subject = _subject_key(entry)
         if existing_subject == candidate_subject:
-            from agent_runtime.features.memory.durable import _resolve_conflict
-
             resolution = _resolve_conflict(entry, candidate_text, authority)
             if resolution.value == "override":
                 return CandidateGateResult(allowed=True, resolution="override")

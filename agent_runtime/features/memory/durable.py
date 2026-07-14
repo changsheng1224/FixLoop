@@ -17,6 +17,29 @@ class ConflictResolution(Enum):
 # 权威序：user > agent > auto
 AUTHORITY_ORDER = {"user": 3, "agent": 2, "auto": 1}
 
+# source → authority 映射（工具/角色 → 权威级别）
+_SOURCE_AUTHORITY = {
+    "user": "user",
+    "stack_parse": "agent",
+    "patcher": "agent",
+    "localizer": "agent",
+    "retriever": "agent",
+    "verifier": "agent",
+    "final_answer": "agent",
+    "llm": "agent",
+}
+
+
+def source_to_authority(source: str) -> str:
+    """将 source 字符串映射到权威级别（user/agent/auto）。"""
+    if not source:
+        return "auto"
+    s = source.lower()
+    for key, auth in _SOURCE_AUTHORITY.items():
+        if key in s:
+            return auth
+    return "auto"
+
 DURABLE_TOPICS = [
     "project-conventions",
     "key-decisions",
@@ -191,10 +214,15 @@ class DurableMemoryStore:
         """创建 memory/topics 目录。"""
         self.topics_dir.mkdir(parents=True, exist_ok=True)
 
-    def promote(self, promotions: list[tuple[str, str]]):
+    def promote(
+        self,
+        promotions: list[tuple[str, str]],
+        authority: str = "auto",
+    ):
         """将 (topic, text) 条目 upsert 到对应 topic 并更新路由表。
 
         超 CHUNK_THRESHOLD_BYTES 自动 split 为 chunked 存储。
+        authority 按权威序传播到冲突状态机（user > agent > auto）。
         """
         if not promotions:
             return
@@ -209,7 +237,7 @@ class DurableMemoryStore:
             strategy = self._topic_strategy(topic)
             existing = self._read_topic(topic, strategy=strategy)
             for text in texts:
-                existing = self._upsert_entry(existing, text)
+                existing = self._upsert_entry(existing, text, authority=authority)
             self._write_topic(topic, existing)
         self._update_index()
 
@@ -341,15 +369,15 @@ class DurableMemoryStore:
 
     @staticmethod
     def _upsert_entry(entries: list[str], new_text: str, authority: str = "auto") -> list[str]:
-        new_subject = new_text.split("\n")[0].strip().lower()
+        new_subject = _subject_key(new_text)
         for i, entry in enumerate(entries):
-            if entry.split("\n")[0].strip().lower() == new_subject:
+            if _subject_key(entry) == new_subject:
                 result = _resolve_conflict(entry, new_text, authority)
                 if result in (ConflictResolution.OVERRIDE, ConflictResolution.EQUIVALENT):
                     entries[i] = new_text
                 elif result == ConflictResolution.INVALID:
                     # 互斥版本：追加而非覆盖
-                    ver = sum(1 for e in entries if e.split("\n")[0].strip().lower() == new_subject) + 1
+                    ver = sum(1 for e in entries if _subject_key(e) == new_subject) + 1
                     entries.append(new_text.replace("\n", f"  # v{ver}\n", 1))
                 return entries
         entries.append(new_text)
@@ -456,6 +484,14 @@ def _extract_promotions(text: str) -> list[tuple[str, str]]:
                     promotions.append((topic, f"{prefix} {body}"))
                 break
     return promotions
+
+
+def _subject_key(text: str) -> str:
+    """提取条目主题 key（首行，去除 authority 标记和尾部空白）。"""
+    first_line = text.split("\n")[0].strip().lower()
+    # 去除 [authority:...] 标记
+    first_line = re.sub(r"\s*\[authority:\w+\]\s*", "", first_line).strip()
+    return first_line
 
 
 def _resolve_conflict(existing: str, new: str, new_authority: str = "auto") -> ConflictResolution:

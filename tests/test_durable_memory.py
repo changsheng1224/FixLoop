@@ -228,3 +228,161 @@ class TestRoutingTable:
         chunked_entries = store._read_topic("key-decisions", strategy="chunked")
         # chunked 应包含原有 + 新条目
         assert len(chunked_entries) > 3
+
+
+# ---------------------------------------------------------------------------
+# 冲突状态机（V1.5-Bonus3）
+# ---------------------------------------------------------------------------
+
+
+class TestConflictResolution:
+    """ConflictResolution 枚举 + _resolve_conflict 全部 4 状态。"""
+
+    def test_none_when_empty_existing(self):
+        from agent_runtime.features.memory.durable import ConflictResolution, _resolve_conflict
+
+        result = _resolve_conflict("", "new entry")
+        assert result == ConflictResolution.NONE
+
+    def test_equivalent_when_content_matches(self):
+        from agent_runtime.features.memory.durable import ConflictResolution, _resolve_conflict
+
+        result = _resolve_conflict("use pytest for testing", "use pytest for testing")
+        assert result == ConflictResolution.EQUIVALENT
+
+    def test_equivalent_case_insensitive(self):
+        from agent_runtime.features.memory.durable import ConflictResolution, _resolve_conflict
+
+        result = _resolve_conflict("Use Pytest", "use pytest")
+        assert result == ConflictResolution.EQUIVALENT
+
+    def test_override_when_higher_authority(self):
+        """高权威（agent）可覆盖低权威（auto）。"""
+        from agent_runtime.features.memory.durable import ConflictResolution, _resolve_conflict
+
+        existing = "old decision [authority:auto]"
+        new = "new decision [authority:agent]"
+        result = _resolve_conflict(existing, new, new_authority="agent")
+        assert result == ConflictResolution.OVERRIDE
+
+    def test_override_user_over_agent(self):
+        """user 权威可覆盖 agent。"""
+        from agent_runtime.features.memory.durable import ConflictResolution, _resolve_conflict
+
+        existing = "agent decision [authority:agent]"
+        new = "user decision [authority:user]"
+        result = _resolve_conflict(existing, new, new_authority="user")
+        assert result == ConflictResolution.OVERRIDE
+
+    def test_invalid_when_lower_authority(self):
+        """低权威（auto）不可覆盖高权威（agent）。"""
+        from agent_runtime.features.memory.durable import ConflictResolution, _resolve_conflict
+
+        existing = "agent decision [authority:agent]"
+        new = "auto decision"
+        result = _resolve_conflict(existing, new, new_authority="auto")
+        assert result == ConflictResolution.INVALID
+
+    def test_invalid_same_authority_different_content(self):
+        """同权威 + 不同内容 → INVALID（互斥版本链）。"""
+        from agent_runtime.features.memory.durable import ConflictResolution, _resolve_conflict
+
+        existing = "decision v1"
+        new = "decision v2 different"
+        result = _resolve_conflict(existing, new, new_authority="auto")
+        assert result == ConflictResolution.INVALID
+
+
+class TestSourceToAuthority:
+    def test_known_source_maps_correctly(self):
+        from agent_runtime.features.memory.durable import source_to_authority
+
+        assert source_to_authority("patcher") == "agent"
+        assert source_to_authority("localizer") == "agent"
+        assert source_to_authority("user") == "user"
+        assert source_to_authority("stack_parse") == "agent"
+
+    def test_unknown_source_defaults_auto(self):
+        from agent_runtime.features.memory.durable import source_to_authority
+
+        assert source_to_authority("unknown_tool") == "auto"
+        assert source_to_authority("") == "auto"
+
+    def test_partial_match_works(self):
+        from agent_runtime.features.memory.durable import source_to_authority
+
+        assert source_to_authority("tool:patcher") == "agent"
+
+
+class TestUpsertEntryAuthority:
+    """_upsert_entry 权威传播测试。"""
+
+    def test_high_authority_overrides_low(self):
+        from agent_runtime.features.memory.durable import DurableMemoryStore
+
+        entries = ["old entry"]
+        # 先以 auto 写入
+        result = DurableMemoryStore._upsert_entry([], "old entry", authority="auto")
+        # 同 subject、高权威覆盖
+        result = DurableMemoryStore._upsert_entry(
+            result, "old entry [authority:agent]", authority="agent"
+        )
+        assert len(result) == 1
+        assert "agent" in result[0]
+
+    def test_low_authority_appends_versioned(self):
+        """低权威写入同 subject → 互斥版本链（追加 #v2）。"""
+        from agent_runtime.features.memory.durable import DurableMemoryStore
+
+        entries = ["important decision\nkind=decision confidence=0.80 source=agent [authority:agent]"]
+        result = DurableMemoryStore._upsert_entry(
+            entries, "important decision\nkind=observation confidence=0.50 source=auto",
+            authority="auto",
+        )
+        # 低权威不可覆盖 → 追加版本
+        assert len(result) == 2
+        assert "v2" in result[1]
+
+    def test_equivalent_overwrites_same(self):
+        from agent_runtime.features.memory.durable import DurableMemoryStore
+
+        entries = ["use ruff format"]
+        result = DurableMemoryStore._upsert_entry(
+            entries, "use ruff format", authority="auto"
+        )
+        assert len(result) == 1
+
+    def test_new_entry_appended(self):
+        from agent_runtime.features.memory.durable import DurableMemoryStore
+
+        entries = ["existing entry"]
+        result = DurableMemoryStore._upsert_entry(
+            entries, "completely new entry", authority="auto"
+        )
+        assert len(result) == 2
+
+
+class TestPromoteAuthority:
+    """promote 权威传播集成测试。"""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        (tmp_path / ".agent" / "memory" / "topics").mkdir(parents=True)
+        return DurableMemoryStore(str(tmp_path))
+
+    def test_agent_authority_allows_override(self, store):
+        store.promote([("key-decisions", "auto decision")], authority="auto")
+        # agent 权威覆盖同 subject 的 auto 条目
+        store.promote([("key-decisions", "auto decision [authority:agent]")], authority="agent")
+        entries = store._read_topic("key-decisions")
+        assert len(entries) == 1
+        assert "[authority:agent]" in entries[0]
+
+    def test_auto_authority_cannot_override_agent(self, store):
+        store.promote([("key-decisions", "agent decision\nsource=patcher")], authority="agent")
+        # auto 权威不可覆盖 agent → 追加版本
+        store.promote([("key-decisions", "agent decision\nsource=auto")], authority="auto")
+        entries = store._read_topic("key-decisions")
+        assert len(entries) == 2
+        assert "source=patcher" in entries[0]
+        assert "source=auto" in entries[1]
