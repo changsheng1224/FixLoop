@@ -6,10 +6,19 @@
 """
 
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+
+from agent_runtime.logging_setup import get_logger
+
+log = get_logger(__name__)
+
+# 模块级并发上限 Semaphore（env FIXLOOP_MAX_SANDBOXES，默认 4）
+_MAX_SANDBOXES = int(os.getenv("FIXLOOP_MAX_SANDBOXES", "4"))
+_sandbox_semaphore = threading.BoundedSemaphore(_MAX_SANDBOXES)
 
 from agent_runtime.cancellation import (
     BlockingDeadlineError,
@@ -92,6 +101,7 @@ class Sandbox:
     id: str
     profile: str
     timings: dict | None = None
+    _semaphore_held: bool = False  # destroy 时是否需要 release semaphore
 
 
 class SandboxManager:
@@ -122,6 +132,9 @@ class SandboxManager:
     def create(self, repo_path: str, profile: str = "python") -> Sandbox:
         """创建隔离容器并通过 tar 流式传文件。
 
+        受 FIXLOOP_MAX_SANDBOXES 控制并发上限（默认 4）。
+        达到上限时阻塞等待，不抛异常。
+
         Args:
             repo_path: 仓库路径（tar 打包后传入 /code）。
             profile: 镜像 profile（默认 python）。
@@ -133,6 +146,15 @@ class SandboxManager:
             SandboxArchiveError: tar 排除后为空或超过大小上限。
         """
         import time
+
+        acquired = _sandbox_semaphore.acquire(timeout=30)
+        if not acquired:
+            raise RuntimeError(
+                f"FIXLOOP_MAX_SANDBOXES={_MAX_SANDBOXES}: "
+                "无法在 30s 内获取 sandbox 槽位"
+            )
+        log.debug("sandbox semaphore acquired (%d/%d)",
+                   _MAX_SANDBOXES - _sandbox_semaphore._value, _MAX_SANDBOXES)
 
         repo = Path(repo_path).resolve()
         image = self.IMAGE
@@ -163,7 +185,8 @@ class SandboxManager:
             raise
         timings["tar_copy_ms"] = int((time.time() - t1) * 1000)
 
-        return Sandbox(id=container.id, profile=profile, timings=timings)
+        sb = Sandbox(id=container.id, profile=profile, timings=timings, _semaphore_held=acquired)
+        return sb
 
     def execute(
         self,
@@ -226,13 +249,18 @@ class SandboxManager:
         )
 
     def destroy(self, sandbox: Sandbox):
-        """销毁容器并移除持久层（kill + remove --force）。"""
+        """销毁容器、释放 semaphore（若 create 时持有）、移除持久层。"""
         try:
             container = self.docker.containers.get(sandbox.id)
             container.kill()
             container.remove(force=True)
         except Exception:
             pass
+        finally:
+            if getattr(sandbox, "_semaphore_held", False):
+                _sandbox_semaphore.release()
+                log.debug("sandbox semaphore released (%d/%d)",
+                           _MAX_SANDBOXES - _sandbox_semaphore._value, _MAX_SANDBOXES)
 
 
 class SandboxContext:

@@ -125,17 +125,22 @@ class RunStore:
     def write_task_state(self, task_state) -> Path:
         """写入 task_state.json（原子写）。
 
-        Args:
-            task_state: TaskState 实例。
-
-        Returns:
-            写入的文件路径。
+        FIXLOOP_ENCRYPT_KEY 设置时加密 user_request / final_answer。
         """
+        from agent_runtime.crypto_utils import is_encryption_enabled, encrypt
+
         run_dir = self.start_run(task_state)
         path = run_dir / "task_state.json"
+        data = task_state.to_dict()
+        if is_encryption_enabled():
+            if data.get("user_request"):
+                data["user_request"] = encrypt(data["user_request"])
+            if data.get("final_answer"):
+                data["final_answer"] = encrypt(data["final_answer"])
+            data["_encrypted"] = True
         tmp = path.with_suffix(".tmp")
         tmp.write_text(
-            json.dumps(task_state.to_dict(), ensure_ascii=False, indent=2),
+            json.dumps(data, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         tmp.replace(path)
