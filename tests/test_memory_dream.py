@@ -161,7 +161,7 @@ class TestRun:
             _make_note("old", 3, created_at=old),
             _make_note("unique", 4, created_at=time.time()),
         ]
-        stats = run_memory_dream(state)
+        stats, dreamer = run_memory_dream(state)
         assert stats["deduped"] == 1  # "dup" appeared twice
         assert stats["expired"] == 1  # "old" is 60 days old
         assert stats["total_before"] == 4
@@ -173,7 +173,7 @@ class TestRun:
         state["episodic_notes"] = [
             _make_note("old", 1, created_at=old),
         ]
-        stats = run_memory_dream(state, ttl_days=-1)  # skip expire
+        stats, dreamer = run_memory_dream(state, ttl_days=-1)  # skip expire
         assert stats["expired"] == 0
         assert stats["total_after"] == 1
 
@@ -241,7 +241,7 @@ class TestDurableGC:
         with tempfile.TemporaryDirectory() as tmp:
             _setup_topics_dir(tmp, 25)
             state = default_memory_state()
-            stats = run_memory_dream(state, durable_root=tmp)
+            stats, dreamer = run_memory_dream(state, durable_root=tmp)
             assert stats["durable_gc"] == 5
 
     def test_max_entries_zero_disables(self):
@@ -305,3 +305,126 @@ class TestDreamInAgentLoop:
         assert "ok" in answer
         notes = agent.session["memory"]["episodic_notes"]
         assert len(notes) == 1  # 去重后只剩 1 条
+
+
+# ---------------------------------------------------------------------------
+# 晋升建议（V1.5-Bonus3）
+# ---------------------------------------------------------------------------
+
+
+class TestSuggestPromotions:
+    def test_no_decisions_no_suggestions(self):
+        state = default_memory_state()
+        state["episodic_notes"] = [
+            {**_make_note("obs", 1), "kind": "observation", "retrieve_count": 5},
+        ]
+        dreamer = MemoryDreamer(state)
+        n = dreamer._suggest_promotions(hit_min=3)
+        assert n == 0
+        assert dreamer.promotion_hints == []
+
+    def test_decision_below_threshold_no_suggest(self):
+        state = default_memory_state()
+        state["episodic_notes"] = [
+            {**_make_note("dec", 1), "kind": "decision", "retrieve_count": 2},
+        ]
+        dreamer = MemoryDreamer(state)
+        n = dreamer._suggest_promotions(hit_min=3)
+        assert n == 0
+
+    def test_decision_above_threshold_suggests(self):
+        state = default_memory_state()
+        state["episodic_notes"] = [
+            {**_make_note("fix import", 1), "kind": "decision",
+             "retrieve_count": 5, "source": "patcher"},
+        ]
+        dreamer = MemoryDreamer(state)
+        n = dreamer._suggest_promotions(hit_min=3)
+        assert n == 1
+        assert len(dreamer.promotion_hints) == 1
+        assert dreamer.promotion_hints[0]["text"] == "fix import"
+        assert dreamer.promotion_hints[0]["retrieve_count"] == 5
+        assert dreamer.promotion_hints[0]["kind"] == "decision"
+
+    def test_multiple_decisions(self):
+        state = default_memory_state()
+        state["episodic_notes"] = [
+            {**_make_note("d1", 1), "kind": "decision", "retrieve_count": 3},
+            {**_make_note("d2", 2), "kind": "decision", "retrieve_count": 4},
+            {**_make_note("obs", 3), "kind": "observation", "retrieve_count": 10},
+        ]
+        dreamer = MemoryDreamer(state)
+        n = dreamer._suggest_promotions(hit_min=3)
+        assert n == 2
+        assert dreamer.stats["promotion_suggestions"] == 2
+
+    def test_suggestions_in_run_stats(self):
+        state = default_memory_state()
+        state["episodic_notes"] = [
+            {**_make_note("use pytest", 1), "kind": "decision",
+             "retrieve_count": 4, "source": "localizer"},
+        ]
+        stats, dreamer = run_memory_dream(state)
+        assert stats["promotion_suggestions"] == 1
+        assert len(dreamer.promotion_hints) == 1
+
+
+# ---------------------------------------------------------------------------
+# 路由重建（V1.5-Bonus3）
+# ---------------------------------------------------------------------------
+
+
+class TestRebuildRoutingTable:
+    def test_empty_durable_root(self):
+        state = default_memory_state()
+        dreamer = MemoryDreamer(state, durable_root="")
+        result = dreamer._rebuild_routing_table()
+        assert result == {}
+
+    def test_counts_topic_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _setup_topics_dir(tmp, 12)
+            state = default_memory_state()
+            dreamer = MemoryDreamer(state, durable_root=tmp)
+            result = dreamer._rebuild_routing_table()
+            assert "key-decisions" in result
+            assert result["key-decisions"] == 12
+
+    def test_routing_in_run_stats(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _setup_topics_dir(tmp, 8)
+            state = default_memory_state()
+            stats, dreamer = run_memory_dream(state, durable_root=tmp)
+            assert stats["routing_entries"] == 8
+
+
+# ---------------------------------------------------------------------------
+# trace / health 更新（V1.5-Bonus3）
+# ---------------------------------------------------------------------------
+
+
+class TestDreamTraceHealth:
+    def test_dream_summary_includes_new_fields(self):
+        trace = dream_summary_to_trace({
+            "deduped": 1, "expired": 0, "trimmed": 2, "durable_gc": 3,
+            "total_before": 10, "total_after": 4,
+            "promotion_suggestions": 2, "routing_entries": 15,
+        })
+        assert trace["durable_gc"] == 3
+        assert trace["promotion_suggestions"] == 2
+        assert trace["routing_entries"] == 15
+
+    def test_dream_summary_with_hints(self):
+        dreamer = MemoryDreamer(default_memory_state())
+        dreamer.promotion_hints = [
+            {"text": "use ruff", "retrieve_count": 3, "kind": "decision"},
+        ]
+        stats = {"promotion_suggestions": 1}
+        trace = dream_summary_to_trace(stats, dreamer)
+        assert "promotion_hints" in trace
+        assert len(trace["promotion_hints"]) == 1
+
+    def test_dream_summary_without_dreamer(self):
+        trace = dream_summary_to_trace({"deduped": 0})
+        assert "promotion_hints" not in trace
+        assert trace["promotion_suggestions"] == 0

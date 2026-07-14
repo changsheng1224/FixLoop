@@ -15,8 +15,11 @@ _DEFAULT_TTL_DAYS = 30
 MAX_DURABLE_ENTRIES_PER_TOPIC = 20
 
 
+PROMOTE_SUGGEST_HIT_MIN = 3  # kind=decision 且 retrieve_count≥N 时建议晋升
+
+
 class MemoryDreamer:
-    """记忆维护器：去重、过期、裁剪、durable GC，返回统计信息。"""
+    """记忆维护器：去重、过期、裁剪、durable GC、晋升建议、路由重建。"""
 
     def __init__(self, memory_state: dict[str, Any], durable_root: str = ""):
         self._state = memory_state
@@ -28,7 +31,10 @@ class MemoryDreamer:
             "durable_gc": 0,
             "total_before": 0,
             "total_after": 0,
+            "promotion_suggestions": 0,
+            "routing_entries": 0,
         }
+        self.promotion_hints: list[dict] = []
 
     def run(
         self,
@@ -49,8 +55,10 @@ class MemoryDreamer:
         if ttl_days >= 0:
             self._expire(ttl_days)
         self._trim()
+        self._suggest_promotions(hit_min=PROMOTE_SUGGEST_HIT_MIN)
         if max_durable > 0:
             self._gc_durable(max_durable)
+        self._rebuild_routing_table()
 
         self.stats["total_after"] = len(self._state.get("episodic_notes", []))
         return dict(self.stats)
@@ -97,6 +105,57 @@ class MemoryDreamer:
         return removed
 
 
+    def _suggest_promotions(self, hit_min: int = PROMOTE_SUGGEST_HIT_MIN) -> int:
+        """扫描 episodic notes，kind=decision 且 retrieve_count≥N 生成晋升建议。
+
+        仅生成 suggestion 写入 promotion_hints，默认不自动 promote。
+        （自动 promote 由 episodic.retrieval_candidates 在 PROMOTE_THRESHOLD 时触发）
+        """
+        notes = self._state.get("episodic_notes", [])
+        suggestions = []
+        for note in notes:
+            if note.get("kind") != "decision":
+                continue
+            rc = note.get("retrieve_count", 0)
+            if rc >= hit_min:
+                suggestions.append({
+                    "text": note.get("text", "")[:200],
+                    "retrieve_count": rc,
+                    "kind": note.get("kind"),
+                    "source": note.get("source", ""),
+                    "note_index": note.get("note_index"),
+                })
+        self.promotion_hints = suggestions
+        self.stats["promotion_suggestions"] = len(suggestions)
+        return len(suggestions)
+
+    def _rebuild_routing_table(self) -> dict[str, int]:
+        """重建内存路由表（topic → entries → bytes 概览）。
+
+        当前为轻量实现：扫描 topics_dir 统计条目数。
+        完整路由表（inline/chunked strategy）依赖 MEMORY.md 升级。
+        """
+        if not self._durable_root:
+            self.stats["routing_entries"] = 0
+            return {}
+        topics_dir = Path(self._durable_root) / ".agent" / "memory" / "topics"
+        if not topics_dir.is_dir():
+            self.stats["routing_entries"] = 0
+            return {}
+
+        routing: dict[str, int] = {}
+        total = 0
+        for md_file in sorted(topics_dir.glob("*.md")):
+            try:
+                lines = md_file.read_text(encoding="utf-8").splitlines()
+                count = sum(1 for l in lines if l.strip() and not l.startswith("#"))
+                routing[md_file.stem] = count
+                total += count
+            except OSError:
+                pass
+        self.stats["routing_entries"] = total
+        return routing
+
     def _gc_durable(self, max_entries: int) -> int:
         """Durable GC：每个 topic 文件超限时按 mtime LRU 淘汰旧条目。
 
@@ -132,18 +191,27 @@ def run_memory_dream(
     *,
     ttl_days: int = _DEFAULT_TTL_DAYS,
     durable_root: str = "",
-) -> dict:
-    """便捷函数：对 memory_state 执行 dream 并返回统计信息。"""
+) -> tuple[dict, MemoryDreamer]:
+    """便捷函数：对 memory_state 执行 dream 并返回 (统计信息, dreamer)。
+
+    dreamer 含 promotion_hints 列表供调用方写入 trace。
+    """
     dreamer = MemoryDreamer(memory_state, durable_root=durable_root)
-    return dreamer.run(ttl_days=ttl_days)
+    return dreamer.run(ttl_days=ttl_days), dreamer
 
 
-def dream_summary_to_trace(stats: dict) -> dict:
+def dream_summary_to_trace(stats: dict, dreamer: MemoryDreamer | None = None) -> dict:
     """将 dream 统计转为 trace 事件 payload。"""
-    return {
+    payload = {
         "deduped": stats.get("deduped", 0),
         "expired": stats.get("expired", 0),
         "trimmed": stats.get("trimmed", 0),
+        "durable_gc": stats.get("durable_gc", 0),
         "total_before": stats.get("total_before", 0),
         "total_after": stats.get("total_after", 0),
+        "promotion_suggestions": stats.get("promotion_suggestions", 0),
+        "routing_entries": stats.get("routing_entries", 0),
     }
+    if dreamer is not None and dreamer.promotion_hints:
+        payload["promotion_hints"] = dreamer.promotion_hints
+    return payload

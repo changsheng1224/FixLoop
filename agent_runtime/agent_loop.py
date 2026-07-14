@@ -101,6 +101,7 @@ class AgentLoop:
         self._json_retry_count = 0
         self._empty_retries = 0
         self.MAX_EMPTY_RETRIES = 3
+        self._last_dream_stats: dict[str, int] = {}
 
     def _accumulate_context_stats(self, meta: dict) -> None:
         """从 context_built metadata 累积 section 统计 + cache hit rate。"""
@@ -125,7 +126,7 @@ class AgentLoop:
             self._emit("compression_triggered", ev)
 
     def _build_memory_health(self) -> dict:
-        """构建 report.json 中的 memory_health 字段。"""
+        """构建 report.json 中的 memory_health 字段（合并 Dream stats）。"""
         try:
             from agent_runtime.features.memory.core import MAX_EPISODIC_NOTES
             from agent_runtime.features.memory.durable import DurableMemoryStore
@@ -135,11 +136,21 @@ class AgentLoop:
             store = DurableMemoryStore(self.agent._cwd)
             prefs = store.get_preferences()
             avg_conf = round(sum(p.confidence for p in prefs) / max(len(prefs), 1), 2)
+
+            dream = self._last_dream_stats if hasattr(self, "_last_dream_stats") else {}
             return {
                 "episodic_notes": len(episodic),
                 "episodic_cap": MAX_EPISODIC_NOTES,
                 "durable_entries": sum(1 for _ in store.topics_dir.glob("*.md") if store.topics_dir.is_dir()),
                 "avg_confidence": avg_conf,
+                "dream_deduped": dream.get("deduped", 0),
+                "dream_expired": dream.get("expired", 0),
+                "dream_trimmed": dream.get("trimmed", 0),
+                "dream_durable_gc": dream.get("durable_gc", 0),
+                "dream_promotion_suggestions": dream.get("promotion_suggestions", 0),
+                "dream_routing_entries": dream.get("routing_entries", 0),
+                "dream_total_before": dream.get("total_before", 0),
+                "dream_total_after": dream.get("total_after", 0),
             }
         except Exception:
             return {}
@@ -1234,16 +1245,18 @@ class AgentLoop:
         return cleaned if cleaned else raw.strip()
 
     def _run_memory_dream(self) -> None:
-        """Agent ask() 结束后执行 Memory Dream：去重 + 过期 + 裁剪。"""
+        """Agent ask() 结束后执行 Memory Dream：去重+过期+裁剪+晋升建议+路由重建。"""
         mem = self.agent.session.get("memory")
         if not mem:
             return
         from agent_runtime.features.memory.dream import dream_summary_to_trace, run_memory_dream
 
         root = getattr(self.agent, "_cwd", "") or ""
-        stats = run_memory_dream(mem, durable_root=root)
-        if any(stats.get(k, 0) for k in ("deduped", "expired", "trimmed")):
-            self._emit("memory_dream", dream_summary_to_trace(stats))
+        stats, dreamer = run_memory_dream(mem, durable_root=root)
+        if any(stats.get(k, 0) for k in ("deduped", "expired", "trimmed", "durable_gc", "promotion_suggestions")):
+            self._emit("memory_dream", dream_summary_to_trace(stats, dreamer))
+        # 存储 dream stats 供 _build_memory_health 合并
+        self._last_dream_stats = stats
 
     def _get_store(self):
         if self._store is None:
