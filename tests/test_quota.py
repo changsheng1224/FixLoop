@@ -74,6 +74,16 @@ class TestQuotaIntegration:
         r = executor.execute("list_files", {"path": "."})
         assert r.metadata["tool_status"] == "success"
 
+    def test_denied_run_shell_releases_concurrent_slot(self, agent):
+        quota = QuotaEnforcer(max_shell=10, max_total=10, max_concurrent_shell=1)
+        executor = ToolExecutor(agent=agent, approval_policy="auto", quota=quota)
+
+        result = executor.execute("run_shell", {"command": "echo hi", "timeout": 1})
+
+        assert result.metadata["tool_status"] == "rejected"
+        assert result.metadata["tool_error_code"] == "approval_denied"
+        assert quota.acquire_shell() is True
+
 class TestConcurrentShellLimit:
     def test_acquire_blocks_when_full(self):
         from agent_runtime.tool_executor import QuotaEnforcer

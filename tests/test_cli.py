@@ -104,3 +104,12 @@ class TestBuildLightClient:
         client = _build_light_client(Args())
         assert client is not None
         assert client.model == "qwen3:1.8b"
+
+
+class TestLayerBoundary:
+    """Layer 1 CLI 不应反向依赖 Layer 2 src 包。"""
+
+    def test_agent_runtime_cli_does_not_import_src(self):
+        text = Path("agent_runtime/cli.py").read_text(encoding="utf-8")
+        assert "from src." not in text
+        assert "import src." not in text

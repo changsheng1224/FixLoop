@@ -27,7 +27,7 @@ from src.repair.timing_schema import (
 )
 from src.repair.prompt_router import repair_plan_intent_snapshot
 from src.repair.run_context import RepairRunContext
-from src.state import RepairState, RetrievedContext, SuspectLocation
+from src.state import CandidatePatch, RepairState, RetrievedContext, SuspectLocation
 
 log = get_logger("repair.pipeline")
 
@@ -189,12 +189,14 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
     def _merge_subtask_patches(
         self, patches_by_subtask: dict, subtasks: list
-    ) -> list:
+    ) -> list[CandidatePatch]:
         """按 depends_on 拓扑合并各子任务的补丁。"""
-        merged = []
+        merged: list[CandidatePatch] = []
         for st in subtasks:
             sub_patches = patches_by_subtask.get(st.id, [])
             for p in sub_patches:
+                if not isinstance(p, CandidatePatch):
+                    continue
                 if p not in merged:
                     merged.append(p)
         return merged
@@ -458,11 +460,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
                 # matched skill → suggested_tools 约束 Gateway
                 if matched and matched.suggested_tools:
-                    from src.agents.factory import _get_or_create_gateway
-
-                    gw = _get_or_create_gateway()
-                    for role in ("localizer", "retriever", "patcher"):
-                        gw.restrict_to(role, matched.suggested_tools)
+                    for gw in getattr(self, "_repair_gateways", ()):
+                        for role in ("localizer", "retriever", "patcher"):
+                            gw.restrict_to(role, matched.suggested_tools)
 
                 # 读取相似修复先例（repair precedent 读写一体）
                 if state.repair_plan and state.repair_plan.issue_type:
@@ -807,7 +807,11 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 similar_snippets=similar_snippets,
                 related_tests=related_tests,
             ),
-            {"retriever_ms": elapsed_ms, "retrieval_path": "rule"},
+            {
+                "total_ms": elapsed_ms,
+                "internal": {"retriever_ms": elapsed_ms, "retrieval_path": "rule"},
+                "retrieval_path": "rule",
+            },
         )
 
     def _save_repair_checkpoint(self, state) -> None:

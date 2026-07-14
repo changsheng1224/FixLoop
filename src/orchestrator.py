@@ -120,6 +120,27 @@ class Orchestrator(RepairPipelineMixin):
                 or localizer.workspace.repo_root
                 or self._repo_root
             )
+        self._repair_gateways = self._collect_repair_gateways(
+            localizer,
+            retriever,
+            patcher,
+            verifier,
+        )
+
+    @staticmethod
+    def _collect_repair_gateways(*agents) -> tuple:
+        gateways = []
+        seen: set[int] = set()
+        for agent in agents:
+            gw = getattr(agent, "_repair_gateway", None)
+            if gw is None:
+                continue
+            marker = id(gw)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            gateways.append(gw)
+        return tuple(gateways)
 
     @staticmethod
     def _resolve_l1_prompt_cache_key_from_agents(*agents) -> str:
@@ -172,7 +193,11 @@ class Orchestrator(RepairPipelineMixin):
         if phase_timeouts is None:
             phase_timeouts = PhaseTimeoutConfig.with_repair_total_cap(repair_timeout_s)
 
-        state = RepairState(issue_input=issue, max_retries=max_retries)
+        state = RepairState(
+            issue_input=issue,
+            max_retries=max_retries,
+            repair_run_id=resume_run_id or "",
+        )
         token = cancel_token or CancellationToken()
         initial_snapshot = self._snapshot_repo()
 

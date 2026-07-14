@@ -63,6 +63,31 @@ class TestSaveCheckpointValidatesType:
 
 
 class TestResumeSkipsParse:
+    def test_orchestrator_repair_passes_resume_run_id_to_state(self, tmp_path):
+        """Orchestrator.repair 应将 resume_run_id 写入 RepairState。"""
+        from src.orchestrator import Orchestrator
+
+        class CaptureResumeOrchestrator(Orchestrator):
+            def _snapshot_repo(self):
+                return {}
+
+            def _restore_repo_snapshot(self, snapshot):
+                return None
+
+            def _repair_impl(self, state, initial_snapshot=None):
+                return state
+
+        orch = CaptureResumeOrchestrator(None, None, None)
+        orch._repo_root = str(tmp_path)
+
+        result = orch.repair(
+            "test issue",
+            repair_timeout_s=0,
+            resume_run_id="resume-001",
+        )
+
+        assert result.repair_run_id == "resume-001"
+
     def test_resume_repair_skips_parse(self, tmp_path):
         """resume_run_id 有效时 _repair_impl 跳过 parse 直接返回 state。"""
         from src.repair.pipeline import RepairPipelineMixin

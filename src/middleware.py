@@ -89,7 +89,7 @@ def build_repair_gateway(repo_root: str = "") -> ToolGateway:
 
     若 ``.agent/tools.yaml`` 存在，加载用户自定义权限并与内置合并。
     """
-    table = dict(REPAIR_PERMISSION_TABLE)
+    table = {tool: set(agents) for tool, agents in REPAIR_PERMISSION_TABLE.items()}
     if repo_root:
         from src.tools.manifest import load_tools_manifest, merge_permission_table
 

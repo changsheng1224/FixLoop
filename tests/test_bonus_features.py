@@ -190,5 +190,4 @@ class TestHealthCheck:
         assert "status" in data
         assert "python" in data
         assert "git" in data
-        assert "sandbox" in data
-        assert "ready" in data["sandbox"]
+        assert "sandbox" not in data

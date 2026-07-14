@@ -18,6 +18,7 @@ from src.agents.localizer import create_localizer
 from src.agents.patcher import create_patcher
 from src.agents.retriever import create_retriever
 from src.agents.verifier import create_verifier
+from src.middleware import build_repair_gateway
 from src.orchestrator import Orchestrator
 from src.tools.composite import build_repair_canonical_tools
 
@@ -104,8 +105,14 @@ def wire_orchestrator(
     # 预热 tokenizer + 创建共享预算上下文
     wc = create_warm_context(model="deepseek-v4-pro", provider="deepseek")
     budget_ctx = RepairBudgetContext.create(model="deepseek-v4-pro", provider="deepseek")
+    gateway = build_repair_gateway(repo)
 
-    base_kw: dict = {"l1_prefix": l1, "dry_run": dry_run, "warm_context": wc}
+    base_kw: dict = {
+        "l1_prefix": l1,
+        "dry_run": dry_run,
+        "warm_context": wc,
+        "gateway": gateway,
+    }
 
     def _agent_kw(role: str) -> dict:
         """构建角色专属 kwargs（含子预算）。配额由 Agent._role_quota 按角色分配。"""

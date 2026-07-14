@@ -100,31 +100,30 @@ class ToolExecutor:
             return self._rejected(2, "not_found", f"Error: 工具 '{name}' 未注册。")
 
         # ---- Gate 3: 参数校验 ----
-        args_dataclass = self._get_args_class(name)
-        if args_dataclass:
-            try:
-                args = auto_validate(args_dataclass, args)
-            except ValueError as e:
-                return self._rejected(3, "invalid_args", f"Error: 参数校验失败: {e}")
-
-        path_reject = self._validate_path_args(args)
-        if path_reject is not None:
-            return path_reject
+        validated_args, args_reject = self._validate_args(name, args)
+        if args_reject is not None:
+            return args_reject
+        args = validated_args
 
         # ---- Gate 4: 配额检查 ----
-        if self._quota is not None:
-            if not self._quota.check(name):
-                return self._rejected(
-                    4,
-                    "quota_exceeded",
-                    f"Error: 工具 '{name}' 超出配额限制。{self._quota.status()}",
-                )
-            if name == "run_shell" and not self._quota.acquire_shell():
-                return self._rejected(
-                    4,
-                    "quota_exceeded",
-                    f"Error: 并行 shell 达到上限。{self._quota.status()}",
-                )
+        shell_slot_acquired, quota_reject = self._check_quota(name)
+        if quota_reject is not None:
+            return quota_reject
+
+        try:
+            return self._execute_after_quota(name, args, tool_spec, token)
+        finally:
+            if shell_slot_acquired and self._quota is not None:
+                self._quota.release_shell()
+
+    def _execute_after_quota(
+        self,
+        name: str,
+        args: dict,
+        tool_spec: dict,
+        token,
+    ) -> ToolExecutionResult:
+        """执行 Gate 5–9；调用方负责释放 Gate 4 获取的资源。"""
 
         # ---- Gate 5: 重复调用检测 ----
         if self._is_duplicate(name, args):
@@ -151,51 +150,19 @@ class ToolExecutor:
                 )
 
         # ---- Gate 6: Dry-Run 模式（在审批之前，因为不实际修改） ----
-        if self.dry_run:
-            return ToolExecutionResult(
-                content=f"[DRY RUN] Would {name}({args})",
-                metadata={"tool_status": "success", "dry_run": True},
-            )
+        dry_run_result = self._maybe_dry_run(name, args)
+        if dry_run_result is not None:
+            return dry_run_result
 
         # ---- Gate 6.5: 高风险工具预览（审批时展示） ----
-        patch_preview_meta = None
-        if name == "write_file":
-            raw_path = args.get("path", "")
-            content_len = len(str(args.get("content", "")))
-            mode = "追加" if args.get("append") else "新建/覆盖"
-            preview_text = f"[{mode}] {raw_path} ({content_len} 字符)"
-            patch_preview_meta = {"path": raw_path, "preview_text": preview_text}
-        elif name == "patch_file":
-            patch_preview_meta, preview_err = self._build_patch_preview(args)
-            if preview_err:
-                return self._rejected(
-                    3,
-                    "invalid_args",
-                    f"Error: 补丁预览失败: {preview_err}",
-                )
+        patch_preview_meta, preview_reject = self._build_risk_preview(name, args)
+        if preview_reject is not None:
+            return preview_reject
 
         # ---- Gate 7: 分级审批检查 ----
-        gate7_meta = None
-        tier = self._approval_tier(name)
-        if tier == self._APPROVAL_TIER_DENY:
-            return self._rejected(
-                7, "approval_denied",
-                f"Error: 工具 '{name}' 已被禁止执行。",
-            )
-        if tier == self._APPROVAL_TIER_ASK:
-            if not self._approve(name, args, patch_preview_meta):
-                if token is not None and token.is_cancelled:
-                    return self._rejected_cancel("Error: 任务已取消（审批中断）。")
-                extra = {"approval_policy": self.approval_policy}
-                if patch_preview_meta:
-                    extra["patch_preview"] = patch_preview_meta
-                return self._rejected(
-                    7,
-                    "approval_denied",
-                    f"Error: 工具 '{name}' 调用被拒绝（approval_policy={self.approval_policy}）",
-                    **extra,
-                )
-            gate7_meta = build_gate7_pass_metadata(self.approval_policy)
+        gate7_meta, approval_reject = self._check_approval(name, args, patch_preview_meta, token)
+        if approval_reject is not None:
+            return approval_reject
 
         # ---- Gate 8: 执行前工作区快照 ----
         is_risky = name in self._high_risk_tools
@@ -203,52 +170,18 @@ class ToolExecutor:
         restore_snapshot = self._capture_restore_snapshot() if is_risky else {}
 
         # ---- Gate 9: 执行工具 ----
-        timeout_s = int(getattr(self.agent.config, "tool_timeout_s", 0) or 0)
-        ctx = self.agent.tool_context
-        prev_ctx_token = ctx.cancel_token
-        # write/patch 必须等工具返回后再 restore；只读/shell 可协作式中断
-        run_cancel = token if name not in ("write_file", "patch_file") else None
-        ctx.cancel_token = token
-        try:
-            from agent_runtime.cancellation import CancelledError
-            from agent_runtime.tool_timeout import ToolTimeoutError, run_with_timeout
-
-            result_text = run_with_timeout(
-                lambda: tool_spec["run"](args),
-                timeout_s=timeout_s,
-                cancel_token=run_cancel,
-            )
-        except CancelledError:
-            return ToolExecutionResult(
-                content=f"Error: 工具 '{name}' 执行已取消。",
-                metadata=build_executor_cancel_metadata(),
-            )
-        except ToolTimeoutError as e:
-            return ToolExecutionResult(
-                content=f"Error: 工具 '{name}' 执行超时（{e.timeout_s} 秒）",
-                metadata=build_executor_error_metadata("tool_timeout", timeout_s=e.timeout_s),
-            )
-        except Exception as e:
-            return ToolExecutionResult(
-                content=f"Error: 工具 '{name}' 执行异常: {e}",
-                metadata=build_executor_error_metadata(),
-            )
-        finally:
-            ctx.cancel_token = prev_ctx_token
+        execution_result = self._run_tool(name, args, tool_spec, token)
+        if isinstance(execution_result, ToolExecutionResult):
+            return execution_result
+        result_text = execution_result
 
         # ---- Gate 9 续: 执行后快照对比 ----
-        metadata = {"tool_status": "success"}
-        execution_tier = tool_spec.get("execution_tier", "host")
-        if execution_tier:
-            metadata["execution_tier"] = execution_tier
-        if gate7_meta:
-            metadata.update(gate7_meta)
-        if patch_preview_meta:
-            metadata["patch_preview"] = patch_preview_meta
-        if name == "run_shell":
-            provider = getattr(self.agent.tool_context, "shell_env_provider", None)
-            if callable(provider):
-                metadata["shell_env_keys"] = sorted(provider().keys())
+        metadata = self._build_success_metadata(
+            name,
+            tool_spec,
+            gate7_meta,
+            patch_preview_meta,
+        )
         if is_risky:
             if token is not None and token.is_cancelled:
                 self._restore_restore_snapshot(restore_snapshot)
@@ -261,8 +194,6 @@ class ToolExecutor:
         # 记录配额
         if self._quota is not None:
             self._quota.record(name)
-            if name == "run_shell":
-                self._quota.release_shell()
 
         return ToolExecutionResult(content=result_text, metadata=metadata)
 
@@ -285,6 +216,163 @@ class ToolExecutor:
             content=content,
             metadata=build_executor_cancel_metadata(**extra),
         )
+
+    def _validate_args(self, name: str, args: dict) -> tuple[dict, ToolExecutionResult | None]:
+        """Gate 3：dataclass 参数校验与路径逃逸校验。"""
+        args_dataclass = self._get_args_class(name)
+        if args_dataclass:
+            try:
+                args = auto_validate(args_dataclass, args)
+            except ValueError as e:
+                return args, self._rejected(3, "invalid_args", f"Error: 参数校验失败: {e}")
+
+        path_reject = self._validate_path_args(args)
+        if path_reject is not None:
+            return args, path_reject
+        return args, None
+
+    def _check_quota(self, name: str) -> tuple[bool, ToolExecutionResult | None]:
+        """Gate 4：检查调用配额，并返回是否获取了 shell 并发槽。"""
+        if self._quota is None:
+            return False, None
+        if not self._quota.check(name):
+            return False, self._rejected(
+                4,
+                "quota_exceeded",
+                f"Error: 工具 '{name}' 超出配额限制。{self._quota.status()}",
+            )
+        if name == "run_shell":
+            if not self._quota.acquire_shell():
+                return False, self._rejected(
+                    4,
+                    "quota_exceeded",
+                    f"Error: 并行 shell 达到上限。{self._quota.status()}",
+                )
+            return True, None
+        return False, None
+
+    def _maybe_dry_run(self, name: str, args: dict) -> ToolExecutionResult | None:
+        """Gate 6：dry-run 直接返回计划，不进入审批与执行。"""
+        if not self.dry_run:
+            return None
+        return ToolExecutionResult(
+            content=f"[DRY RUN] Would {name}({args})",
+            metadata={"tool_status": "success", "dry_run": True},
+        )
+
+    def _build_risk_preview(
+        self,
+        name: str,
+        args: dict,
+    ) -> tuple[dict | None, ToolExecutionResult | None]:
+        """Gate 6.5：为写类工具准备审批预览。"""
+        if name == "write_file":
+            raw_path = args.get("path", "")
+            content_len = len(str(args.get("content", "")))
+            mode = "追加" if args.get("append") else "新建/覆盖"
+            preview_text = f"[{mode}] {raw_path} ({content_len} 字符)"
+            return {"path": raw_path, "preview_text": preview_text}, None
+        if name == "patch_file":
+            patch_preview_meta, preview_err = self._build_patch_preview(args)
+            if preview_err:
+                return None, self._rejected(
+                    3,
+                    "invalid_args",
+                    f"Error: 补丁预览失败: {preview_err}",
+                )
+            return patch_preview_meta, None
+        return None, None
+
+    def _check_approval(
+        self,
+        name: str,
+        args: dict,
+        patch_preview_meta: dict | None,
+        token,
+    ) -> tuple[dict | None, ToolExecutionResult | None]:
+        """Gate 7：执行分级审批策略。"""
+        tier = self._approval_tier(name)
+        if tier == self._APPROVAL_TIER_DENY:
+            return None, self._rejected(
+                7,
+                "approval_denied",
+                f"Error: 工具 '{name}' 已被禁止执行。",
+            )
+        if tier != self._APPROVAL_TIER_ASK:
+            return None, None
+
+        if self._approve(name, args, patch_preview_meta):
+            return build_gate7_pass_metadata(self.approval_policy), None
+
+        if token is not None and token.is_cancelled:
+            return None, self._rejected_cancel("Error: 任务已取消（审批中断）。")
+
+        extra = {"approval_policy": self.approval_policy}
+        if patch_preview_meta:
+            extra["patch_preview"] = patch_preview_meta
+        return None, self._rejected(
+            7,
+            "approval_denied",
+            f"Error: 工具 '{name}' 调用被拒绝（approval_policy={self.approval_policy}）",
+            **extra,
+        )
+
+    def _run_tool(self, name: str, args: dict, tool_spec: dict, token) -> str | ToolExecutionResult:
+        """Gate 9：运行工具并把异常转换为结构化结果。"""
+        timeout_s = int(getattr(self.agent.config, "tool_timeout_s", 0) or 0)
+        ctx = self.agent.tool_context
+        prev_ctx_token = ctx.cancel_token
+        # write/patch 必须等工具返回后再 restore；只读/shell 可协作式中断
+        run_cancel = token if name not in ("write_file", "patch_file") else None
+        ctx.cancel_token = token
+        try:
+            from agent_runtime.cancellation import CancelledError
+            from agent_runtime.tool_timeout import ToolTimeoutError, run_with_timeout
+
+            return run_with_timeout(
+                lambda: tool_spec["run"](args),
+                timeout_s=timeout_s,
+                cancel_token=run_cancel,
+            )
+        except CancelledError:
+            return ToolExecutionResult(
+                content=f"Error: 工具 '{name}' 执行已取消。",
+                metadata=build_executor_cancel_metadata(),
+            )
+        except ToolTimeoutError as e:
+            return ToolExecutionResult(
+                content=f"Error: 工具 '{name}' 执行超时（{e.timeout_s} 秒）",
+                metadata=build_executor_error_metadata("tool_timeout", timeout_s=e.timeout_s),
+            )
+        except Exception as e:
+            return ToolExecutionResult(
+                content=f"Error: 工具 '{name}' 执行异常: {e}",
+                metadata=build_executor_error_metadata(),
+            )
+        finally:
+            ctx.cancel_token = prev_ctx_token
+
+    def _build_success_metadata(
+        self,
+        name: str,
+        tool_spec: dict,
+        gate7_meta: dict | None,
+        patch_preview_meta: dict | None,
+    ) -> dict:
+        """Gate 9 后处理：构造成功结果 metadata。"""
+        metadata = {"tool_status": "success"}
+        execution_tier = tool_spec.get("execution_tier", "host")
+        if execution_tier:
+            metadata["execution_tier"] = execution_tier
+        if gate7_meta:
+            metadata.update(gate7_meta)
+        if patch_preview_meta:
+            metadata["patch_preview"] = patch_preview_meta
+        if name == "run_shell":
+            provider = getattr(self.agent.tool_context, "shell_env_provider", None)
+            if callable(provider):
+                metadata["shell_env_keys"] = sorted(provider().keys())
+        return metadata
 
     def _validate_path_args(self, args) -> ToolExecutionResult | None:
         """Gate 3 续：路径参数 resolve，拦截 workspace 逃逸与 symlink。"""
