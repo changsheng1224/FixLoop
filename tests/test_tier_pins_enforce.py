@@ -215,3 +215,66 @@ class TestTierPinsContextManagerIntegration:
         assert SUSPECT_FILE in prompt, f"{SUSPECT_FILE} should be in prompt"
         assert "定位" in prompt
         assert meta.get("request_preserved") is True
+
+
+# ---------------------------------------------------------------------------
+# tier_pins L2：fit_repair_user_prompt 与 L0 共读同一 tier_pins.yaml
+# ---------------------------------------------------------------------------
+
+
+class TestTierPinsL2FitRepair:
+    """fit_repair_user_prompt 共读 tier_pins.yaml，钉扎字段在超预算时保留。"""
+
+    def test_metadata_includes_orch_pin_fields(self, agent):
+        """fit_repair_user_prompt metadata 含 orchestrator_pin_fields。"""
+        from agent_runtime.tier_policy import load_orchestrator_pin_fields
+
+        pin_fields = load_orchestrator_pin_fields()
+        assert len(pin_fields) >= 2, f"expected >=2 pin fields, got {pin_fields}"
+        assert "issue" in pin_fields
+
+        user_text = "issue: TypeError at calc.py:42\nstack: File ...\n" + "pad " * 100
+        fitted, meta = fit_repair_user_prompt(agent, user_text, "system " * 200)
+        assert "orpin_fields" in meta
+        assert meta["orpin_fields"] == list(pin_fields)
+        assert "orpin_preserved" in meta
+        # issue 和 stack 都应保留
+        assert meta["orpin_preserved"].get("issue") is True
+        assert meta["orpin_preserved"].get("stack") is True
+
+    def test_issue_and_stack_survive_tiny_budget(self, agent):
+        """极小 budget 下 issue/stack 钉扎字段仍在 fitted 输出中。"""
+        agent.config.prompt_budget = 300
+        user_text = (
+            "issue: UNIQUE_BUG_123 TypeError at calc.py:42\n"
+            "stack: File \"calc.py\", line 42, in add\n"
+            "TypeError: unsupported operand\n"
+            + "padding " * 200
+        )
+        fitted, meta = fit_repair_user_prompt(agent, user_text, "sys")
+        assert "UNIQUE_BUG_123" in fitted
+        assert "calc.py" in fitted
+        assert meta.get("request_preserved") is True
+
+    def test_l0_and_l2_read_same_pin_fields(self):
+        """L0 (tier_policy) 与 L2 (context_fit) 从同一 tier_pins.yaml 读取 pin 字段。"""
+        from agent_runtime.tier_policy import load_orchestrator_pin_fields, PIN_CONTENT_MARKERS
+
+        pin_fields = load_orchestrator_pin_fields()
+        # orchestrator_pin_fields 应已合并到 PIN_CONTENT_MARKERS（L0 使用）
+        for field in pin_fields:
+            assert field in PIN_CONTENT_MARKERS, (
+                f"'{field}' should be in PIN_CONTENT_MARKERS (L0), "
+                f"but got {PIN_CONTENT_MARKERS}"
+            )
+
+    def test_pin_field_request_survives(self, agent):
+        """'request' 钉扎字段在超长文本中保留。"""
+        agent.config.prompt_budget = 400
+        user_text = (
+            "request: fix all import errors in src/utils.py\n"
+            + "details " * 200
+        )
+        fitted, meta = fit_repair_user_prompt(agent, user_text, "sys")
+        assert "src/utils.py" in fitted
+        assert meta["orpin_preserved"].get("request") is True
