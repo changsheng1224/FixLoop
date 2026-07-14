@@ -56,6 +56,93 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             plan.prompt_variants = plan.prompt_variants or {}
             plan.prompt_variants["agent_pruning"] = "skip_retriever"
 
+    # ── composite subtasks 编排 ──
+
+    @staticmethod
+    def _generate_subtasks(plan) -> list:
+        """规则生成 composite 子任务列表（Planner Agent 后置）。"""
+        from src.state import RepairSubTask
+
+        if not plan or plan.issue_type != "composite" or len(plan.suspect_files) < 2:
+            return []
+
+        subtasks = []
+        for i, f in enumerate(plan.suspect_files):
+            sid = f"fix_{Path(f).stem}"
+            subtasks.append(RepairSubTask(
+                id=sid,
+                goal=f"修复 {f} 中的错误",
+                suspect_files=[f],
+                depends_on=[] if i == 0 else [subtasks[0].id],
+            ))
+        # 至少 2 个
+        return subtasks if len(subtasks) >= 2 else []
+
+    def _run_subtask_cycle(
+        self, state, subtask, patches_by_subtask: dict
+    ) -> list:
+        """执行单个子任务的 localize→patch→verify 子循环。
+
+        Blackboard key 前缀 subtask:{id}: 隔离各子任务的 suspects。
+        """
+        log.info("[subtask] 开始: %s (%s)", subtask.id, subtask.goal)
+
+        tracer = self._active_repair_ctx().repair_tracer if self._active_repair_ctx() else None
+        if tracer:
+            tracer.emit("orchestrator", "subtask_started", {
+                "subtask_id": subtask.id,
+                "goal": subtask.goal,
+                "suspect_files": subtask.suspect_files,
+            })
+
+        # 缩窄 suspect_files
+        plan = state.repair_plan
+        original_files = list(plan.suspect_files)
+        plan.suspect_files = list(subtask.suspect_files)
+
+        patches = []
+        try:
+            # localize + retrieve
+            suspects, context, loc_timing, ret_timing = self._run_localize_and_retrieve(state)
+            state.suspect_locations = suspects
+            state.retrieved_context = context
+            state.node_timings[f"subtask_{subtask.id}_loc_ms"] = loc_timing.get("total_ms", 0)
+
+            # patch
+            patch_result = self._run_patch_phase(state)
+            if patch_result:
+                patches = patch_result if isinstance(patch_result, list) else [patch_result]
+
+            # verify
+            if patches:
+                verify_result = self._run_verify_phase(state, patches)
+                state.verification_result = verify_result
+
+        finally:
+            plan.suspect_files = original_files
+
+        patches_by_subtask[subtask.id] = patches
+
+        if tracer:
+            tracer.emit("orchestrator", "subtask_done", {
+                "subtask_id": subtask.id,
+                "patch_count": len(patches),
+            })
+        log.info("[subtask] 完成: %s, patches=%d", subtask.id, len(patches))
+        return patches
+
+    def _merge_subtask_patches(
+        self, patches_by_subtask: dict, subtasks: list
+    ) -> list:
+        """按 depends_on 拓扑合并各子任务的补丁。"""
+        merged = []
+        for st in subtasks:
+            sub_patches = patches_by_subtask.get(st.id, [])
+            for p in sub_patches:
+                if p not in merged:
+                    merged.append(p)
+        return merged
+
     def _make_phase_clock(self) -> RepairPhaseClock | None:
         config = self._active_repair_ctx().phase_timeout_config
         if config is None or not config.any_enabled():
@@ -292,6 +379,24 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     )
                     if similar:
                         state.node_timings["similar_fixes"] = similar
+
+                # ── composite subtasks 路径 ──
+                if state.repair_plan and state.repair_plan.issue_type == "composite":
+                    subtasks = self._generate_subtasks(state.repair_plan)
+                    if subtasks:
+                        state.repair_plan.subtasks = subtasks
+                        all_patches: dict[str, list] = {}
+                        for st in subtasks:
+                            self._run_subtask_cycle(state, st, all_patches)
+                        merged = self._merge_subtask_patches(all_patches, subtasks)
+                        state.candidate_patches = merged
+                        if merged:
+                            state.status = "patched"
+                            log.info(
+                                "[composite] %d subtasks -> %d patches merged",
+                                len(subtasks), len(merged),
+                            )
+                        return state
 
                 log.info("Localizer + Retriever 并行开始...")
                 if phase_clock is not None:
