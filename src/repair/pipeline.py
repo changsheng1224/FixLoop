@@ -56,6 +56,63 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             plan.prompt_variants = plan.prompt_variants or {}
             plan.prompt_variants["agent_pruning"] = "skip_retriever"
 
+    # ── Planner Agent ──
+
+    def _plan_with_llm(self, issue: str) -> "tuple | None":
+        """LLM 单次 JSON complete → RepairPlan dict，失败返回 None。
+
+        只规划不调 tool；失败回落规则 _parse_issue。
+        trace: planner_invoked · fallback=rule|llm · plan_rationale。
+        """
+        import json
+
+        from src.agents.planner import PLANNER_PROMPT
+
+        client = getattr(self, "_light_client", None) or getattr(
+            getattr(self, "localizer", None), "model_client", None
+        )
+        if client is None:
+            return None
+
+        tracer = self._active_repair_ctx().repair_tracer if self._active_repair_ctx() else None
+        try:
+            prompt = f"{PLANNER_PROMPT}\n\nIssue:\n{issue[:2000]}"
+            raw = client.complete(prompt, max_new_tokens=512)
+            start = raw.find("{")
+            end = raw.rfind("}") + 1
+            if start >= 0 and end > start:
+                data = json.loads(raw[start:end])
+                if isinstance(data, dict) and "issue_type" in data:
+                    if tracer:
+                        tracer.emit("orchestrator", "planner_invoked", {
+                            "fallback": "llm",
+                            "plan_rationale": str(data.get("reasoning", ""))[:200],
+                        })
+                    return data
+        except Exception:
+            pass
+
+        if tracer:
+            tracer.emit("orchestrator", "planner_invoked", {
+                "fallback": "rule",
+                "plan_rationale": "",
+            })
+        return None
+
+    def _apply_planner_result(self, plan_dict: dict, plan) -> None:
+        """将 Planner LLM 输出应用到 RepairPlan。"""
+        plan.issue_type = plan_dict.get("issue_type", plan.issue_type)
+        plan.reasoning = plan_dict.get("reasoning", plan.reasoning)
+        if plan_dict.get("suspect_files"):
+            plan.suspect_files = list(plan_dict["suspect_files"])
+        if plan_dict.get("subtasks"):
+            from src.state import RepairSubTask
+
+            plan.subtasks = [
+                RepairSubTask.from_dict(s) for s in plan_dict["subtasks"]
+            ]
+        plan.intent_parser = "llm"
+
     # ── composite subtasks 编排 ──
 
     @staticmethod
@@ -320,6 +377,10 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             else:
                 t0 = time.time()
                 state.repair_plan = self._parse_issue(issue)
+                # Planner Agent: LLM 单次 JSON → 覆盖规则解析结果
+                planner_result = self._plan_with_llm(issue)
+                if planner_result:
+                    self._apply_planner_result(planner_result, state.repair_plan)
                 # 动态 Agent 裁剪：简单问题类型跳过 Retriever
                 self._prune_agents_for_issue(state.repair_plan)
                 parse_ms = int((time.time() - t0) * 1000)
@@ -382,7 +443,10 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
                 # ── composite subtasks 路径 ──
                 if state.repair_plan and state.repair_plan.issue_type == "composite":
-                    subtasks = self._generate_subtasks(state.repair_plan)
+                    # 优先使用 Planner 生成的 subtasks，否则规则生成
+                    subtasks = list(state.repair_plan.subtasks) if state.repair_plan.subtasks else []
+                    if not subtasks:
+                        subtasks = self._generate_subtasks(state.repair_plan)
                     if subtasks:
                         state.repair_plan.subtasks = subtasks
                         all_patches: dict[str, list] = {}
