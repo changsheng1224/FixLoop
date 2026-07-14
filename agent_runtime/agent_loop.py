@@ -598,7 +598,8 @@ class AgentLoop:
             try:
                 if self._stream_enabled and hasattr(self.agent.model_client, "complete_stream"):
                     raw = self._invoke_model_call(
-                        lambda: self.agent.model_client.complete_stream(
+                        lambda: self.agent.circuit_breaker.call(
+                            self.agent.model_client.complete_stream,
                             prompt_text,
                             max_new_tokens=self.agent.config.max_new_tokens,
                             on_chunk=getattr(callback, "on_chunk", None) if callback else None,
