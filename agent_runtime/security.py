@@ -71,6 +71,46 @@ def looks_sensitive_env_name(name: str) -> bool:
     return False
 
 
+# Shell 命令白名单/黑名单（仅匹配命令名，不含参数）
+SHELL_COMMAND_WHITELIST = frozenset({
+    "pytest", "python", "python3", "py",
+    "git", "rg", "grep", "find", "ls", "dir",
+    "cat", "head", "tail", "wc", "echo", "test",
+    "ruff", "mypy", "black", "isort",
+    "pip", "poetry", "npm", "yarn",
+    "cp", "mv", "rm", "mkdir", "rmdir",
+    "curl", "wget",
+})
+
+SHELL_COMMAND_BLOCKLIST = frozenset({
+    "sudo", "su", "chmod", "chown", "mount", "umount",
+    "reboot", "shutdown", "halt", "poweroff",
+    "dd", "mkfs", "fdisk", "parted",
+    "iptables", "ufw", "firewall-cmd",
+    "kill", "pkill", "killall",
+    "docker", "podman", "kubectl",
+    "ssh", "scp", "rsync", "nc",
+    "wget",  # 比 curl 更可能下载恶意 payload
+})
+
+
+def check_shell_command(command: str) -> tuple[bool, str]:
+    """检查 Shell 命令是否在白名单内/黑名单外。
+
+    Returns:
+        (allowed, reason): allowed=True 表示允许执行。
+    """
+    if not command or not command.strip():
+        return False, "空命令"
+    cmd_name = command.strip().split()[0].split("/")[-1].split("\\")[-1].lower()
+    if cmd_name in SHELL_COMMAND_BLOCKLIST:
+        return False, f"blocked: {cmd_name}"
+    if cmd_name in SHELL_COMMAND_WHITELIST:
+        return True, f"whitelist: {cmd_name}"
+    # 不在任一列表中 → 保守拒绝
+    return False, f"not in whitelist: {cmd_name}"
+
+
 def redact_text(text: str, secret_values: list[str] | None = None) -> str:
     """将文本中的敏感值替换为 <redacted>。
 

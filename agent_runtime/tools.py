@@ -471,11 +471,15 @@ def tool_run_shell(context, args: dict) -> str:
     Args 必须包含 'command'，可选 'timeout'(默认20s)。
     环境变量经过白名单过滤；输出经 redact_text 脱敏。
     """
-    from agent_runtime.security import redact_text, shell_env as _shell_env
+    from agent_runtime.security import check_shell_command, redact_text, shell_env as _shell_env
 
     command = args.get("command", "")
     if not command:
         return "Error: 缺少必填参数 command"
+
+    allowed, reason = check_shell_command(command)
+    if not allowed:
+        return f"Error: Shell 命令被安全策略拒绝 ({reason}): {command[:100]}"
     try:
         timeout = int(args.get("timeout", 20))
     except (ValueError, TypeError):
