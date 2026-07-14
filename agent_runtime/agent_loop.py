@@ -1395,6 +1395,11 @@ class AgentLoop:
                     "container_tools": self._tier_tools.get("container", {}),
                 },
                 "context_summary": self._build_context_summary(),
+                "runtime_metrics": {
+                    "parse_retry_count": self._retry_count,
+                    "tool_steps": ts.tool_steps,
+                    "cache_hit_rate": self._build_context_summary().get("cache_hit_rate", 0.0),
+                },
                 "retry_summary": {
                     "parse_retries": self._retry_count,
                     "model_attempts": ts.attempts,
