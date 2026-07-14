@@ -190,6 +190,14 @@ class SemanticMemory:
     def __init__(self):
         self.model = _get_semantic_model()
         self._notes: list[dict] = []
+        self._cache_hits = 0
+        self._cache_misses = 0
+
+    @property
+    def embed_cache_hit_rate(self) -> float:
+        """embed_cache 命中率（hits / (hits + misses)）。"""
+        total = self._cache_hits + self._cache_misses
+        return round(self._cache_hits / total, 3) if total > 0 else 0.0
 
     @property
     def available(self) -> bool:
@@ -210,8 +218,10 @@ class SemanticMemory:
                 content_hash = hashlib.sha256(truncated.encode("utf-8")).hexdigest()[:32]
                 embedding = _load_embed_cache(content_hash)
                 if embedding is not None:
+                    self._cache_hits += 1
                     self._notes.append({**note, "embedding": embedding})
                     return
+                self._cache_misses += 1
                 embedding = self.model.encode(truncated)
                 _save_embed_cache(content_hash, embedding)
                 self._notes.append({**note, "embedding": embedding})

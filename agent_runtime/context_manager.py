@@ -427,7 +427,14 @@ class ContextManager:
         return "\n".join(parts) if parts else ""
 
     def _get_knowledge(self, query: str = "") -> str:
-        """Knowledge 段：episodic notes + durable facts 检索结果。"""
+        """Knowledge 段：三层 RAG 检索结果。
+
+        Layer 1 (投影层): episodic notes → semantic/keyword → knowledge section
+        Layer 2 (流水线): RepairPrecedentStore → similar_fixes (by Orchestrator)
+        Layer 3 (缓存层): .agent/embed_cache → content_hash → embedding reuse
+
+        三层共用 derive_embed_query() 作为查询提取入口。
+        """
         query = run_user_query(self.agent.session, query)
         if not query:
             return ""
@@ -437,9 +444,11 @@ class ContextManager:
         )
 
         parts = []
+        trace_info: dict[str, str] = {}
 
-        # Episodic 检索（L0：低分条目不注入）
+        # Layer 1: Episodic 检索
         mem = self.agent.session.get("memory", {})
+        trace_info["memory_retrieval_path"] = "semantic"
         results = retrieval_candidates_semantic(mem, query, limit=2)
         results = filter_relevant_results(results, self.tier_policy)
         if results:
@@ -447,16 +456,28 @@ class ContextManager:
             for r in results:
                 lines.append(f"  - {r.get('text', '')[:150]}")
             parts.append("\n".join(lines))
+        trace_info["episodic_hits"] = str(len(results))
 
-        # Durable 检索
+        # Layer 2: Durable 检索
         try:
             store = DurableMemoryStore(root=self.agent._cwd)
             durable_results = store.retrieval(query, limit=2)
+            trace_info["durable_hits"] = str(len(durable_results))
             if durable_results:
                 lines = ["持久知识:"]
                 for r in durable_results:
                     lines.append(f"  - {r[:150]}")
                 parts.append("\n".join(lines))
+        except Exception:
+            trace_info["durable_hits"] = "0"
+
+        # Layer 3: embed_cache stats (aggregated from SemanticMemory)
+        try:
+            from agent_runtime.features.memory.semantic import SemanticMemory
+
+            sem = SemanticMemory()
+            if sem.available:
+                trace_info["embed_cache_hit_rate"] = str(sem.embed_cache_hit_rate)
         except Exception:
             pass
 
