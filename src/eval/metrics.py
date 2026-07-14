@@ -53,6 +53,16 @@ def _summary_metrics(results: list[CaseResult]) -> dict:
     if token_totals:
         summary["total_tokens"] = sum(token_totals)
         summary["avg_total_tokens"] = round(sum(token_totals) / len(token_totals), 2)
+
+    # patch equivalence
+    eq_full = sum(1 for r in results if r.equivalence == "full")
+    eq_partial = sum(1 for r in results if r.equivalence == "partial")
+    summary["equivalence_by_type"] = {
+        "full": eq_full,
+        "partial": eq_partial,
+        "none": total - eq_full - eq_partial,
+    }
+    summary["avg_equivalence_full_rate"] = round(eq_full / total, 4)
     return summary
 
 

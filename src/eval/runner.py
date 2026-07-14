@@ -345,6 +345,17 @@ class EvalRunner:
                     issue, actual_patch,
                 )
 
+            # 计算 patch equivalence（vs expected_patch.diff）
+            equivalence = "none"
+            if fixed:
+                try:
+                    from src.eval.patch_utils import patch_equivalence
+
+                    expected = (case_dir / "expected_patch.diff").read_text(encoding="utf-8")
+                    equivalence = patch_equivalence(actual_patch, expected)
+                except Exception:
+                    pass
+
             return CaseResult(
                 case_id=case_id,
                 issue_type=str(meta.get("issue_type", "")),
@@ -367,6 +378,7 @@ class EvalRunner:
                 total_tokens=total_tokens,
                 token_usage=token_usage if isinstance(token_usage, dict) else {},
                 permission_denied_by_tool=permission_denied_by_tool,
+                equivalence=equivalence,
                 judge_score=judge_score,
                 judge_reason=judge_reason,
             )

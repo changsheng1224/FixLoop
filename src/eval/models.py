@@ -34,6 +34,7 @@ class CaseResult:
     skill_labeled: bool = False
     judge_score: int = 0
     judge_reason: str = ""
+    equivalence: str = ""  # full / partial / none (patch_equivalence vs expected_patch.diff)
 
     def to_dict(self) -> dict:
         """序列化为 JSON 可写 dict。"""
@@ -56,6 +57,7 @@ class CaseResult:
             "run_index": self.run_index,
             "total_tokens": self.total_tokens,
             "token_usage": self.token_usage,
+            "equivalence": self.equivalence,
         }
         if self.permission_denied_by_tool:
             data["permission_denied_by_tool"] = self.permission_denied_by_tool
