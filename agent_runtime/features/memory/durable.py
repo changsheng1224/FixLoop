@@ -369,6 +369,13 @@ class DurableMemoryStore:
 
     @staticmethod
     def _upsert_entry(entries: list[str], new_text: str, authority: str = "auto") -> list[str]:
+        """插入或更新条目。冲突时按权威序判定，低权威追加版本链。
+
+        版本链格式: ``entry_text  # v{ver} @{timestamp}``
+        读路径取最后一条同 subject 条目作为最新值。
+        """
+        import time as _time
+
         new_subject = _subject_key(new_text)
         for i, entry in enumerate(entries):
             if _subject_key(entry) == new_subject:
@@ -376,12 +383,28 @@ class DurableMemoryStore:
                 if result in (ConflictResolution.OVERRIDE, ConflictResolution.EQUIVALENT):
                     entries[i] = new_text
                 elif result == ConflictResolution.INVALID:
-                    # 互斥版本：追加而非覆盖
+                    # 互斥版本链：追加新版本，保留历史（含时间戳）
                     ver = sum(1 for e in entries if _subject_key(e) == new_subject) + 1
-                    entries.append(new_text.replace("\n", f"  # v{ver}\n", 1))
+                    ts = int(_time.time())
+                    entries.append(
+                        new_text.replace("\n", f"  # v{ver} @{ts}\n", 1)
+                    )
                 return entries
         entries.append(new_text)
         return entries
+
+    @staticmethod
+    def _latest_entry(entries: list[str], subject: str) -> str | None:
+        """返回同 subject 的最新版本条目（版本链末尾）。"""
+        key = _subject_key(subject)
+        matching = [e for e in entries if _subject_key(e) == key]
+        return matching[-1] if matching else None
+
+    @staticmethod
+    def _entry_history(entries: list[str], subject: str) -> list[str]:
+        """返回同 subject 的全部版本历史（最旧在前）。"""
+        key = _subject_key(subject)
+        return [e for e in entries if _subject_key(e) == key]
 
     def _update_index(self):
         """写入 MEMORY.md 路由表：| topic | entries | bytes | strategy |。"""
@@ -487,10 +510,12 @@ def _extract_promotions(text: str) -> list[tuple[str, str]]:
 
 
 def _subject_key(text: str) -> str:
-    """提取条目主题 key（首行，去除 authority 标记和尾部空白）。"""
+    """提取条目主题 key（首行，去除 authority/version 标记和尾部空白）。"""
     first_line = text.split("\n")[0].strip().lower()
     # 去除 [authority:...] 标记
     first_line = re.sub(r"\s*\[authority:\w+\]\s*", "", first_line).strip()
+    # 去除版本链标记 # vN @TS
+    first_line = re.sub(r"\s*#\s*v\d+\s*@\d+\s*", "", first_line).strip()
     return first_line
 
 

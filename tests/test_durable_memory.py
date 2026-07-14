@@ -362,6 +362,98 @@ class TestUpsertEntryAuthority:
         assert len(result) == 2
 
 
+# ---------------------------------------------------------------------------
+# 互斥 key 版本链（V1.5-Bonus3）
+# ---------------------------------------------------------------------------
+
+
+class TestVersionChain:
+    """同 subject 低权威写入追加版本链，保留历史。"""
+
+    def test_invalid_creates_versioned_entry(self):
+        from agent_runtime.features.memory.durable import DurableMemoryStore
+
+        entries = ["important decision\nsource=agent [authority:agent]"]
+        result = DurableMemoryStore._upsert_entry(
+            entries, "important decision\nsource=auto",
+            authority="auto",
+        )
+        assert len(result) == 2
+        assert "v2" in result[1]
+
+    def test_version_chain_length_increases(self):
+        """连续 3 次低权威写入 → 版本链长度 3。"""
+        from agent_runtime.features.memory.durable import DurableMemoryStore
+
+        entries = ["locked decision [authority:agent]"]
+        # 3 次低权威写入
+        result = DurableMemoryStore._upsert_entry(
+            entries, "locked decision\nattempt 1", authority="auto"
+        )
+        result = DurableMemoryStore._upsert_entry(
+            result, "locked decision\nattempt 2", authority="auto"
+        )
+        assert len(result) == 3  # 原始 + v2 + v3
+        assert "v2" in result[1]
+        assert "v3" in result[2]
+
+    def test_latest_entry_returns_newest(self):
+        """_latest_entry 返回版本链末端条目。"""
+        from agent_runtime.features.memory.durable import DurableMemoryStore
+
+        entries = ["locked decision [authority:agent]"]
+        result = DurableMemoryStore._upsert_entry(
+            entries, "locked decision\nattempt 1", authority="auto"
+        )
+        result = DurableMemoryStore._upsert_entry(
+            result, "locked decision\nattempt 2", authority="auto"
+        )
+
+        latest = DurableMemoryStore._latest_entry(result, "locked decision")
+        assert latest is not None
+        assert "attempt 2" in latest
+
+    def test_entry_history_returns_all_versions(self):
+        """_entry_history 返回全部版本（最旧在前）。"""
+        from agent_runtime.features.memory.durable import DurableMemoryStore
+
+        entries = ["locked decision [authority:agent]"]
+        result = DurableMemoryStore._upsert_entry(
+            entries, "locked decision\nattempt 1", authority="auto"
+        )
+        result = DurableMemoryStore._upsert_entry(
+            result, "locked decision\nattempt 2", authority="auto"
+        )
+
+        history = DurableMemoryStore._entry_history(result, "locked decision")
+        assert len(history) == 3
+        assert "locked decision" in history[0]  # 原始
+        assert "attempt 1" in history[1]
+        assert "attempt 2" in history[2]  # 最新在最后
+
+    def test_version_includes_timestamp(self):
+        """版本链条目含 @timestamp。"""
+        from agent_runtime.features.memory.durable import DurableMemoryStore
+
+        entries = ["locked decision [authority:agent]"]
+        result = DurableMemoryStore._upsert_entry(
+            entries, "locked decision\nnew data", authority="auto"
+        )
+        assert "@" in result[1]  # 含时间戳标记
+
+    def test_different_subjects_not_versioned(self):
+        """不同 subject 的条目不参与版本链。"""
+        from agent_runtime.features.memory.durable import DurableMemoryStore
+
+        entries = ["entry alpha"]
+        result = DurableMemoryStore._upsert_entry(
+            entries, "entry beta", authority="auto"
+        )
+        assert len(result) == 2
+        # beta 是新条目，无版本标记
+        assert "v2" not in result[1]
+
+
 class TestPromoteAuthority:
     """promote 权威传播集成测试。"""
 
