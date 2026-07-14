@@ -337,9 +337,43 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         state: RepairState,
         initial_snapshot: dict | None = None,
     ) -> RepairState:
-        """修复流水线主体（可被 repair() 超时包装）。"""
+        """修复流水线主体（可被 repair() 超时包装）。
+
+        支持 --resume-repair：若有 resume_run_id 且 checkpoint 有效，
+        跳过 parse/localize，从 patch 循环重入。
+        """
         if initial_snapshot is None:
             initial_snapshot = self._snapshot_repo()
+
+        # ── L2 resume: 从 checkpoint 恢复，跳过 parse/localize ──
+        resume_run_id = state.repair_run_id
+        if resume_run_id:
+            from src.repair.checkpoint_load import load_repair_checkpoint
+
+            cp = load_repair_checkpoint(self._repo_root, resume_run_id)
+            if cp:
+                log.info("[resume] 从 %s 恢复 repair state", resume_run_id)
+                state.retry_count = cp.get("retry_count", 0)
+                state.phase = cp.get("phase", "patch")
+                state.feedback = cp.get("feedback", "")
+                state.blackboard_snapshot = cp.get("blackboard_snapshot", {})
+                state.retrieved_context = (
+                    RetrievedContext.from_dict(cp["retrieved_context"])
+                    if cp.get("retrieved_context") else None
+                )
+                state.suspect_locations = [
+                    SuspectLocation.from_dict(s)
+                    for s in cp.get("suspect_locations", [])
+                ]
+                if cp.get("repair_plan"):
+                    plan_data = cp["repair_plan"]
+                    if isinstance(plan_data, dict):
+                        from src.state import RepairPlan
+                        state.repair_plan = RepairPlan.from_dict(plan_data)
+
+                # 跳过 parse/localize，直接进入 patch 循环
+                log.info("[resume] 跳过 parse/localize，retry=%d", state.retry_count)
+                return state
 
         max_retries = state.max_retries
         issue = state.issue_input
@@ -654,6 +688,13 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         self._save_repair_checkpoint(state)
         self._attach_token_usage(state)
         self._attach_rejection_stats(state)
+        # 保存 L2 checkpoint 供 --resume-repair 续跑
+        if state.repair_run_id:
+            try:
+                from src.repair.checkpoint_load import save_repair_checkpoint
+                save_repair_checkpoint(state, self._repo_root)
+            except Exception:
+                pass
         self._end_repair_trace(state)
         self._push_repair_metrics(state)
         log.info("总耗时: %dms, status=%s", total_ms, state.status)

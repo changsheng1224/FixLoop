@@ -150,6 +150,7 @@ class Orchestrator(RepairPipelineMixin):
         phase_timeouts: PhaseTimeoutConfig | None = None,
         cancel_token=None,
         allow_baseline_degrade: bool = True,
+        resume_run_id: str = "",
     ) -> RepairState:
         """执行修复流水线。
 
@@ -160,6 +161,8 @@ class Orchestrator(RepairPipelineMixin):
             phase_timeouts: 分阶段超时；默认由 ``repair_timeout_s`` 推导。
             cancel_token: 可选协作式取消 token（CLI Ctrl+C 注入）。
             allow_baseline_degrade: 是否在 verify 耗尽后 Single-Agent 最后一搏。
+            resume_run_id: L2 续跑 run_id（从 repair_checkpoint.json 恢复，
+                跳过 parse/localize，直接进入 patch 循环）。
 
         Returns:
             RepairState 实例。

@@ -261,6 +261,7 @@ def _repair(args) -> int:
             args.issue,
             cancel_token=cancel_token,
             allow_baseline_degrade=not args.no_degrade,
+            resume_run_id=getattr(args, "resume_repair", None) or "",
         )
 
     _print_repair_result(state, verbose=args.verbose)
