@@ -402,3 +402,88 @@ class TestFitPriorityMatrix:
         cuts = meta.get("cuts", [])
         # 应至少有些 section 被裁剪
         assert len(cuts) >= 0  # 松断言：压缩管线可能保留压缩后的内容
+
+
+# ---------------------------------------------------------------------------
+# history 只读 JSONL（V1.5-Bonus2）：build 优先读 JSONL，不写回
+# ---------------------------------------------------------------------------
+
+
+class TestHistoryReadOnlyJsonl:
+    """ContextManager.build() 优先读 history.jsonl，篡改 session 内存不影响投影。"""
+
+    def test_build_reads_from_jsonl_not_session(self, agent, temp_workspace):
+        """record 写入 JSONL 后，清空 session history，build 仍能读到 JSONL 内容。"""
+        # 1. 写入历史（双写：session + JSONL）
+        agent.record({"role": "user", "content": "fix the import error"})
+        agent.record({"role": "assistant", "content": "let me check the files"})
+
+        # 2. 篡改 session 内存（模拟内存损坏或外部修改）
+        agent.session["history"] = [
+            {"role": "user", "content": "TAMPERED fake request"}
+        ]
+
+        # 3. build 应读 JSONL（原始内容），忽略被篡改的 session 内存
+        cm = ContextManager(agent)
+        prompt, _ = cm.build("new issue")
+        # JSONL 中的原始内容在 prompt 中
+        assert "fix the import error" in prompt
+        # 篡改内容不在 prompt 中
+        assert "TAMPERED" not in prompt
+
+    def test_build_does_not_write_jsonl(self, agent, temp_workspace):
+        """ContextManager.build() 不向 history.jsonl 写入任何内容。"""
+        import json
+        from pathlib import Path
+
+        jsonl_path = Path(str(temp_workspace)) / ".agent" / "history.jsonl"
+
+        # 1. 写入一条历史
+        agent.record({"role": "user", "content": "original entry"})
+        lines_before = len(jsonl_path.read_text(encoding="utf-8").strip().splitlines())
+
+        # 2. 多次 build
+        cm = ContextManager(agent)
+        for _ in range(3):
+            cm.build("another request")
+
+        # 3. JSONL 行数不变（build 不追加写入）
+        lines_after = len(jsonl_path.read_text(encoding="utf-8").strip().splitlines())
+        assert lines_after == lines_before, (
+            f"build should not write to JSONL; {lines_before} → {lines_after}"
+        )
+
+    def test_fallback_to_session_when_jsonl_missing(self, agent):
+        """JSONL 文件不存在时回退到 session.history。"""
+        # agent 未设置 cwd 或 JSONL 不存在 → read_history 回退 session
+        agent.session["history"] = [
+            {"role": "user", "content": "fallback entry"}
+        ]
+        cm = ContextManager(agent)
+        prompt, _ = cm.build("test")
+        assert "fallback entry" in prompt
+
+    def test_jsonl_and_session_in_sync_produces_same_result(self, agent, temp_workspace):
+        """正常情况（JSONL 与 session 同步）build 结果一致。"""
+        import json
+        from pathlib import Path
+
+        # 写入多条历史
+        for i in range(5):
+            agent.record({"role": "user", "content": f"question {i}"})
+
+        # 用 JSONL 路径 build
+        cm_jsonl = ContextManager(agent)
+        prompt_jsonl, _ = cm_jsonl.build("test")
+
+        # 清空 session history，从 JSONL 读取
+        agent.session["history"] = []
+        cm_fallback = ContextManager(agent)
+        prompt_fallback, _ = cm_fallback.build("test")
+
+        # JSONL 路径应保留原始内容
+        assert "question 0" in prompt_jsonl
+        # 清空 session 后 JSONL 仍能提供服务
+        assert "question 0" in prompt_fallback
+        # 两者一致（都从同一 JSONL 读取）
+        assert prompt_jsonl == prompt_fallback

@@ -325,7 +325,7 @@ class ContextManager:
         metadata["budget"] = self.budget.total_limit
         metadata["tokenizer_backend"] = self.budget.backend
         attach_context_projection(metadata, agent=self.agent, budget=self.budget)
-        history = self.agent.session.get("history", [])
+        history = self.agent.read_history()  # JSONL 优先，build 不写回
         if history and history_text:
             seal_history_at_build(self.agent.session, len(history), history_text)
         return sections
@@ -479,8 +479,12 @@ class ContextManager:
         return "\n".join(parts) if parts else ""
 
     def _get_compressed_history(self, metadata: dict | None = None) -> str:
-        """获取压缩后的对话历史（L0–L5 管线；已封印段单调追加）。"""
-        history = self.agent.session.get("history", [])
+        """获取压缩后的对话历史（L0–L5 管线；已封印段单调追加）。
+
+        优先从 .agent/history.jsonl 读取，文件缺失时回退 session 内存。
+        ContextManager 不写入 JSONL（写路径由 AgentLoop.record 独占）。
+        """
+        history = self.agent.read_history()
         if not history:
             return ""
 
