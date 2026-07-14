@@ -17,6 +17,29 @@ class ConflictResolution(Enum):
 # 权威序：user > agent > auto
 AUTHORITY_ORDER = {"user": 3, "agent": 2, "auto": 1}
 
+# source → authority 映射（工具/角色 → 权威级别）
+_SOURCE_AUTHORITY = {
+    "user": "user",
+    "stack_parse": "agent",
+    "patcher": "agent",
+    "localizer": "agent",
+    "retriever": "agent",
+    "verifier": "agent",
+    "final_answer": "agent",
+    "llm": "agent",
+}
+
+
+def source_to_authority(source: str) -> str:
+    """将 source 字符串映射到权威级别（user/agent/auto）。"""
+    if not source:
+        return "auto"
+    s = source.lower()
+    for key, auth in _SOURCE_AUTHORITY.items():
+        if key in s:
+            return auth
+    return "auto"
+
 DURABLE_TOPICS = [
     "project-conventions",
     "key-decisions",
@@ -34,7 +57,7 @@ PREFIX_MAP = {
 
 @dataclass
 class UserPreference:
-    """结构化用户偏好条目。"""
+    """结构化用户偏好条目（轻量 pydantic 替代，零依赖）。"""
 
     key: str
     value: str
@@ -66,16 +89,90 @@ class UserPreference:
     def to_table_row(self) -> str:
         return f"| {self.key} | {self.value} | {self.confidence:.2f} | {self.source} |"
 
+    def to_dict(self) -> dict:
+        return {
+            "key": self.key,
+            "value": self.value,
+            "confidence": self.confidence,
+            "source": self.source,
+            "updated_at": self.updated_at,
+        }
+
     @staticmethod
     def table_header() -> str:
         return "| key | value | confidence | source |\n|-----|-------|------------|--------|"
 
 
+class UserProfileStore:
+    """用户画像持久存储（user-preferences topic 的轻量读写 API）。"""
+
+    def __init__(self, root: str):
+        self._store = DurableMemoryStore(root)
+
+    def get(self, key: str) -> UserPreference | None:
+        """按 key 读取单个偏好。"""
+        for pref in self._store.get_preferences():
+            if pref.key.lower() == key.lower():
+                return pref
+        return None
+
+    def set(self, key: str, value: str, *, confidence: float = 1.0, source: str = "") -> None:
+        """写入或更新一个偏好条目。"""
+        pref = UserPreference(
+            key=key,
+            value=value,
+            confidence=confidence,
+            source=source,
+        )
+        self._store.upsert_preference(pref)
+
+    def list_all(self) -> list[UserPreference]:
+        """列出全部偏好（含时间衰减）。"""
+        return self._store.get_preferences()
+
+    def invalidate(self, key: str) -> bool:
+        """标记删除一个偏好条目（soft delete: 置空 + confidence=0 由衰减过滤）。"""
+        pref = self.get(key)
+        if pref is None:
+            return False
+        pref.value = ""
+        pref.confidence = 0.0
+        self._store.upsert_preference(pref)
+        return True
+
+    # backward-compat alias
+    remove = invalidate
+
+
 DECAY_RATE = 0.95  # 每天衰减 5%（模块级常量）
+CONFIDENCE_FLOOR = 0.1  # 置信度低于此阈值不参与召回
+CHUNK_THRESHOLD_BYTES = 32768  # 32KB — topic 文件超此阈值拆分为 chunked 存储
+CHUNK_ENTRIES_PER_FILE = 15    # 每个 chunk 文件最大条目数
+
+
+def apply_confidence_decay(confidence: float, updated_at: float, *, now: float | None = None) -> tuple[float, bool]:
+    """按时间衰减置信度。返回 (衰减后 confidence, 是否仍有效)。
+
+    formula: confidence *= DECAY_RATE ** days_since_update
+    返回值低于 CONFIDENCE_FLOOR 则 expired=True。
+    """
+    if now is None:
+        import time as _time
+        now = _time.time()
+    days = (now - updated_at) / 86400
+    if days <= 1:
+        return confidence, True
+    decayed = round(confidence * (DECAY_RATE ** days), 3)
+    valid = decayed >= CONFIDENCE_FLOOR
+    return decayed, valid
 
 
 class DurableMemoryStore:
-    """跨会话 Markdown 持久记忆（.agent/memory/topics/）。"""
+    """跨会话 Markdown 持久记忆（.agent/memory/topics/）。
+
+    MEMORY.md 路由表：topic | entries | bytes | strategy(inline|chunked)。
+    小 topic → topics/{t}.md；大 topic → topics/{t}/chunk-{n}.md。
+    """
 
     def __init__(self, root: str):
         self.memory_dir = Path(root) / ".agent" / "memory"
@@ -83,18 +180,76 @@ class DurableMemoryStore:
         self._topics_root = str(self.topics_dir.resolve())
 
     def _ensure_within(self, path: Path) -> None:
-        """确保路径在 topics_dir 内（防止路径遍历攻击）。"""
-        if not str(path.resolve()).startswith(self._topics_root):
-            raise ValueError(f"路径逃逸: {path}")
+        """确保路径在 topics_dir 内（防止路径遍历攻击）。
+
+        使用 path_safety.resolve_under_root 统一校验（含 .. 和 symlink 检测）。
+        """
+        from agent_runtime.features.memory.candidate import MemoryPathError, resolve_memory_path
+
+        try:
+            resolve_memory_path(self._topics_root, str(path))
+        except MemoryPathError:
+            raise
+        except Exception:
+            # fallback: 原有 startswith 检查
+            if not str(path.resolve()).startswith(self._topics_root):
+                raise MemoryPathError(str(path), detail="路径不在 topics_dir 内")
+
+    def _topic_path(self, topic: str, chunk: int | None = None) -> Path:
+        """返回 topic 文件路径。chunked 策略时指定 chunk 编号。"""
+        if chunk is not None:
+            chunk_dir = self.topics_dir / topic
+            return chunk_dir / f"chunk-{chunk}.md"
+        return self.topics_dir / f"{topic}.md"
+
+    def _topic_strategy(self, topic: str) -> str:
+        """判断 topic 存储策略：inline 或 chunked。"""
+        chunk_dir = self.topics_dir / topic
+        if chunk_dir.is_dir():
+            return "chunked"
+        path = self._topic_path(topic)
+        if not path.is_file():
+            return "inline"
+        return "chunked" if path.stat().st_size > CHUNK_THRESHOLD_BYTES else "inline"
+
+    def _load_routing_table(self) -> dict[str, dict]:
+        """从 MEMORY.md 解析路由表。返回 {topic: {entries, bytes, strategy}}。"""
+        index_path = self.memory_dir / "MEMORY.md"
+        routing: dict[str, dict] = {}
+        if not index_path.is_file():
+            return routing
+        in_table = False
+        for line in index_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("| topic") or line.startswith("|---"):
+                in_table = True
+                continue
+            if in_table and line.startswith("|"):
+                parts = [p.strip() for p in line.split("|") if p.strip()]
+                if len(parts) >= 4:
+                    try:
+                        routing[parts[0]] = {
+                            "entries": int(parts[1]),
+                            "bytes": int(parts[2]),
+                            "strategy": parts[3],
+                        }
+                    except (ValueError, IndexError):
+                        pass
+            elif in_table and not line.startswith("|"):
+                break
+        return routing
 
     # ── 结构化用户画像 ──
 
     def get_preferences(self) -> list[UserPreference]:
         """读取 user-preferences topic 的结构化条目（含时间衰减）。"""
-        entries = self._read_topic(self.topics_dir / "user-preferences.md")
+        path = self._topic_path("user-preferences")
+        if not path.is_file():
+            return []
         prefs = []
         in_table = False
-        for line in entries:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
             if line.startswith("| key "):
                 in_table = True
                 continue
@@ -111,7 +266,6 @@ class DurableMemoryStore:
     def upsert_preference(self, pref: UserPreference) -> None:
         """写入或更新一个用户偏好条目（按 key 去重）。"""
         self.ensure_dirs()
-        topic_file = self.topics_dir / "user-preferences.md"
         header = UserPreference.table_header()
         existing = self.get_preferences()
         # upsert
@@ -124,15 +278,23 @@ class DurableMemoryStore:
         if not replaced:
             existing.append(pref)
         lines = [header] + [p.to_table_row() for p in existing]
-        topic_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        (self.topics_dir / "user-preferences.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
         self._update_index()
 
     def ensure_dirs(self):
         """创建 memory/topics 目录。"""
         self.topics_dir.mkdir(parents=True, exist_ok=True)
 
-    def promote(self, promotions: list[tuple[str, str]]):
-        """将 (topic, text) 条目 upsert 到对应 topic 文件并更新索引。"""
+    def promote(
+        self,
+        promotions: list[tuple[str, str]],
+        authority: str = "auto",
+    ):
+        """将 (topic, text) 条目 upsert 到对应 topic 并更新路由表。
+
+        超 CHUNK_THRESHOLD_BYTES 自动 split 为 chunked 存储。
+        authority 按权威序传播到冲突状态机（user > agent > auto）。
+        """
         if not promotions:
             return
         self.ensure_dirs()
@@ -143,27 +305,56 @@ class DurableMemoryStore:
                 continue  # 拒绝未知 topic
             by_topic.setdefault(topic, []).append(text)
         for topic, texts in by_topic.items():
-            topic_file = self.topics_dir / f"{topic}.md"
-            existing = self._read_topic(topic_file)
+            strategy = self._topic_strategy(topic)
+            existing = self._read_topic(topic, strategy=strategy)
             for text in texts:
-                existing = self._upsert_entry(existing, text)
-            self._write_topic(topic_file, existing)
+                existing = self._upsert_entry(existing, text, authority=authority)
+            self._write_topic(topic, existing)
         self._update_index()
 
     def retrieval(self, query: str, limit: int = 3) -> list[dict]:
-        """返回带 topic 标注的结果列表。"""
+        """返回带 topic 标注的结果列表。
+
+        先读 MEMORY.md 路由表 → chunked 主题只读前 2 chunk（semantic max-pool），
+        inline 主题全量读取。
+        """
         query_lower = query.lower()
         results = []
         if not self.topics_dir.exists():
             return results
-        for topic_file in sorted(self.topics_dir.glob("*.md")):
-            topic = topic_file.stem
-            for entry in self._read_topic(topic_file):
+
+        routing = self._load_routing_table()
+        for topic in sorted(DURABLE_TOPICS):
+            if len(results) >= limit:
+                break
+            route = routing.get(topic, {})
+            strategy = route.get("strategy", "inline")
+            if strategy == "chunked":
+                # chunked: semantic max-pool — 只读前 2 chunk
+                entries = self._read_chunked_first(topic, max_chunks=2)
+            else:
+                entries = self._read_topic(topic)
+            for entry in entries:
                 if query_lower in entry.lower():
                     results.append({"topic": topic, "text": entry})
                     if len(results) >= limit:
-                        return results
+                        break
         return results
+
+    def _read_chunked_first(self, topic: str, max_chunks: int = 2) -> list[str]:
+        """读取 chunked topic 的前 N 个 chunk（semantic max-pool 优化）。"""
+        chunk_dir = self.topics_dir / topic
+        if not chunk_dir.is_dir():
+            return []
+        entries: list[str] = []
+        for chunk_file in sorted(chunk_dir.glob("chunk-*.md"))[:max_chunks]:
+            try:
+                entries.extend(
+                    e.strip() for e in chunk_file.read_text(encoding="utf-8").split("\n---\n") if e.strip()
+                )
+            except OSError:
+                pass
+        return entries
 
     def _normalize_topic(self, topic: str) -> str:
         t = topic.lower()
@@ -177,42 +368,148 @@ class DurableMemoryStore:
         }
         return m.get(t, "project-conventions")
 
-    @staticmethod
-    def _read_topic(path: Path) -> list[str]:
+    def _read_topic(self, topic_or_path: str | Path, strategy: str = "inline") -> list[str]:
+        """读取 topic 全部条目（inline 读单文件，chunked 合并多 chunk）。"""
+        if isinstance(topic_or_path, Path):
+            # backward compat: direct path read
+            path = topic_or_path
+            if not path.exists():
+                return []
+            return [e.strip() for e in path.read_text(encoding="utf-8").split("\n---\n") if e.strip()]
+
+        topic = topic_or_path
+        if strategy == "chunked":
+            return self._read_chunked(topic)
+        path = self._topic_path(topic)
         if not path.exists():
             return []
         return [e.strip() for e in path.read_text(encoding="utf-8").split("\n---\n") if e.strip()]
 
-    @staticmethod
-    def _write_topic(path: Path, entries: list[str]):
-        if entries:
-            path.write_text("\n\n---\n\n".join(entries) + "\n", encoding="utf-8")
-        elif path.exists():
-            path.unlink()
+    def _read_chunked(self, topic: str) -> list[str]:
+        """读取 chunked topic 的全部 chunk 并合并。"""
+        chunk_dir = self.topics_dir / topic
+        if not chunk_dir.is_dir():
+            return []
+        entries: list[str] = []
+        for chunk_file in sorted(chunk_dir.glob("chunk-*.md")):
+            try:
+                entries.extend(
+                    e.strip() for e in chunk_file.read_text(encoding="utf-8").split("\n---\n") if e.strip()
+                )
+            except OSError:
+                pass
+        return entries
+
+    def _write_topic(self, topic: str, entries: list[str]):
+        """写入 topic 条目（inline 或 chunked，超阈值自动 split）。"""
+        if not entries:
+            # 清理
+            inline_path = self._topic_path(topic)
+            if inline_path.exists():
+                inline_path.unlink()
+            chunk_dir = self.topics_dir / topic
+            if chunk_dir.is_dir():
+                import shutil
+                shutil.rmtree(str(chunk_dir), ignore_errors=True)
+            return
+
+        inline_path = self._topic_path(topic)
+        test_text = "\n\n---\n\n".join(entries) + "\n"
+        if len(test_text.encode("utf-8")) <= CHUNK_THRESHOLD_BYTES:
+            # inline 足够
+            chunk_dir = self.topics_dir / topic
+            if chunk_dir.is_dir():
+                import shutil
+                shutil.rmtree(str(chunk_dir), ignore_errors=True)
+            inline_path.write_text(test_text, encoding="utf-8")
+        else:
+            # chunked 拆分
+            if inline_path.exists():
+                inline_path.unlink()
+            chunk_dir = self.topics_dir / topic
+            chunk_dir.mkdir(parents=True, exist_ok=True)
+            # 清除旧 chunk
+            for old in chunk_dir.glob("chunk-*.md"):
+                old.unlink()
+            for ci in range(0, len(entries), CHUNK_ENTRIES_PER_FILE):
+                chunk_entries = entries[ci:ci + CHUNK_ENTRIES_PER_FILE]
+                chunk_path = chunk_dir / f"chunk-{ci // CHUNK_ENTRIES_PER_FILE}.md"
+                chunk_path.write_text(
+                    "\n\n---\n\n".join(chunk_entries) + "\n", encoding="utf-8"
+                )
 
     @staticmethod
     def _upsert_entry(entries: list[str], new_text: str, authority: str = "auto") -> list[str]:
-        new_subject = new_text.split("\n")[0].strip().lower()
+        """插入或更新条目。冲突时按权威序判定，低权威追加版本链。
+
+        版本链格式: ``entry_text  # v{ver} @{timestamp}``
+        读路径取最后一条同 subject 条目作为最新值。
+        """
+        import time as _time
+
+        new_subject = _subject_key(new_text)
         for i, entry in enumerate(entries):
-            if entry.split("\n")[0].strip().lower() == new_subject:
+            if _subject_key(entry) == new_subject:
                 result = _resolve_conflict(entry, new_text, authority)
                 if result in (ConflictResolution.OVERRIDE, ConflictResolution.EQUIVALENT):
                     entries[i] = new_text
                 elif result == ConflictResolution.INVALID:
-                    # 互斥版本：追加而非覆盖
-                    ver = sum(1 for e in entries if e.split("\n")[0].strip().lower() == new_subject) + 1
-                    entries.append(new_text.replace("\n", f"  # v{ver}\n", 1))
+                    # 互斥版本链：追加新版本，保留历史（含时间戳）
+                    ver = sum(1 for e in entries if _subject_key(e) == new_subject) + 1
+                    ts = int(_time.time())
+                    entries.append(
+                        new_text.replace("\n", f"  # v{ver} @{ts}\n", 1)
+                    )
                 return entries
         entries.append(new_text)
         return entries
 
+    @staticmethod
+    def _latest_entry(entries: list[str], subject: str) -> str | None:
+        """返回同 subject 的最新版本条目（版本链末尾）。"""
+        key = _subject_key(subject)
+        matching = [e for e in entries if _subject_key(e) == key]
+        return matching[-1] if matching else None
+
+    @staticmethod
+    def _entry_history(entries: list[str], subject: str) -> list[str]:
+        """返回同 subject 的全部版本历史（最旧在前）。"""
+        key = _subject_key(subject)
+        return [e for e in entries if _subject_key(e) == key]
+
     def _update_index(self):
-        lines = ["# Agent Memory Index", "", f"_{len(DURABLE_TOPICS)} topics_", ""]
+        """写入 MEMORY.md 路由表：| topic | entries | bytes | strategy |。"""
+        rows = [
+            "# Agent Memory Index",
+            "",
+            f"_{len(DURABLE_TOPICS)} topics_",
+            "",
+            "| topic | entries | bytes | strategy |",
+            "|-------|---------|-------|----------|",
+        ]
         for topic in DURABLE_TOPICS:
-            count = len(self._read_topic(self.topics_dir / f"{topic}.md"))
-            lines.append(f"- **{topic}** ({count} entries)")
-        lines.append("")
-        (self.memory_dir / "MEMORY.md").write_text("\n".join(lines), encoding="utf-8")
+            strategy = self._topic_strategy(topic)
+            entries = self._read_topic(topic, strategy=strategy)
+            count = len(entries)
+            byte_size = 0
+            if strategy == "chunked":
+                chunk_dir = self.topics_dir / topic
+                if chunk_dir.is_dir():
+                    for cf in chunk_dir.glob("chunk-*.md"):
+                        try:
+                            byte_size += cf.stat().st_size
+                        except OSError:
+                            pass
+            else:
+                path = self._topic_path(topic)
+                if path.is_file():
+                    try:
+                        byte_size = path.stat().st_size
+                    except OSError:
+                        pass
+            rows.append(f"| {topic} | {count} | {byte_size} | {strategy} |")
+        rows.append("")
+        (self.memory_dir / "MEMORY.md").write_text("\n".join(rows), encoding="utf-8")
 
 
 def promote_durable_memory(
@@ -283,6 +580,16 @@ def _extract_promotions(text: str) -> list[tuple[str, str]]:
     return promotions
 
 
+def _subject_key(text: str) -> str:
+    """提取条目主题 key（首行，去除 authority/version 标记和尾部空白）。"""
+    first_line = text.split("\n")[0].strip().lower()
+    # 去除 [authority:...] 标记
+    first_line = re.sub(r"\s*\[authority:\w+\]\s*", "", first_line).strip()
+    # 去除版本链标记 # vN @TS
+    first_line = re.sub(r"\s*#\s*v\d+\s*@\d+\s*", "", first_line).strip()
+    return first_line
+
+
 def _resolve_conflict(existing: str, new: str, new_authority: str = "auto") -> ConflictResolution:
     """冲突状态机：比较新旧条目，按权威序决定是否覆盖。"""
     if not existing:
@@ -302,14 +609,13 @@ def _resolve_conflict(existing: str, new: str, new_authority: str = "auto") -> C
 
 
 def _apply_time_decay(prefs: list[UserPreference]) -> list[UserPreference]:
-    """对偏好条目应用时间衰减；低于阈值 0.1 的不再参与召回。"""
+    """对偏好条目应用时间衰减（与 apply_confidence_decay 共用公式）。"""
     now = time.time()
     result = []
     for p in prefs:
-        days = (now - p.updated_at) / 86400
-        if days > 1:
-            p.confidence = round(p.confidence * (DECAY_RATE ** days), 3)
-        if p.confidence >= 0.1:
+        decayed, valid = apply_confidence_decay(p.confidence, p.updated_at, now=now)
+        p.confidence = decayed
+        if valid:
             result.append(p)
     return result
 

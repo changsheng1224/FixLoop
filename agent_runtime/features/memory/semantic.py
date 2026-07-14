@@ -312,20 +312,76 @@ def derive_embed_query(user_message: str, task_summary: str = "") -> str:
     return " ".join(parts)[:200].strip()
 
 
+# HyDE (Hypothetical Document Embedding) — 查询改写入开关
+HYDE_ENABLED = False
+
+HYDE_PROMPT = (
+    "Write a short hypothetical answer (1-2 sentences) to the following query "
+    "about a software project. Only output the answer, no explanation.\n"
+    "Query: {query}"
+)
+
+
+def recall_with_hyde(
+    state: dict,
+    query: str,
+    light_client=None,
+    *,
+    limit: int = 3,
+) -> list[dict]:
+    """HyDE 查询改写：LLM 生成假设性答案 → embed → 检索。
+
+    与 derive_embed_query 规则版共用同一标注集做 recall@k A/B 对比。
+    当 light_client=None 或 HYDE_ENABLED=False 时降级为规则版。
+    """
+    if not HYDE_ENABLED or light_client is None:
+        # 降级：规则版 derive_embed_query
+        rewritten = derive_embed_query(query)
+        return retrieval_candidates_semantic(state, rewritten, limit=limit)
+
+    try:
+        prompt = HYDE_PROMPT.format(query=query[:300])
+        hypothetical = light_client.complete(prompt, max_new_tokens=128)
+        if hypothetical and hypothetical.strip():
+            # 嵌入假设性答案并检索
+            rewritten = hypothetical.strip()[:200]
+            return retrieval_candidates_semantic(state, rewritten, limit=limit)
+    except Exception:
+        pass
+
+    # 失败降级
+    return retrieval_candidates_semantic(state, query, limit=limit)
+
+
 def retrieval_candidates_semantic(state: dict, query: str, limit: int = 3) -> list[dict]:
-    """合并 keyword 与 semantic 检索结果并去重。"""
-    from agent_runtime.features.memory.episodic import retrieval_candidates
+    """合并 keyword 与 semantic 检索结果，按 kind 权重排序后去重。
+
+    kind 权重顺序: error(2.0) > decision(1.5) > observation(1.0)。
+    同相似度时 error/decision 排前。
+    """
+    from agent_runtime.features.memory.episodic import KIND_WEIGHTS, retrieval_candidates
 
     kw_results = retrieval_candidates(state, query, limit)
     sem = SemanticMemory()
     for note in state.get("episodic_notes", [])[-20:]:
         sem.add(note)
     sem_results = sem.search(query, limit)
-    seen = set()
-    merged = []
+
+    # 给 semantic 结果也应用 kind 权重
+    for r in sem_results:
+        kind = r.get("kind", "observation")
+        base_score = r.get("score", 0.0)
+        r["score"] = round(base_score * KIND_WEIGHTS.get(kind, 1.0), 3)
+
+    # 合并 + 去重
+    seen: set[int] = set()
+    merged: list[dict] = []
     for note in kw_results + sem_results:
         idx = note.get("note_index")
         if idx is not None and idx not in seen:
             seen.add(idx)
             merged.append(note)
+
+    # 按 score 降序重排（kind 权重已在各自路径应用）
+    merged.sort(key=lambda n: n.get("score", 0.0), reverse=True)
     return merged[:limit]
