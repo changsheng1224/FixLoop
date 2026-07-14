@@ -114,6 +114,17 @@ class RepairRunTracer:
         run_dir = self.store.runs_dir / self.run_id
         reports = load_agent_reports_from_run(run_dir)
         by_agent = project_token_usage_by_agent(reports)
+        # 分 Agent latency 聚合: agent_asks → {role: {tokens, ms, calls}}
+        by_agent_latency: dict[str, dict] = {}
+        for ref in state.agent_asks:
+            role = ref.agent
+            entry = by_agent_latency.setdefault(role, {"tokens": 0, "ms": 0, "calls": 0})
+            entry["calls"] += 1
+            entry["ms"] += ref.finished_ms - ref.started_ms
+        # 合并 token 数据
+        for role, info in by_agent.items():
+            entry = by_agent_latency.setdefault(role, {"tokens": 0, "ms": 0, "calls": 0})
+            entry["tokens"] = info.get("total_tokens", 0)
         tool_summary = summarize_agent_tool_usage(by_agent)
         rejection_summary = aggregate_rejection_from_agent_reports(reports)
         ttft_summary = aggregate_ttft_from_agent_reports(reports)
@@ -142,6 +153,7 @@ class RepairRunTracer:
                 "shell_limit": token_summary.get("shell_limit", 0),
             },
             "token_usage_by_agent": by_agent,
+            "latency_by_agent": by_agent_latency,
             **tool_summary,
             **token_summary,
             **rejection_summary,
