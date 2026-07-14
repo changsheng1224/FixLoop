@@ -135,6 +135,46 @@ class TestContextManagerBuild:
         # 应该发生了裁剪
         assert len(meta.get("cuts", [])) > 0
 
+    def test_hard_cap_raises_context_too_large_error(self, agent):
+        """hard_cap 超限时 ContextManager.build() 抛出 ContextTooLargeError。"""
+        from agent_runtime.errors import ContextTooLargeError
+
+        # 设置极低硬顶（system+tool+workspace 常规就 >300 tokens）
+        agent.config.hard_cap = 100
+        cm = ContextManager(agent)
+        with pytest.raises(ContextTooLargeError) as exc_info:
+            cm.build("test")
+        e = exc_info.value
+        assert e.actual > 100
+        assert e.limit == 100
+        assert "100" in str(e)
+
+    def test_hard_cap_high_enough_does_not_raise(self, agent):
+        """hard_cap 足够大时不抛异常。"""
+        agent.config.hard_cap = 8000
+        cm = ContextManager(agent)
+        prompt, meta = cm.build("test")
+        assert meta["total_tokens"] <= 8000
+        assert "test" in prompt
+
+    def test_hard_cap_build_dynamic_context_raises(self, agent):
+        """build_dynamic_context() 也检查 hard_cap。"""
+        from agent_runtime.errors import ContextTooLargeError
+
+        agent.config.hard_cap = 50
+        cm = ContextManager(agent)
+        with pytest.raises(ContextTooLargeError):
+            cm.build_dynamic_context("test")
+
+    def test_hard_cap_build_for_native_raises(self, agent):
+        """build_for_native() 也检查 hard_cap。"""
+        from agent_runtime.errors import ContextTooLargeError
+
+        agent.config.hard_cap = 50
+        cm = ContextManager(agent)
+        with pytest.raises(ContextTooLargeError):
+            cm.build_for_native("test")
+
 
 class TestHistoryCompression:
     """历史压缩测试。"""

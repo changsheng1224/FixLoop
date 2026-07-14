@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from agent_runtime.errors import ContextTooLargeError
+
 from agent_runtime.compression_pipeline import (
     DEFAULT_TOOL_TRUNCATION,
     L5_TRIGGER_RATIO,
@@ -48,6 +50,7 @@ BUDGET_MEMORY = 800
 BUDGET_KNOWLEDGE = 600  # 持久知识检索（episodic notes + durable facts）
 BUDGET_HISTORY = 2600
 KEEP_RECENT_HISTORY = 6  # 最近 N 条历史完整保留
+HARD_CAP = 8000  # 硬顶 token 数，超出拒绝 ask
 
 
 def scaled_section_budget(section_limit: int, total_limit: int) -> int:
@@ -162,35 +165,57 @@ class ContextManager:
             model = getattr(getattr(agent, "config", None), "model", "deepseek-v4-pro")
             provider = getattr(getattr(agent, "config", None), "provider", "deepseek")
             self.budget = TokenBudget(model=model, total_limit=limit, provider=provider)
+        self.hard_cap = int(
+            getattr(getattr(agent, "config", None), "hard_cap", HARD_CAP) or HARD_CAP
+        )
         cache_dir = Path(getattr(agent, "_cwd", ".")) / ".agent" / "summary_cache"
         self._summary_cache: dict[str, str] = _DiskCache(cache_dir)
         self.tier_policy = TierPolicy.from_agent(agent)
+
+    def _check_hard_cap(self, used: int) -> None:
+        """检查总 token 数是否超出硬顶；超出则抛 ContextTooLargeError。"""
+        if used > self.hard_cap:
+            raise ContextTooLargeError(actual=used, limit=self.hard_cap)
 
     def build(self, user_message: str) -> tuple[str, dict]:
         """组装完整 prompt，返回 (prompt_text, metadata)。
 
         metadata 含各 section token 数、裁剪日志和 prompt_cache_key。
+
+        Raises:
+            ContextTooLargeError: 若合计 tokens 超出硬顶限制。
         """
         metadata = self._base_metadata()
         sections = self._fill_sections(user_message, metadata)
+        self._check_hard_cap(metadata.get("total_tokens", 0))
         result_parts = [sections[name] for name in self.SECTION_ORDER if sections.get(name)]
         if sections.get("request"):
             result_parts.append(sections["request"])
         return "\n".join(result_parts), metadata
 
     def build_dynamic_context(self, user_message: str) -> tuple[str, dict]:
-        """组装动态上下文（不含 system / request）。"""
+        """组装动态上下文（不含 system / request）。
+
+        Raises:
+            ContextTooLargeError: 若合计 tokens 超出硬顶限制。
+        """
         metadata = self._base_metadata()
         sections = self._fill_sections(
             user_message, metadata, include_system=False, include_request=False
         )
+        self._check_hard_cap(metadata.get("total_tokens", 0))
         parts = [sections[name] for name in self.DYNAMIC_ORDER if sections.get(name)]
         return "\n\n".join(parts), metadata
 
     def build_for_native(self, user_message: str) -> tuple[str, str, dict]:
-        """Native API：stable system+tools + 动态 user 上下文（含 skills/task）。"""
+        """Native API：stable system+tools + 动态 user 上下文（含 skills/task）。
+
+        Raises:
+            ContextTooLargeError: 若合计 tokens 超出硬顶限制。
+        """
         metadata = self._base_metadata()
         sections = self._fill_sections(user_message, metadata)
+        self._check_hard_cap(metadata.get("total_tokens", 0))
         system_parts = [sections[name] for name in self.NATIVE_SYSTEM_ORDER if sections.get(name)]
         system_prompt = "\n\n".join(system_parts)
         user_parts = [sections[name] for name in self.DYNAMIC_ORDER if sections.get(name)]

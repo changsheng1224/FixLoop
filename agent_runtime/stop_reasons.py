@@ -27,6 +27,7 @@ class StopReason(StrEnum):
     USER_CANCEL = "user_cancel"
     STALL = "stall"
     GOAL_DRIFT = "goal_drift"
+    CONTEXT_OVERFLOW = "context_overflow"
 
 
 CANONICAL_STOP_REASONS = frozenset(member.value for member in StopReason)

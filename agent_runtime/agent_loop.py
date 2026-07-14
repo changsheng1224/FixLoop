@@ -26,6 +26,7 @@ from agent_runtime.step_clock import StepClock, StepTimeoutError
 from agent_runtime.step_guard import StepContext, StepGuard
 from agent_runtime.stop_reasons import StopReason
 from agent_runtime.cancellation import CancelledError, run_with_cancellation
+from agent_runtime.errors import ContextTooLargeError, EmptyModelResponse
 
 # StepGuard stall 检测：仅"可能修改文件"的工具才计入停滞
 _MODIFYING_TOOLS = frozenset({"write_file", "patch_file", "run_shell"})
@@ -581,8 +582,6 @@ class AgentLoop:
         )
         meta = getattr(self, "_last_token_meta", None) or {}
         cache_key = str(meta.get("prompt_cache_key", "") or "")
-        from agent_runtime.errors import EmptyModelResponse
-
         for empty_try in range(self.MAX_EMPTY_RETRIES):
             try:
                 raw = self._invoke_model_call(
@@ -805,7 +804,18 @@ class AgentLoop:
         if (msg := self._maybe_step_timeout(ts, step_clock, 1, "native")) is not None:
             return msg
 
-        system_prompt, user_message, budget_meta = self.agent.build_for_native(user_message)
+        try:
+            system_prompt, user_message, budget_meta = self.agent.build_for_native(user_message)
+        except ContextTooLargeError as e:
+            ts.stop_with_reason(
+                StopReason.CONTEXT_OVERFLOW, "stopped",
+                detail=f"actual={e.actual} limit={e.limit}",
+            )
+            return self._complete_run(
+                ts,
+                f"<final>Prompt 大小 {e.actual} tokens 超出硬顶限制 ({e.limit})。"
+                "请缩短输入或使用 /reset 清空对话历史后重试。</final>",
+            )
         if hard_limit := self._check_hard_cap(budget_meta):
             return hard_limit
         from agent_runtime.message_projection import (
@@ -957,7 +967,25 @@ class AgentLoop:
             if callback is not None:
                 self._notify("on_step_start", callback, step=step, max_steps=self.max_steps, path="xml")
 
-            prompt_text = self._xml_build_context(ts, user_message, step=step, callback=callback)
+            try:
+                prompt_text = self._xml_build_context(ts, user_message, step=step, callback=callback)
+            except ContextTooLargeError as e:
+                ts.stop_with_reason(
+                    StopReason.CONTEXT_OVERFLOW, "stopped",
+                    detail=f"actual={e.actual} limit={e.limit}",
+                )
+                return self._complete_run(
+                    ts,
+                    f"<final>Prompt 大小 {e.actual} tokens 超出硬顶限制 ({e.limit})。"
+                    "请缩短输入或使用 /reset 清空对话历史后重试。</final>",
+                )
+            # _check_hard_cap 返回 <final> 字符串时直接终止（不发给模型）
+            if prompt_text.startswith("<final>"):
+                ts.stop_with_reason(
+                    StopReason.CONTEXT_OVERFLOW, "stopped",
+                    detail="hard_cap via legacy _check_hard_cap",
+                )
+                return self._complete_run(ts, prompt_text)
 
             self._notify(
                 "on_pre_model", callback, step=step,

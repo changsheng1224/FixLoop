@@ -956,3 +956,37 @@ class TestStreamingCancel:
             # cancel 后应返回 cancel 相关结果
             assert "cancel" in answer.lower() or "取消" in answer or "用户" in answer
 
+
+class TestHardCapContextOverflow:
+    """hard_cap 超限 → ContextTooLargeError → stop_reason=context_overflow。"""
+
+    def test_xml_path_hard_cap_overflow_stops_loop(self, config, workspace):
+        """XML 路径：hard_cap 超限时 AgentLoop 以 context_overflow 终止。"""
+        from agent_runtime.agent_loop import AgentLoop
+
+        config.hard_cap = 100  # 极低硬顶，system+tool+workspace 常规即超
+        agent = _make_agent(
+            ["<final>should not reach model</final>"],
+            config, workspace,
+        )
+        loop = AgentLoop(agent)
+        answer = loop.run("test hard cap overflow")
+        assert loop.stop_reason == "context_overflow"
+        assert "硬顶" in answer or "超出" in answer or "hard" in answer.lower()
+
+    def test_native_path_hard_cap_overflow_stops_loop(self, config, workspace):
+        """Native 路径：hard_cap 超限时 AgentLoop 以 context_overflow 终止。"""
+        from agent_runtime.agent_loop import AgentLoop
+        from agent_runtime.providers.clients import FakeNativeToolClient
+
+        config.hard_cap = 50  # 极低硬顶
+        agent = Agent(
+            config=config,
+            model_client=FakeNativeToolClient("<final>done</final>"),
+            workspace=workspace,
+        )
+        loop = AgentLoop(agent)
+        answer = loop.run("test native hard cap overflow")
+        assert loop.stop_reason == "context_overflow"
+        assert "硬顶" in answer or "超出" in answer or "hard" in answer.lower()
+

@@ -47,6 +47,12 @@ class AgentConfig(BaseModel):
     approval: str = Field(default="ask", description="高风险工具审批策略: auto / ask / never")
     temperature: float = Field(default=0.2, ge=0.0, le=2.0, description="模型温度")
     json_mode: bool = Field(default=False, description="启用 JSON 输出引导（repair agent 专用）")
+    hard_cap: int = Field(
+        default=8000,
+        ge=512,
+        le=200_000,
+        description="Prompt 上下文硬顶 token 数。超出时拒绝 ask，不静默裁剪。",
+    )
     loop_detect_threshold: int = Field(
         default=3,
         ge=0,
