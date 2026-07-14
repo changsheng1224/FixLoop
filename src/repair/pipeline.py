@@ -602,6 +602,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                         continue
 
                     # ── AST 语义等价检查（V1.5-Bonus9）──
+                    # 仅检测函数/类签名变更（语法错误不算 drift）
                     semantic_drift = False
                     for patch in state.candidate_patches:
                         try:
@@ -610,18 +611,20 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                             result = check_semantic_equivalence(
                                 patch.original_lines, patch.patched_lines,
                             )
-                            if result["status"] == "drift":
-                                state.agent_errors["semantic_drift"] = result["detail"]
+                            detail = result.get("detail", "")
+                            # 跳过 syntax error（非签名级变更，由 verifier 最终裁决）
+                            if result["status"] == "drift" and "syntax" not in detail:
+                                state.agent_errors["semantic_drift"] = detail
                                 semantic_drift = True
                                 tracer = ctx.repair_tracer
                                 if tracer:
                                     tracer.emit("orchestrator", "semantic_check", {
                                         "status": "drift",
-                                        "detail": result["detail"],
+                                        "detail": detail,
                                         "file": patch.file_path,
                                     })
                                 log.warning("[semantic] drift: %s → %s",
-                                             patch.file_path, result["detail"])
+                                             patch.file_path, detail)
                                 break
                         except Exception:
                             pass
