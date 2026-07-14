@@ -92,7 +92,9 @@ def create_repair_agent(
         agent_name = role
         light = light_client if role in ("localizer", "retriever") else None
 
-    json_mode = role in ("localizer", "patcher", "retriever")
+    # 表驱动 JSON mode：四 L2 角色默认启用（provider 不支持时降级文本 + 多级 parse）
+    _JSON_MODE_ROLES = frozenset({"localizer", "retriever", "patcher", "verifier"})
+    json_mode = role in _JSON_MODE_ROLES
     if json_mode:
         system_prompt += "\n\n【输出格式】只输出合法 JSON（不要包裹在 ```json 或 <final> 中）。"
     agent = Agent(
