@@ -53,6 +53,11 @@ def _add_eval_run_args(parser: argparse.ArgumentParser) -> None:
         help="生成 Markdown 指标报告（默认 output/report.md）",
     )
     parser.add_argument(
+        "--jobs", "-j",
+        type=int, default=1,
+        help="并行 eval workers（1=串行，>1 按 case 并行；注意 API 限流）",
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help="断点续跑：跳过已完成的 case",
