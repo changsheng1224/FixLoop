@@ -75,6 +75,8 @@ def wire_orchestrator(
     with_retriever: bool | None = None,
     skip_verify: bool = False,
     dry_run: bool = False,
+    execution_tier: str = "auto",
+    require_sandbox: bool = False,
     agent_profile: AgentProfile | None = None,
 ) -> O:
     """装配 Localizer / Retriever / Patcher / 可选 Verifier（Agent 池化预热）。
@@ -132,15 +134,22 @@ def wire_orchestrator(
         retriever = fut_ret.result() if fut_ret else None
 
     patcher = create_patcher(client, ws, cwd=repo, **_agent_kw("patcher"))
+    normalized_tier = execution_tier if execution_tier in {"auto", "container", "host", "static"} else "auto"
+    use_pytest_verify = (not skip_verify) and normalized_tier in {"auto", "host"}
+    allow_static_verify_fallback = (not skip_verify) and normalized_tier == "static"
+    should_try_verifier = (not skip_verify) and normalized_tier in {"auto", "container"}
+
     orch = orch_class(
         localizer,
         retriever,
         patcher,
-        use_pytest_verify=not skip_verify,
+        use_pytest_verify=use_pytest_verify,
+        require_sandbox=require_sandbox or normalized_tier == "container",
+        allow_static_verify_fallback=allow_static_verify_fallback,
         l1_prompt_cache_key=l1.hash,
     )
     orch._budget_ctx = budget_ctx
-    if not skip_verify:
+    if should_try_verifier:
         verifier = try_create_verifier(client, ws, repo, **_agent_kw("verifier"))
         if verifier:
             orch.verifier = verifier
@@ -151,6 +160,8 @@ def make_orchestrator_factory(
     *,
     skip_verify: bool = False,
     dry_run: bool = False,
+    execution_tier: str = "auto",
+    require_sandbox: bool = False,
     model_client=None,
 ) -> Callable[[str], Orchestrator]:
     """返回 `(repo_path) -> Orchestrator` 工厂。"""
@@ -163,6 +174,8 @@ def make_orchestrator_factory(
             repo_path,
             skip_verify=skip_verify,
             dry_run=dry_run,
+            execution_tier=execution_tier,
+            require_sandbox=require_sandbox,
         )
 
     return factory

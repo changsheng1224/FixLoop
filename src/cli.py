@@ -83,6 +83,20 @@ def main() -> int:
     p_repair.add_argument("--dry-run", action="store_true", help="演习模式")
     p_repair.add_argument("--skip-verify", action="store_true", help="跳过 Docker 验证")
     p_repair.add_argument(
+        "--execution-tier",
+        choices=["auto", "container", "host", "static"],
+        default="auto",
+        help=(
+            "验证执行层：auto=优先 Docker 不可用降级 host；"
+            "container=只用 Docker；host=本地 pytest；static=仅静态编译检查"
+        ),
+    )
+    p_repair.add_argument(
+        "--require-sandbox",
+        action="store_true",
+        help="要求 Docker sandbox；不可用时不降级到 host/static",
+    )
+    p_repair.add_argument(
         "--fast-retrieve",
         action="store_true",
         help="规则检索（跳过 Retriever LLM，直接 grep）",
@@ -226,7 +240,12 @@ def _repair(args) -> int:
         return REPAIR_EXIT_CONFIG
 
     try:
-        factory = make_orchestrator_factory(skip_verify=args.skip_verify, dry_run=args.dry_run)
+        factory = make_orchestrator_factory(
+            skip_verify=args.skip_verify,
+            dry_run=args.dry_run,
+            execution_tier=args.execution_tier,
+            require_sandbox=args.require_sandbox,
+        )
         orch = factory(repo)
     except Exception as exc:
         print(f"错误: 配置/初始化失败: {exc}", file=sys.stderr)
@@ -249,6 +268,10 @@ def _repair(args) -> int:
     if args.verbose:
         if orch.verifier:
             print("[Orchestrator] Verifier 已接入 (Docker)", file=sys.stderr)
+        elif args.execution_tier == "host" and not args.skip_verify:
+            print("[Orchestrator] Verifier 使用本地 pytest（无 sandbox 隔离）", file=sys.stderr)
+        elif args.execution_tier == "static" and not args.skip_verify:
+            print("[Orchestrator] Verifier 使用静态检查（不执行 pytest）", file=sys.stderr)
         elif not args.skip_verify:
             print("[Orchestrator] Docker 不可用，跳过验证", file=sys.stderr)
         print("[Orchestrator] 开始修复...", file=sys.stderr)
