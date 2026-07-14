@@ -503,9 +503,7 @@ class ContextManager:
         include_header = not (sealed_count > 0 and sealed_text)
 
         projected = run_compression_pipeline(
-            history,
-            self.budget,
-            metadata=meta,
+            history, self.budget, metadata=meta,
             summarizer=make_summarizer(self.agent),
             summary_cache=self._summary_cache,
             history_window=history_window_budget(self.budget.total_limit),
@@ -515,27 +513,25 @@ class ContextManager:
         pipe = meta.get("compression_pipeline", {})
         if pipe.get("l5_triggered"):
             body = self._format_compressed_result(projected, apply_l1=False)
-            if include_header:
-                return body
-            return self._strip_history_header(body)
+            return body if include_header else self._strip_history_header(body)
 
+        return self._format_split_history(projected, pipe, include_header)
+
+    def _format_split_history(
+        self, projected: list, pipe: dict, include_header: bool
+    ) -> str:
+        """格式化未触发 L5 的 history：早期摘要 + 最近对话。"""
         recent = projected[-KEEP_RECENT_HISTORY:]
         old = projected[:-KEEP_RECENT_HISTORY]
-
         lines: list[str] = []
         if include_header:
             lines.extend(["## 对话历史", ""])
 
-        if old and not any(
-            pipe.get(k)
-            for k in ("l2_triggered", "l3_triggered", "l4_triggered")
-        ):
+        if old and not any(pipe.get(k) for k in ("l2_triggered", "l3_triggered", "l4_triggered")):
             compressed = self._compress_old_entries(old)
             if compressed:
-                if include_header:
-                    lines.append("### 早期摘要")
-                else:
-                    lines.append("### 追加早期摘要")
+                prefix = "### 早期摘要" if include_header else "### 追加早期摘要"
+                lines.append(prefix)
                 lines.append(compressed)
                 lines.append("")
 
@@ -548,7 +544,6 @@ class ContextManager:
                 content = content[:300] + "..."
             lines.append(f"**{role}**: {content}")
             lines.append("")
-
         return "\n".join(lines)
 
     @staticmethod
