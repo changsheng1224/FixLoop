@@ -17,14 +17,24 @@ PrefixMode = Literal["default", "repair"]
 
 
 def _role_quota(agent_name: str = ""):
-    """按 Agent 角色返回差异化配额。"""
+    """按 Agent 角色返回差异化配额。
+
+    Localizer: 只读 query 密集 → total=12
+    Retriever: 只读 search 中等 → total=10
+    Patcher:   写文件宽松 → writes=8 shell=2 total=15
+    Verifier:  sandbox 仅容器操作 → shell=3 total=6
+    """
     from agent_runtime.tool_executor import QuotaEnforcer
 
     role = (agent_name or "").lower()
+    if role == "localizer":
+        return QuotaEnforcer(max_writes=0, max_shell=0, max_total=12)
+    if role == "retriever":
+        return QuotaEnforcer(max_writes=0, max_shell=0, max_total=10)
     if role == "patcher":
-        return QuotaEnforcer(max_writes=5, max_shell=0, max_total=30)
-    if role in ("localizer", "retriever"):
-        return QuotaEnforcer(max_writes=0, max_shell=0, max_total=20)
+        return QuotaEnforcer(max_writes=8, max_shell=2, max_total=15)
+    if role == "verifier":
+        return QuotaEnforcer(max_writes=0, max_shell=3, max_total=6)
     return QuotaEnforcer()
 
 
