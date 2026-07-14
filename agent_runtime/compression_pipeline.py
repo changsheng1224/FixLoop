@@ -612,15 +612,41 @@ def l5_auto_compact(
         pipe["l5"] = "skipped"
         return history
 
-    # 钉扎保护：将 pinned items 移到后半段，确保不被 L5 摘要丢弃
-    pinned, unpinned = _partition_pinned(history)
-    protected_count = len(pinned)
-    mid = max(len(unpinned) // 2, 1)
-    old_history = unpinned[:mid]
-    recent_history = unpinned[mid:] + pinned  # pinned 数据在最后，永不进入摘要
+    # 增量摘要：检测已有 [Earlier summary]，只摘要其后新增条目
+    existing_summary_idx = _find_existing_summary(history)
+    incremental = existing_summary_idx is not None
+
+    pinned: list[dict]
+    unpinned: list[dict]
+    old_history: list[dict]
+    recent_history: list[dict]
+
+    if incremental:
+        # 已有摘要前的内容已摘要过 → 跳过；只处理摘要后的新条目
+        existing_summary = str(history[existing_summary_idx].get("content", ""))
+        existing_summary = existing_summary.replace("[Earlier summary]: ", "").strip()
+        preserved = [dict(item) for item in history[:existing_summary_idx + 1]]
+        new_items = [dict(item) for item in history[existing_summary_idx + 1:]]
+        pinned = []
+        # 钉扎保护：new_items 中的关键条目移到后半段
+        pinned_new, unpinned_new = _partition_pinned(new_items)
+        mid = max(len(unpinned_new) // 2, 1)
+        old_history = unpinned_new[:mid]
+        recent_history = unpinned_new[mid:] + pinned_new
+        # 已摘要的前缀保留在结果前部
+        recent_history = preserved + recent_history
+        protected_count = len(pinned_new)
+        # cache key 含 offset → 不同轮次不同 key
+        cache_key = _summary_cache_key(old_history) + f"@offset{existing_summary_idx}"
+    else:
+        pinned, unpinned = _partition_pinned(history)
+        protected_count = len(pinned)
+        mid = max(len(unpinned) // 2, 1)
+        old_history = unpinned[:mid]
+        recent_history = unpinned[mid:] + pinned  # pinned 数据在最后
+        cache_key = _summary_cache_key(old_history)
 
     cache = summary_cache if summary_cache is not None else {}
-    cache_key = _summary_cache_key(old_history)
 
     summary = ""
     cache_hit = False
@@ -629,7 +655,11 @@ def l5_auto_compact(
         cache_hit = True
     elif summarizer is not None:
         try:
-            summary = summarizer(_build_l5_summary_prompt(old_history))
+            summary_prompt = _build_l5_summary_prompt(
+                old_history,
+                existing_summary=existing_summary if incremental else "",
+            )
+            summary = summarizer(summary_prompt)
         except Exception:
             summary = ""
         if summary:
@@ -643,6 +673,7 @@ def l5_auto_compact(
         tokens_after = count_history_tokens(result, budget)
         pipe["l5_triggered"] = True
         pipe["l5"] = "summarized"
+        pipe["l5_incremental"] = incremental
         pipe["l5_summary_cache_hit"] = cache_hit
         pipe["l5_fallback"] = False
         pipe["l5_tokens_before"] = tokens_before
@@ -688,15 +719,28 @@ def _summary_cache_key(old_history: list[dict]) -> str:
     return hashlib.md5(raw.encode()).hexdigest()
 
 
-def _build_l5_summary_prompt(old_history: list[dict]) -> str:
+def _find_existing_summary(history: list[dict]) -> int | None:
+    """返回第一个 [Earlier summary] 条目的索引，无则返回 None。"""
+    for i, item in enumerate(history):
+        content = str(item.get("content", ""))
+        if content.startswith("[Earlier summary]"):
+            return i
+    return None
+
+
+def _build_l5_summary_prompt(
+    old_history: list[dict],
+    existing_summary: str = "",
+) -> str:
+    """构建 L5 摘要 prompt（增量或全量模式）。"""
     # 检测已有摘要 → 增量模式
-    existing = ""
-    new_items = []
+    existing = existing_summary
+    new_items: list[str] = []
     for item in old_history:
         content = str(item.get("content", ""))
-        if item.get("role") == "system" and content.startswith("[Earlier summary]"):
+        if not existing and item.get("role") == "system" and content.startswith("[Earlier summary]"):
             existing = content.replace("[Earlier summary]: ", "").strip()
-            new_items = []  # reset — 已有摘要后的是新内容
+            new_items = []
         elif existing:
             role = item.get("role", "unknown")
             new_items.append(f"{role}: {content[:150]}")

@@ -606,3 +606,138 @@ class TestSummaryCachePersistence:
         cache_files = list(cache_dir.glob("*.txt")) if cache_dir.is_dir() else []
         # 至少 _DiskCache 目录存在
         assert cm._summary_cache._dir.is_dir()
+
+
+# ---------------------------------------------------------------------------
+# 增量摘要（V1.5-Bonus2）：L5 在已有 [Earlier summary] 上追加新段
+# ---------------------------------------------------------------------------
+
+
+class TestIncrementalSummary:
+    """增量摘要：已有 [Earlier summary] 时只摘要新增条目，cache key 含 offset。"""
+
+    def test_incremental_mode_detected(self, budget):
+        """已有 [Earlier summary] 时 L5 进入增量模式。"""
+        from agent_runtime.compression_pipeline import (
+            _find_existing_summary,
+            l5_auto_compact,
+        )
+
+        # Round 1: 无已有摘要 → 全量模式
+        history1 = _long_user_history(30, pad=200)
+        meta1: dict = {}
+        result1 = l5_auto_compact(
+            history1, budget, meta1,
+            summarizer=lambda p: "round 1 summary",
+            trigger_tokens=10,
+        )
+        assert meta1["compression_pipeline"]["l5_incremental"] is False
+        assert len(result1) < len(history1)
+
+        # Round 2: 追加新条目到 Round 1 结果后
+        new_entries = _long_user_history(15, pad=200)
+        history2 = result1 + new_entries
+        assert _find_existing_summary(history2) is not None
+
+        meta2: dict = {}
+        result2 = l5_auto_compact(
+            history2, budget, meta2,
+            summarizer=lambda p: "round 2 incremental summary",
+            trigger_tokens=10,
+        )
+        assert meta2["compression_pipeline"]["l5_incremental"] is True
+        assert "round 2" in str(result2[0]["content"])
+
+    def test_cache_key_includes_offset_with_existing_summary(self, budget):
+        """增量模式下 cache key 含 offset → 不同轮次不同 key。"""
+        from agent_runtime.compression_pipeline import (
+            _summary_cache_key,
+            l5_auto_compact,
+        )
+
+        history1 = _long_user_history(25, pad=200)
+        r1 = l5_auto_compact(
+            history1, budget, {},
+            summarizer=lambda p: "s1",
+            trigger_tokens=10,
+        )
+
+        # Round 2: 追加更多条目
+        more = _long_user_history(15, pad=200)
+        history2 = r1 + more
+        summarizer_calls = []
+
+        def counted_summarizer(prompt: str) -> str:
+            summarizer_calls.append(prompt)
+            return "s2 incremental"
+
+        r2 = l5_auto_compact(
+            history2, budget, {},
+            summarizer=counted_summarizer,
+            trigger_tokens=10,
+        )
+        # 增量模式：summarizer 被调用（因为新内容触发新的 cache key）
+        assert len(summarizer_calls) == 1
+        # prompt 应是增量模式（含 "Current summary"）
+        assert "Current summary" in summarizer_calls[0]
+
+    def test_incremental_only_summarizes_new_items(self, budget):
+        """增量模式只摘要 [Earlier summary] 之后的新条目。"""
+        from agent_runtime.compression_pipeline import l5_auto_compact
+
+        history1 = _long_user_history(20, pad=200)
+        r1 = l5_auto_compact(
+            history1, budget, {},
+            summarizer=lambda p: "initial summary",
+            trigger_tokens=10,
+        )
+
+        # 追加少量新条目 — 不应触发全量重摘要
+        new_entries = _long_user_history(10, pad=200)
+        history2 = r1 + new_entries
+
+        summarizer_inputs = []
+        r2 = l5_auto_compact(
+            history2, budget, {},
+            summarizer=lambda p: summarizer_inputs.append(p) or "updated summary",
+            trigger_tokens=10,
+        )
+
+        # prompt 中的 "New items" 应只含新条目
+        assert len(summarizer_inputs) == 1
+        prompt = summarizer_inputs[0]
+        assert "Update the following summary" in prompt
+        assert "Current summary: initial summary" in prompt
+        # 结果中保留更新后的摘要
+        assert "updated summary" in str(r2[0]["content"])
+
+    def test_second_incremental_round_hits_cache(self, budget):
+        """同 offset + 同新条目 → 缓存命中，不调 summarizer。"""
+        from agent_runtime.compression_pipeline import l5_auto_compact
+
+        history1 = _long_user_history(20, pad=200)
+        r1 = l5_auto_compact(
+            history1, budget, {},
+            summarizer=lambda p: "first summary",
+            trigger_tokens=10,
+        )
+
+        new_entries = _long_user_history(10, pad=200)
+        history2 = r1 + new_entries
+
+        cache: dict[str, str] = {}
+        calls = []
+
+        def counted(prompt: str) -> str:
+            calls.append(1)
+            return "incremental summary"
+
+        # 第一次增量
+        l5_auto_compact(history2, budget, {}, summarizer=counted,
+                        summary_cache=cache, trigger_tokens=10)
+        assert len(calls) == 1
+
+        # 第二次增量（同输入）→ 缓存命中
+        l5_auto_compact(history2, budget, {}, summarizer=counted,
+                        summary_cache=cache, trigger_tokens=10)
+        assert len(calls) == 1  # 未增加
