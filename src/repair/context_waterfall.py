@@ -78,16 +78,15 @@ def _extract_sections(report: dict) -> dict[str, int]:
     return {}
 
 
-def waterfall_to_ascii(waterfall: dict) -> str:
-    """将 waterfall 渲染为 ASCII 条形图。"""
-    by_agent = waterfall.get("by_agent") or waterfall
-    if not by_agent:
+def waterfall_to_ascii(waterfall: dict[str, list[dict]]) -> str:
+    """将 build_context_waterfall() 输出渲染为 ASCII 条形图。"""
+    if not waterfall:
         return "(no context waterfall data)"
 
     lines = ["Context Waterfall (tokens per section)", "=" * 50]
     max_bar = 40
 
-    for agent_name, entries in by_agent.items():
+    for agent_name, entries in waterfall.items():
         if agent_name.startswith("_"):
             continue
         if not entries:
@@ -103,7 +102,7 @@ def waterfall_to_ascii(waterfall: dict) -> str:
             )
 
     # 总计
-    totals = by_agent.get("_totals") or waterfall.get("_totals")
+    totals = waterfall.get("_totals")
     if totals:
         grand = sum(e["tokens"] for e in totals)
         lines.append(f"\n  [TOTAL]  {grand} tokens across all agents")

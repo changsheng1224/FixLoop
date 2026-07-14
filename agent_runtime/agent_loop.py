@@ -811,11 +811,7 @@ class AgentLoop:
                 StopReason.CONTEXT_OVERFLOW, "stopped",
                 detail=f"actual={e.actual} limit={e.limit}",
             )
-            return self._complete_run(
-                ts,
-                f"<final>Prompt 大小 {e.actual} tokens 超出硬顶限制 ({e.limit})。"
-                "请缩短输入或使用 /reset 清空对话历史后重试。</final>",
-            )
+            return self._complete_run(ts, e.user_message)
         if hard_limit := self._check_hard_cap(budget_meta):
             return hard_limit
         from agent_runtime.message_projection import (
@@ -974,11 +970,7 @@ class AgentLoop:
                     StopReason.CONTEXT_OVERFLOW, "stopped",
                     detail=f"actual={e.actual} limit={e.limit}",
                 )
-                return self._complete_run(
-                    ts,
-                    f"<final>Prompt 大小 {e.actual} tokens 超出硬顶限制 ({e.limit})。"
-                    "请缩短输入或使用 /reset 清空对话历史后重试。</final>",
-                )
+                return self._complete_run(ts, e.user_message)
             # _check_hard_cap 返回 <final> 字符串时直接终止（不发给模型）
             if prompt_text.startswith("<final>"):
                 ts.stop_with_reason(

@@ -20,3 +20,11 @@ class ContextTooLargeError(Exception):
         self.limit = limit
         detail = f"Prompt {actual} tokens 超出硬顶限制 ({limit})"
         super().__init__(detail)
+
+    @property
+    def user_message(self) -> str:
+        """返回用户可读的错误消息（含恢复建议）。"""
+        return (
+            f"<final>Prompt 大小 {self.actual} tokens 超出硬顶限制 ({self.limit})。"
+            "请缩短输入或使用 /reset 清空对话历史后重试。</final>"
+        )

@@ -716,7 +716,7 @@ def _summary_cache_key(old_history: list[dict]) -> str:
     import hashlib
 
     raw = "".join(str(h.get("content", ""))[:100] for h in old_history[-10:])
-    return hashlib.md5(raw.encode()).hexdigest()
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
 def _find_existing_summary(history: list[dict]) -> int | None:

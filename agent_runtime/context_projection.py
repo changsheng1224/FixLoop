@@ -53,42 +53,57 @@ def _count_text(budget: TokenBudget | Any, text: str) -> int:
     return budget.count(text)
 
 
-def count_state_section(agent, budget: TokenBudget | Any) -> int:
-    """state 段：与 ContextManager._get_state() 同格式的 token 估算。"""
-    session = getattr(agent, "session", None) or {}
-    todos = session.get("plan_todos")
-    if not todos:
-        return 0
+_STATUS_ICON = {
+    "done": "+", "in_progress": ">", "pending": "-",
+    "blocked": "!", "cancelled": "x",
+}
 
+
+def format_state_text(
+    session: dict,
+    agent=None,
+) -> str:
+    """构建 state section 文本（task_summary + phase + plan_todos 前 3 条）。
+
+    ContextManager._get_state() 与 count_state_section() 共用此函数，
+    保证格式一致。
+    """
     parts: list[str] = []
+
     # task_summary
     mem = session.get("memory", {})
     working = mem.get("working", {})
     task_summary = (working.get("task_summary", "") or "").strip()
     if task_summary:
         parts.append(f"任务: {task_summary}")
+
     # L2 phase
-    l2_phase = (getattr(agent, "_l2_phase", "") or "").strip()
-    if l2_phase:
-        parts.append(f"阶段: {l2_phase}")
-    # plan_todos
+    if agent is not None:
+        l2_phase = (getattr(agent, "_l2_phase", "") or "").strip()
+        if l2_phase:
+            parts.append(f"阶段: {l2_phase}")
+
+    # plan_todos 前 3 条
+    todos = session.get("plan_todos", [])
     if todos:
         total = len(todos)
         done = sum(1 for t in todos if t.get("status") == "done")
         parts.append(f"进度: {done}/{total}")
-        status_icon = {
-            "done": "+", "in_progress": ">", "pending": "-",
-            "blocked": "!", "cancelled": "x",
-        }
         for t in todos[:3]:
-            icon = status_icon.get(t.get("status", ""), "?")
+            icon = _STATUS_ICON.get(t.get("status", ""), "?")
             content = (t.get("content", "") or "").strip()
             if content:
                 parts.append(f"  {icon} {content}")
 
-    if not parts:
+    return "\n".join(parts) if parts else ""
+
+
+def count_state_section(agent, budget: TokenBudget | Any) -> int:
+    """state 段 token 估算（与 _get_state() 共用 format_state_text）。"""
+    session = getattr(agent, "session", None) or {}
+    text = format_state_text(session, agent=agent)
+    if not text:
         return 0
-    text = "\n".join(parts)
     return _count_text(budget, text)
 
 

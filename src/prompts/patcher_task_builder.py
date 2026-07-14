@@ -21,6 +21,20 @@ def build_issue_hints(plan: RepairPlan | None, issue: str) -> list[str]:
     return collect_patcher_user_hints(plan, issue)
 
 
+def _render_suspects_block(
+    suspects: list[SuspectLocation],
+    read_snippet: Callable[[str, int, int], str],
+    *,
+    diff_only: bool = False,
+    read_line_range: Callable[[str, int, int], str] | None = None,
+) -> str:
+    """渲染嫌疑位置块（diff-only 或完整 snippet 模式）。"""
+    if diff_only and read_line_range is not None:
+        return render_suspects_diff_only(suspects, read_line_range)
+    block, _ = render_suspects_with_snippets(suspects, read_snippet)
+    return block
+
+
 def assemble_patcher_variables(
     *,
     suspects: list[SuspectLocation],
@@ -55,12 +69,10 @@ def assemble_patcher_variables(
 
         suspects_block = prefix_blocks.suspects_block
         if not suspects_block:
-            if diff_only and read_line_range is not None:
-                suspects_block = render_suspects_diff_only(
-                    effective_suspects, read_line_range
-                )
-            else:
-                suspects_block, _ = render_suspects_with_snippets(effective_suspects, read_snippet)
+            suspects_block = _render_suspects_block(
+                effective_suspects, read_snippet,
+                diff_only=diff_only, read_line_range=read_line_range,
+            )
 
         test_text = prefix_blocks.test_blocks
         if not test_text:
@@ -79,10 +91,10 @@ def assemble_patcher_variables(
         effective_suspects = suspects or (
             fallback_suspects(plan, issue) if plan else []
         )
-        if diff_only and read_line_range is not None:
-            suspects_block = render_suspects_diff_only(effective_suspects, read_line_range)
-        else:
-            suspects_block, _ = render_suspects_with_snippets(effective_suspects, read_snippet)
+        suspects_block = _render_suspects_block(
+            effective_suspects, read_snippet,
+            diff_only=diff_only, read_line_range=read_line_range,
+        )
         test_blocks = read_test_context(context, effective_suspects, plan)
         test_text = ""
         if test_blocks:
