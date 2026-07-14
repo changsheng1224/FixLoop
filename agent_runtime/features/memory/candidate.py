@@ -8,7 +8,6 @@ LLM 路径：light_client 仅填 kind/confidence 规划字段，禁止自由建 
 from __future__ import annotations
 
 import re
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -124,13 +123,16 @@ def extract_from_stack(traceback_text: str) -> list[Candidate]:
         ))
 
     # 提取堆栈中的代码片段
+    import hashlib
+
     body_matches = _STACK_BODY_RE.findall(traceback_text)
     for snippet in body_matches[:2]:
         snippet = snippet.strip()
         if len(snippet) > 10 and not snippet.startswith("..."):
+            sid = hashlib.sha256(snippet.encode()).hexdigest()[:8]
             result.append(Candidate(
                 topic="project-conventions",
-                key=f"stack_snippet:{hash(snippet) & 0xFFFF:04x}",
+                key=f"stack_snippet:{sid}",
                 value=f"堆栈代码: {snippet[:150]}",
                 kind="observation",
                 confidence=0.6,
@@ -333,10 +335,8 @@ def promote_candidates(
             c = llm_fill_candidate(c, light_client)
 
         # 读取同 topic 已有条目
-        from pathlib import Path
-
-        topic_file = store.topics_dir / f"{c.topic}.md"
-        existing = store._read_topic(topic_file)
+        strategy = store._topic_strategy(c.topic)
+        existing = store._read_topic(c.topic, strategy=strategy)
 
         gate = gate_candidate(c, existing, authority=authority)
         if not gate.allowed:

@@ -130,8 +130,8 @@ class UserProfileStore:
         """列出全部偏好（含时间衰减）。"""
         return self._store.get_preferences()
 
-    def remove(self, key: str) -> bool:
-        """移除一个偏好条目（设为空值即标记删除）。"""
+    def invalidate(self, key: str) -> bool:
+        """标记删除一个偏好条目（soft delete: 置空 + confidence=0 由衰减过滤）。"""
         pref = self.get(key)
         if pref is None:
             return False
@@ -139,6 +139,9 @@ class UserProfileStore:
         pref.confidence = 0.0
         self._store.upsert_preference(pref)
         return True
+
+    # backward-compat alias
+    remove = invalidate
 
 
 DECAY_RATE = 0.95  # 每天衰减 5%（模块级常量）
@@ -607,9 +610,10 @@ def _resolve_conflict(existing: str, new: str, new_authority: str = "auto") -> C
 
 def _apply_time_decay(prefs: list[UserPreference]) -> list[UserPreference]:
     """对偏好条目应用时间衰减（与 apply_confidence_decay 共用公式）。"""
+    now = time.time()
     result = []
     for p in prefs:
-        decayed, valid = apply_confidence_decay(p.confidence, p.updated_at)
+        decayed, valid = apply_confidence_decay(p.confidence, p.updated_at, now=now)
         p.confidence = decayed
         if valid:
             result.append(p)

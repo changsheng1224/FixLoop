@@ -16,7 +16,7 @@ MAX_DURABLE_ENTRIES_PER_TOPIC = 20
 
 
 # 与 episodic.PROMOTE_THRESHOLD 同源（统一配置面）
-from agent_runtime.features.memory.episodic import PROMOTE_THRESHOLD as _PROMOTE_THRESHOLD, AUTO_PROMOTE as _AUTO_PROMOTE
+from agent_runtime.features.memory.episodic import PROMOTE_THRESHOLD as _PROMOTE_THRESHOLD
 PROMOTE_SUGGEST_HIT_MIN = _PROMOTE_THRESHOLD  # kind=decision 且 retrieve_count≥N 时建议晋升
 
 
