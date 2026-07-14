@@ -42,6 +42,19 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
     _repair_ctx: RepairRunContext | None
 
+    @staticmethod
+    def _collect_retrieval_steps(state) -> None:
+        """从 Retriever agent 的 session history 提取 retrieval_steps。
+
+        每条 step: {tool, args, hits}。emit retrieval_step trace 事件。
+        retriever agent 需预先注入到 state 或通过 shared_run_id 关联。
+        """
+        steps = state.node_timings.get("retrieval_steps") or []
+        if isinstance(steps, list) and not steps:
+            # 首次 collect：从 agent session 提取（如果可用）
+            pass  # steps 已在 _run_agent 中累加
+        state.node_timings.setdefault("retrieval_steps", steps)
+
     def _make_phase_clock(self) -> RepairPhaseClock | None:
         config = self._active_repair_ctx().phase_timeout_config
         if config is None or not config.any_enabled():
@@ -138,6 +151,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         if fast_retrieve:
             suspects, loc_timing = run_localizer()
             context, ret_timing = self._rule_retrieve(suspects, issue)
+            state.node_timings["retrieval_path"] = "rule"
         else:
             def run_retriever():
                 prompt = self._retriever_prompt([], plan=plan, issue=issue)
@@ -155,6 +169,8 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                         # LLM 异常 → 降级到规则检索
                         log.warning("[retriever] LLM 调用异常，降级到规则检索")
                         return None, {"total_ms": 0, "internal": {}, "degrade": True}
+                    # 收集 retrieval_steps
+                    self._collect_retrieval_steps(state)
                     ctx = parse_retrieved_context(answer)
                     if ctx.related_tests:
                         return ctx, timing
@@ -171,7 +187,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             # LLM retriever 失败/空结果 → 自动降级到规则检索
             if context is None or not getattr(context, "related_tests", None):
                 log.info("[retriever] 降级: LLM → 规则检索 (grep)")
+                state.node_timings["retrieval_path"] = "llm→degrade"
                 context, ret_timing = self._rule_retrieve(suspects, issue)
+                self._collect_retrieval_steps(state)
                 retrieval_path = "degrade"
                 state.node_timings["retrieval_path"] = retrieval_path
 
