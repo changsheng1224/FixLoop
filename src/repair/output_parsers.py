@@ -11,20 +11,50 @@ from src.repair.patch_applier import extract_json_block
 from src.state import RetrievedContext, SuspectLocation, VerificationResult
 
 
+def _repair_trailing_comma(text: str) -> str:
+    """轻量修复 trailing comma: 移除 },] 前的多余逗号。"""
+    # },] → }]
+    text = re.sub(r",\s*(\}|\])", r"\1", text)
+    # ,\n] → \n]
+    text = re.sub(r",(\s*\])", r"\1", text)
+    return text
+
+
+def _strip_json_comments(text: str) -> str:
+    """移除 // 和 /* */ 注释（轻量实现，不处理字符串内注释）。"""
+    # 移除 // 行注释
+    text = re.sub(r"//[^\n]*", "", text)
+    # 移除 /* */ 块注释
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    return text
+
+
 def _load_json(text: str) -> Any | None:
-    """三级降级解析：strict JSON → regex extract → None。"""
+    """四级降级解析：strict JSON → repair trailing comma → regex extract → None。"""
     # L1: strict JSON（含 markdown code block 提取）
     try:
         return json.loads(extract_json_block(text))
     except Exception:
         pass
-    # L2: regex 提取第一个 {...} 块
+
+    # L1.5: 修复 trailing comma + 注释 + retry
+    try:
+        repaired = _repair_trailing_comma(text)
+        repaired = _strip_json_comments(repaired)
+        return json.loads(extract_json_block(repaired))
+    except Exception:
+        pass
+
+    # L2: regex 提取第一个 {...} 块 + 修复
     try:
         match = re.search(r"\{(?:[^{}]|\{[^{}]*\})*\}", text, re.DOTALL)
         if match:
-            return json.loads(match.group())
+            raw = match.group()
+            raw = _repair_trailing_comma(raw)
+            return json.loads(raw)
     except Exception:
         pass
+
     # L3: 空结构
     return None
 
