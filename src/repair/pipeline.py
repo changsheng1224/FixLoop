@@ -589,6 +589,39 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                         state.retry_count += 1
                         continue
 
+                    # ── AST 语义等价检查（V1.5-Bonus9）──
+                    semantic_drift = False
+                    for patch in state.candidate_patches:
+                        try:
+                            from src.tools.ast_parser import check_semantic_equivalence
+
+                            result = check_semantic_equivalence(
+                                patch.original_lines, patch.patched_lines,
+                            )
+                            if result["status"] == "drift":
+                                state.agent_errors["semantic_drift"] = result["detail"]
+                                semantic_drift = True
+                                tracer = ctx.repair_tracer
+                                if tracer:
+                                    tracer.emit("orchestrator", "semantic_check", {
+                                        "status": "drift",
+                                        "detail": result["detail"],
+                                        "file": patch.file_path,
+                                    })
+                                log.warning("[semantic] drift: %s → %s",
+                                             patch.file_path, result["detail"])
+                                break
+                        except Exception:
+                            pass
+
+                    if semantic_drift:
+                        state.feedback = (
+                            f"AST 语义漂移检测拒绝补丁: {state.agent_errors['semantic_drift']}。"
+                            "补丁不得删除或新增函数/类定义。"
+                        )
+                        state.retry_count += 1
+                        continue
+
                     log.info("Verifier 开始...")
                     if self._abort_repair_if_cancelled(state):
                         cancelled = True
