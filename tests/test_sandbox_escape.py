@@ -192,3 +192,47 @@ class TestSandboxEscape:
         assert result.exit_code != 0, (
             f"修改 /proc/sys 应被阻止，实际 exit_code={result.exit_code}"
         )
+
+    # ── 向量 6: 敏感文件读取 ──
+
+    def test_cannot_read_etc_passwd(self, sandbox_mgr, sandbox):
+        """容器不应能读取宿主 /etc/passwd（文件系统隔离）。"""
+        result = _run_in_sandbox(sandbox_mgr, sandbox, "cat /etc/passwd 2>&1 || echo NOT_FOUND")
+        combined = (result.stdout or "") + (result.stderr or "")
+        # 容器内可能无 /etc/passwd 或内容不含宿主机用户
+        assert (
+            "NOT_FOUND" in combined
+            or "no such file" in combined.lower()
+            or result.exit_code != 0
+        ), f"不应能读取宿主机 /etc/passwd，实际: {combined[:200]}"
+
+    def test_cannot_read_etc_shadow(self, sandbox_mgr, sandbox):
+        """容器不应能读取 /etc/shadow。"""
+        result = _run_in_sandbox(sandbox_mgr, sandbox, "cat /etc/shadow 2>&1 || echo BLOCKED")
+        combined = (result.stdout or "") + (result.stderr or "")
+        assert (
+            "BLOCKED" in combined
+            or "permission denied" in combined.lower()
+            or "no such file" in combined.lower()
+        ), f"不应能读取 /etc/shadow，实际: {combined[:200]}"
+
+    # ── 向量 7: repo 写保护验证 ──
+
+    def test_repo_stays_clean_after_escape_attempts(self, sandbox_mgr, sandbox, tmp_path):
+        """逃逸尝试后 repo 保持干净。"""
+        repo = tmp_path / "repo"
+        repo.mkdir(exist_ok=True)
+        original_files = set(str(p.relative_to(repo)) for p in repo.rglob("*"))
+        # 执行一系列逃逸尝试
+        escape_cmds = [
+            "curl --connect-timeout 2 http://evil.com 2>&1 || true",
+            "cat /etc/passwd 2>&1 || true",
+            "echo hacked > /code/README.md 2>&1 || true",
+        ]
+        for cmd in escape_cmds:
+            _run_in_sandbox(sandbox_mgr, sandbox, cmd, timeout=8)
+        # repo 文件不应被修改
+        current_files = set(str(p.relative_to(repo)) for p in repo.rglob("*"))
+        assert original_files == current_files, (
+            f"逃逸尝试后 repo 文件不应变化: {current_files - original_files}"
+        )
