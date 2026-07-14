@@ -42,6 +42,20 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
     _repair_ctx: RepairRunContext | None
 
+    def _prune_agents_for_issue(self, plan) -> None:
+        """根据 issue_type 动态裁剪 Agent。
+
+        简单问题类型（import_error/syntax_error）仅需 Localizer + Patcher，
+        跳过 Retriever 以节省 token 和 latency。
+        """
+        from src.repair_factory import AgentProfile
+
+        profile = AgentProfile.for_issue_type(plan.issue_type if plan else "")
+        if not profile.with_retriever:
+            self.retriever = None
+            plan.prompt_variants = plan.prompt_variants or {}
+            plan.prompt_variants["agent_pruning"] = "skip_retriever"
+
     def _make_phase_clock(self) -> RepairPhaseClock | None:
         config = self._active_repair_ctx().phase_timeout_config
         if config is None or not config.any_enabled():
@@ -219,6 +233,8 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             else:
                 t0 = time.time()
                 state.repair_plan = self._parse_issue(issue)
+                # 动态 Agent 裁剪：简单问题类型跳过 Retriever
+                self._prune_agents_for_issue(state.repair_plan)
                 parse_ms = int((time.time() - t0) * 1000)
                 if state.repair_plan and state.repair_plan.language != "python":
                     log.warning(
