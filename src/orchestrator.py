@@ -23,6 +23,7 @@ from src.repair.output_parsers import (
 from src.repair.patch_applier import PatchApplier, apply_patch_to_text, parse_patches
 from src.repair.pipeline import RepairPipelineMixin
 from src.repair.prompt_router import (
+    ROUTED_ISSUE_TYPES,
     apply_prompt_routing,
     classify_exception,
     fallback_suspect_uses_import_line,
