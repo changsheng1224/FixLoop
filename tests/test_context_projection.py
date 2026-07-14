@@ -90,8 +90,8 @@ class TestBuildContextSections:
         assert ctx["system"] == meta["sections"]["system"] + meta["sections"]["workspace"]
 
 
-    def test_discarded_stable_section_counts_zero(self, agent, monkeypatch):
-        """stable 段被丢弃时 impl sections 记 0，投影不 marker 回退高估。"""
+    def test_oversized_stable_section_is_fitted_not_discarded(self, agent, monkeypatch):
+        """stable 段超 cap 时裁剪而非丢弃（Section 硬顶 enforce）。"""
         cm = ContextManager(agent)
         huge_tools = "tool " * 5000
 
@@ -100,9 +100,10 @@ class TestBuildContextSections:
 
         monkeypatch.setattr(cm, "_get_tools", fake_get_tools)
         _, meta = cm.build("hello")
-        assert meta["sections"].get("tools", -1) == 0
-        assert meta["context_sections"]["tools"] == 0
-        assert any("丢弃 tools" in c for c in meta["cuts"])
+        # stable section 被裁剪到 cap 以内（不再丢弃为 0）
+        tools_tokens = meta["sections"].get("tools", 0)
+        assert tools_tokens > 0, "stable section should be fitted, not discarded"
+        assert any("裁剪 tools" in c for c in meta["cuts"])
 
 
 class TestAttachContextProjection:

@@ -404,6 +404,110 @@ class TestFitPriorityMatrix:
         assert len(cuts) >= 0  # 松断言：压缩管线可能保留压缩后的内容
 
 
+class TestSectionHardCapEnforce:
+    """Section 硬顶 enforce：每段独立 BUDGET_* 裁剪，不只依赖 TOTAL。"""
+
+    def _make_filler(self, budget, metadata, section_cap=10000):
+        from agent_runtime.context_manager import TokenBudget, scaled_section_budget
+        from agent_runtime.section_filler import SectionFiller
+
+        return SectionFiller(
+            budget=budget,
+            metadata=metadata,
+            section_cap=section_cap,
+            total_limit=section_cap,
+            scaled_budget=scaled_section_budget,
+        )
+
+    def test_section_budget_fits_when_total_has_room(self):
+        """TOTAL 充足但 section 自身超 BUDGET_* 时仍被裁剪。"""
+        from agent_runtime.context_manager import TokenBudget
+
+        budget = TokenBudget(model="gpt-4", total_limit=6000, provider="openai")
+        meta: dict = {"sections": {}, "cuts": []}
+        filler = self._make_filler(budget, meta, section_cap=5000)
+
+        # memory budget=800，但文本 2000 tokens → 应被裁剪到 800
+        long_memory = "memory content " * 400  # ~2000 tokens
+        filler.add_section("memory", long_memory, section_budget=800)
+        assert meta["sections"]["memory"] <= 800
+        assert any("section 预算" in c for c in meta["cuts"])
+
+    def test_total_budget_cut_distinct_from_section_cut(self):
+        """section 预算裁剪与总预算裁剪的 cut message 区分。"""
+        from agent_runtime.context_manager import TokenBudget
+
+        budget = TokenBudget(model="gpt-4", total_limit=6000, provider="openai")
+        meta: dict = {"sections": {}, "cuts": []}
+
+        # 极小 section_cap → 触发总预算裁剪
+        filler = self._make_filler(budget, meta, section_cap=200)
+        long_text = "x " * 500
+        filler.add_section("history", long_text, section_budget=2600)
+        assert meta["sections"]["history"] <= 200
+        assert any("总预算剩余" in c for c in meta["cuts"])
+
+    def test_stable_section_fitted_not_discarded(self):
+        """stable section 超 cap 时裁剪而非整段丢弃。"""
+        from agent_runtime.context_manager import TokenBudget, scaled_section_budget
+
+        budget = TokenBudget(model="gpt-4", total_limit=6000, provider="openai")
+        meta: dict = {"sections": {}, "cuts": []}
+
+        from agent_runtime.section_filler import SectionFiller
+
+        filler = SectionFiller(
+            budget=budget,
+            metadata=meta,
+            section_cap=5000,
+            total_limit=6000,
+            scaled_budget=scaled_section_budget,
+        )
+        # tools cap ≈ 900，但文本 5000 tokens → 应裁剪而非丢弃
+        huge_tools = "tool " * 1000
+        filler.add_stable_section("tools", huge_tools, section_limit=900)
+        assert meta["sections"]["tools"] > 0, "stable section should be fitted, not discarded"
+        assert any("裁剪 tools" in c for c in meta["cuts"])
+
+    def test_stable_section_still_discarded_when_no_remaining(self):
+        """stable section 在总预算完全耗尽时仍被丢弃。"""
+        from agent_runtime.context_manager import TokenBudget, scaled_section_budget
+
+        budget = TokenBudget(model="gpt-4", total_limit=6000, provider="openai")
+        meta: dict = {"sections": {}, "cuts": []}
+
+        from agent_runtime.section_filler import SectionFiller
+
+        filler = SectionFiller(
+            budget=budget,
+            metadata=meta,
+            section_cap=100,  # 极小 cap
+            total_limit=100,
+            scaled_budget=scaled_section_budget,
+        )
+        # 先填满总预算
+        filler.add_section("memory", "x " * 200, section_budget=800)
+        # 再加 stable section — 剩余为 0，应丢弃
+        filler.add_stable_section("tools", "tool " * 500, section_limit=900)
+        assert meta["sections"].get("tools", 0) == 0
+        assert any("丢弃 tools" in c for c in meta["cuts"])
+
+    def test_section_skipped_when_no_remaining(self):
+        """总预算耗尽后 section 被跳过。"""
+        from agent_runtime.context_manager import TokenBudget
+
+        budget = TokenBudget(model="gpt-4", total_limit=6000, provider="openai")
+        meta: dict = {"sections": {}, "cuts": []}
+        filler = self._make_filler(budget, meta, section_cap=50)
+
+        # 先填满
+        filler.add_section("memory", "xxx " * 50, section_budget=100)
+        # 再加 → 跳过
+        filler.add_section("history", "more content " * 50, section_budget=500)
+        assert meta["sections"].get("history", -1) == 0
+        assert any("跳过 history" in c for c in meta["cuts"])
+
+
 # ---------------------------------------------------------------------------
 # history 只读 JSONL（V1.5-Bonus2）：build 优先读 JSONL，不写回
 # ---------------------------------------------------------------------------
