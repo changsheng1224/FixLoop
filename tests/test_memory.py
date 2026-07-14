@@ -149,3 +149,99 @@ class TestNormalizeMemory:
             set_file_summary(s, f"f{i}.py", f"summary {i}")
         s = normalize_memory_state(s, str(temp_workspace))
         assert len(s["file_summaries"]) <= MAX_FILE_SUMMARIES
+
+
+# ---------------------------------------------------------------------------
+# episodic kind 权重（V1.5-Bonus3）
+# ---------------------------------------------------------------------------
+
+
+class TestKindWeights:
+    """KIND_WEIGHTS 权重：error(2.0) > decision(1.5) > observation(1.0)。"""
+
+    def test_weights_defined(self):
+        from agent_runtime.features.memory.episodic import KIND_WEIGHTS
+
+        assert KIND_WEIGHTS["error"] == 2.0
+        assert KIND_WEIGHTS["decision"] == 1.5
+        assert KIND_WEIGHTS["observation"] == 1.0
+
+    def test_error_ranks_higher_than_observation(self):
+        """同相似度时 error 权重最高。"""
+        assert 2.0 > 1.0
+        assert 2.0 > 1.5
+
+    def test_decision_ranks_between(self):
+        """decision 权重在 error 和 observation 之间。"""
+        assert 2.0 > 1.5 > 1.0
+
+
+class TestKindWeightRetrieval:
+    """retrieval_candidates 应用 kind 权重排序。"""
+
+    def test_decision_before_observation_same_score(self):
+        """同相似度时 decision 排 observation 前。"""
+        from agent_runtime.features.memory.episodic import retrieval_candidates
+        from agent_runtime.features.memory.core import default_memory_state
+
+        state = default_memory_state()
+        state["episodic_notes"] = [
+            {"text": "obs note", "tags": ["test"], "kind": "observation",
+             "created_at": 1000, "note_index": 1, "retrieve_count": 0},
+            {"text": "decision note", "tags": ["test"], "kind": "decision",
+             "created_at": 1000, "note_index": 2, "retrieve_count": 0},
+        ]
+        results = retrieval_candidates(state, "test", limit=2)
+        assert len(results) == 2
+        # decision 权重 1.5 > observation 1.0 → decision 排前
+        assert results[0]["kind"] == "decision"
+        assert results[1]["kind"] == "observation"
+
+    def test_error_before_decision_same_score(self):
+        """同相似度时 error 排 decision 前。"""
+        from agent_runtime.features.memory.episodic import retrieval_candidates
+        from agent_runtime.features.memory.core import default_memory_state
+
+        state = default_memory_state()
+        state["episodic_notes"] = [
+            {"text": "decision note", "tags": ["test"], "kind": "decision",
+             "created_at": 1000, "note_index": 1, "retrieve_count": 0},
+            {"text": "error note", "tags": ["test"], "kind": "error",
+             "created_at": 1000, "note_index": 2, "retrieve_count": 0},
+        ]
+        results = retrieval_candidates(state, "test", limit=2)
+        assert results[0]["kind"] == "error"
+        assert results[1]["kind"] == "decision"
+
+    def test_higher_base_score_overrides_kind(self):
+        """高基准分 observation 可超越低基准分 decision。"""
+        from agent_runtime.features.memory.episodic import retrieval_candidates
+        from agent_runtime.features.memory.core import default_memory_state
+
+        state = default_memory_state()
+        state["episodic_notes"] = [
+            {"text": "decision low", "tags": ["low"], "kind": "decision",
+             "created_at": 1000, "note_index": 1, "retrieve_count": 0},
+            {"text": "obs high score", "tags": ["high", "high", "high"],
+             "kind": "observation",
+             "created_at": 1000, "note_index": 2, "retrieve_count": 0},
+        ]
+        # "high" query → obs matches 3 tags (score=9) vs decision 1 tag (score=3*1.5=4.5)
+        # obs 基准分更高 → 排前
+        results = retrieval_candidates(state, "high", limit=2)
+        assert results[0]["kind"] == "observation"
+
+    def test_kind_weight_in_score_field(self):
+        """返回结果的 score 字段已含 kind 权重。"""
+        from agent_runtime.features.memory.episodic import retrieval_candidates
+        from agent_runtime.features.memory.core import default_memory_state
+
+        state = default_memory_state()
+        state["episodic_notes"] = [
+            {"text": "note", "tags": ["test"], "kind": "error",
+             "created_at": 1000, "note_index": 1, "retrieve_count": 0},
+        ]
+        results = retrieval_candidates(state, "test", limit=1)
+        assert "score" in results[0]
+        # tag match 3 + tag-in-query 2 = 5 × error weight 2.0 = 10.0
+        assert results[0]["score"] == 10.0

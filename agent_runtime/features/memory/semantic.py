@@ -313,19 +313,34 @@ def derive_embed_query(user_message: str, task_summary: str = "") -> str:
 
 
 def retrieval_candidates_semantic(state: dict, query: str, limit: int = 3) -> list[dict]:
-    """合并 keyword 与 semantic 检索结果并去重。"""
-    from agent_runtime.features.memory.episodic import retrieval_candidates
+    """合并 keyword 与 semantic 检索结果，按 kind 权重排序后去重。
+
+    kind 权重顺序: error(2.0) > decision(1.5) > observation(1.0)。
+    同相似度时 error/decision 排前。
+    """
+    from agent_runtime.features.memory.episodic import KIND_WEIGHTS, retrieval_candidates
 
     kw_results = retrieval_candidates(state, query, limit)
     sem = SemanticMemory()
     for note in state.get("episodic_notes", [])[-20:]:
         sem.add(note)
     sem_results = sem.search(query, limit)
-    seen = set()
-    merged = []
+
+    # 给 semantic 结果也应用 kind 权重
+    for r in sem_results:
+        kind = r.get("kind", "observation")
+        base_score = r.get("score", 0.0)
+        r["score"] = round(base_score * KIND_WEIGHTS.get(kind, 1.0), 3)
+
+    # 合并 + 去重
+    seen: set[int] = set()
+    merged: list[dict] = []
     for note in kw_results + sem_results:
         idx = note.get("note_index")
         if idx is not None and idx not in seen:
             seen.add(idx)
             merged.append(note)
+
+    # 按 score 降序重排（kind 权重已在各自路径应用）
+    merged.sort(key=lambda n: n.get("score", 0.0), reverse=True)
     return merged[:limit]
