@@ -906,6 +906,86 @@ class TestNativeContextBuilt:
         payload = ctx_events[0][1]
         assert "total_tokens" in payload or "context_sections" in payload
 
+    def test_native_long_history_triggers_compression(self, config, workspace):
+        """Native 路径：长 history 触发压缩管线 metadata / compression_triggered。"""
+        from agent_runtime.agent_loop import AgentLoop
+        from agent_runtime.providers.clients import FakeNativeToolClient
+
+        # 极小 budget → 压缩阈值降低，少量 history 即可触发
+        config.prompt_budget = 2000
+        # Native path 每轮调一次 complete()，多给几个输出
+        agent = Agent(
+            config=config,
+            model_client=FakeNativeToolClient(
+                outputs=["<final>done</final>"] * 5
+            ),
+            workspace=workspace,
+            cwd=str(workspace.repo_root),
+        )
+        # 注入足够长的 history
+        for i in range(30):
+            agent.record({"role": "user", "content": f"question {i} " + "detail " * 20})
+            agent.record({"role": "tool", "content": f"result {i}: " + "x" * 200})
+
+        loop = AgentLoop(agent)
+        events = []
+
+        def capture(name, data=None):
+            events.append((name, data))
+
+        loop._emit = capture
+        answer = loop.run("test native compression")
+        assert "done" in answer
+
+        # 验证压缩事件被 emit
+        compression_events = [e for e in events if e[0] == "compression_triggered"]
+        assert len(compression_events) >= 1, (
+            f"expected compression_triggered events, got events: {[e[0] for e in events]}"
+        )
+
+    def test_native_and_xml_share_compression_pipeline(self, config, workspace):
+        """Native 与 XML 路径共用同一压缩管线入口 run_compression_pipeline。"""
+        from agent_runtime.agent_loop import AgentLoop
+        from agent_runtime.providers.clients import FakeNativeToolClient
+
+        cfg = AgentConfig(provider="fake", max_steps=3, max_new_tokens=256, prompt_budget=2000)
+
+        # === Native 路径 ===
+        agent_native = Agent(
+            config=cfg,
+            model_client=FakeNativeToolClient(outputs=["<final>native done</final>"] * 5),
+            workspace=workspace,
+            cwd=str(workspace.repo_root),
+        )
+        for i in range(30):
+            agent_native.record({"role": "user", "content": f"q {i} " + "pad " * 15})
+            agent_native.record({"role": "tool", "content": f"r {i}: " + "y" * 200})
+
+        loop_native = AgentLoop(agent_native)
+        native_events = []
+        loop_native._emit = lambda n, d=None: native_events.append((n, d))
+        loop_native.run("native compression test")
+
+        # === XML 路径 ===
+        agent_xml = _make_agent(
+            ["<final>xml done</final>"] * 3,
+            cfg, workspace,
+        )
+        for i in range(30):
+            agent_xml.record({"role": "user", "content": f"q {i} " + "pad " * 15})
+            agent_xml.record({"role": "tool", "content": f"r {i}: " + "y" * 200})
+
+        loop_xml = AgentLoop(agent_xml)
+        xml_events = []
+        loop_xml._emit = lambda n, d=None: xml_events.append((n, d))
+        loop_xml.run("xml compression test")
+
+        # 两条路径都应触发 compression_triggered
+        native_comp = [e for e in native_events if e[0] == "compression_triggered"]
+        xml_comp = [e for e in xml_events if e[0] == "compression_triggered"]
+        assert len(native_comp) >= 1, "Native path should emit compression_triggered"
+        assert len(xml_comp) >= 1, "XML path should emit compression_triggered"
+
 
 class TestStreamingCancel:
     def test_cancel_during_stream_stops_early(self):
