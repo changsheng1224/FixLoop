@@ -95,8 +95,26 @@ class UserPreference:
 
 
 DECAY_RATE = 0.95  # 每天衰减 5%（模块级常量）
+CONFIDENCE_FLOOR = 0.1  # 置信度低于此阈值不参与召回
 CHUNK_THRESHOLD_BYTES = 32768  # 32KB — topic 文件超此阈值拆分为 chunked 存储
 CHUNK_ENTRIES_PER_FILE = 15    # 每个 chunk 文件最大条目数
+
+
+def apply_confidence_decay(confidence: float, updated_at: float, *, now: float | None = None) -> tuple[float, bool]:
+    """按时间衰减置信度。返回 (衰减后 confidence, 是否仍有效)。
+
+    formula: confidence *= DECAY_RATE ** days_since_update
+    返回值低于 CONFIDENCE_FLOOR 则 expired=True。
+    """
+    if now is None:
+        import time as _time
+        now = _time.time()
+    days = (now - updated_at) / 86400
+    if days <= 1:
+        return confidence, True
+    decayed = round(confidence * (DECAY_RATE ** days), 3)
+    valid = decayed >= CONFIDENCE_FLOOR
+    return decayed, valid
 
 
 class DurableMemoryStore:
@@ -538,14 +556,12 @@ def _resolve_conflict(existing: str, new: str, new_authority: str = "auto") -> C
 
 
 def _apply_time_decay(prefs: list[UserPreference]) -> list[UserPreference]:
-    """对偏好条目应用时间衰减；低于阈值 0.1 的不再参与召回。"""
-    now = time.time()
+    """对偏好条目应用时间衰减（与 apply_confidence_decay 共用公式）。"""
     result = []
     for p in prefs:
-        days = (now - p.updated_at) / 86400
-        if days > 1:
-            p.confidence = round(p.confidence * (DECAY_RATE ** days), 3)
-        if p.confidence >= 0.1:
+        decayed, valid = apply_confidence_decay(p.confidence, p.updated_at)
+        p.confidence = decayed
+        if valid:
             result.append(p)
     return result
 

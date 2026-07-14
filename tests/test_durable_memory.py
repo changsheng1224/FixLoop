@@ -1,6 +1,7 @@
 """Durable Memory 单测：读写 Markdown 文件、promote、过滤。"""
 
 import tempfile
+import time
 
 import pytest
 
@@ -452,6 +453,104 @@ class TestVersionChain:
         assert len(result) == 2
         # beta 是新条目，无版本标记
         assert "v2" not in result[1]
+
+
+# ---------------------------------------------------------------------------
+# 置信度时间衰减（V1.5-Bonus3）
+# ---------------------------------------------------------------------------
+
+
+class TestConfidenceDecay:
+    def test_apply_decay_formula(self):
+        """apply_confidence_decay: confidence *= DECAY_RATE ** days。"""
+        from agent_runtime.features.memory.durable import DECAY_RATE, apply_confidence_decay
+
+        # 10 天前 → 0.95^10 ≈ 0.599
+        old_time = 0  # epoch
+        now = 10 * 86400  # 10 days later
+        decayed, valid = apply_confidence_decay(1.0, old_time, now=now)
+        expected = round(1.0 * (DECAY_RATE ** 10), 3)
+        assert decayed == expected
+        assert valid is True
+
+    def test_recent_entry_not_decayed(self):
+        """1 天内不衰减。"""
+        from agent_runtime.features.memory.durable import apply_confidence_decay
+
+        decayed, valid = apply_confidence_decay(0.5, 1000, now=1000 + 3600)  # 1 hour
+        assert decayed == 0.5
+        assert valid is True
+
+    def test_old_entry_below_floor_expired(self):
+        """置信度衰减后低于 CONFIDENCE_FLOOR → expired。"""
+        from agent_runtime.features.memory.durable import apply_confidence_decay
+
+        # 低初始置信度 + 很久以前 → 衰减到低于 0.1
+        old_time = 0
+        now = 200 * 86400  # 200 days
+        decayed, valid = apply_confidence_decay(0.3, old_time, now=now)
+        assert decayed < 0.1
+        assert valid is False
+
+    def test_high_confidence_survives_long_time(self):
+        """高置信度条目久远但仍在阈值之上。"""
+        from agent_runtime.features.memory.durable import apply_confidence_decay
+
+        old_time = 0
+        now = 30 * 86400  # 30 days
+        decayed, valid = apply_confidence_decay(0.9, old_time, now=now)
+        assert valid is True  # 0.9 * 0.95^30 ≈ 0.193 > 0.1
+
+    def test_shared_formula_with_user_preference(self):
+        """apply_confidence_decay 与 _apply_time_decay 共用公式。"""
+        from agent_runtime.features.memory.durable import (
+            UserPreference,
+            _apply_time_decay,
+            apply_confidence_decay,
+        )
+
+        pref = UserPreference(key="test", value="v", confidence=0.8, updated_at=0)
+        result = _apply_time_decay([pref])
+        # 置信度已衰减
+        assert result[0].confidence <= 0.8
+
+
+class TestEpisodicDecayInDream:
+    """Dream._expire 对 episodic notes 应用时间衰减。"""
+
+    def test_old_low_confidence_note_filtered(self):
+        """旧 + 低置信度 → 被 Dream 过滤。"""
+        from agent_runtime.features.memory.dream import MemoryDreamer
+        from agent_runtime.features.memory.core import default_memory_state
+
+        state = default_memory_state()
+        old = 1000  # very old
+        state["episodic_notes"] = [
+            {"text": "old low conf", "note_index": 1, "created_at": old, "confidence": 0.3},
+            {"text": "fresh note", "note_index": 2, "created_at": 1e12, "confidence": 0.8},
+        ]
+        dreamer = MemoryDreamer(state)
+        # TTL=365 → 不过期，但衰减会过滤第一条
+        removed = dreamer._expire(ttl_days=365)
+        assert removed > 0
+        notes = state["episodic_notes"]
+        assert len(notes) == 1
+        assert notes[0]["text"] == "fresh note"
+
+    def test_no_confidence_field_not_decay_filtered(self):
+        """无 confidence 字段的笔记不受衰减过滤（仅受 TTL 控制）。"""
+        from agent_runtime.features.memory.dream import MemoryDreamer
+        from agent_runtime.features.memory.core import default_memory_state
+
+        state = default_memory_state()
+        recent = time.time()
+        state["episodic_notes"] = [
+            {"text": "recent no conf", "note_index": 1, "created_at": recent},
+        ]
+        dreamer = MemoryDreamer(state)
+        # TTL=-1 跳过 → 无 confidence 也不触发衰减 → 保留
+        dreamer._expire(ttl_days=-1)
+        assert len(state["episodic_notes"]) == 1
 
 
 class TestPromoteAuthority:

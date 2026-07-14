@@ -82,18 +82,36 @@ class MemoryDreamer:
         return removed
 
     def _expire(self, ttl_days: int) -> int:
-        """移除过期笔记（TTL 超过 ttl_days 天）。"""
-        if ttl_days <= 0:
-            return 0
-        cutoff = time.time() - ttl_days * 86400
+        """移除过期笔记（TTL 超限 + 置信度时间衰减过滤）。
+
+        置信度公式: confidence *= DECAY_RATE ** days_since_created
+        低于 CONFIDENCE_FLOOR 的笔记视为过期。
+        """
+        from agent_runtime.features.memory.durable import CONFIDENCE_FLOOR, apply_confidence_decay
+
+        ttl_cutoff = time.time() - ttl_days * 86400 if ttl_days > 0 else 0
         notes = self._state.get("episodic_notes", [])
-        kept = [
-            n for n in notes
-            if n.get("created_at", float("inf")) >= cutoff
-        ]
+        kept = []
+        decay_expired = 0
+        for n in notes:
+            created = n.get("created_at", float("inf"))
+            # TTL 过期
+            if ttl_days > 0 and created < ttl_cutoff:
+                continue
+            # 置信度时间衰减
+            if "confidence" in n:
+                decayed, valid = apply_confidence_decay(
+                    n["confidence"], created
+                )
+                n["confidence"] = decayed
+                if not valid:
+                    decay_expired += 1
+                    continue
+            kept.append(n)
+
         removed = len(notes) - len(kept)
         self._state["episodic_notes"] = kept
-        self.stats["expired"] = removed
+        self.stats["expired"] = removed + decay_expired
         return removed
 
     @staticmethod
