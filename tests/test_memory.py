@@ -245,3 +245,113 @@ class TestKindWeightRetrieval:
         assert "score" in results[0]
         # tag match 3 + tag-in-query 2 = 5 × error weight 2.0 = 10.0
         assert results[0]["score"] == 10.0
+
+
+# ---------------------------------------------------------------------------
+# episodic → durable promote（V1.5-Bonus3）
+# ---------------------------------------------------------------------------
+
+
+class TestAutoPromote:
+    """AUTO_PROMOTE 开关：默认 false 不写入 durable，true 时达到阈值自动晋升。"""
+
+    def test_auto_promote_default_false(self):
+        from agent_runtime.features.memory.episodic import AUTO_PROMOTE
+
+        assert AUTO_PROMOTE is False
+
+    def test_auto_promote_off_does_not_write(self, tmp_path):
+        """AUTO_PROMOTE=False 时只累加 retrieve_count，不写 durable。"""
+        from agent_runtime.features.memory.episodic import AUTO_PROMOTE, retrieval_candidates
+        from agent_runtime.features.memory.durable import DurableMemoryStore
+        from agent_runtime.features.memory.core import default_memory_state
+
+        assert AUTO_PROMOTE is False  # 确保默认关
+
+        store = DurableMemoryStore(str(tmp_path))
+        store.ensure_dirs()
+        state = default_memory_state()
+        state["episodic_notes"] = [{
+            "text": "use pytest for testing",
+            "tags": ["pytest", "testing"],
+            "kind": "decision",
+            "created_at": 1000,
+            "note_index": 1,
+            "retrieve_count": 0,
+        }]
+
+        # 多次检索触发 PROMOTE_THRESHOLD
+        for _ in range(5):
+            retrieval_candidates(state, "pytest", limit=3, durable_store=store)
+
+        # retrieve_count 累加了
+        assert state["episodic_notes"][0]["retrieve_count"] == 5
+        # 但 durable 没有写入（AUTO_PROMOTE=False）
+        entries = store._read_topic("key-decisions")
+        assert len(entries) == 0
+
+    def test_auto_promote_on_writes_to_durable(self, monkeypatch, tmp_path):
+        """AUTO_PROMOTE=True 时达到阈值自动写入 durable。"""
+        import agent_runtime.features.memory.episodic as ep_mod
+
+        monkeypatch.setattr(ep_mod, "AUTO_PROMOTE", True)
+
+        from agent_runtime.features.memory.episodic import retrieval_candidates
+        from agent_runtime.features.memory.durable import DurableMemoryStore
+        from agent_runtime.features.memory.core import default_memory_state
+
+        store = DurableMemoryStore(str(tmp_path))
+        store.ensure_dirs()
+        state = default_memory_state()
+        state["episodic_notes"] = [{
+            "text": "use ruff format for linting",
+            "tags": ["ruff", "linting"],
+            "kind": "decision",
+            "created_at": 1000,
+            "note_index": 1,
+            "retrieve_count": 0,
+        }]
+
+        for _ in range(3):
+            retrieval_candidates(state, "ruff", limit=3, durable_store=store)
+
+        # durable 写入了
+        entries = store._read_topic("key-decisions")
+        assert len(entries) >= 1
+        assert "ruff" in entries[0].lower()
+
+    def test_promote_threshold_shared_with_dream(self):
+        """episodic.PROMOTE_THRESHOLD 与 dream.PROMOTE_SUGGEST_HIT_MIN 同源。"""
+        from agent_runtime.features.memory.episodic import PROMOTE_THRESHOLD
+        from agent_runtime.features.memory.dream import PROMOTE_SUGGEST_HIT_MIN
+
+        assert PROMOTE_SUGGEST_HIT_MIN == PROMOTE_THRESHOLD
+
+    def test_retrieve_count_below_threshold_no_promote(self, monkeypatch, tmp_path):
+        """未达阈值不晋升。"""
+        import agent_runtime.features.memory.episodic as ep_mod
+
+        monkeypatch.setattr(ep_mod, "AUTO_PROMOTE", True)
+
+        from agent_runtime.features.memory.episodic import retrieval_candidates
+        from agent_runtime.features.memory.durable import DurableMemoryStore
+        from agent_runtime.features.memory.core import default_memory_state
+
+        store = DurableMemoryStore(str(tmp_path))
+        store.ensure_dirs()
+        state = default_memory_state()
+        state["episodic_notes"] = [{
+            "text": "decision below threshold",
+            "tags": ["test"],
+            "kind": "decision",
+            "created_at": 1000,
+            "note_index": 1,
+            "retrieve_count": 0,
+        }]
+
+        # 只检索 2 次（未达 PROMOTE_THRESHOLD=3）
+        for _ in range(2):
+            retrieval_candidates(state, "test", limit=3, durable_store=store)
+
+        entries = store._read_topic("key-decisions")
+        assert len(entries) == 0

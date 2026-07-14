@@ -4,8 +4,10 @@ import time
 
 from agent_runtime.features.memory.core import MAX_EPISODIC_NOTES
 
-# kind=decision 笔记被检索 >= PROMOTE_THRESHOLD 次时自动晋升到 durable memory
+# kind=decision 笔记被检索 >= PROMOTE_THRESHOLD 次时触发晋升逻辑
 PROMOTE_THRESHOLD = 3
+# 是否自动写入 durable（默认关闭，仅累计 retrieve_count + Dream 生成 hints）
+AUTO_PROMOTE = False
 # kind 分类权重：error > decision > observation
 KIND_WEIGHTS = {"error": 2.0, "decision": 1.5, "observation": 1.0}
 
@@ -50,8 +52,9 @@ def retrieval_candidates(
 ) -> list[dict]:
     """按关键词/tag 对 episodic notes 打分排序，返回 top-k。
 
-    kind=decision 笔记每次命中累加 retrieve_count；达到 PROMOTE_THRESHOLD
-    时自动晋升到 durable memory（需传入 durable_store）。
+    kind=decision 笔记每次命中累加 retrieve_count。
+    仅当 AUTO_PROMOTE=True 时，达到 PROMOTE_THRESHOLD 才自动写入 durable。
+    默认 AUTO_PROMOTE=False：仅累计计数，由 Dream._suggest_promotions 生成 hints。
     """
     query_lower = query.lower()
     query_tokens = set(query_lower.split())
@@ -78,10 +81,11 @@ def retrieval_candidates(
             age_hours = (now - note.get("created_at", now)) / 3600
             if age_hours < 1:
                 score += 1.0 * (1 - age_hours)
-            # 决策类笔记：累计检索次数，达到阈值自动晋升
+            # 决策类笔记：累计检索次数
             if note.get("kind") == "decision":
                 note["retrieve_count"] = note.get("retrieve_count", 0) + 1
-                if note["retrieve_count"] >= PROMOTE_THRESHOLD and durable_store is not None:
+                # 仅当 AUTO_PROMOTE=True 且达到阈值才写入 durable
+                if AUTO_PROMOTE and note["retrieve_count"] >= PROMOTE_THRESHOLD and durable_store is not None:
                     promotions.append(("key-decisions", f"Decision: {note['text']}"))
             scored.append((score, note))
     scored.sort(key=lambda x: x[0], reverse=True)
