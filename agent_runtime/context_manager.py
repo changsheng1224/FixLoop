@@ -95,7 +95,11 @@ class TokenBudget:
 
 
 class _DiskCache(dict):
-    """dict-like 磁盘缓存（key → .agent/summary_cache/<hash>.txt）。"""
+    """dict-like 磁盘缓存（key → .agent/summary_cache/<hash>.txt）。
+
+    内部用 content_hash 作为存储 key，外部透明使用原始 key。
+    写失败静默降级内存 dict。
+    """
 
     def __init__(self, cache_dir: Path):
         super().__init__()
@@ -114,14 +118,19 @@ class _DiskCache(dict):
     def _load(self):
         for p in self._dir.glob("*.txt"):
             try:
-                super().__setitem__(p.stem, p.read_text(encoding="utf-8"))
+                content = p.read_text(encoding="utf-8")
+                # 第一行是原始 key，其余是 value
+                lines = content.split("\n", 1)
+                if len(lines) == 2:
+                    super().__setitem__(lines[0], lines[1])
             except Exception:
                 pass
 
     def __setitem__(self, key, value):
         super().__setitem__(key, value)
         try:
-            self._path(key).write_text(str(value), encoding="utf-8")
+            # 文件格式：第一行原始 key，其余 value
+            self._path(key).write_text(f"{key}\n{value}", encoding="utf-8")
         except Exception:
             pass
 

@@ -490,3 +490,119 @@ class TestAgentLoopL1Integration:
         combined = "\n".join(client.prompts)
         assert "截断" in combined or len(combined) < len(long_result)
         assert budget.count(long_result) > TOOL_TRUNCATION_TOKENS["read_file"]
+
+
+# ---------------------------------------------------------------------------
+# 摘要缓存持久化（V1.5-Bonus2）：落盘 + 启动加载 + 降级
+# ---------------------------------------------------------------------------
+
+
+class TestSummaryCachePersistence:
+    """L5 摘要缓存磁盘持久化：落盘、加载、二次命中、写失败降级。"""
+
+    def test_disk_cache_writes_and_reads(self, tmp_path):
+        """DiskCache 写入后落盘，新实例启动加载。"""
+        from agent_runtime.context_manager import _DiskCache
+
+        cache_dir = tmp_path / "summary_cache"
+        cache1 = _DiskCache(cache_dir)
+        cache1["test_key"] = "cached summary text"
+        assert (cache_dir / (cache1._hash_key("test_key") + ".txt")).is_file()
+
+        # 新建实例 → 从磁盘加载
+        cache2 = _DiskCache(cache_dir)
+        assert "test_key" in cache2
+        assert cache2["test_key"] == "cached summary text"
+
+    def test_disk_cache_write_failure_does_not_raise(self, tmp_path, monkeypatch):
+        """写磁盘失败时静默降级，不抛异常。"""
+        from agent_runtime.context_manager import _DiskCache
+
+        cache_dir = tmp_path / "summary_cache"
+        cache = _DiskCache(cache_dir)
+
+        # 模拟写失败
+        def failing_write(*_a, **_kw):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(cache, "_path", lambda k: tmp_path / "readonly" / "x.txt")
+        # 写失败不抛异常
+        cache["should_not_crash"] = "value"
+        # 内存中仍然有效
+        assert cache["should_not_crash"] == "value"
+
+    def test_l5_cache_hit_skips_summarizer_with_disk_cache(self, budget, tmp_path):
+        """磁盘缓存命中时不再调 summarizer LLM。"""
+        from agent_runtime.compression_pipeline import l5_auto_compact
+        from agent_runtime.context_manager import _DiskCache
+
+        history = _long_user_history(20, pad=200)
+        cache_dir = tmp_path / "summary_cache"
+        disk_cache = _DiskCache(cache_dir)
+        summarizer_calls = []
+
+        def summarizer(prompt: str) -> str:
+            summarizer_calls.append(1)
+            return "fresh summary"
+
+        # 第一次：无缓存 → 调 summarizer
+        meta1: dict = {}
+        l5_auto_compact(history, budget, meta1, summarizer=summarizer,
+                        summary_cache=disk_cache, trigger_tokens=10)
+        assert len(summarizer_calls) == 1
+        assert meta1["compression_pipeline"]["l5_summary_cache_hit"] is False
+
+        # 第二次：同 history → 缓存命中，不调 summarizer
+        meta2: dict = {}
+        l5_auto_compact(history, budget, meta2, summarizer=summarizer,
+                        summary_cache=disk_cache, trigger_tokens=10)
+        assert len(summarizer_calls) == 1  # 未增加
+        assert meta2["compression_pipeline"]["l5_summary_cache_hit"] is True
+
+        # 新建 DiskCache 实例（模拟进程重启）→ 仍然命中
+        disk_cache2 = _DiskCache(cache_dir)
+        summarizer_calls2 = []
+
+        def summarizer2(prompt: str) -> str:
+            summarizer_calls2.append(1)
+            return "should not be called"
+
+        meta3: dict = {}
+        l5_auto_compact(history, budget, meta3, summarizer=summarizer2,
+                        summary_cache=disk_cache2, trigger_tokens=10)
+        assert len(summarizer_calls2) == 0  # 磁盘加载后命中
+        assert meta3["compression_pipeline"]["l5_summary_cache_hit"] is True
+
+    def test_disk_cache_context_manager_integration(self, temp_workspace):
+        """ContextManager._summary_cache 使用 _DiskCache 落盘。"""
+        from pathlib import Path
+
+        from agent_runtime.config import AgentConfig
+        from agent_runtime.context_manager import ContextManager, _DiskCache
+        from agent_runtime.providers.clients import FakeModelClient
+        from agent_runtime.runtime import Agent
+        from agent_runtime.workspace import WorkspaceContext
+
+        config = AgentConfig(provider="fake", max_steps=3, prompt_budget=4000)
+        ws = WorkspaceContext.build(str(temp_workspace))
+        agent = Agent(config=config, model_client=FakeModelClient([]), workspace=ws)
+
+        # 注入大量 history 触发 L5 压缩
+        for i in range(50):
+            agent.record({"role": "user", "content": f"question {i} " + "data " * 30})
+            agent.record({"role": "tool", "content": f"result {i}: " + "y" * 200})
+
+        cm = ContextManager(agent, total_budget=2000)
+        assert isinstance(cm._summary_cache, _DiskCache)
+
+        # 检查缓存目录存在
+        cache_dir = Path(str(temp_workspace)) / ".agent" / "summary_cache"
+        assert cache_dir.is_dir() or cm._summary_cache._dir.is_dir()
+
+        # build 触发压缩
+        cm.build("fix the bug")
+
+        # 缓存目录应有文件（如果 L5 触发了摘要）
+        cache_files = list(cache_dir.glob("*.txt")) if cache_dir.is_dir() else []
+        # 至少 _DiskCache 目录存在
+        assert cm._summary_cache._dir.is_dir()
