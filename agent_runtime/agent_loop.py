@@ -78,7 +78,7 @@ def _build_anthropic_tools(tools_registry: dict) -> list[dict]:
 class AgentLoop:
     """Agent 控制循环。管理对话回合，统计步数，产出 trace 工件。"""
 
-    def __init__(self, agent, max_steps: int | None = None):
+    def __init__(self, agent, max_steps: int | None = None, *, stream: bool = False):
         self.agent = agent
         self.max_steps = max_steps or agent.config.max_steps
         self.stop_reason = ""
@@ -86,6 +86,7 @@ class AgentLoop:
         self._store = None
         self._last_token_meta = {}
         self._retry_count = 0
+        self._stream_enabled = stream
         self._call_timings: list[ModelCallTiming] = []
         self._in_flight_tool = ""
         self._tier_counts: dict[str, int] = {}
@@ -584,7 +585,7 @@ class AgentLoop:
         ts.node_timings["prompt_build_ms"] += int((_time.time() - t0) * 1000)
         return prompt_text
 
-    def _xml_call_model(self, ts, prompt_text: str, *, step: int) -> tuple[str, float]:
+    def _xml_call_model(self, ts, prompt_text: str, *, step: int, callback=None) -> tuple[str, float]:
         ts.record_attempt()
         t1 = _time.time()
         self._emit(
@@ -595,14 +596,25 @@ class AgentLoop:
         cache_key = str(meta.get("prompt_cache_key", "") or "")
         for empty_try in range(self.MAX_EMPTY_RETRIES):
             try:
-                raw = self._invoke_model_call(
-                    lambda: self.agent.circuit_breaker.call(
-                        self.agent.model_client.complete,
-                        prompt_text,
-                        max_new_tokens=self.agent.config.max_new_tokens,
-                        prompt_cache_key=cache_key,
+                if self._stream_enabled and hasattr(self.agent.model_client, "complete_stream"):
+                    raw = self._invoke_model_call(
+                        lambda: self.agent.circuit_breaker.call(
+                            self.agent.model_client.complete_stream,
+                            prompt_text,
+                            max_new_tokens=self.agent.config.max_new_tokens,
+                            on_chunk=getattr(callback, "on_chunk", None) if callback else None,
+                            cancel_token=self._cancel_token,
+                        )
                     )
-                )
+                else:
+                    raw = self._invoke_model_call(
+                        lambda: self.agent.circuit_breaker.call(
+                            self.agent.model_client.complete,
+                            prompt_text,
+                            max_new_tokens=self.agent.config.max_new_tokens,
+                            prompt_cache_key=cache_key,
+                        )
+                    )
                 break  # 成功，退出重试循环
             except EmptyModelResponse:
                 self._empty_retries += 1
@@ -995,7 +1007,7 @@ class AgentLoop:
                 prompt_preview=prompt_text[:200], path="xml",
             )
             try:
-                raw, t1 = self._xml_call_model(ts, prompt_text, step=step)
+                raw, t1 = self._xml_call_model(ts, prompt_text, step=step, callback=callback)
             except CancelledError as e:
                 if e.answer:
                     return e.answer

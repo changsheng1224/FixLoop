@@ -22,12 +22,12 @@ def _ensure_ask_token(agent: Agent):
     return agent.cancel_token
 
 
-def _ask_with_repl_cancel(agent: Agent, user_message: str, callback=None) -> str:
+def _ask_with_repl_cancel(agent: Agent, user_message: str, callback=None, stream: bool = False) -> str:
     from agent_runtime.repl_cancel import repl_cancel_scope
 
     token = _ensure_ask_token(agent)
     with repl_cancel_scope(token):
-        return agent.ask(user_message, callback=callback)
+        return agent.ask(user_message, callback=callback, stream=stream)
 
 
 def _make_parser() -> argparse.ArgumentParser:
@@ -336,6 +336,7 @@ def _repl_mode(args) -> int:
                 agent,
                 user_input,
                 callback=CLIProgressCallback(),
+                stream=getattr(args, "stream", False),
             )
         except KeyboardInterrupt:
             print("\n再见！")

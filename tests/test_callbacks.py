@@ -415,3 +415,69 @@ class TestCallbackChain:
         assert tracker == []
         chain.on_pre_tool(1, "grep", {}, path="xml")
         assert tracker == ["pre_tool"]
+
+
+# ---------------------------------------------------------------------------
+# streaming REPL（V1.5-Bonus6）
+# ---------------------------------------------------------------------------
+
+
+class TestStreamingCallback:
+    def test_on_chunk_writes_to_stdout(self):
+        """on_chunk 输出 token 到 stdout。"""
+        from agent_runtime.callbacks import CLIProgressCallback
+
+        cb = CLIProgressCallback()
+        import io
+
+        # 捕获 stdout
+        buf = io.StringIO()
+        import sys
+
+        old_stdout = sys.stdout
+        sys.stdout = buf
+        try:
+            cb.on_chunk("hello ")
+            cb.on_chunk("world")
+        finally:
+            sys.stdout = old_stdout
+        assert "hello world" in buf.getvalue()
+
+    def test_agent_ask_accepts_stream_param(self):
+        """Agent.ask() 接受 stream 参数。"""
+        from agent_runtime.config import AgentConfig
+        from agent_runtime.providers.clients import FakeModelClient
+        from agent_runtime.runtime import Agent
+        from agent_runtime.workspace import WorkspaceContext
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = WorkspaceContext.build(tmp)
+            agent = Agent(
+                config=AgentConfig(provider="fake"),
+                model_client=FakeModelClient(["<final>ok</final>"]),
+                workspace=ws,
+            )
+            answer = agent.ask("test", stream=False)
+            assert "ok" in answer
+
+    def test_agent_loop_has_stream_flag(self):
+        """AgentLoop 接收 stream 参数。"""
+        from agent_runtime.agent_loop import AgentLoop
+        from agent_runtime.config import AgentConfig
+        from agent_runtime.providers.clients import FakeModelClient
+        from agent_runtime.runtime import Agent
+        from agent_runtime.workspace import WorkspaceContext
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = WorkspaceContext.build(tmp)
+            agent = Agent(
+                config=AgentConfig(provider="fake"),
+                model_client=FakeModelClient(["<final>stream test</final>"]),
+                workspace=ws,
+            )
+            loop = AgentLoop(agent, stream=True)
+            assert loop._stream_enabled is True
+            loop2 = AgentLoop(agent)
+            assert loop2._stream_enabled is False
