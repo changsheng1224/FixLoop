@@ -1,0 +1,10 @@
+{"query": "pytest", "relevant_topics": ["project-conventions"], "relevant_texts": ["use pytest for testing", "pytest fixture setup"]}
+{"query": "import", "relevant_topics": ["key-decisions", "dependency-facts"], "relevant_texts": ["ImportError fix for missing module", "missing __init__.py"]}
+{"query": "ruff", "relevant_topics": ["dependency-facts", "project-conventions"], "relevant_texts": ["ruff==0.5 required", "use ruff format for linting"]}
+{"query": "TypeError", "relevant_topics": ["key-decisions"], "relevant_texts": ["TypeError at calculator.py line 42", "int conversion fix for TypeError"]}
+{"query": "pytest over unittest", "relevant_topics": ["user-preferences"], "relevant_texts": ["prefer pytest over unittest for new tests", "use pytest fixtures"]}
+{"query": ".env", "relevant_topics": ["project-conventions", "key-decisions"], "relevant_texts": ["store secrets in .env file", "never commit .env to repo"]}
+{"query": "feature branch", "relevant_topics": ["project-conventions", "key-decisions"], "relevant_texts": ["feature branch workflow for all changes", "use squash merge for PRs"]}
+{"query": "pyproject.toml", "relevant_topics": ["dependency-facts", "project-conventions"], "relevant_texts": ["pyproject.toml settings for build", "configure black in pyproject.toml"]}
+{"query": "AttributeError", "relevant_topics": ["key-decisions"], "relevant_texts": ["AttributeError NoneType has no attribute", "add null check before accessing attribute"]}
+{"query": "format", "relevant_topics": ["project-conventions"], "relevant_texts": ["use ruff format for linting", "line length limit 120 chars"]}
