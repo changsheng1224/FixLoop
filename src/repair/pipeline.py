@@ -58,7 +58,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
     # ── Planner Agent ──
 
-    def _plan_with_llm(self, issue: str) -> "tuple | None":
+    def _plan_with_llm(self, issue: str) -> dict | None:
         """LLM 单次 JSON complete → RepairPlan dict，失败返回 None。
 
         只规划不调 tool；失败回落规则 _parse_issue。
@@ -74,7 +74,8 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         if client is None:
             return None
 
-        tracer = self._active_repair_ctx().repair_tracer if self._active_repair_ctx() else None
+        ctx = self._active_repair_ctx()
+        tracer = ctx.repair_tracer if ctx else None
         try:
             prompt = f"{PLANNER_PROMPT}\n\nIssue:\n{issue[:2000]}"
             raw = client.complete(prompt, max_new_tokens=512)
@@ -138,9 +139,10 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
     def _run_subtask_cycle(
         self, state, subtask, patches_by_subtask: dict
     ) -> list:
-        """执行单个子任务的 localize→patch→verify 子循环。
+        """执行单个子任务的 localize 子循环。
 
-        Blackboard key 前缀 subtask:{id}: 隔离各子任务的 suspects。
+        缩窄 suspect_files 后定位嫌疑位置。
+        后续 patch+verify 由主循环统一执行。
         """
         log.info("[subtask] 开始: %s (%s)", subtask.id, subtask.goal)
 
@@ -157,36 +159,23 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         original_files = list(plan.suspect_files)
         plan.suspect_files = list(subtask.suspect_files)
 
-        patches = []
         try:
-            # localize + retrieve
-            suspects, context, loc_timing, ret_timing = self._run_localize_and_retrieve(state)
+            suspects, context, loc_timing, _ = self._run_localize_and_retrieve(state)
             state.suspect_locations = suspects
             state.retrieved_context = context
             state.node_timings[f"subtask_{subtask.id}_loc_ms"] = loc_timing.get("total_ms", 0)
-
-            # patch
-            patch_result = self._run_patch_phase(state)
-            if patch_result:
-                patches = patch_result if isinstance(patch_result, list) else [patch_result]
-
-            # verify
-            if patches:
-                verify_result = self._run_verify_phase(state, patches)
-                state.verification_result = verify_result
-
         finally:
             plan.suspect_files = original_files
 
-        patches_by_subtask[subtask.id] = patches
+        patches_by_subtask[subtask.id] = state.suspect_locations
 
         if tracer:
             tracer.emit("orchestrator", "subtask_done", {
                 "subtask_id": subtask.id,
-                "patch_count": len(patches),
+                "suspect_count": len(state.suspect_locations),
             })
-        log.info("[subtask] 完成: %s, patches=%d", subtask.id, len(patches))
-        return patches
+        log.info("[subtask] 完成: %s, suspects=%d", subtask.id, len(state.suspect_locations))
+        return state.suspect_locations
 
     def _merge_subtask_patches(
         self, patches_by_subtask: dict, subtasks: list

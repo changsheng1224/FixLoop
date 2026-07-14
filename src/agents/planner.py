@@ -28,7 +28,6 @@ def create_planner(client, workspace, cwd: str = ""):
     Returns: agent instance 供 orchestrator 调用 plan_with_llm()。
     """
     from agent_runtime.config import AgentConfig
-    from agent_runtime.providers.clients import FakeModelClient
     from agent_runtime.runtime import Agent
 
     config = AgentConfig(
