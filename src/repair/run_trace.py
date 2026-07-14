@@ -100,6 +100,7 @@ class RepairRunTracer:
     def finalize(self, state, token_summary: dict) -> None:
         from src.eval.token_usage import summarize_agent_tool_usage
         from src.repair.agent_report_loader import load_agent_reports_from_run, project_token_usage_by_agent
+        from src.repair.context_waterfall import build_context_waterfall
         from src.repair.rejection_aggregate import (
             aggregate_rejection_from_agent_reports,
         )
@@ -129,6 +130,7 @@ class RepairRunTracer:
                 "count": len(state.blackboard_snapshot.get("conflicts", [])),
                 "items": state.blackboard_snapshot.get("conflicts", []),
             },
+            "context_waterfall": build_context_waterfall(reports),
             "token_usage_by_agent": by_agent,
             **tool_summary,
             **token_summary,
