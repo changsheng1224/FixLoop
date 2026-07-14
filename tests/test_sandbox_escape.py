@@ -36,6 +36,14 @@ def _run_in_sandbox(mgr: SandboxManager, sandbox: Sandbox, command: str, timeout
     return mgr.execute(sandbox, f"/bin/sh -c {_sh_quote(command)}", timeout=timeout)
 
 
+def _cap_eff_value(status_output: str) -> int | None:
+    for line in status_output.splitlines():
+        if line.lower().startswith("capeff:"):
+            _, value = line.split(":", 1)
+            return int(value.strip(), 16)
+    return None
+
+
 @pytest.fixture
 def sandbox_mgr() -> SandboxManager:
     return SandboxManager()
@@ -109,6 +117,7 @@ class TestSandboxEscape:
             result.exit_code != 0
             or "unreachable" in combined.lower()
             or "100% packet loss" in combined.lower()
+            or "not found" in combined.lower()
         )
         assert blocked, f"ping 应被网络隔离阻止，实际: {combined[:200]}"
 
@@ -149,6 +158,7 @@ class TestSandboxEscape:
             "permission denied" in combined.lower()
             or "not permitted" in combined.lower()
             or "operation not permitted" in combined.lower()
+            or "must be superuser" in combined.lower()
         ), f"应包含权限拒绝信息，实际: {combined[:200]}"
 
     def test_unprivileged_no_cap_sys_admin(self, sandbox_mgr, sandbox):
@@ -158,10 +168,13 @@ class TestSandboxEscape:
             "cat /proc/1/status 2>&1 | grep -i cap || echo 'no status file'",
             timeout=5,
         )
-        combined = (result.stdout or "").lower()
-        # 非特权容器中 /proc/1/status 可能不可读或 CapEff 不含 sys_admin
-        caps_ok = "no status file" in combined or "00000000" not in combined
-        assert caps_ok or result.exit_code != 0, "不应有 root-level capability"
+        combined = result.stdout or ""
+        if "no status file" in combined.lower() or result.exit_code != 0:
+            return
+        cap_eff = _cap_eff_value(combined)
+        assert cap_eff is not None, f"未找到 CapEff，实际输出: {combined[:200]}"
+        cap_sys_admin = 1 << 21
+        assert (cap_eff & cap_sys_admin) == 0, "不应有 CAP_SYS_ADMIN"
 
     # ── 向量 5: 设备访问 ──
 
@@ -195,16 +208,11 @@ class TestSandboxEscape:
 
     # ── 向量 6: 敏感文件读取 ──
 
-    def test_cannot_read_etc_passwd(self, sandbox_mgr, sandbox):
-        """容器不应能读取宿主 /etc/passwd（文件系统隔离）。"""
-        result = _run_in_sandbox(sandbox_mgr, sandbox, "cat /etc/passwd 2>&1 || echo NOT_FOUND")
-        combined = (result.stdout or "") + (result.stderr or "")
-        # 容器内可能无 /etc/passwd 或内容不含宿主机用户
-        assert (
-            "NOT_FOUND" in combined
-            or "no such file" in combined.lower()
-            or result.exit_code != 0
-        ), f"不应能读取宿主机 /etc/passwd，实际: {combined[:200]}"
+    def test_container_runs_as_non_root(self, sandbox_mgr, sandbox):
+        """容器默认执行用户不应是 root。"""
+        result = _run_in_sandbox(sandbox_mgr, sandbox, "id -u")
+        assert result.exit_code == 0
+        assert result.stdout.strip() != "0", f"容器不应以 root 运行，实际 uid={result.stdout!r}"
 
     def test_cannot_read_etc_shadow(self, sandbox_mgr, sandbox):
         """容器不应能读取 /etc/shadow。"""

@@ -113,6 +113,15 @@ class TestNoPrivilege:
         kwargs = sandbox_container_run_kwargs("python:3.12-slim")
         assert kwargs.get("privileged") is False
 
+    def test_kwargs_runs_as_non_root(self):
+        kwargs = sandbox_container_run_kwargs("python:3.12-slim")
+        assert kwargs.get("user") == "65534:65534"
+
+    def test_kwargs_drops_capabilities(self):
+        kwargs = sandbox_container_run_kwargs("python:3.12-slim")
+        assert kwargs.get("cap_drop") == ["ALL"]
+        assert kwargs.get("security_opt") == ["no-new-privileges:true"]
+
     def test_kwargs_no_docker_sock(self):
         kwargs = sandbox_container_run_kwargs("python:3.12-slim")
         volumes = kwargs.get("volumes", {}) or {}
