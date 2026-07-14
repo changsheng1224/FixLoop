@@ -1,5 +1,5 @@
 --- a/Calculator.java
 +++ b/Calculator.java
-@@ -3,2 +3,2 @@
--    int value = "42";
-+    int value = Integer.parseInt("42");
+@@ -4,3 +4,3 @@ public class Calculator {
+-    return input.toString();
++    return input != null ? input.toString() : "0";

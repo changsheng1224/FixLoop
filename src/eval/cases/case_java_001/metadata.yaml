@@ -1,14 +1,8 @@
 case_id: case_java_001
-language: java
-issue_type: type_error
-expected_skill: java_type_error_fix
+description: Java 最小 Case — NullPointerException 空值检查
 difficulty: easy
-status: verified
-description: "Java 类型不匹配: int = String"
+issue_type: type_error
+language: java
 tags:
-  - java
-  - type_error
-source_files:
-  - Calculator.java
-test_files:
-  - CalculatorTest.java
+- java
+- type_error

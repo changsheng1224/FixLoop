@@ -1,6 +1,5 @@
 public class Calculator {
-    public int getValue() {
-        int value = "42";
-        return value;
+    public String format(Object input) {
+        return input.toString();
     }
 }
