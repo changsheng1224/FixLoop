@@ -68,6 +68,7 @@ class TestIntegrationFullPipeline:
     def test_max_steps_limit(self, config, workspace):
         """模拟：超过 max_steps 后强制终止。"""
         config.max_steps = 2
+        config.loop_detect_threshold = 0
         agent = Agent(
             config=config,
             model_client=FakeModelClient(

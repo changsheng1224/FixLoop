@@ -5,6 +5,7 @@ import pytest
 from agent_runtime.context_manager import TokenBudget, fit_prompt_to_budget, fit_repair_user_prompt
 from agent_runtime.tokenizer_registry import lookup_token_rule
 from agent_runtime.tokenizers import (
+    TiktokenCounter,
     clear_token_counter_cache,
     resolve_deepseek_tokenizer_id,
     resolve_token_counter,
@@ -21,6 +22,10 @@ def _clear_counter_cache():
     clear_token_counter_cache()
     yield
     clear_token_counter_cache()
+
+
+def _is_tiktoken_backend(backend: str) -> bool:
+    return backend.startswith("tiktoken:") or backend.startswith("tiktoken-local:")
 
 
 class TestTokenizerRegistry:
@@ -52,13 +57,38 @@ class TestTokenizerRegistry:
 
 
 class TestResolveTokenCounter:
+    def test_cl100k_uses_packaged_asset_without_tiktoken_download(self, monkeypatch):
+        import tiktoken
+
+        def fail_get_encoding(*args, **kwargs):
+            raise RuntimeError("network access should not be used")
+
+        monkeypatch.setattr(tiktoken, "get_encoding", fail_get_encoding)
+        counter = TiktokenCounter(encoding_name="cl100k_base")
+
+        assert counter.backend == "tiktoken-local:cl100k_base"
+        assert counter.count("Hello world") == 2
+
+    def test_gpt_model_uses_packaged_cl100k_without_tiktoken_download(self, monkeypatch):
+        import tiktoken
+
+        def fail_download_path(*args, **kwargs):
+            raise RuntimeError("network access should not be used")
+
+        monkeypatch.setattr(tiktoken, "encoding_for_model", fail_download_path)
+        monkeypatch.setattr(tiktoken, "get_encoding", fail_download_path)
+        counter = TiktokenCounter(model="gpt-4")
+
+        assert counter.backend == "tiktoken-local:cl100k_base"
+        assert counter.count("Hello world") == 2
+
     def test_deepseek_default_uses_huggingface(self):
         counter = resolve_token_counter("deepseek-v4-pro", "deepseek")
         assert "huggingface" in counter.backend
 
     def test_openai_uses_tiktoken(self):
         counter = resolve_token_counter("gpt-4", "openai")
-        assert counter.backend.startswith("tiktoken:")
+        assert _is_tiktoken_backend(counter.backend)
 
     def test_unknown_provider_with_deepseek_model_uses_huggingface(self):
         counter = resolve_token_counter("deepseek-v4-pro", "fake")
@@ -66,7 +96,22 @@ class TestResolveTokenCounter:
 
     def test_unknown_provider_and_model_falls_back_to_tiktoken(self):
         counter = resolve_token_counter("some-model", "fake")
-        assert counter.backend.startswith("tiktoken:")
+        assert _is_tiktoken_backend(counter.backend)
+
+    def test_tiktoken_load_failure_uses_offline_approximation(self, monkeypatch):
+        import tiktoken
+        import agent_runtime.tokenizers as tokenizers_mod
+
+        def fail_load(*args, **kwargs):
+            raise RuntimeError("network unavailable")
+
+        monkeypatch.setattr(tokenizers_mod, "load_local_tiktoken_encoding", lambda _name: None)
+        monkeypatch.setattr(tiktoken, "get_encoding", fail_load)
+        counter = resolve_token_counter("gpt-4o", "openai")
+
+        assert _is_tiktoken_backend(counter.backend)
+        assert "approx" in counter.backend
+        assert counter.count("你好 hello") > 0
 
     def test_unknown_model_sets_fallback_spec(self):
         spec = resolve_tokenizer_spec("some-model", "fake")
@@ -144,7 +189,7 @@ class TestTokenBudgetIntegration:
     def test_fit_prompt_unknown_model_records_fallback(self):
         _, _, meta = fit_prompt_to_budget("sys", "user", model="unknown-x", provider="fake")
         assert meta["tokenizer_fallback"] is True
-        assert meta["tokenizer_backend"].startswith("tiktoken:")
+        assert _is_tiktoken_backend(meta["tokenizer_backend"])
 
 
 class TestFitRepairUserPrompt:
@@ -160,4 +205,4 @@ class TestFitRepairUserPrompt:
         fitted, meta = fit_repair_user_prompt(agent, "word " * 5000)
         assert meta.get("request_preserved") is True
         assert len(fitted) == len("word " * 5000)
-        assert meta["tokenizer_backend"].startswith("tiktoken:")
+        assert _is_tiktoken_backend(meta["tokenizer_backend"])

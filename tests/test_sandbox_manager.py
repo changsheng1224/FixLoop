@@ -1,7 +1,11 @@
 """SandboxManager + PatchApplier + TestRunner 单测（Mock docker）。"""
 
+import base64
+import io
 import json
+import tarfile
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -42,6 +46,33 @@ class FakeManager:
         return ExecResult(exit_code=0, stdout="ok", stderr="")
 
 
+class FakeUploadSocket:
+    """收集 Docker exec stdin 上传的数据。"""
+
+    def __init__(self):
+        self.data = bytearray()
+        self.closed = False
+
+    def sendall(self, data: bytes):
+        self.data.extend(data)
+
+    def settimeout(self, timeout):
+        self.timeout = timeout
+
+    def recv(self, size):
+        return b""
+
+    def close(self):
+        self.closed = True
+
+
+def _successful_upload_results(sock: FakeUploadSocket):
+    return [
+        SimpleNamespace(output=sock),
+        SimpleNamespace(exit_code=0, output=b""),
+    ]
+
+
 class TestSandboxManager:
     def test_create_returns_sandbox(self):
         mgr = SandboxManager()
@@ -61,9 +92,18 @@ class TestSandboxManager:
         assert set(kwargs["tmpfs"]) == {"/tmp", "/code"}
         assert kwargs["network_mode"] == "none"
 
+    def test_container_run_kwargs_uses_non_root_without_capabilities(self):
+        kwargs = sandbox_container_run_kwargs("repair-agent/python-repair")
+        assert kwargs["user"] == "65534:65534"
+        assert kwargs["cap_drop"] == ["ALL"]
+        assert kwargs["security_opt"] == ["no-new-privileges:true"]
+        assert kwargs["environment"]["HOME"] == "/tmp/fixloop-home"
+        assert kwargs["environment"]["PYTHONUSERBASE"] == "/tmp/fixloop-userbase"
+
     def test_pip_install_command_uses_user_site(self):
         cmd = sandbox_pip_install_command()
         assert "pip install --user -e /code" in cmd
+        assert "mkdir -p /tmp/fixloop-home /tmp/fixloop-userbase" in cmd
 
     def test_create_passes_fs_isolation_to_docker(self, tmp_path):
         repo = tmp_path / "proj"
@@ -72,6 +112,8 @@ class TestSandboxManager:
 
         fake_container = MagicMock()
         fake_container.id = "container-abc"
+        fake_sock = FakeUploadSocket()
+        fake_container.exec_run.side_effect = _successful_upload_results(fake_sock)
         captured: dict = {}
 
         def fake_run(**kwargs):
@@ -88,9 +130,37 @@ class TestSandboxManager:
         assert captured["read_only"] is True
         assert "/code" in captured["tmpfs"]
         assert "/tmp" in captured["tmpfs"]
-        fake_container.put_archive.assert_called_once()
+        fake_container.put_archive.assert_not_called()
+        upload_call = fake_container.exec_run.call_args_list[0]
+        assert upload_call.kwargs == {"stdin": True, "socket": True, "tty": True}
+        assert "base64 -d | tar -C /code -xf -" in upload_call.args[0][2]
+        assert fake_sock.data.endswith(b"\x04")
+        assert fake_sock.closed
         assert sandbox.timings["tar_file_count"] == 1
         assert sandbox.timings["tar_bytes"] > 0
+
+    def test_create_uploads_repo_contents_into_code_tmpfs(self, tmp_path):
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "main.py").write_text("x = 1\n", encoding="utf-8")
+
+        fake_container = MagicMock()
+        fake_container.id = "container-code"
+        fake_sock = FakeUploadSocket()
+        fake_container.exec_run.side_effect = _successful_upload_results(fake_sock)
+
+        mgr = SandboxManager()
+        mgr._docker = MagicMock()
+        mgr._docker.containers.run.return_value = fake_container
+
+        mgr.create(str(repo))
+
+        assert fake_sock.data.endswith(b"\x04")
+        tar_bytes = base64.decodebytes(bytes(fake_sock.data[:-1]))
+        with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:") as tar:
+            names = {m.name for m in tar.getmembers()}
+        assert "main.py" in names
+        assert "code/main.py" not in names
 
     def test_create_skips_docker_when_tar_too_large(self, tmp_path):
         (tmp_path / "huge.bin").write_bytes(b"x" * 500)
@@ -109,14 +179,14 @@ class TestSandboxManager:
 
         mgr._docker.containers.run.assert_not_called()
 
-    def test_create_kills_container_when_put_archive_fails(self, tmp_path):
+    def test_create_kills_container_when_exec_upload_fails(self, tmp_path):
         repo = tmp_path / "proj"
         repo.mkdir()
         (repo / "main.py").write_text("x = 1\n", encoding="utf-8")
 
         fake_container = MagicMock()
         fake_container.id = "container-fail"
-        fake_container.put_archive.side_effect = RuntimeError("upload failed")
+        fake_container.exec_run.side_effect = RuntimeError("upload failed")
 
         mgr = SandboxManager()
         mgr._docker = MagicMock()

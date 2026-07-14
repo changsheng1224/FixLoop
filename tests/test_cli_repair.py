@@ -105,6 +105,7 @@ class TestCliRepair:
     def test_repair_failed_returns_fail_exit(self, temp_workspace, monkeypatch, capsys):
         monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
         monkeypatch.chdir(temp_workspace)
+        captured = {}
 
         class _FailOrch:
             def repair(self, issue, **kwargs):
@@ -113,6 +114,8 @@ class TestCliRepair:
             verifier = None
 
         def _fake_factory(**kwargs):
+            captured.update(kwargs)
+
             def factory(repo):
                 return _FailOrch()
 
@@ -129,12 +132,16 @@ class TestCliRepair:
                 "TypeError at app.py:1",
                 "--repo",
                 str(temp_workspace),
-                "--skip-verify",
+                "--execution-tier",
+                "static",
+                "--require-sandbox",
             ],
         )
         from src.cli import main
 
         assert main() == REPAIR_EXIT_FAIL
+        assert captured["execution_tier"] == "static"
+        assert captured["require_sandbox"] is True
         assert "未完成" in capsys.readouterr().out
 
     def test_repair_timeout_returns_timeout_exit(self, temp_workspace, monkeypatch, capsys):

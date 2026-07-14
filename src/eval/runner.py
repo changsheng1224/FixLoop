@@ -21,6 +21,15 @@ from src.repair.termination import introduced_regression, regression_detected
 EVAL_DIFF_SKIP_DIRS = frozenset({".agent", ".pytest_cache", "__pycache__", ".git"})
 
 
+def _copy_case_repo(src: Path, dst: Path) -> None:
+    """Copy an eval case repo while skipping generated/cache directories."""
+    shutil.copytree(
+        src,
+        dst,
+        ignore=shutil.ignore_patterns(*EVAL_DIFF_SKIP_DIRS),
+    )
+
+
 def should_include_in_eval_diff(rel_path: str) -> bool:
     """评测 diff 只统计项目源码变更，排除 Agent/pytest 运行时产物。"""
     parts = Path(rel_path).parts
@@ -283,7 +292,7 @@ class EvalRunner:
 
         with tempfile.TemporaryDirectory(prefix=f"fixloop_eval_{case_id}_") as tmp:
             tmp_repo = Path(tmp) / "repo"
-            shutil.copytree(case_dir / "repo", tmp_repo)
+            _copy_case_repo(case_dir / "repo", tmp_repo)
 
             pre_code, pre_out = (0, "") if (is_fake and language != "python") else run_pytest(tmp_repo)
 
@@ -303,7 +312,7 @@ class EvalRunner:
             fixed = post_code == 0
 
             original_snapshot = Path(tmp) / "original"
-            shutil.copytree(case_dir / "repo", original_snapshot)
+            _copy_case_repo(case_dir / "repo", original_snapshot)
             actual_patch = collect_repo_diff(original_snapshot, tmp_repo)
             actual_lines = count_changed_lines(actual_patch)
 
@@ -392,7 +401,10 @@ def build_eval_report(results: list[CaseResult]) -> EvalReport:
 
 
 def _read_min_lines(case_dir: Path) -> int:
-    text = (case_dir / "min_lines.txt").read_text(encoding="utf-8").strip()
+    min_lines_path = case_dir / "min_lines.txt"
+    if not min_lines_path.is_file():
+        return 0
+    text = min_lines_path.read_text(encoding="utf-8").strip()
     if text.upper() == "TBD":
         return 0
     return int(text)

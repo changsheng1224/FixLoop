@@ -33,7 +33,12 @@ from src.repair.phase_clock import PhaseTimeoutConfig
 from src.repair.repo_snapshot import restore_repo_snapshot, snapshot_repo
 from src.repair.run_context import RepairRunContext
 from src.repair.language_detect import detect_repair_language
-from src.repair.verify import DockerVerifyStrategy, PytestVerifyStrategy, record_verify_timings
+from src.repair.verify import (
+    DockerVerifyStrategy,
+    PytestVerifyStrategy,
+    StaticVerifyStrategy,
+    record_verify_timings,
+)
 from src.prompts.loader import load_role_prompt
 from src.prompts.patcher_task_builder import assemble_patcher_variables
 from src.prompts.repair_tasks import (
@@ -101,6 +106,8 @@ class Orchestrator(RepairPipelineMixin):
         verifier=None,
         *,
         use_pytest_verify: bool = False,
+        require_sandbox: bool = False,
+        allow_static_verify_fallback: bool = False,
         l1_prompt_cache_key: str = "",
     ):
         self.localizer = localizer
@@ -108,6 +115,8 @@ class Orchestrator(RepairPipelineMixin):
         self.patcher = patcher
         self.verifier = verifier
         self.use_pytest_verify = use_pytest_verify
+        self.require_sandbox = require_sandbox
+        self.allow_static_verify_fallback = allow_static_verify_fallback
         self.l1_prompt_cache_key = l1_prompt_cache_key or self._resolve_l1_prompt_cache_key()
         self._repair_ctx: RepairRunContext | None = None
         self._log_run_id_token = None
@@ -452,7 +461,11 @@ class Orchestrator(RepairPipelineMixin):
         return classify_exception(exc_type)
 
     def _verification_enabled(self) -> bool:
-        return self.verifier is not None or self.use_pytest_verify
+        return (
+            self.verifier is not None
+            or self.use_pytest_verify
+            or self.allow_static_verify_fallback
+        )
 
     def _snapshot_repo(self) -> dict[str, str]:
         return snapshot_repo(self._repo_root)
@@ -868,9 +881,19 @@ class Orchestrator(RepairPipelineMixin):
             if run.error:
                 log.warning("[verifier] 沙箱验证失败: %s", run.error)
                 # Docker 不可用时自动降级到 host pytest
+                if run.error == "sandbox_unavailable" and self.require_sandbox:
+                    record_verify_timings(state, run)
+                    return run.result
                 if run.error == "sandbox_unavailable" and self.use_pytest_verify:
                     log.info("[verifier] 沙箱不可用，降级到宿主机 pytest（execution_tier=host）")
                     run = PytestVerifyStrategy().run(
+                        self._repo_root, cancel_token=cancel_token
+                    )
+                    record_verify_timings(state, run)
+                    return run.result
+                if run.error == "sandbox_unavailable" and self.allow_static_verify_fallback:
+                    log.info("[verifier] 沙箱不可用，降级到静态验证（execution_tier=static）")
+                    run = StaticVerifyStrategy().run(
                         self._repo_root, cancel_token=cancel_token
                     )
                     record_verify_timings(state, run)
@@ -879,6 +902,10 @@ class Orchestrator(RepairPipelineMixin):
             return run.result
         if self.use_pytest_verify:
             run = PytestVerifyStrategy().run(self._repo_root, cancel_token=cancel_token)
+            record_verify_timings(state, run)
+            return run.result
+        if self.allow_static_verify_fallback:
+            run = StaticVerifyStrategy().run(self._repo_root, cancel_token=cancel_token)
             record_verify_timings(state, run)
             return run.result
         return VerificationResult(all_passed=False, failure_logs=["verifier 未配置"])

@@ -6,6 +6,7 @@ from agent_runtime.prefix_stable import hash_stable_prefix
 from agent_runtime.providers.clients import FakeModelClient, FakeNativeToolClient
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.workspace import WorkspaceContext
+from agent_runtime.context_manager import TokenBudget
 from src.agents.factory import create_localizer, create_patcher, create_retriever, create_verifier
 from src.tools.composite import (
     REPAIR_CANONICAL_TOOL_NAMES,
@@ -95,7 +96,13 @@ class TestRepairNativePromptSplit:
 
         client = FakeNativeToolClient(["<final>done</final>"])
         ws = WorkspaceContext.build(str(temp_workspace))
-        agent = create_localizer(client, ws, cwd=str(temp_workspace))
+        agent = create_localizer(
+            client,
+            ws,
+            cwd=str(temp_workspace),
+            budget=TokenBudget(model="deepseek-v4-pro", provider="deepseek", total_limit=50_000),
+        )
+        agent.config.hard_cap = 100_000
         role_snippet = agent._prefix.role_text[:30]
         agent.ask("locate bug")
         first = client.prompts[0]

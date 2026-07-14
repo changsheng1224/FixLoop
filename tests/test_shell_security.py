@@ -30,7 +30,7 @@ class TestRunShell:
     def test_timeout_kills_long_command(self, ctx):
         # 在 Windows 上 timeout 对 shell 命令不总是生效
         # 使用一个极短的 timeout 测试
-        result = tool_run_shell(ctx, {"command": "sleep 10", "timeout": 1})
+        result = tool_run_shell(ctx, {"command": 'python -c "import time; time.sleep(10)"', "timeout": 1})
         assert "超时" in result or "exit_code" in result
 
     def test_missing_command(self, ctx):

@@ -56,19 +56,21 @@ class TestAblationRunnerFake:
                 output_dir=tmp,
             )
             report = runner.run(case_ids=["case_001", "case_002"], repetitions=2)
-            assert set(report["summary_by_variant"].keys()) == {"full", "single", "no_retriever"}
+            assert set(report["summary_by_variant"].keys()) == {
+                "full", "single", "no_retriever", "naive",
+            }
             assert report["summary_by_variant"]["full"]["total"] == 4
             assert report["summary_by_variant"]["full"]["fixed"] == 4
-            assert len(report["runs"]) == 12
+            assert len(report["runs"]) == 16
 
             out = Path(tmp) / "ablation_report.json"
             assert out.is_file()
             data = json.loads(out.read_text(encoding="utf-8"))
             assert "summary_by_variant" in data
-            assert data["runs"][0]["variant"] in {"full", "single", "no_retriever"}
+            assert data["runs"][0]["variant"] in {"full", "single", "no_retriever", "naive"}
             assert data["meta"]["status"] == "completed"
-            assert data["meta"]["completed_runs"] == 12
+            assert data["meta"]["completed_runs"] == 16
 
             journal = Path(tmp) / "ablation_runs.jsonl"
             assert journal.is_file()
-            assert len(journal.read_text(encoding="utf-8").strip().splitlines()) == 12
+            assert len(journal.read_text(encoding="utf-8").strip().splitlines()) == 16

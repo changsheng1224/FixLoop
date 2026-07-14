@@ -31,9 +31,9 @@ class TestCliAblation:
         report_file = tmp_path / "ablation.json"
         assert report_file.is_file()
         data = json.loads(report_file.read_text(encoding="utf-8"))
-        assert set(data["summary_by_variant"].keys()) == {"full", "single", "no_retriever"}
+        assert set(data["summary_by_variant"].keys()) == {"full", "single", "no_retriever", "naive"}
         assert data["summary_by_variant"]["full"]["total"] == 1
-        assert len(data["runs"]) == 3
+        assert len(data["runs"]) == 4
         err = capsys.readouterr().err
         assert "[full]" in err
 

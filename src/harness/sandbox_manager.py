@@ -6,6 +6,8 @@
 """
 
 import os
+import base64
+import socket
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -35,6 +37,17 @@ EXEC_USER_CANCEL_EXIT_CODE = -2
 # 可写面仅 /code + /tmp（read_only rootfs + tmpfs）；大小可通过环境变量调节。
 DEFAULT_TMPFS_TMP = "size=512m"
 DEFAULT_TMPFS_CODE = "size=2g"
+DEFAULT_SANDBOX_USER = "65534:65534"
+SANDBOX_HOME = "/tmp/fixloop-home"
+SANDBOX_PYTHONUSERBASE = "/tmp/fixloop-userbase"
+SANDBOX_UPLOAD_DONE_MARKER = "/tmp/fixloop_upload_done"
+TTY_EOF = b"\x04"
+SANDBOX_TAR_UPLOAD_COMMAND = [
+    "/bin/sh",
+    "-c",
+    "stty -echo 2>/dev/null || true; "
+    f"base64 -d | tar -C /code -xf - && touch {SANDBOX_UPLOAD_DONE_MARKER}",
+]
 
 
 def sandbox_tmpfs_mounts() -> dict[str, str]:
@@ -48,15 +61,22 @@ def sandbox_tmpfs_mounts() -> dict[str, str]:
 def sandbox_container_run_kwargs(image: str) -> dict:
     """``containers.run`` 参数：网络/资源/只读 rootfs + 双 tmpfs。
 
-    Security: privileged=False，不挂载 docker.sock（禁止 Docker-in-Docker）。
+    Security: 非 root、cap_drop=ALL、no-new-privileges，不挂载 docker.sock。
     """
     return {
         "image": image,
         "command": ["sleep", "infinity"],
         "entrypoint": "",
+        "user": os.getenv("FIXLOOP_SANDBOX_USER", DEFAULT_SANDBOX_USER),
         "read_only": True,
         "privileged": False,
+        "cap_drop": ["ALL"],
+        "security_opt": ["no-new-privileges:true"],
         "tmpfs": sandbox_tmpfs_mounts(),
+        "environment": {
+            "HOME": SANDBOX_HOME,
+            "PYTHONUSERBASE": SANDBOX_PYTHONUSERBASE,
+        },
         "mem_limit": "4g",
         "cpu_quota": 200000,
         "network_mode": "none",
@@ -80,8 +100,86 @@ def assert_no_docker_sock(kwargs: dict) -> None:
 
 
 def sandbox_pip_install_command() -> str:
-    """pip 写入限定在 /code/.local（只读 rootfs 下不可写 /usr/local）。"""
-    return "/entrypoint.sh build pip install --user -e /code 2>&1 | tail -5"
+    """pip 写入限定在 /tmp userbase（只读 rootfs 下不可写 /usr/local）。"""
+    return (
+        f"mkdir -p {SANDBOX_HOME} {SANDBOX_PYTHONUSERBASE} && "
+        "/entrypoint.sh build pip install --user -e /code 2>&1 | tail -5"
+    )
+
+
+class _SocketWriter:
+    """将 file-like write() 桥接到 Docker exec socket.sendall()."""
+
+    def __init__(self, sock):
+        self._sock = sock
+
+    def write(self, data: bytes) -> int:
+        self._sock.sendall(data)
+        return len(data)
+
+
+def _exec_output_socket(result):
+    if isinstance(result, tuple):
+        return result[1]
+    return getattr(result, "output", result)
+
+
+def _exec_exit_code(result) -> int:
+    if isinstance(result, tuple):
+        return result[0] or 0
+    return getattr(result, "exit_code", 0) or 0
+
+
+def _drain_exec_socket(sock) -> None:
+    try:
+        sock.settimeout(10)
+    except Exception:
+        pass
+    while True:
+        try:
+            chunk = sock.recv(4096)
+        except (socket.timeout, TimeoutError) as exc:
+            raise RuntimeError("sandbox upload did not finish before socket timeout") from exc
+        except Exception:
+            break
+        if not chunk:
+            break
+
+
+def _close_exec_socket(sock) -> None:
+    try:
+        sock.close()
+    except Exception:
+        pass
+
+
+def _copy_tar_to_code_tmpfs(container, tar_stream) -> None:
+    """通过 exec stdin 将 tar 解包到 /code tmpfs。
+
+    Docker put_archive 会在 read_only rootfs 容器上拒绝写入，即便目标路径是
+    tmpfs；这里改为容器内 tar 从 stdin 解包，保持 rootfs 只读不变。
+    """
+    result = container.exec_run(
+        SANDBOX_TAR_UPLOAD_COMMAND,
+        stdin=True,
+        socket=True,
+        tty=True,
+    )
+    sock = _exec_output_socket(result)
+    try:
+        base64.encode(tar_stream, _SocketWriter(sock))
+        sock.sendall(TTY_EOF)
+        _drain_exec_socket(sock)
+    finally:
+        _close_exec_socket(sock)
+
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        marker = container.exec_run(["test", "-f", SANDBOX_UPLOAD_DONE_MARKER])
+        if _exec_exit_code(marker) == 0:
+            return
+        time.sleep(0.05)
+    raise RuntimeError("sandbox upload did not complete")
 
 
 @dataclass
@@ -147,6 +245,17 @@ class SandboxManager:
         """
         import time
 
+        repo = Path(repo_path).resolve()
+        image = self.IMAGE
+        timings: dict[str, int] = {}
+
+        t_pack = time.time()
+        tar_stream, stats = build_sandbox_tar(repo, ".")
+        timings["tar_pack_ms"] = int((time.time() - t_pack) * 1000)
+        timings["tar_bytes"] = stats.total_bytes
+        timings["tar_file_count"] = stats.file_count
+        timings["tar_max_bytes"] = stats.max_bytes
+
         acquired = _sandbox_semaphore.acquire(timeout=30)
         if not acquired:
             raise RuntimeError(
@@ -156,34 +265,26 @@ class SandboxManager:
         log.debug("sandbox semaphore acquired (%d/%d)",
                    _MAX_SANDBOXES - _sandbox_semaphore._value, _MAX_SANDBOXES)
 
-        repo = Path(repo_path).resolve()
-        image = self.IMAGE
-        timings: dict[str, int] = {}
-
-        t_pack = time.time()
-        tar_stream, stats = build_sandbox_tar(repo, "/code")
-        timings["tar_pack_ms"] = int((time.time() - t_pack) * 1000)
-        timings["tar_bytes"] = stats.total_bytes
-        timings["tar_file_count"] = stats.file_count
-        timings["tar_max_bytes"] = stats.max_bytes
-
+        container = None
         t0 = time.time()
-        # entrypoint.sh 启动时会 cd /code；镜像内尚无 /code 时容器会立刻退出，
-        # 导致 put_archive 报 RWLayer nil。保持容器存活用 bare sleep，exec 仍走 entrypoint。
-        container = self.docker.containers.run(**sandbox_container_run_kwargs(image))
-        timings["container_create_ms"] = int((time.time() - t0) * 1000)
-
-        t1 = time.time()
         try:
+            # entrypoint.sh 启动时会 cd /code；镜像内尚无 /code 时容器会立刻退出，
+            # 导致 put_archive 报 RWLayer nil。保持容器存活用 bare sleep，exec 仍走 entrypoint。
+            container = self.docker.containers.run(**sandbox_container_run_kwargs(image))
+            timings["container_create_ms"] = int((time.time() - t0) * 1000)
+
+            t1 = time.time()
             tar_stream.seek(0)
-            container.put_archive("/", tar_stream)
+            _copy_tar_to_code_tmpfs(container, tar_stream)
+            timings["tar_copy_ms"] = int((time.time() - t1) * 1000)
         except Exception:
-            try:
-                container.kill()
-            except Exception:
-                pass
+            if container is not None:
+                try:
+                    container.kill()
+                except Exception:
+                    pass
+            _sandbox_semaphore.release()
             raise
-        timings["tar_copy_ms"] = int((time.time() - t1) * 1000)
 
         sb = Sandbox(id=container.id, profile=profile, timings=timings, _semaphore_held=acquired)
         return sb
