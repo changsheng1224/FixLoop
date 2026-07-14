@@ -1005,6 +1005,8 @@ class Orchestrator(RepairPipelineMixin):
             read_test_context=self._read_test_context,
             fallback_suspects=self._fallback_suspects_from_plan,
             blackboard=blackboard,
+            diff_only=True,
+            read_line_range=self._read_line_range,
         )
         tracer = ctx.repair_tracer if ctx is not None else None
         if subscribe_meta and tracer is not None:
@@ -1032,6 +1034,18 @@ class Orchestrator(RepairPipelineMixin):
             block.append(f"    {marker} {lines[i]}")
         block.append("    ```")
         return "\n".join(block)
+
+    def _read_line_range(self, file_path: str, start_line: int, end_line: int) -> str:
+        """读取文件的原始行（无 markdown 包装），供 diff-only 上下文使用。"""
+        path = Path(file_path)
+        if not path.is_absolute():
+            path = Path(self._repo_root) / path
+        if not path.is_file():
+            return ""
+        lines = path.read_text(encoding="utf-8").split("\n")
+        ctx_start = max(0, start_line - 1)
+        ctx_end = min(len(lines), end_line)
+        return "\n".join(lines[ctx_start:ctx_end])
 
     def _read_test_context(
         self,

@@ -10,7 +10,7 @@ from src.repair.blackboard_merge import read_suspects_from_blackboard
 from src.repair.blackboard_subscribe import render_patcher_prefix_blocks
 from src.repair.prompt_router import collect_patcher_user_hints, is_composite_multi_file
 from src.repair.repair_context_blocks import build_repair_context_blocks
-from src.repair.suspect_blocks import render_suspects_with_snippets
+from src.repair.suspect_blocks import render_suspects_diff_only, render_suspects_with_snippets
 from src.skills.skill_block import SkillBlockRender, render_skill_hint_for_plan
 from src.state import RepairPlan, RetrievedContext, SuspectLocation
 
@@ -36,6 +36,8 @@ def assemble_patcher_variables(
     fallback_suspects: Callable[[RepairPlan, str], list[SuspectLocation]],
     skill_render: SkillBlockRender | None = None,
     blackboard: Blackboard | None = None,
+    diff_only: bool = False,
+    read_line_range: Callable[[str, int, int], str] | None = None,
 ) -> tuple[dict[str, str], SkillBlockRender, dict | None]:
     subscribe_meta: dict | None = None
     effective_suspects: list[SuspectLocation]
@@ -53,7 +55,12 @@ def assemble_patcher_variables(
 
         suspects_block = prefix_blocks.suspects_block
         if not suspects_block:
-            suspects_block, _ = render_suspects_with_snippets(effective_suspects, read_snippet)
+            if diff_only and read_line_range is not None:
+                suspects_block = render_suspects_diff_only(
+                    effective_suspects, read_line_range
+                )
+            else:
+                suspects_block, _ = render_suspects_with_snippets(effective_suspects, read_snippet)
 
         test_text = prefix_blocks.test_blocks
         if not test_text:
@@ -72,7 +79,10 @@ def assemble_patcher_variables(
         effective_suspects = suspects or (
             fallback_suspects(plan, issue) if plan else []
         )
-        suspects_block, _ = render_suspects_with_snippets(effective_suspects, read_snippet)
+        if diff_only and read_line_range is not None:
+            suspects_block = render_suspects_diff_only(effective_suspects, read_line_range)
+        else:
+            suspects_block, _ = render_suspects_with_snippets(effective_suspects, read_snippet)
         test_blocks = read_test_context(context, effective_suspects, plan)
         test_text = ""
         if test_blocks:
