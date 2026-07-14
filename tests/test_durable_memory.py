@@ -133,3 +133,98 @@ class TestRejectDurableReason:
 
     def test_accept_valid(self):
         assert reject_durable_reason("Preference: use pytest") == ""
+
+
+# ---------------------------------------------------------------------------
+# 路由表升级（V1.5-Bonus3）
+# ---------------------------------------------------------------------------
+
+
+class TestRoutingTable:
+    @pytest.fixture
+    def store(self, tmp_path):
+        (tmp_path / ".agent" / "memory" / "topics").mkdir(parents=True)
+        return DurableMemoryStore(str(tmp_path))
+
+    def test_index_writes_routing_table_format(self, store):
+        """MEMORY.md 含路由表列: | topic | entries | bytes | strategy |。"""
+        store.promote([("project-conventions", "use pytest")])
+        index = (store.memory_dir / "MEMORY.md").read_text(encoding="utf-8")
+        assert "| topic | entries | bytes | strategy |" in index
+        assert "| project-conventions " in index
+        assert "| inline |" in index
+
+    def test_load_routing_table_parses_correctly(self, store):
+        """_load_routing_table 正确解析 topic/entries/bytes/strategy。"""
+        store.promote([("key-decisions", "fix type error"), ("key-decisions", "add validation")])
+        routing = store._load_routing_table()
+        assert "key-decisions" in routing
+        assert routing["key-decisions"]["entries"] == 2
+        assert routing["key-decisions"]["strategy"] == "inline"
+        assert routing["key-decisions"]["bytes"] > 0
+
+    def test_small_topic_uses_inline_strategy(self, store):
+        """小 topic（<32KB）使用 inline 策略。"""
+        for i in range(5):
+            store.promote([("project-conventions", f"rule {i}: use standard format")])
+        assert store._topic_strategy("project-conventions") == "inline"
+        path = store._topic_path("project-conventions")
+        assert path.is_file()
+
+    def test_large_topic_splits_to_chunked(self, store):
+        """大 topic（>32KB）自动拆分为 chunked 存储。"""
+        # 写足够多的大条目触发 chunked（每条 ~1000 bytes）
+        entries = [(f"key-decisions", f"decision {i}: " + "y" * 1000) for i in range(60)]
+        store.promote(entries)
+        strategy = store._topic_strategy("key-decisions")
+        assert strategy == "chunked", (
+            f"expected chunked, file size={store._topic_path('key-decisions').stat().st_size if store._topic_path('key-decisions').is_file() else 'no file'}"
+        )
+        # chunk 目录存在
+        chunk_dir = store.topics_dir / "key-decisions"
+        assert chunk_dir.is_dir()
+        chunks = sorted(chunk_dir.glob("chunk-*.md"))
+        assert len(chunks) >= 2
+
+    def test_read_chunked_first_limits_chunks(self, store):
+        """_read_chunked_first 只读前 N chunk。"""
+        entries = [(f"key-decisions", f"decision {i}: " + "y" * 800) for i in range(80)]
+        store.promote(entries)
+        # 全部条目数
+        all_count = len(store._read_chunked("key-decisions"))
+        # 前 2 chunk 条目数 < 全部
+        first_count = len(store._read_chunked_first("key-decisions", max_chunks=2))
+        assert first_count < all_count
+        assert first_count > 0
+
+    def test_retrieval_uses_routing_table(self, store):
+        """retrieval 先读路由表再取内容。"""
+        store.promote([("project-conventions", "use ruff format for linting")])
+        results = store.retrieval("ruff")
+        assert len(results) >= 1
+        assert results[0]["topic"] == "project-conventions"
+        assert "ruff" in results[0]["text"]
+
+    def test_chunked_retrieval_reads_limited_chunks(self, store):
+        """chunked topic retrieval 只读前 2 chunk。"""
+        entries = [(f"dependency-facts", f"dep {i}: pytest==" + "z" * 200) for i in range(80)]
+        # 在其中加一个可检索条目
+        entries[3] = ("dependency-facts", "dep 3: pytest==7.0.0 findme_marker")
+        store.promote(entries)
+        results = store.retrieval("findme_marker")
+        assert len(results) >= 1
+        assert "findme_marker" in results[0]["text"]
+
+    def test_roundtrip_inline_to_chunked(self, store):
+        """inline → chunked 转换正确保留所有条目。"""
+        # 先写少量
+        store.promote([("key-decisions", f"small {i}") for i in range(3)])
+        inline_entries = store._read_topic("key-decisions")
+        assert len(inline_entries) == 3
+
+        # 再写到超过阈值 → chunked
+        big = [(f"key-decisions", f"big {i}: " + "x" * 800) for i in range(80)]
+        store.promote(big)
+        chunked_entries = store._read_topic("key-decisions", strategy="chunked")
+        # chunked 应包含原有 + 新条目
+        assert len(chunked_entries) > 3

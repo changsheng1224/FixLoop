@@ -72,10 +72,16 @@ class UserPreference:
 
 
 DECAY_RATE = 0.95  # 每天衰减 5%（模块级常量）
+CHUNK_THRESHOLD_BYTES = 32768  # 32KB — topic 文件超此阈值拆分为 chunked 存储
+CHUNK_ENTRIES_PER_FILE = 15    # 每个 chunk 文件最大条目数
 
 
 class DurableMemoryStore:
-    """跨会话 Markdown 持久记忆（.agent/memory/topics/）。"""
+    """跨会话 Markdown 持久记忆（.agent/memory/topics/）。
+
+    MEMORY.md 路由表：topic | entries | bytes | strategy(inline|chunked)。
+    小 topic → topics/{t}.md；大 topic → topics/{t}/chunk-{n}.md。
+    """
 
     def __init__(self, root: str):
         self.memory_dir = Path(root) / ".agent" / "memory"
@@ -98,11 +104,55 @@ class DurableMemoryStore:
             if not str(path.resolve()).startswith(self._topics_root):
                 raise MemoryPathError(str(path), detail="路径不在 topics_dir 内")
 
+    def _topic_path(self, topic: str, chunk: int | None = None) -> Path:
+        """返回 topic 文件路径。chunked 策略时指定 chunk 编号。"""
+        if chunk is not None:
+            chunk_dir = self.topics_dir / topic
+            return chunk_dir / f"chunk-{chunk}.md"
+        return self.topics_dir / f"{topic}.md"
+
+    def _topic_strategy(self, topic: str) -> str:
+        """判断 topic 存储策略：inline 或 chunked。"""
+        chunk_dir = self.topics_dir / topic
+        if chunk_dir.is_dir():
+            return "chunked"
+        path = self._topic_path(topic)
+        if not path.is_file():
+            return "inline"
+        return "chunked" if path.stat().st_size > CHUNK_THRESHOLD_BYTES else "inline"
+
+    def _load_routing_table(self) -> dict[str, dict]:
+        """从 MEMORY.md 解析路由表。返回 {topic: {entries, bytes, strategy}}。"""
+        index_path = self.memory_dir / "MEMORY.md"
+        routing: dict[str, dict] = {}
+        if not index_path.is_file():
+            return routing
+        in_table = False
+        for line in index_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("| topic") or line.startswith("|---"):
+                in_table = True
+                continue
+            if in_table and line.startswith("|"):
+                parts = [p.strip() for p in line.split("|") if p.strip()]
+                if len(parts) >= 4:
+                    try:
+                        routing[parts[0]] = {
+                            "entries": int(parts[1]),
+                            "bytes": int(parts[2]),
+                            "strategy": parts[3],
+                        }
+                    except (ValueError, IndexError):
+                        pass
+            elif in_table and not line.startswith("|"):
+                break
+        return routing
+
     # ── 结构化用户画像 ──
 
     def get_preferences(self) -> list[UserPreference]:
         """读取 user-preferences topic 的结构化条目（含时间衰减）。"""
-        entries = self._read_topic(self.topics_dir / "user-preferences.md")
+        entries = self._read_topic("user-preferences")
         prefs = []
         in_table = False
         for line in entries:
@@ -122,7 +172,6 @@ class DurableMemoryStore:
     def upsert_preference(self, pref: UserPreference) -> None:
         """写入或更新一个用户偏好条目（按 key 去重）。"""
         self.ensure_dirs()
-        topic_file = self.topics_dir / "user-preferences.md"
         header = UserPreference.table_header()
         existing = self.get_preferences()
         # upsert
@@ -135,7 +184,7 @@ class DurableMemoryStore:
         if not replaced:
             existing.append(pref)
         lines = [header] + [p.to_table_row() for p in existing]
-        topic_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        (self.topics_dir / "user-preferences.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
         self._update_index()
 
     def ensure_dirs(self):
@@ -143,7 +192,10 @@ class DurableMemoryStore:
         self.topics_dir.mkdir(parents=True, exist_ok=True)
 
     def promote(self, promotions: list[tuple[str, str]]):
-        """将 (topic, text) 条目 upsert 到对应 topic 文件并更新索引。"""
+        """将 (topic, text) 条目 upsert 到对应 topic 并更新路由表。
+
+        超 CHUNK_THRESHOLD_BYTES 自动 split 为 chunked 存储。
+        """
         if not promotions:
             return
         self.ensure_dirs()
@@ -154,27 +206,56 @@ class DurableMemoryStore:
                 continue  # 拒绝未知 topic
             by_topic.setdefault(topic, []).append(text)
         for topic, texts in by_topic.items():
-            topic_file = self.topics_dir / f"{topic}.md"
-            existing = self._read_topic(topic_file)
+            strategy = self._topic_strategy(topic)
+            existing = self._read_topic(topic, strategy=strategy)
             for text in texts:
                 existing = self._upsert_entry(existing, text)
-            self._write_topic(topic_file, existing)
+            self._write_topic(topic, existing)
         self._update_index()
 
     def retrieval(self, query: str, limit: int = 3) -> list[dict]:
-        """返回带 topic 标注的结果列表。"""
+        """返回带 topic 标注的结果列表。
+
+        先读 MEMORY.md 路由表 → chunked 主题只读前 2 chunk（semantic max-pool），
+        inline 主题全量读取。
+        """
         query_lower = query.lower()
         results = []
         if not self.topics_dir.exists():
             return results
-        for topic_file in sorted(self.topics_dir.glob("*.md")):
-            topic = topic_file.stem
-            for entry in self._read_topic(topic_file):
+
+        routing = self._load_routing_table()
+        for topic in sorted(DURABLE_TOPICS):
+            if len(results) >= limit:
+                break
+            route = routing.get(topic, {})
+            strategy = route.get("strategy", "inline")
+            if strategy == "chunked":
+                # chunked: semantic max-pool — 只读前 2 chunk
+                entries = self._read_chunked_first(topic, max_chunks=2)
+            else:
+                entries = self._read_topic(topic)
+            for entry in entries:
                 if query_lower in entry.lower():
                     results.append({"topic": topic, "text": entry})
                     if len(results) >= limit:
-                        return results
+                        break
         return results
+
+    def _read_chunked_first(self, topic: str, max_chunks: int = 2) -> list[str]:
+        """读取 chunked topic 的前 N 个 chunk（semantic max-pool 优化）。"""
+        chunk_dir = self.topics_dir / topic
+        if not chunk_dir.is_dir():
+            return []
+        entries: list[str] = []
+        for chunk_file in sorted(chunk_dir.glob("chunk-*.md"))[:max_chunks]:
+            try:
+                entries.extend(
+                    e.strip() for e in chunk_file.read_text(encoding="utf-8").split("\n---\n") if e.strip()
+                )
+            except OSError:
+                pass
+        return entries
 
     def _normalize_topic(self, topic: str) -> str:
         t = topic.lower()
@@ -188,18 +269,75 @@ class DurableMemoryStore:
         }
         return m.get(t, "project-conventions")
 
-    @staticmethod
-    def _read_topic(path: Path) -> list[str]:
+    def _read_topic(self, topic_or_path: str | Path, strategy: str = "inline") -> list[str]:
+        """读取 topic 全部条目（inline 读单文件，chunked 合并多 chunk）。"""
+        if isinstance(topic_or_path, Path):
+            # backward compat: direct path read
+            path = topic_or_path
+            if not path.exists():
+                return []
+            return [e.strip() for e in path.read_text(encoding="utf-8").split("\n---\n") if e.strip()]
+
+        topic = topic_or_path
+        if strategy == "chunked":
+            return self._read_chunked(topic)
+        path = self._topic_path(topic)
         if not path.exists():
             return []
         return [e.strip() for e in path.read_text(encoding="utf-8").split("\n---\n") if e.strip()]
 
-    @staticmethod
-    def _write_topic(path: Path, entries: list[str]):
-        if entries:
-            path.write_text("\n\n---\n\n".join(entries) + "\n", encoding="utf-8")
-        elif path.exists():
-            path.unlink()
+    def _read_chunked(self, topic: str) -> list[str]:
+        """读取 chunked topic 的全部 chunk 并合并。"""
+        chunk_dir = self.topics_dir / topic
+        if not chunk_dir.is_dir():
+            return []
+        entries: list[str] = []
+        for chunk_file in sorted(chunk_dir.glob("chunk-*.md")):
+            try:
+                entries.extend(
+                    e.strip() for e in chunk_file.read_text(encoding="utf-8").split("\n---\n") if e.strip()
+                )
+            except OSError:
+                pass
+        return entries
+
+    def _write_topic(self, topic: str, entries: list[str]):
+        """写入 topic 条目（inline 或 chunked，超阈值自动 split）。"""
+        if not entries:
+            # 清理
+            inline_path = self._topic_path(topic)
+            if inline_path.exists():
+                inline_path.unlink()
+            chunk_dir = self.topics_dir / topic
+            if chunk_dir.is_dir():
+                import shutil
+                shutil.rmtree(str(chunk_dir), ignore_errors=True)
+            return
+
+        inline_path = self._topic_path(topic)
+        test_text = "\n\n---\n\n".join(entries) + "\n"
+        if len(test_text.encode("utf-8")) <= CHUNK_THRESHOLD_BYTES:
+            # inline 足够
+            chunk_dir = self.topics_dir / topic
+            if chunk_dir.is_dir():
+                import shutil
+                shutil.rmtree(str(chunk_dir), ignore_errors=True)
+            inline_path.write_text(test_text, encoding="utf-8")
+        else:
+            # chunked 拆分
+            if inline_path.exists():
+                inline_path.unlink()
+            chunk_dir = self.topics_dir / topic
+            chunk_dir.mkdir(parents=True, exist_ok=True)
+            # 清除旧 chunk
+            for old in chunk_dir.glob("chunk-*.md"):
+                old.unlink()
+            for ci in range(0, len(entries), CHUNK_ENTRIES_PER_FILE):
+                chunk_entries = entries[ci:ci + CHUNK_ENTRIES_PER_FILE]
+                chunk_path = chunk_dir / f"chunk-{ci // CHUNK_ENTRIES_PER_FILE}.md"
+                chunk_path.write_text(
+                    "\n\n---\n\n".join(chunk_entries) + "\n", encoding="utf-8"
+                )
 
     @staticmethod
     def _upsert_entry(entries: list[str], new_text: str, authority: str = "auto") -> list[str]:
@@ -218,12 +356,38 @@ class DurableMemoryStore:
         return entries
 
     def _update_index(self):
-        lines = ["# Agent Memory Index", "", f"_{len(DURABLE_TOPICS)} topics_", ""]
+        """写入 MEMORY.md 路由表：| topic | entries | bytes | strategy |。"""
+        rows = [
+            "# Agent Memory Index",
+            "",
+            f"_{len(DURABLE_TOPICS)} topics_",
+            "",
+            "| topic | entries | bytes | strategy |",
+            "|-------|---------|-------|----------|",
+        ]
         for topic in DURABLE_TOPICS:
-            count = len(self._read_topic(self.topics_dir / f"{topic}.md"))
-            lines.append(f"- **{topic}** ({count} entries)")
-        lines.append("")
-        (self.memory_dir / "MEMORY.md").write_text("\n".join(lines), encoding="utf-8")
+            strategy = self._topic_strategy(topic)
+            entries = self._read_topic(topic, strategy=strategy)
+            count = len(entries)
+            byte_size = 0
+            if strategy == "chunked":
+                chunk_dir = self.topics_dir / topic
+                if chunk_dir.is_dir():
+                    for cf in chunk_dir.glob("chunk-*.md"):
+                        try:
+                            byte_size += cf.stat().st_size
+                        except OSError:
+                            pass
+            else:
+                path = self._topic_path(topic)
+                if path.is_file():
+                    try:
+                        byte_size = path.stat().st_size
+                    except OSError:
+                        pass
+            rows.append(f"| {topic} | {count} | {byte_size} | {strategy} |")
+        rows.append("")
+        (self.memory_dir / "MEMORY.md").write_text("\n".join(rows), encoding="utf-8")
 
 
 def promote_durable_memory(
