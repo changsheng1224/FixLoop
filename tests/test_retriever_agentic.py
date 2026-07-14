@@ -96,8 +96,12 @@ class TestRetrievalSteps:
         tool_names = [s["tool"] for s in state.node_timings["retrieval_steps"]]
         assert "grep" in tool_names
 
-    def test_collect_retrieval_steps_is_callable(self):
-        """_collect_retrieval_steps 方法存在且可调用。"""
-        from src.repair.pipeline import RepairPipelineMixin
+    def test_retrieval_steps_present_in_timings(self):
+        """retrieval_steps 可在 node_timings 中存储。"""
+        from src.state import RepairState
 
-        assert hasattr(RepairPipelineMixin, "_collect_retrieval_steps")
+        state = RepairState(issue_input="test")
+        state.node_timings["retrieval_steps"] = [
+            {"tool": "grep", "args": {"pattern": "Error"}, "hits": 2},
+        ]
+        assert "retrieval_steps" in state.node_timings

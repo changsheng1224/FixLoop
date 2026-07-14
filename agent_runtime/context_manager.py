@@ -444,11 +444,9 @@ class ContextManager:
         )
 
         parts = []
-        trace_info: dict[str, str] = {}
 
         # Layer 1: Episodic 检索
         mem = self.agent.session.get("memory", {})
-        trace_info["memory_retrieval_path"] = "semantic"
         results = retrieval_candidates_semantic(mem, query, limit=2)
         results = filter_relevant_results(results, self.tier_policy)
         if results:
@@ -456,28 +454,16 @@ class ContextManager:
             for r in results:
                 lines.append(f"  - {r.get('text', '')[:150]}")
             parts.append("\n".join(lines))
-        trace_info["episodic_hits"] = str(len(results))
 
         # Layer 2: Durable 检索
         try:
             store = DurableMemoryStore(root=self.agent._cwd)
             durable_results = store.retrieval(query, limit=2)
-            trace_info["durable_hits"] = str(len(durable_results))
             if durable_results:
                 lines = ["持久知识:"]
                 for r in durable_results:
                     lines.append(f"  - {r[:150]}")
                 parts.append("\n".join(lines))
-        except Exception:
-            trace_info["durable_hits"] = "0"
-
-        # Layer 3: embed_cache stats (aggregated from SemanticMemory)
-        try:
-            from agent_runtime.features.memory.semantic import SemanticMemory
-
-            sem = SemanticMemory()
-            if sem.available:
-                trace_info["embed_cache_hit_rate"] = str(sem.embed_cache_hit_rate)
         except Exception:
             pass
 

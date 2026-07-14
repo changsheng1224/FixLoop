@@ -50,26 +50,36 @@ class TestDeriveEmbedQuery:
 
 class TestEmbedCacheHitRate:
     def test_initial_rate_is_zero(self):
-        sem = SemanticMemory()
-        assert sem.embed_cache_hit_rate == 0.0
+        from agent_runtime.features.memory.semantic import get_embed_cache_hit_rate
 
-    def test_hit_and_miss_tracking(self):
-        sem = SemanticMemory()
-        sem._cache_hits = 7
-        sem._cache_misses = 3
-        assert sem.embed_cache_hit_rate == 0.7
+        assert get_embed_cache_hit_rate() == 0.0
 
-    def test_all_hits_rate_is_one(self):
-        sem = SemanticMemory()
-        sem._cache_hits = 5
-        sem._cache_misses = 0
-        assert sem.embed_cache_hit_rate == 1.0
+    def test_module_level_counter(self):
+        import agent_runtime.features.memory.semantic as sem_mod
 
-    def test_all_misses_rate_is_zero(self):
+        old_hits, old_misses = sem_mod._embed_cache_hits, sem_mod._embed_cache_misses
+        sem_mod._embed_cache_hits = 7
+        sem_mod._embed_cache_misses = 3
+        assert sem_mod.get_embed_cache_hit_rate() == 0.7
+        # restore
+        sem_mod._embed_cache_hits = old_hits
+        sem_mod._embed_cache_misses = old_misses
+
+    def test_semantic_memory_delegates_to_module(self):
+        from agent_runtime.features.memory.semantic import (
+            SemanticMemory,
+            get_embed_cache_hit_rate,
+        )
+
         sem = SemanticMemory()
-        sem._cache_hits = 0
-        sem._cache_misses = 10
-        assert sem.embed_cache_hit_rate == 0.0
+        assert sem.embed_cache_hit_rate == get_embed_cache_hit_rate()
+
+    def test_get_stats_returns_tuple(self):
+        from agent_runtime.features.memory.semantic import get_embed_cache_stats
+
+        hits, misses = get_embed_cache_stats()
+        assert isinstance(hits, int)
+        assert isinstance(misses, int)
 
 
 # ---------------------------------------------------------------------------
