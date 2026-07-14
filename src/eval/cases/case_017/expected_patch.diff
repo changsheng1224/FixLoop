@@ -1,0 +1,5 @@
+--- a/ranges.py
++++ b/ranges.py
+@@ -3,3 +3,3 @@ def in_range(value, low, high):
+-    return low < value < high
++    return low <= value <= high

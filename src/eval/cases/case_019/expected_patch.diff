@@ -1,0 +1,5 @@
+--- a/checkout.py
++++ b/checkout.py
+@@ -6,3 +6,3 @@ def apply_tax(cart, rate):
+-    for item, price in cart.items():
++    for item, price in (cart or {}).items():

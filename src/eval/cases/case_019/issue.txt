@@ -1,0 +1,6 @@
+AttributeError: 'NoneType' object has no attribute 'items'
+
+File "checkout.py", line 8, in apply_tax
+    for item, price in cart.items():
+AttributeError: 'NoneType' object has no attribute 'items'
+Repo: eval-case-019

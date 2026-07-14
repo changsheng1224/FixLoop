@@ -1,0 +1,8 @@
+logic error: calculate_discount returns wrong value for percentage > 50
+
+CI log excerpt:
+  File "discount.py", line 8, in calculate_discount
+    return price * (discount / 100)  # wrong formula
+Failed: test_discount.py::test_large_discount - assert 20.0 == 50.0
+Repo: eval-case-016
+Expected: fix formula to return price * (1 - discount/100)

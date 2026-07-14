@@ -1,0 +1,10 @@
+composite error: TypeError in report.py + ValueError in values.py
+
+File "report.py", line 12, in generate_report
+    result = values.get_score(name) + " points"
+TypeError: unsupported operand type(s) for +: 'int' and 'str'
+
+File "values.py", line 4, in get_score
+    return int(data[name])
+ValueError: invalid literal for int() with base 10: 'N/A'
+Repo: eval-case-018

@@ -1,0 +1,10 @@
+--- a/report.py
++++ b/report.py
+@@ -10,3 +10,3 @@ def generate_report(name):
+-    result = values.get_score(name) + " points"
++    result = str(values.get_score(name)) + " points"
+--- a/values.py
++++ b/values.py
+@@ -2,3 +2,3 @@ def get_score(name):
+-    return int(data[name])
++    return int(data.get(name, '0') or 0)

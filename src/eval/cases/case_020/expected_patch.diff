@@ -1,0 +1,5 @@
+--- a/gateway.py
++++ b/gateway.py
+@@ -1,3 +1,3 @@
+-from backend.tasks import run_task
++from backend import run_task

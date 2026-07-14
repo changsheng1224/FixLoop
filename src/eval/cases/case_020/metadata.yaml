@@ -1,0 +1,7 @@
+case_id: case_020
+description: import_error test case
+difficulty: easy
+expected_skill: ''
+issue_type: import_error
+tags:
+- import_error
