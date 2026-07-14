@@ -18,6 +18,21 @@ _SEMANTIC_MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
 EMBED_MAX_CHARS = 800  # ~256 tokens for English（all-MiniLM-L6-v2 max_seq_length）
 _EMBED_CACHE_DIR = Path(".agent/embed_cache")
 
+# 模块级 embed_cache 统计（跨 SemanticMemory 实例共享）
+_embed_cache_hits = 0
+_embed_cache_misses = 0
+
+
+def get_embed_cache_stats() -> tuple[int, int]:
+    """返回 (hits, misses)，无需实例化模型。"""
+    return _embed_cache_hits, _embed_cache_misses
+
+
+def get_embed_cache_hit_rate() -> float:
+    """embed_cache 命中率，无需实例化模型。"""
+    total = _embed_cache_hits + _embed_cache_misses
+    return round(_embed_cache_hits / total, 3) if total > 0 else 0.0
+
 
 def _embed_cache_path(content_hash: str) -> Path:
     return _EMBED_CACHE_DIR / f"{content_hash}.npy"
@@ -192,12 +207,19 @@ class SemanticMemory:
         self._notes: list[dict] = []
 
     @property
+    def embed_cache_hit_rate(self) -> float:
+        """embed_cache 命中率（委托模块级 counter）。"""
+        return get_embed_cache_hit_rate()
+
+    @property
     def available(self) -> bool:
         """语义模型是否已成功加载。"""
         return self.model is not None
 
     def add(self, note: dict):
         """为 note 计算 embedding 并缓存（短文本单 embed，长文本 chunk+max-pool）。"""
+        global _embed_cache_hits, _embed_cache_misses
+
         if not self.available:
             return
         text = note.get("text", "")
@@ -210,8 +232,10 @@ class SemanticMemory:
                 content_hash = hashlib.sha256(truncated.encode("utf-8")).hexdigest()[:32]
                 embedding = _load_embed_cache(content_hash)
                 if embedding is not None:
+                    _embed_cache_hits += 1
                     self._notes.append({**note, "embedding": embedding})
                     return
+                _embed_cache_misses += 1
                 embedding = self.model.encode(truncated)
                 _save_embed_cache(content_hash, embedding)
                 self._notes.append({**note, "embedding": embedding})

@@ -18,13 +18,44 @@ class SkillCatalogError(ValueError):
 
 
 class SkillCatalog:
-    """In-memory Skill registry."""
+    """In-memory Skill registry（含向量索引用于 N>100 大目录场景）。"""
 
     def __init__(self, skills: list[SkillSpec], content_hash: str = "") -> None:
         self.skills = tuple(skills)
         self.content_hash = content_hash or _compute_skills_hash(
             Path.cwd() / ".agent" / ".skill_cache"  # default path, overridden by caller
         )
+        self._embed_index: "SemanticMemory | None" = None
+
+    def build_embed_index(self) -> bool:
+        """预构建语义向量索引（复用 semantic.py SemanticMemory）。
+
+        N>50 时调用，后续 match_skill_semantic 直接使用索引。
+        返回 True 表示索引构建成功，False 表示模型不可用。
+        """
+        try:
+            from agent_runtime.features.memory.semantic import SemanticMemory
+
+            sem = SemanticMemory()
+            if not sem.available:
+                self._embed_index = None
+                return False
+            for spec in self.skills:
+                sem.add({
+                    "text": f"{spec.name}: {spec.trigger_pattern} {getattr(spec, 'example_issue', '')[:200]}",
+                })
+            self._embed_index = sem
+            return True
+        except Exception:
+            self._embed_index = None
+            return False
+
+    def get_embed_index(self):
+        """获取预构建的向量索引（None 表示不可用或未构建）。"""
+        if self._embed_index is not None:
+            return self._embed_index
+        self.build_embed_index()
+        return self._embed_index
 
     @classmethod
     def load_from_directory(

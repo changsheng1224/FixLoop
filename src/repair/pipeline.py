@@ -138,6 +138,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         if fast_retrieve:
             suspects, loc_timing = run_localizer()
             context, ret_timing = self._rule_retrieve(suspects, issue)
+            state.node_timings["retrieval_path"] = "rule"
         else:
             def run_retriever():
                 prompt = self._retriever_prompt([], plan=plan, issue=issue)
@@ -171,9 +172,8 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             # LLM retriever 失败/空结果 → 自动降级到规则检索
             if context is None or not getattr(context, "related_tests", None):
                 log.info("[retriever] 降级: LLM → 规则检索 (grep)")
+                state.node_timings["retrieval_path"] = "llm→degrade"
                 context, ret_timing = self._rule_retrieve(suspects, issue)
-                retrieval_path = "degrade"
-                state.node_timings["retrieval_path"] = retrieval_path
 
         if not suspects:
             suspects = self._fallback_suspects_from_plan(plan, issue)

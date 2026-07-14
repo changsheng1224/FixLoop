@@ -37,27 +37,32 @@ def match_skill_semantic(
     catalog: SkillCatalog | None = None,
     top_k: int = 5,
 ) -> MatchedSkill | None:
-    """N>100 时先用 semantic embedding 预过滤 top_k，再 regex 精确匹配。
+    """N>50 时先用 semantic embedding 预过滤 top_k，再 regex 精确匹配。
 
-    当前 N=10 时匹配速度足够快，此函数预留为未来扩展。
+    N≤50 仍走 match_skill 全量 regex（速度足够快）。
+    语义索引从 SkillCatalog.embed_index 复用，首次调用时自动构建。
     """
     registry = catalog or get_default_catalog()
-    if len(registry.skills) <= 50:
+    # N≤50 → 全量 regex 足够快
+    if registry.skill_count <= 50:
         return match_skill(issue, language=language, catalog=registry)
 
-    from agent_runtime.features.memory.semantic import SemanticMemory
-
-    sem = SemanticMemory()
-    for spec in registry.skills:
-        if spec.language == language:
-            sem.add({"text": f"{spec.name}: {spec.example_issue[:200]}"})
-    if not sem.available:
+    # N>50 → semantic pre-filter
+    sem = registry.get_embed_index()
+    if sem is None or not sem.available:
+        # 降级：语义模型不可用 → 回退全量 regex
         return match_skill(issue, language=language, catalog=registry)
 
-    candidates = sem.search(issue, top_k=top_k)
+    # 向量 top-k 预筛选
+    try:
+        candidates = sem.search(issue, top_k=top_k)
+    except Exception:
+        return match_skill(issue, language=language, catalog=registry)
+
     if not candidates:
         return None
-    # regex 确认
+
+    # regex 精确确认（signal > noise）
     best_matches = [
         spec for spec in registry.skills
         if spec.language == language and spec.matches(issue)
