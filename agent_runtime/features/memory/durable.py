@@ -83,9 +83,20 @@ class DurableMemoryStore:
         self._topics_root = str(self.topics_dir.resolve())
 
     def _ensure_within(self, path: Path) -> None:
-        """确保路径在 topics_dir 内（防止路径遍历攻击）。"""
-        if not str(path.resolve()).startswith(self._topics_root):
-            raise ValueError(f"路径逃逸: {path}")
+        """确保路径在 topics_dir 内（防止路径遍历攻击）。
+
+        使用 path_safety.resolve_under_root 统一校验（含 .. 和 symlink 检测）。
+        """
+        from agent_runtime.features.memory.candidate import MemoryPathError, resolve_memory_path
+
+        try:
+            resolve_memory_path(self._topics_root, str(path))
+        except MemoryPathError:
+            raise
+        except Exception:
+            # fallback: 原有 startswith 检查
+            if not str(path.resolve()).startswith(self._topics_root):
+                raise MemoryPathError(str(path), detail="路径不在 topics_dir 内")
 
     # ── 结构化用户画像 ──
 

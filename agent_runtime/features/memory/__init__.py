@@ -1,5 +1,9 @@
-"""记忆系统：Working + Episodic + Durable + Semantic。"""
+"""记忆系统：Working + Episodic + Durable + Semantic + Candidate。"""
 
+from agent_runtime.features.memory.candidate import (  # noqa: F401
+    MemoryPathError,
+    resolve_memory_path,
+)
 from agent_runtime.features.memory.core import (  # noqa: F401
     MAX_EPISODIC_NOTES,
     MAX_FILE_SUMMARIES,

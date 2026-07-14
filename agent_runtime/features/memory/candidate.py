@@ -1,4 +1,4 @@
-"""Memory Candidate schema：规则/LLM 双路抽取 + 冲突门控。
+"""Memory Candidate schema：规则/LLM 双路抽取 + 冲突门控 + 路径隔离。
 
 规则路径：从 stack trace、工具结果、最终答案中按前缀/正则抽取。
 LLM 路径：light_client 仅填 kind/confidence 规划字段，禁止自由建 topic。
@@ -10,7 +10,44 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
+
+
+# ── 路径隔离 ──
+
+
+class MemoryPathError(ValueError):
+    """记忆系统路径越界或逃逸异常。"""
+
+    def __init__(self, raw_path: str, detail: str = ""):
+        self.raw_path = raw_path
+        self.detail = detail
+        msg = f"Memory path 越界: {raw_path}"
+        if detail:
+            msg += f" ({detail})"
+        super().__init__(msg)
+
+
+def resolve_memory_path(root: str | Path, raw_path: str) -> Path:
+    """解析记忆系统路径，含 `..` 或越界抛 MemoryPathError。
+
+    Args:
+        root: workspace 根目录（如 /repo/.agent/memory）。
+        raw_path: 用户/外部输入的相对路径。
+
+    Returns:
+        位于 root 内的 canonical 绝对路径。
+
+    Raises:
+        MemoryPathError: 路径含 `..` 逃逸、绝对路径越界或为空。
+    """
+    from agent_runtime.path_safety import resolve_under_root
+
+    try:
+        return resolve_under_root(root, raw_path)
+    except ValueError as e:
+        raise MemoryPathError(raw_path, detail=str(e)) from e
 
 # ── 候选数据结构 ──
 
