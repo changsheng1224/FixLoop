@@ -1311,6 +1311,31 @@ class AgentLoop:
         except Exception:
             pass
 
+    def _promote_memory_candidates(self, ts) -> None:
+        """after_ask hook：从最终答案 + 暂存区抽取 Candidate 写入 durable。"""
+        try:
+            from agent_runtime.features.memory.candidate import (
+                candidates_from_answer,
+                promote_candidates,
+            )
+            from agent_runtime.features.memory.durable import DurableMemoryStore
+
+            store = DurableMemoryStore(self.agent._cwd)
+            candidates = list(
+                self.agent.session.get("_memory_candidates", [])
+            )
+            # 从最终答案也抽取
+            candidates.extend(
+                candidates_from_answer(ts.final_answer, ts.user_request)
+            )
+            if candidates:
+                light_client = getattr(self.agent, "light_client", None)
+                promote_candidates(store, candidates, light_client=light_client)
+            # 清空暂存区
+            self.agent.session.pop("_memory_candidates", None)
+        except Exception:
+            pass
+
     def _finalize_run(self, ts):
         from agent_runtime.checkpoint import create_checkpoint
         from agent_runtime.features.memory import promote_durable_memory
@@ -1394,6 +1419,8 @@ class AgentLoop:
                 ts.final_answer,
                 root=self.agent._cwd,
             )
+            # Candidate after_ask hook：从最终答案 + 暂存区抽取候选
+            self._promote_memory_candidates(ts)
             SessionStore(root=self.agent._cwd).save(self.agent.session)
         except Exception:
             pass

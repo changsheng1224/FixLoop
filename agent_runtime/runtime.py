@@ -583,4 +583,18 @@ class Agent:
                     kind="observation",
                 )
 
+        # Candidate 抽取 hook（after_tool）
+        self._extract_memory_candidates_from_tool(name, args, result_text)
 
+    def _extract_memory_candidates_from_tool(
+        self, name: str, args: dict, result_text: str
+    ) -> None:
+        """从工具结果中规则抽取 Candidate 并写入 session 暂存区。"""
+        try:
+            from agent_runtime.features.memory.candidate import candidates_from_tool
+
+            candidates = candidates_from_tool(name, args, result_text)
+            if candidates:
+                self.session.setdefault("_memory_candidates", []).extend(candidates)
+        except Exception:
+            pass
