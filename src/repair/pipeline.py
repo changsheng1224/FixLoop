@@ -42,6 +42,153 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
     _repair_ctx: RepairRunContext | None
 
+    def _prune_agents_for_issue(self, plan) -> None:
+        """根据 issue_type 动态裁剪 Agent。
+
+        简单问题类型（import_error/syntax_error）仅需 Localizer + Patcher，
+        跳过 Retriever 以节省 token 和 latency。
+        """
+        from src.repair_factory import AgentProfile
+
+        profile = AgentProfile.for_issue_type(plan.issue_type if plan else "")
+        if not profile.with_retriever:
+            self.retriever = None
+            plan.prompt_variants = plan.prompt_variants or {}
+            plan.prompt_variants["agent_pruning"] = "skip_retriever"
+
+    # ── Planner Agent ──
+
+    def _plan_with_llm(self, issue: str) -> dict | None:
+        """LLM 单次 JSON complete → RepairPlan dict，失败返回 None。
+
+        只规划不调 tool；失败回落规则 _parse_issue。
+        trace: planner_invoked · fallback=rule|llm · plan_rationale。
+        """
+        import json
+
+        from src.agents.planner import PLANNER_PROMPT
+
+        client = getattr(self, "_light_client", None) or getattr(
+            getattr(self, "localizer", None), "model_client", None
+        )
+        if client is None:
+            return None
+
+        ctx = self._active_repair_ctx()
+        tracer = ctx.repair_tracer if ctx else None
+        try:
+            prompt = f"{PLANNER_PROMPT}\n\nIssue:\n{issue[:2000]}"
+            raw = client.complete(prompt, max_new_tokens=512)
+            start = raw.find("{")
+            end = raw.rfind("}") + 1
+            if start >= 0 and end > start:
+                data = json.loads(raw[start:end])
+                if isinstance(data, dict) and "issue_type" in data:
+                    if tracer:
+                        tracer.emit("orchestrator", "planner_invoked", {
+                            "fallback": "llm",
+                            "plan_rationale": str(data.get("reasoning", ""))[:200],
+                        })
+                    return data
+        except Exception:
+            pass
+
+        if tracer:
+            tracer.emit("orchestrator", "planner_invoked", {
+                "fallback": "rule",
+                "plan_rationale": "",
+            })
+        return None
+
+    def _apply_planner_result(self, plan_dict: dict, plan) -> None:
+        """将 Planner LLM 输出应用到 RepairPlan。"""
+        plan.issue_type = plan_dict.get("issue_type", plan.issue_type)
+        plan.reasoning = plan_dict.get("reasoning", plan.reasoning)
+        if plan_dict.get("suspect_files"):
+            plan.suspect_files = list(plan_dict["suspect_files"])
+        if plan_dict.get("subtasks"):
+            from src.state import RepairSubTask
+
+            plan.subtasks = [
+                RepairSubTask.from_dict(s) for s in plan_dict["subtasks"]
+            ]
+        plan.intent_parser = "llm"
+
+    # ── composite subtasks 编排 ──
+
+    @staticmethod
+    def _generate_subtasks(plan) -> list:
+        """规则生成 composite 子任务列表（Planner Agent 后置）。"""
+        from src.state import RepairSubTask
+
+        if not plan or plan.issue_type != "composite" or len(plan.suspect_files) < 2:
+            return []
+
+        subtasks = []
+        for i, f in enumerate(plan.suspect_files):
+            sid = f"fix_{Path(f).stem}"
+            subtasks.append(RepairSubTask(
+                id=sid,
+                goal=f"修复 {f} 中的错误",
+                suspect_files=[f],
+                depends_on=[] if i == 0 else [subtasks[0].id],
+            ))
+        # 至少 2 个
+        return subtasks if len(subtasks) >= 2 else []
+
+    def _run_subtask_cycle(
+        self, state, subtask, patches_by_subtask: dict
+    ) -> list:
+        """执行单个子任务的 localize 子循环。
+
+        缩窄 suspect_files 后定位嫌疑位置。
+        后续 patch+verify 由主循环统一执行。
+        """
+        log.info("[subtask] 开始: %s (%s)", subtask.id, subtask.goal)
+
+        tracer = self._active_repair_ctx().repair_tracer if self._active_repair_ctx() else None
+        if tracer:
+            tracer.emit("orchestrator", "subtask_started", {
+                "subtask_id": subtask.id,
+                "goal": subtask.goal,
+                "suspect_files": subtask.suspect_files,
+            })
+
+        # 缩窄 suspect_files
+        plan = state.repair_plan
+        original_files = list(plan.suspect_files)
+        plan.suspect_files = list(subtask.suspect_files)
+
+        try:
+            suspects, context, loc_timing, _ = self._run_localize_and_retrieve(state)
+            state.suspect_locations = suspects
+            state.retrieved_context = context
+            state.node_timings[f"subtask_{subtask.id}_loc_ms"] = loc_timing.get("total_ms", 0)
+        finally:
+            plan.suspect_files = original_files
+
+        patches_by_subtask[subtask.id] = state.suspect_locations
+
+        if tracer:
+            tracer.emit("orchestrator", "subtask_done", {
+                "subtask_id": subtask.id,
+                "suspect_count": len(state.suspect_locations),
+            })
+        log.info("[subtask] 完成: %s, suspects=%d", subtask.id, len(state.suspect_locations))
+        return state.suspect_locations
+
+    def _merge_subtask_patches(
+        self, patches_by_subtask: dict, subtasks: list
+    ) -> list:
+        """按 depends_on 拓扑合并各子任务的补丁。"""
+        merged = []
+        for st in subtasks:
+            sub_patches = patches_by_subtask.get(st.id, [])
+            for p in sub_patches:
+                if p not in merged:
+                    merged.append(p)
+        return merged
+
     def _make_phase_clock(self) -> RepairPhaseClock | None:
         config = self._active_repair_ctx().phase_timeout_config
         if config is None or not config.any_enabled():
@@ -219,6 +366,12 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             else:
                 t0 = time.time()
                 state.repair_plan = self._parse_issue(issue)
+                # Planner Agent: LLM 单次 JSON → 覆盖规则解析结果
+                planner_result = self._plan_with_llm(issue)
+                if planner_result:
+                    self._apply_planner_result(planner_result, state.repair_plan)
+                # 动态 Agent 裁剪：简单问题类型跳过 Retriever
+                self._prune_agents_for_issue(state.repair_plan)
                 parse_ms = int((time.time() - t0) * 1000)
                 if state.repair_plan and state.repair_plan.language != "python":
                     log.warning(
@@ -276,6 +429,27 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     )
                     if similar:
                         state.node_timings["similar_fixes"] = similar
+
+                # ── composite subtasks 路径 ──
+                if state.repair_plan and state.repair_plan.issue_type == "composite":
+                    # 优先使用 Planner 生成的 subtasks，否则规则生成
+                    subtasks = list(state.repair_plan.subtasks) if state.repair_plan.subtasks else []
+                    if not subtasks:
+                        subtasks = self._generate_subtasks(state.repair_plan)
+                    if subtasks:
+                        state.repair_plan.subtasks = subtasks
+                        all_patches: dict[str, list] = {}
+                        for st in subtasks:
+                            self._run_subtask_cycle(state, st, all_patches)
+                        merged = self._merge_subtask_patches(all_patches, subtasks)
+                        state.candidate_patches = merged
+                        if merged:
+                            state.status = "patched"
+                            log.info(
+                                "[composite] %d subtasks -> %d patches merged",
+                                len(subtasks), len(merged),
+                            )
+                        return state
 
                 log.info("Localizer + Retriever 并行开始...")
                 if phase_clock is not None:

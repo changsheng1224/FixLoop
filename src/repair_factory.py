@@ -26,7 +26,6 @@ from src.tools.composite import build_repair_canonical_tools
 # full    = 全部四个 Agent
 _SIMPLE_ISSUE_TYPES = frozenset({"import_error", "syntax_error"})
 
-
 @dataclass(frozen=True)
 class AgentProfile:
     """问题类型对应的 Agent 参与配置。"""
@@ -109,7 +108,7 @@ def wire_orchestrator(
     base_kw: dict = {"l1_prefix": l1, "dry_run": dry_run, "warm_context": wc}
 
     def _agent_kw(role: str) -> dict:
-        """构建角色专属 kwargs（含子预算）。"""
+        """构建角色专属 kwargs（含子预算）。配额由 Agent._role_quota 按角色分配。"""
         kw = dict(base_kw)
         kw["budget"] = budget_ctx.sub_budget(role)
         return kw

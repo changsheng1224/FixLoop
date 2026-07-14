@@ -88,3 +88,70 @@ class TestConcurrentShellLimit:
         from agent_runtime.tool_executor import QuotaEnforcer
         q = QuotaEnforcer()
         q.release_shell()  # 不应抛异常
+
+
+# ---------------------------------------------------------------------------
+# 分 Agent 配额（V1.5-Bonus5）
+# ---------------------------------------------------------------------------
+
+
+class TestRoleQuotas:
+    def test_localizer_readonly_no_writes(self):
+        from agent_runtime.runtime import _role_quota
+
+        q = _role_quota("localizer")
+        assert not q.check("write_file")
+        assert not q.check("patch_file")
+        assert not q.check("run_shell")
+        assert q.check("read_file")
+
+    def test_patcher_can_write(self):
+        from agent_runtime.runtime import _role_quota
+
+        q = _role_quota("patcher")
+        assert q.check("write_file")
+        assert q.check("patch_file")
+
+    def test_localizer_depletion_does_not_affect_patcher(self):
+        """Localizer 配额独立于 Patcher。"""
+        from agent_runtime.runtime import _role_quota
+
+        loc_q = _role_quota("localizer")
+        pat_q = _role_quota("patcher")
+
+        # 耗尽 localizer 的 total
+        for _ in range(12):
+            loc_q.record("read_file")
+        assert not loc_q.check("read_file")
+
+        # patcher 仍然可以 write
+        assert pat_q.check("write_file")
+        assert pat_q.check("patch_file")
+
+    def test_verifier_sandbox_only(self):
+        from agent_runtime.runtime import _role_quota
+
+        q = _role_quota("verifier")
+        # verifier 只能 run_shell (sandbox)，不能写文件
+        assert not q.check("write_file")
+        assert q.check("run_shell")
+
+    def test_retriever_readonly(self):
+        from agent_runtime.runtime import _role_quota
+
+        q = _role_quota("retriever")
+        assert not q.check("write_file")
+        assert q.check("read_file")
+        assert q.check("search")
+
+    def test_all_roles_distinct(self):
+        """四角色配额互不相同。"""
+        from agent_runtime.runtime import _role_quota
+
+        quotas = {
+            role: _role_quota(role)
+            for role in ("localizer", "retriever", "patcher", "verifier")
+        }
+        # 每个角色是独立实例
+        ids = {id(q) for q in quotas.values()}
+        assert len(ids) == 4
