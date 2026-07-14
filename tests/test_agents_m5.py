@@ -48,13 +48,13 @@ class TestAgentFactories:
 
     def test_all_agents_work(self, workspace):
         """3 个 Agent 都能正常 ask。"""
-        c1 = FakeModelClient(["<final>ok</final>"])
-        c2 = FakeModelClient(["<final>ok</final>"])
-        c3 = FakeModelClient(["<final>ok</final>"])
+        c1 = FakeModelClient(["<final>[]</final>"])
+        c2 = FakeModelClient(["<final>{}</final>"])
+        c3 = FakeModelClient(["<final>[]</final>"])
 
-        assert "ok" in create_localizer(c1, workspace).ask("test")
-        assert "ok" in create_retriever(c2, workspace).ask("test")
-        assert "ok" in create_patcher(c3, workspace).ask("test")
+        assert create_localizer(c1, workspace).ask("test") == "[]"
+        assert create_retriever(c2, workspace).ask("test") == "{}"
+        assert create_patcher(c3, workspace).ask("test") == "[]"
 
 
 class TestToolGatewayWired:
@@ -110,14 +110,13 @@ class TestToolGatewayIntegration:
         assert gw.can_call("patcher", "ast_parse") is False
 
 class TestSharedGateway:
-    def test_gateway_is_shared_across_agents(self):
-        from src.agents.factory import _get_or_create_gateway, _shared_repair_gateway
-        import src.agents.factory as factory_mod
+    def test_default_gateways_are_isolated_between_agents(self, client, workspace):
+        patcher_1 = create_patcher(client, workspace)
+        patcher_2 = create_patcher(client, workspace)
 
-        # 重置
-        factory_mod._shared_repair_gateway = None
-        gw1 = _get_or_create_gateway()
-        gw2 = _get_or_create_gateway()
-        assert gw1 is gw2  # 同一个实例
-        # 清理
-        factory_mod._shared_repair_gateway = None
+        assert patcher_1._repair_gateway is not patcher_2._repair_gateway
+
+        patcher_1._repair_gateway.restrict_to("patcher", ["read_file"])
+
+        assert not patcher_1._repair_gateway.can_call("patcher", "write_file")
+        assert patcher_2._repair_gateway.can_call("patcher", "write_file")

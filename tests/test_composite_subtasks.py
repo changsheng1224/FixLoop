@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.state import RepairPlan, RepairSubTask
+from src.state import CandidatePatch, RepairPlan, RepairSubTask, SuspectLocation
 
 
 class TestGenerateSubtasks:
@@ -87,9 +87,11 @@ class TestMergeSubtaskPatches:
         st1 = RepairSubTask(id="fix_a", goal="fix a.py", suspect_files=["a.py"])
         st2 = RepairSubTask(id="fix_b", goal="fix b.py", suspect_files=["b.py"], depends_on=["fix_a"])
 
-        patches_by = {"fix_a": ["patch_a"], "fix_b": ["patch_b"]}
+        patch_a = CandidatePatch(file_path="a.py", diff="-old\n+new")
+        patch_b = CandidatePatch(file_path="b.py", diff="-bad\n+good")
+        patches_by = {"fix_a": [patch_a], "fix_b": [patch_b]}
         merged = mixin._merge_subtask_patches(patches_by, [st1, st2])
-        assert merged == ["patch_a", "patch_b"]
+        assert merged == [patch_a, patch_b]
 
     def test_empty_patches_skipped(self):
         from src.repair.pipeline import RepairPipelineMixin
@@ -97,6 +99,18 @@ class TestMergeSubtaskPatches:
         mixin = RepairPipelineMixin()
         st = RepairSubTask(id="x", goal="x", suspect_files=["x.py"])
         merged = mixin._merge_subtask_patches({"x": []}, [st])
+        assert merged == []
+
+    def test_ignores_suspect_locations_not_candidate_patches(self):
+        """subtask localize 结果不能被塞进 candidate_patches。"""
+        from src.repair.pipeline import RepairPipelineMixin
+
+        mixin = RepairPipelineMixin()
+        st = RepairSubTask(id="fix_a", goal="fix a.py", suspect_files=["a.py"])
+        suspect = SuspectLocation(file_path="a.py", start_line=1, end_line=1)
+
+        merged = mixin._merge_subtask_patches({"fix_a": [suspect]}, [st])
+
         assert merged == []
 
 

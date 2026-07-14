@@ -115,7 +115,7 @@ class TestReportIntegration:
         outputs = [
             '<tool>{"name":"write_file","args":{"path":"x.py","content":"y"}}</tool>',
             '<tool>{"name":"write_file","args":{"path":"x.py","content":"z"}}</tool>',
-            "<final>done</final>",
+            "<final>[]</final>",
         ]
         agent = create_localizer(FakeModelClient(outputs), workspace)
         agent.ask("try write twice")
@@ -127,7 +127,7 @@ class TestReportIntegration:
     def test_ask_report_counts_executor_approval_denial(self, workspace):
         outputs = [
             '<tool>{"name":"write_file","args":{"path":"gate.txt","content":"x"}}</tool>',
-            "<final>done</final>",
+            "<final>[]</final>",
         ]
         agent = create_patcher(FakeModelClient(outputs), workspace, approval="never")
         agent.ask("write once")
@@ -173,7 +173,7 @@ class TestReportIntegration:
     def test_run_finished_includes_grafana_metrics(self, workspace):
         outputs = [
             '<tool>{"name":"write_file","args":{"path":"x.py","content":"y"}}</tool>',
-            "<final>done</final>",
+            "<final>[]</final>",
         ]
         agent = create_localizer(FakeModelClient(outputs), workspace)
         agent.ask("gateway deny")
@@ -199,7 +199,7 @@ class TestRepairRejectionAggregation:
                 '"function_name":"","reason":"stack","confidence":0.9}]</final>',
             ]
         )
-        ret_client = FakeNativeToolClient(['<final>{"related_tests":[]}</final>'])
+        ret_client = FakeNativeToolClient(['<final>{"related_tests":["test_calc.py::test_add"]}</final>'])
         pat_client = FakeModelClient(
             ['<final>[{"file_path":"calc.py","diff":"-old\\n+new","explanation":"fix"}]</final>']
         )

@@ -15,19 +15,6 @@ from src.tools.composite import build_repair_agent_tools
 MultiAgentRole = Literal["localizer", "retriever", "patcher", "verifier"]
 RepairAgentRole = Literal["localizer", "retriever", "patcher", "verifier", "baseline"]
 
-_shared_repair_gateway: ToolGateway | None = None
-_shared_gateway_root: str = ""
-
-
-def _get_or_create_gateway(repo_root: str = "") -> ToolGateway:
-    """返回共享的 ToolGateway 实例（同一 workspace 复用，含 tools.yaml manifest）。"""
-    global _shared_repair_gateway, _shared_gateway_root
-    if _shared_repair_gateway is None or (repo_root and repo_root != _shared_gateway_root):
-        _shared_repair_gateway = build_repair_gateway(repo_root)
-        _shared_gateway_root = repo_root
-    return _shared_repair_gateway
-
-
 BASELINE_SYSTEM_PROMPT = (
     "你是代码修复专家。分析错误、定位代码、生成补丁、在容器内验证修复。你可以使用所有工具。"
 )
@@ -63,6 +50,7 @@ def create_repair_agent(
     l1_prefix=None,
     warm_context=None,
     budget=None,
+    gateway: ToolGateway | None = None,
 ) -> Agent:
     """创建指定角色的修复 Agent（含 baseline 单 Agent 变体）。
 
@@ -83,7 +71,7 @@ def create_repair_agent(
         light = None
     else:
         defaults = _AGENT_DEFAULTS[role]
-        gw = _get_or_create_gateway(root)
+        gw = gateway or build_repair_gateway(root)
         if role == "verifier":
             gw.grant("verifier", "sandbox_build")
             gw.grant("verifier", "sandbox_test")
@@ -112,6 +100,7 @@ def create_repair_agent(
         l1_prefix=l1_prefix,
         warm_context=warm_context,
     )
+    agent._repair_gateway = gw
     if budget is not None:
         agent._budget = budget
     return agent

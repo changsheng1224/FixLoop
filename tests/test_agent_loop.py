@@ -108,6 +108,7 @@ class TestAgentLoopStopConditions:
 
     def test_stops_at_max_steps(self, config, workspace):
         """达到 max_steps 后强制停机。"""
+        config.loop_detect_threshold = 0
         # 一直返回 tool 调用，永不返回 final
         infinite_tools = [
             '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
