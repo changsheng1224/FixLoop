@@ -133,29 +133,44 @@ class Agent:
         return loop.run(user_message, callback=callback, skip_plan=skip_plan)
 
     def _detect_workspace_switch(self) -> None:
-        """检测 cwd 是否变更；变更则重建 workspace、prefix、清空 working memory。"""
+        """检测 cwd/root_hash 是否变更；变更则重建 workspace、prefix、清空 working memory。
+
+        比较 WorkspaceContext.fingerprint (SHA256 of HEAD + dirty files + docs)
+        与上次记录的 _last_root_hash，变更时 invalidate prefix hash 并清空 recent_files。
+        """
         import os
 
         current = os.getcwd()
-        if getattr(self, "_last_cwd", None) and current == self._last_cwd:
-            return
-        if getattr(self, "_last_cwd", None) is None:
+        current_hash = self.workspace.fingerprint() if hasattr(self.workspace, "fingerprint") else ""
+        last_cwd = getattr(self, "_last_cwd", None)
+        last_hash = getattr(self, "_last_root_hash", None)
+
+        # 首次初始化：记录基线
+        if last_cwd is None:
             self._last_cwd = current
-            return  # 首次初始化，跳过
-        # cwd 变更
+            self._last_root_hash = current_hash
+            return
+
+        # 无变更
+        if current == last_cwd and current_hash == last_hash:
+            return
+
+        # cwd/root_hash 变更 → 重建
         from agent_runtime.workspace import WorkspaceContext
 
         self._last_cwd = current
+        self._last_root_hash = current_hash
         self._cwd = current
         self.workspace = WorkspaceContext.build(current)
         self.tool_context = ToolContext(root=current)
         # 清空 working memory（旧 workspace 的文件已失效）
         session = getattr(self, "session", {}) or {}
-        working = session.get("working", {})
+        mem = session.get("memory", {})
+        working = mem.get("working", {})
         if isinstance(working, dict):
             working["recent_files"] = []
             working["file_summaries"] = {}
-        # 重建 prefix（workspace snapshot 变更影响 hash）
+        # 重建 prefix（workspace snapshot 变更影响 hash → prompt cache 失效）
         try:
             sp = self._system_prompt if hasattr(self, "_system_prompt") else ""
             self._prefix = self._build_prefix(sp)
