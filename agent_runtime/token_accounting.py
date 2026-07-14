@@ -99,7 +99,7 @@ def build_report_token_fields(
     sections = dict(meta.get("sections") or {})
     estimated_total = int(meta.get("total_tokens", 0) or 0)
     total_tokens = api["total_tokens"] or estimated_total
-    return {
+    fields = {
         "total_tokens": total_tokens,
         "input_tokens": api["input_tokens"],
         "output_tokens": api["output_tokens"],
@@ -111,3 +111,49 @@ def build_report_token_fields(
         "prompt_budget": meta.get("prompt_budget"),
         "budget_cuts": list(meta.get("cuts") or []),
     }
+    # 成本估算
+    model = meta.get("model", "")
+    if model:
+        fields["estimated_cost_usd"] = estimate_cost(fields, model=model)
+    return fields
+
+
+def load_pricing_table() -> dict:
+    """加载 pricing_table.yaml → {model: {input, output, cache_read}}。"""
+    from pathlib import Path
+    import yaml
+
+    path = Path(__file__).parent / "pricing_table.yaml"
+    try:
+        with open(path, encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except Exception:
+        return {}
+
+
+def estimate_cost(report: dict, *, model: str = "deepseek-v4-pro") -> float:
+    """估算单次 repair 的 USD 成本。
+
+    formula: (input - cache_read) * input_price + output * output_price + cache_read * cache_price
+    所有价格按每 1M token 计算。
+    """
+    pricing = load_pricing_table()
+    rates = pricing.get(model, {})
+    if not rates:
+        return 0.0
+
+    inp = report.get("input_tokens", 0) or 0
+    out = report.get("output_tokens", 0) or 0
+    cache = report.get("cache_read_tokens", 0) or 0
+
+    input_price = float(rates.get("input", 0))
+    output_price = float(rates.get("output", 0))
+    cache_price = float(rates.get("cache_read", input_price))
+
+    # non-cache input + output + cache
+    cost = (
+        (inp - cache) * input_price
+        + out * output_price
+        + cache * cache_price
+    ) / 1_000_000
+    return round(cost, 6)

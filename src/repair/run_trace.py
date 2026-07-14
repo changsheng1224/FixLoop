@@ -5,6 +5,17 @@ from __future__ import annotations
 from agent_runtime.run_ids import new_run_id
 from agent_runtime.run_store import RunStore
 
+
+def _estimate_repair_cost(token_summary: dict, state) -> float:
+    """估算修复成本（USD）。"""
+    try:
+        from agent_runtime.token_accounting import estimate_cost
+
+        model = getattr(getattr(state.repair_plan, "prompt_variants", {}), "model", "") or ""
+        return estimate_cost(token_summary, model=model or "deepseek-v4-pro")
+    except Exception:
+        return 0.0
+
 # Repair trace 可选事件（Orchestrator / Agent 写入）
 REPAIR_TRACE_EVENTS = frozenset(
     {
@@ -154,6 +165,7 @@ class RepairRunTracer:
             },
             "token_usage_by_agent": by_agent,
             "latency_by_agent": by_agent_latency,
+            "estimated_cost_usd": _estimate_repair_cost(token_summary, state),
             **tool_summary,
             **token_summary,
             **rejection_summary,
