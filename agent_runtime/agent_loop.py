@@ -103,6 +103,7 @@ class AgentLoop:
         self._empty_retries = 0
         self.MAX_EMPTY_RETRIES = 3
         self._last_dream_stats: dict[str, int] = {}
+        self._llm_call_count = 0
 
     def _accumulate_context_stats(self, meta: dict) -> None:
         """从 context_built metadata 累积 section 统计 + cache hit rate。"""
@@ -586,6 +587,16 @@ class AgentLoop:
         return prompt_text
 
     def _xml_call_model(self, ts, prompt_text: str, *, step: int, callback=None) -> tuple[str, float]:
+        # LLM 调用预算硬顶
+        max_calls = getattr(self.agent.config, "max_llm_calls_per_repair", 0) or 0
+        if max_calls > 0 and self._llm_call_count >= max_calls:
+            ts.stop_with_reason(StopReason.BUDGET_EXHAUSTED, "stopped",
+                detail=f"max_llm_calls={max_calls}")
+            self.stop_reason = StopReason.BUDGET_EXHAUSTED
+            raise CancelledError("budget", answer=(
+                f"<final>LLM 调用达到硬顶 ({max_calls})，任务终止。</final>"
+            ))
+        self._llm_call_count += 1
         ts.record_attempt()
         t1 = _time.time()
         self._emit(
@@ -1395,6 +1406,13 @@ class AgentLoop:
                     "container_tools": self._tier_tools.get("container", {}),
                 },
                 "context_summary": self._build_context_summary(),
+                "runtime_metrics": {
+                    "parse_retry_count": self._retry_count,
+                    "tool_steps": ts.tool_steps,
+                    "cache_hit_rate": self._build_context_summary().get("cache_hit_rate", 0.0),
+                    "llm_calls": self._llm_call_count,
+                    "llm_call_limit": int(getattr(self.agent.config, "max_llm_calls_per_repair", 0) or 0),
+                },
                 "retry_summary": {
                     "parse_retries": self._retry_count,
                     "model_attempts": ts.attempts,

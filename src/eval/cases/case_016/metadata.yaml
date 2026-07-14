@@ -1,0 +1,7 @@
+case_id: case_016
+description: logic_error test case
+difficulty: medium
+expected_skill: ''
+issue_type: logic_error
+tags:
+- logic_error

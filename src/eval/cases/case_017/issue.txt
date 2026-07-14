@@ -1,0 +1,7 @@
+logic error: off-by-one in range validation
+
+CI log excerpt:
+  File "ranges.py", line 4, in in_range
+    return low < value < high
+Failed: test_ranges.py::test_boundary - assert False
+Repo: eval-case-017

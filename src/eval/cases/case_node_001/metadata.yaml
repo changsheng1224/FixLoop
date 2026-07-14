@@ -1,0 +1,8 @@
+case_id: case_node_001
+description: Node.js 最小 Case — undefined property access
+difficulty: easy
+issue_type: type_error
+language: javascript
+tags:
+- node
+- type_error

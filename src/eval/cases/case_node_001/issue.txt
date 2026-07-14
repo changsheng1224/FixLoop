@@ -1,0 +1,6 @@
+TypeError: Cannot read property 'length' of undefined
+
+File "parser.js", line 4
+    return input.length
+TypeError: input is undefined
+Repo: eval-case-node-001

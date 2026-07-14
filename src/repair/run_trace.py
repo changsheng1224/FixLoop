@@ -5,6 +5,17 @@ from __future__ import annotations
 from agent_runtime.run_ids import new_run_id
 from agent_runtime.run_store import RunStore
 
+
+def _estimate_repair_cost(token_summary: dict, state) -> float:
+    """估算修复成本（USD）。"""
+    try:
+        from agent_runtime.token_accounting import estimate_cost
+
+        model = getattr(getattr(state.repair_plan, "prompt_variants", {}), "model", "") or ""
+        return estimate_cost(token_summary, model=model or "deepseek-v4-pro")
+    except Exception:
+        return 0.0
+
 # Repair trace 可选事件（Orchestrator / Agent 写入）
 REPAIR_TRACE_EVENTS = frozenset(
     {
@@ -114,6 +125,17 @@ class RepairRunTracer:
         run_dir = self.store.runs_dir / self.run_id
         reports = load_agent_reports_from_run(run_dir)
         by_agent = project_token_usage_by_agent(reports)
+        # 分 Agent latency 聚合: agent_asks → {role: {tokens, ms, calls}}
+        by_agent_latency: dict[str, dict] = {}
+        for ref in state.agent_asks:
+            role = ref.agent
+            entry = by_agent_latency.setdefault(role, {"tokens": 0, "ms": 0, "calls": 0})
+            entry["calls"] += 1
+            entry["ms"] += ref.finished_ms - ref.started_ms
+        # 合并 token 数据
+        for role, info in by_agent.items():
+            entry = by_agent_latency.setdefault(role, {"tokens": 0, "ms": 0, "calls": 0})
+            entry["tokens"] = info.get("total_tokens", 0)
         tool_summary = summarize_agent_tool_usage(by_agent)
         rejection_summary = aggregate_rejection_from_agent_reports(reports)
         ttft_summary = aggregate_ttft_from_agent_reports(reports)
@@ -131,7 +153,19 @@ class RepairRunTracer:
                 "items": state.blackboard_snapshot.get("conflicts", []),
             },
             "context_waterfall": build_context_waterfall(reports),
+            "runtime_metrics": {
+                "retry_count": state.retry_count,
+                "tool_steps": tool_summary.get("total_tool_steps", 0),
+                "parse_retry_count": state.node_timings.get("parse_retries", 0),
+                "cache_hit_rate": token_summary.get("cache_hit_rate", 0.0),
+                "writes_used": token_summary.get("writes_used", 0),
+                "writes_limit": token_summary.get("writes_limit", 0),
+                "shell_used": token_summary.get("shell_used", 0),
+                "shell_limit": token_summary.get("shell_limit", 0),
+            },
             "token_usage_by_agent": by_agent,
+            "latency_by_agent": by_agent_latency,
+            "estimated_cost_usd": _estimate_repair_cost(token_summary, state),
             **tool_summary,
             **token_summary,
             **rejection_summary,

@@ -1,0 +1,33 @@
+# Model pricing (USD per 1M tokens)
+# Source: DeepSeek API docs / OpenAI pricing page
+# Last updated: 2026-07
+
+deepseek-v4-pro:
+  input: 0.55
+  output: 2.19
+  cache_read: 0.14  # prompt cache hit discount
+
+deepseek-chat:
+  input: 0.27
+  output: 1.10
+  cache_read: 0.07
+
+gpt-4:
+  input: 30.00
+  output: 60.00
+  cache_read: 15.00  # 50% discount
+
+gpt-4o:
+  input: 2.50
+  output: 10.00
+  cache_read: 1.25
+
+claude-sonnet-5:
+  input: 3.00
+  output: 15.00
+  cache_read: 0.30
+
+claude-opus-4-8:
+  input: 15.00
+  output: 75.00
+  cache_read: 1.50

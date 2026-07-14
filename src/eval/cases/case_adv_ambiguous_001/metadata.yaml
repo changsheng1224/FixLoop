@@ -1,0 +1,17 @@
+case_id: case_adv_ambiguous_001
+description: 意图对抗 — 模糊 issue（无堆栈/无文件名/无错误类型），应 exhausted 而非虚假 success
+difficulty: medium
+expected_badcase_tag: ambiguous_issue
+expected_outcome: exhausted
+expected_skill: ''
+issue_type: unknown
+language: python
+source_files:
+- app.py
+status: draft
+tags:
+- adversarial
+- ambiguous
+- intent
+test_files:
+- test_app.py

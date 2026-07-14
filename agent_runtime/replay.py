@@ -1,6 +1,6 @@
-"""Deterministic Replay：从 trace.jsonl（或 .gz）回放工具执行，对比结果差异。
+"""Deterministic Replay：从 trace.jsonl 回放工具执行 + 树状摘要。
 
-不重新调模型（结果不确定），只回放工具执行（结果确定）。
+不重新调模型（结果不确定），只读 trace 文件做审计/调试。
 """
 
 import json
@@ -8,6 +8,84 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from agent_runtime.run_store import read_trace_path
+
+
+def trace_tree_summary(run_dir: str | Path) -> str:
+    """从 trace.jsonl 生成树状摘要（只读，不重调模型）。
+
+    输出包括：run_started → context_built → tool_executed → run_finished。
+    每步工具调用显示 tool name + preview + timing。
+    """
+    path = Path(run_dir) / "trace.jsonl"
+    if not path.is_file():
+        return f"(trace not found: {path})"
+
+    lines = []
+    events = []
+    for line_text in path.read_text(encoding="utf-8").splitlines():
+        if not line_text.strip():
+            continue
+        try:
+            events.append(json.loads(line_text))
+        except json.JSONDecodeError:
+            pass
+
+    if not events:
+        return "(empty trace)"
+
+    lines.append(f"Trace: {len(events)} events")
+    lines.append("─" * 40)
+
+    step = 0
+    for ev in events:
+        name = ev.get("event", "?")
+        payload = ev.get("payload", {})
+
+        if name == "run_started":
+            lines.append(f"▶ run_started")
+        elif name == "context_built":
+            sections = payload.get("sections") or payload.get("context_sections") or {}
+            total = payload.get("total_tokens", "?")
+            lines.append(f"  📋 context_built ({total} tokens)")
+            for sname, stokens in sorted(sections.items()):
+                lines.append(f"      {sname}: {stokens}")
+        elif name == "tool_executed":
+            step += 1
+            tool = payload.get("tool", "?")
+            tier = payload.get("execution_tier", "")
+            lines.append(f"  [{step}] 🔧 {tool}" + (f" ({tier})" if tier else ""))
+        elif name == "model_request_start":
+            lines.append(f"  🤖 model_request")
+        elif name == "run_finished":
+            reason = payload.get("stop_reason", "?")
+            lines.append(f"■ run_finished ({reason})")
+
+    return "\n".join(lines)
+
+
+def trace_step_prompt(run_dir: str | Path, step: int) -> str:
+    """从 trace 中提取第 N 步的 prompt 文本（来自 context_built）。"""
+    path = Path(run_dir) / "trace.jsonl"
+    if not path.is_file():
+        return "(trace not found)"
+
+    context_seen = 0
+    for line_text in path.read_text(encoding="utf-8").splitlines():
+        if not line_text.strip():
+            continue
+        try:
+            ev = json.loads(line_text)
+        except json.JSONDecodeError:
+            continue
+        if ev.get("event") == "context_built":
+            context_seen += 1
+            if context_seen == step:
+                payload = ev.get("payload", {})
+                preview = payload.get("prompt_preview", "")
+                if preview:
+                    return preview[:2000]
+                return json.dumps(payload, indent=2, ensure_ascii=False)[:2000]
+    return f"(step {step} not found in trace)"
 
 
 @dataclass

@@ -1,0 +1,7 @@
+case_id: case_019
+description: attribute_error test case
+difficulty: easy
+expected_skill: ''
+issue_type: attribute_error
+tags:
+- attribute_error

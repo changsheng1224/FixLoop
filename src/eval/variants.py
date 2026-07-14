@@ -16,6 +16,61 @@ class NoRetrieverOrchestrator(Orchestrator):
     """3-Agent 变体：Localizer → Patcher → Verifier（retriever=None 时跳过 Retriever）。"""
 
 
+class NaiveOrchestrator:
+    """Naive 单轮基线：单次 LLM complete，无 tool schema，无 verify。
+
+    与 Full Multi-Agent 对比，体现工具编排和分工的价值。
+    """
+
+    def __init__(self, client, repo_root: str = ""):
+        self.client = client
+        self._repo_root = repo_root
+
+    def repair(self, issue: str, max_retries: int = 0, **kwargs):
+        import time
+
+        from src.repair.termination import finalize_repair_state
+        from src.state import RepairState
+
+        state = RepairState(issue_input=issue)
+        t0 = time.time()
+
+        try:
+            raw = self.client.complete(
+                f"Fix this bug. Output only the corrected code as a unified diff:\n\n{issue}",
+                max_new_tokens=1024,
+            )
+            # 尝试提取 patch
+            from src.repair.patch_applier import parse_patches
+
+            patches = parse_patches(raw)
+            if patches:
+                state.candidate_patches = patches
+                state.status = "patched"
+            else:
+                state.status = "failed"
+        except Exception as e:
+            state.status = "failed"
+            state.agent_errors["naive"] = str(e)
+
+        state.node_timings["total_ms"] = int((time.time() - t0) * 1000)
+        finalize_repair_state(state)
+        return state
+
+
+def make_naive_factory(
+    *,
+    model_client=None,
+) -> Callable[[str], NaiveOrchestrator]:
+    """返回 `(repo_path) -> NaiveOrchestrator` 工厂。"""
+    client = create_model_client(model_client)
+
+    def factory(repo_path: str) -> NaiveOrchestrator:
+        return NaiveOrchestrator(client, repo_root=repo_path)
+
+    return factory
+
+
 def make_no_retriever_factory(
     *,
     skip_verify: bool = False,
@@ -47,11 +102,14 @@ def build_ablation_variants(
     cases_dir: str | Path | None = None,
     variant_names: list[str] | None = None,
 ) -> dict[str, Callable[[str], object]]:
-    """构建 full / single / no_retriever 三组消融变体工厂。"""
+    """构建 full / single / no_retriever / naive 四组消融变体工厂。"""
     cases_path = Path(cases_dir or DEFAULT_CASES_DIR)
     if fake:
         factory = fake_orchestrator_factory(cases_path)
-        all_variants = {"full": factory, "single": factory, "no_retriever": factory}
+        all_variants = {
+            "full": factory, "single": factory,
+            "no_retriever": factory, "naive": factory,
+        }
     else:
         all_variants = {
             "full": make_orchestrator_factory(
@@ -63,6 +121,7 @@ def build_ablation_variants(
                 skip_verify=skip_verify,
                 model_client=model_client,
             ),
+            "naive": make_naive_factory(model_client=model_client),
         }
 
     if not variant_names:

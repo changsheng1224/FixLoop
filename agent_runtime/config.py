@@ -53,6 +53,12 @@ class AgentConfig(BaseModel):
         le=200_000,
         description="Prompt 上下文硬顶 token 数。超出时拒绝 ask，不静默裁剪。",
     )
+    max_llm_calls_per_repair: int = Field(
+        default=0,
+        ge=0,
+        le=200,
+        description="单次 repair LLM 调用硬顶（0=不禁用）。超限触发 budget_exhausted。",
+    )
     loop_detect_threshold: int = Field(
         default=3,
         ge=0,

@@ -460,8 +460,22 @@ def _handle_command(cmd: str, agent: Agent) -> str:
         else:
             print("(无已保存会话)")
     elif name == "/replay":
-        rid = parts[1] if len(parts) > 1 else "latest"
-        print(f"replay 功能请使用 Python API: ReplayRunner(trace_path).replay(agent)")
+        from agent_runtime.replay import trace_tree_summary
+        from agent_runtime.run_store import RunStore
+
+        store = RunStore(agent._cwd)
+        rid = parts[1] if len(parts) > 1 else None
+        if rid is None:
+            # 找最近的 run
+            if store.runs_dir.exists():
+                runs = sorted(store.runs_dir.iterdir(), key=lambda p: p.stat().st_mtime_ns, reverse=True)
+                if runs:
+                    rid = runs[0].name
+        if rid:
+            run_dir = store.runs_dir / rid
+            print(trace_tree_summary(run_dir))
+        else:
+            print("(无可用 trace)")
     elif name == "/prompt":
         from agent_runtime.run_store import RunStore
         store = RunStore(agent._cwd)
