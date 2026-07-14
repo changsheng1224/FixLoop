@@ -3,13 +3,21 @@
 每次 ask() 结束时自动创建 checkpoint，下次 resume 时检测：
 - 文件是否被外部修改（freshness hash）
 - runtime 身份是否变化（cwd/model/approval/tools）
+
+触发点规范 (CheckpointTrigger)：
+- step_end:    工具执行成功后，可 mid-loop resume
+- user_cancel: Ctrl+C / /cancel，记录 in_flight_tool
+- ask_end:     ask() 正常结束，仅 full-session resume
 """
 
 import hashlib
 import time
 from pathlib import Path
+from typing import Literal
 
 CHECKPOINT_SCHEMA_VERSION = "1.0"
+CheckpointTrigger = Literal["step_end", "user_cancel", "ask_end"]
+VALID_TRIGGERS: frozenset[str] = frozenset({"step_end", "user_cancel", "ask_end"})
 
 # 组成 runtime 身份的配置字段
 RUNTIME_IDENTITY_KEYS = [
@@ -42,18 +50,36 @@ def current_runtime_identity(agent) -> dict:
     }
 
 
-def create_checkpoint(agent, task_state, user_message: str, trigger: str = "ask_end") -> dict:
+def create_checkpoint(
+    agent,
+    task_state,
+    user_message: str,
+    trigger: CheckpointTrigger = "ask_end",
+    *,
+    last_tool: str = "",
+    in_flight_tool: str = "",
+) -> dict:
     """创建检查点，记录当前状态。
 
     Args:
         agent: Agent 实例。
         task_state: TaskState 实例。
         user_message: 当前用户输入（作为 goal）。
-        trigger: 触发原因（"ask_start"/"ask_end"/"manual"）。
+        trigger: 触发原因（step_end/user_cancel/ask_end）。
+        last_tool: 最近执行成功的工具名（step_end 时有效）。
+        in_flight_tool: cancel 时正在执行中的工具名（user_cancel 时有效）。
+
+    Raises:
+        ValueError: trigger 不在 VALID_TRIGGERS 中。
 
     Returns:
         checkpoint 字典。
     """
+    if trigger not in VALID_TRIGGERS:
+        raise ValueError(
+            f"非法 trigger '{trigger}'，允许值: {sorted(VALID_TRIGGERS)}"
+        )
+
     # 从 working memory 提取关键文件
     key_files = {}
     memory = agent.session.get("memory", {})
@@ -75,7 +101,10 @@ def create_checkpoint(agent, task_state, user_message: str, trigger: str = "ask_
         "runtime_identity": current_runtime_identity(agent),
         "tool_steps": task_state.tool_steps,
         "stop_reason": task_state.stop_reason,
+        "last_tool": last_tool,
     }
+    if trigger == "user_cancel" and in_flight_tool:
+        checkpoint["in_flight_tool"] = in_flight_tool
 
     # 存入 session
     agent.session.setdefault("checkpoints", []).append(checkpoint)
