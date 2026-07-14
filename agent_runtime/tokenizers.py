@@ -6,6 +6,7 @@ import os
 from typing import Protocol
 
 from agent_runtime.logging_setup import get_logger
+from agent_runtime.tiktoken_assets import load_local_tiktoken_encoding
 from agent_runtime.tokenizer_assets import local_tokenizer_json
 from agent_runtime.tokenizer_registry import TokenizerSpec, build_tokenizer_spec
 
@@ -30,27 +31,95 @@ class TokenCounter(Protocol):
     def fit(self, text: str, limit: int) -> str: ...
 
 
+class ApproxTokenCounter:
+    """Offline approximation used when tokenizer assets cannot be loaded."""
+
+    def __init__(self, backend: str = "approx"):
+        self.backend = backend
+
+    def count(self, text: str) -> int:
+        if not text:
+            return 0
+        total = 0
+        ascii_run = 0
+
+        def flush_ascii() -> None:
+            nonlocal total, ascii_run
+            if not ascii_run:
+                return
+            total += 1 if ascii_run <= 6 else max(1, (ascii_run + 3) // 4)
+            ascii_run = 0
+
+        for ch in text:
+            if ch.isspace():
+                flush_ascii()
+                continue
+            if ord(ch) > 127:
+                flush_ascii()
+                total += 1
+            else:
+                ascii_run += 1
+        flush_ascii()
+        return max(1, total)
+
+    def fit(self, text: str, limit: int) -> str:
+        if limit <= 0:
+            return ""
+        out = []
+        for ch in text:
+            candidate = "".join(out) + ch
+            if self.count(candidate) > limit:
+                break
+            out.append(ch)
+        return "".join(out)
+
+
 class TiktokenCounter:
     """OpenAI tiktoken backend（GPT 系及未知模型 fallback）。"""
 
     def __init__(self, model: str = "gpt-4", *, encoding_name: str | None = None):
-        import tiktoken
+        self._fallback: ApproxTokenCounter | None = None
+        try:
+            import tiktoken
 
-        if encoding_name:
-            self.encoder = tiktoken.get_encoding(encoding_name)
-            self.backend = f"tiktoken:{encoding_name}"
-        else:
-            try:
-                self.encoder = tiktoken.encoding_for_model(model)
-                self.backend = f"tiktoken:{model}"
-            except KeyError:
-                self.encoder = tiktoken.get_encoding("cl100k_base")
-                self.backend = "tiktoken:cl100k_base"
+            if encoding_name:
+                self.encoder = load_local_tiktoken_encoding(encoding_name)
+                if self.encoder is not None:
+                    self.backend = f"tiktoken-local:{encoding_name}"
+                else:
+                    self.encoder = tiktoken.get_encoding(encoding_name)
+                    self.backend = f"tiktoken:{encoding_name}"
+            else:
+                try:
+                    mapped_encoding = tiktoken.model.encoding_name_for_model(model)
+                except KeyError:
+                    mapped_encoding = "cl100k_base"
+
+                self.encoder = load_local_tiktoken_encoding(mapped_encoding)
+                if self.encoder is not None:
+                    self.backend = f"tiktoken-local:{mapped_encoding}"
+                else:
+                    try:
+                        self.encoder = tiktoken.encoding_for_model(model)
+                        self.backend = f"tiktoken:{model}"
+                    except KeyError:
+                        self.encoder = tiktoken.get_encoding("cl100k_base")
+                        self.backend = "tiktoken:cl100k_base"
+        except Exception as exc:
+            backend = f"tiktoken:{encoding_name or model}:approx"
+            log.warning("无法加载 tiktoken tokenizer %s（%s），使用近似计数", encoding_name or model, exc)
+            self.encoder = None
+            self._fallback = ApproxTokenCounter(backend)
+            self.backend = backend
 
     def count(self, text: str) -> int:
+        if self._fallback is not None:
+            return self._fallback.count(text)
         return len(self.encoder.encode(text))
 
     def fit(self, text: str, limit: int) -> str:
+        if self._fallback is not None:
+            return self._fallback.fit(text, limit)
         tokens = self.encoder.encode(text)
         if len(tokens) <= limit:
             return text
@@ -85,7 +154,7 @@ class HuggingFaceTokenizerCounter:
                 exc,
             )
             self._fallback = TiktokenCounter(encoding_name="cl100k_base")
-            self.backend = "tiktoken:cl100k_base"
+            self.backend = self._fallback.backend
 
     def count(self, text: str) -> int:
         if self._fallback is not None:

@@ -8,7 +8,7 @@ from src.agents.verifier import create_verifier
 
 @pytest.fixture
 def client():
-    return FakeModelClient(["<final>ok</final>"])
+    return FakeModelClient(['{"all_passed": true, "total_tests": 1, "passed": 1}'])
 
 
 class TestVerifierAgent:
@@ -31,7 +31,7 @@ class TestVerifierAgent:
     def test_verifier_ask_returns_answer(self, client, workspace):
         agent = create_verifier(client, workspace)
         answer = agent.ask("验证补丁")
-        assert "ok" in answer
+        assert "all_passed" in answer
 
 
 class TestVerifyStrategyExecutionTier:

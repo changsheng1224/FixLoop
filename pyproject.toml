@@ -34,7 +34,7 @@ where = ["."]
 include = ["agent_runtime*"]
 
 [tool.setuptools.package-data]
-agent_runtime = ["data/tokenizers/**/*"]
+agent_runtime = ["data/tokenizers/**/*", "data/tiktoken/**/*"]
 
 [tool.ruff]
 line-length = 100

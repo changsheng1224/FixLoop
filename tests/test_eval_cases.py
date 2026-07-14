@@ -1,6 +1,5 @@
 """M7 评测 Case 库结构与健康检查。"""
 
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -9,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from src.eval.patch_utils import apply_unified_patch
+from src.eval.runner import _copy_case_repo
 
 CASES_DIR = Path(__file__).resolve().parents[1] / "src" / "eval" / "cases"
 READY_CASES = [f"case_{i:03d}" for i in range(1, 11)]
@@ -64,7 +64,7 @@ class TestEvalCaseHealth:
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp_repo = Path(tmp) / "repo"
-            shutil.copytree(repo, tmp_repo)
+            _copy_case_repo(repo, tmp_repo)
             apply_unified_patch(tmp_repo, patch)
             proc = subprocess.run(
                 [sys.executable, "-m", "pytest", "-q"],

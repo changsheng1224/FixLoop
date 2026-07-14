@@ -335,13 +335,24 @@ def _merge_adjacent_lines(lines: list[str]) -> list[str]:
         m = re.match(r"^(.+?):(\d+):(.+)$", ln)
         if m:
             parsed.append((m.group(1), int(m.group(2)), m.group(3).strip()))
+        else:
+            parsed.append((ln, -1, ""))
 
     i = 0
     while i < len(parsed):
         fname, lnum, text = parsed[i]
+        if lnum < 0:
+            merged.append(fname)
+            i += 1
+            continue
         # 找连续同文件行
         j = i + 1
-        while j < len(parsed) and parsed[j][0] == fname and parsed[j][1] == parsed[j - 1][1] + 1:
+        while (
+            j < len(parsed)
+            and parsed[j][1] >= 0
+            and parsed[j][0] == fname
+            and parsed[j][1] == parsed[j - 1][1] + 1
+        ):
             j += 1
         if j - i >= 3:
             # 3 行及以上合并为范围
@@ -520,31 +531,54 @@ def _kill_process_tree(proc: subprocess.Popen) -> None:
     """终止 shell 子进程（含 Windows 下 shell 派生的孙进程）。"""
     if proc.poll() is not None:
         return
+    killed = False
     if os.name == "nt":
-        subprocess.run(
+        result = subprocess.run(
             ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
             capture_output=True,
             check=False,
         )
+        killed = result.returncode == 0
     else:
         proc.kill()
+        killed = True
+    if not killed and proc.poll() is None:
+        proc.terminate()
     try:
-        proc.wait(timeout=3)
+        proc.wait(timeout=0.5)
     except subprocess.TimeoutExpired:
-        pass
+        proc.kill()
 
 
 def _run_shell_cancellable(command: str, root, env, timeout: int, cancel_token) -> str:
+    import shlex
     import time
 
+    popen_kwargs = {}
+    popen_command = command
+    use_shell = True
+    if os.name == "nt":
+        cmd_name = command.strip().split()[0].split("/")[-1].split("\\")[-1].lower()
+        if cmd_name not in {"echo", "dir", "set"}:
+            try:
+                popen_command = shlex.split(command)
+                use_shell = False
+            except ValueError:
+                popen_command = command
+                use_shell = True
+        popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    else:
+        popen_kwargs["start_new_session"] = True
+
     proc = subprocess.Popen(
-        command,
+        popen_command,
         cwd=root,
-        shell=True,
+        shell=use_shell,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         env=env,
+        **popen_kwargs,
     )
     deadline = time.time() + timeout
     poll_s = 0.05

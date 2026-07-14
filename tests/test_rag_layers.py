@@ -49,10 +49,12 @@ class TestDeriveEmbedQuery:
 
 
 class TestEmbedCacheHitRate:
-    def test_initial_rate_is_zero(self):
-        from agent_runtime.features.memory.semantic import get_embed_cache_hit_rate
+    def test_initial_rate_is_zero(self, monkeypatch):
+        import agent_runtime.features.memory.semantic as sem_mod
 
-        assert get_embed_cache_hit_rate() == 0.0
+        monkeypatch.setattr(sem_mod, "_embed_cache_hits", 0)
+        monkeypatch.setattr(sem_mod, "_embed_cache_misses", 0)
+        assert sem_mod.get_embed_cache_hit_rate() == 0.0
 
     def test_module_level_counter(self):
         import agent_runtime.features.memory.semantic as sem_mod

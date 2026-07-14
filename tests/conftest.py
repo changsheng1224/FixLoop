@@ -73,9 +73,10 @@ def ws(workspace):
 
 
 @pytest.fixture
-def non_git_dir():
+def non_git_dir(monkeypatch):
     """创建非 git 目录。"""
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
+        monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(root.parent.resolve()))
         (root / "hello.txt").write_text("hello world")
         yield root
