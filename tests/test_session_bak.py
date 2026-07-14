@@ -50,3 +50,45 @@ class TestSessionStoreBak:
     def test_load_returns_none_when_no_files(self, store):
         """文件不存在时返回 None。"""
         assert store.load("nonexistent") is None
+
+
+# ---------------------------------------------------------------------------
+# REPL /save /load 往返（V1.5-Bonus8）
+# ---------------------------------------------------------------------------
+
+
+class TestReplSaveLoad:
+    @pytest.fixture
+    def store(self, tmp_path):
+        from agent_runtime.session_store import SessionStore
+
+        (tmp_path / ".agent" / "sessions").mkdir(parents=True)
+        return SessionStore(str(tmp_path))
+
+    def test_save_load_roundtrip(self, store):
+        """save → load 字段往返一致。"""
+        session = {
+            "id": "my-session",
+            "history": [{"role": "user", "content": "hello"}],
+            "plan_todos": [{"id": "1", "content": "fix bug", "status": "done"}],
+            "memory": {"working": {"task_summary": "修复除零错误"}},
+        }
+        store.save(session)
+        loaded = store.load("my-session")
+        assert loaded is not None
+        assert loaded["id"] == "my-session"
+        assert len(loaded["history"]) == 1
+        assert loaded["history"][0]["content"] == "hello"
+        assert len(loaded["plan_todos"]) == 1
+        assert loaded["plan_todos"][0]["status"] == "done"
+
+    def test_save_without_explicit_id_uses_default(self, store):
+        """未指定 id 时使用 'unknown'。"""
+        store.save({"data": "test"})
+        loaded = store.load("unknown")
+        assert loaded is not None
+        assert loaded["data"] == "test"
+
+    def test_load_nonexistent_session(self, store):
+        """加载不存在的会话返回 None。"""
+        assert store.load("ghost-session") is None
