@@ -94,13 +94,19 @@ class MemoryDreamer:
         self.stats["expired"] = removed
         return removed
 
+    @staticmethod
+    def _sort_by_time(notes: list[dict]) -> list[dict]:
+        """按 created_at 升序排列（最旧在前，最新在后）。"""
+        return sorted(notes, key=lambda n: n.get("created_at", 0))
+
     def _trim(self) -> int:
-        """裁剪超出 MAX_EPISODIC_NOTES 的笔记。"""
+        """裁剪超出 MAX_EPISODIC_NOTES 的笔记（按时间保留最新）。"""
         notes = self._state.get("episodic_notes", [])
         if len(notes) <= MAX_EPISODIC_NOTES:
             return 0
         removed = len(notes) - MAX_EPISODIC_NOTES
-        self._state["episodic_notes"] = notes[-MAX_EPISODIC_NOTES:]
+        sorted_notes = self._sort_by_time(notes)
+        self._state["episodic_notes"] = sorted_notes[-MAX_EPISODIC_NOTES:]
         self.stats["trimmed"] = removed
         return removed
 
@@ -157,9 +163,10 @@ class MemoryDreamer:
         return routing
 
     def _gc_durable(self, max_entries: int) -> int:
-        """Durable GC：每个 topic 文件超限时按 mtime LRU 淘汰旧条目。
+        """Durable GC：每个 topic 文件超限时淘汰旧条目。
 
-        不读取文件内容——直接按行裁剪（每行一个条目）。
+        按文件 mtime 排序，优先淘汰最旧文件中的条目。
+        chunked topic 的 chunk 目录也参与 GC。
         """
         if not self._durable_root:
             return 0
@@ -168,20 +175,46 @@ class MemoryDreamer:
             return 0
 
         total_removed = 0
-        for md_file in sorted(topics_dir.glob("*.md")):
+        # 按 mtime 排序文件（旧文件优先处理）
+        md_files = sorted(topics_dir.glob("*.md"), key=lambda p: p.stat().st_mtime)
+        for md_file in md_files:
             try:
                 lines = md_file.read_text(encoding="utf-8").splitlines()
-                # 保留标题行（以 # 开头）和最近 N 个条目
                 headers = [l for l in lines if l.startswith("#")]
                 entries = [l for l in lines if l.strip() and not l.startswith("#")]
                 if len(entries) <= max_entries:
                     continue
                 removed = len(entries) - max_entries
+                # 保留最近 N 条（按追加顺序）
                 kept = headers + entries[-max_entries:]
                 md_file.write_text("\n".join(kept) + "\n", encoding="utf-8")
                 total_removed += removed
             except OSError:
                 pass
+
+        # chunked topic GC
+        for chunk_dir in sorted(topics_dir.glob("*"), key=lambda p: p.stat().st_mtime if p.is_dir() else 0):
+            if not chunk_dir.is_dir() or not (chunk_dir / "chunk-0.md").is_file():
+                continue
+            try:
+                total_entries = 0
+                for cf in sorted(chunk_dir.glob("chunk-*.md")):
+                    lines = cf.read_text(encoding="utf-8").splitlines()
+                    total_entries += sum(1 for l in lines if l.strip() and not l.startswith("#"))
+                if total_entries <= max_entries:
+                    continue
+                # 删除最旧 chunk
+                chunks = sorted(chunk_dir.glob("chunk-*.md"), key=lambda p: int(p.stem.split("-")[1]))
+                while total_entries > max_entries and len(chunks) > 1:
+                    oldest = chunks.pop(0)
+                    lines = oldest.read_text(encoding="utf-8").splitlines()
+                    removed = sum(1 for l in lines if l.strip() and not l.startswith("#"))
+                    total_entries -= removed
+                    oldest.unlink()
+                    total_removed += removed
+            except OSError:
+                pass
+
         self.stats["durable_gc"] = total_removed
         return total_removed
 

@@ -36,7 +36,9 @@ def append_note(
     }
     notes.append(note)
     if len(notes) > MAX_EPISODIC_NOTES:
-        state["episodic_notes"] = notes[-MAX_EPISODIC_NOTES:]
+        # 按时间保留最新 N 条
+        sorted_notes = sorted(notes, key=lambda n: n.get("created_at", 0))
+        state["episodic_notes"] = sorted_notes[-MAX_EPISODIC_NOTES:]
 
 
 def retrieval_candidates(

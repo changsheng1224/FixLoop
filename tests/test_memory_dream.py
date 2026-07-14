@@ -403,6 +403,136 @@ class TestRebuildRoutingTable:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# GC + episodic 上限（V1.5-Bonus3）
+# ---------------------------------------------------------------------------
+
+
+class TestTrimByTime:
+    """_trim 按 created_at 淘汰最旧，保留最新。"""
+
+    def test_within_limit_unchanged(self):
+        state = default_memory_state()
+        state["episodic_notes"] = [_make_note(f"n{i}", i) for i in range(5)]
+        dreamer = MemoryDreamer(state)
+        assert dreamer._trim() == 0
+
+    def test_exceeds_limit_trims_oldest(self):
+        state = default_memory_state()
+        # 旧条目在前，新条目在后
+        old = time.time() - 3600
+        new = time.time()
+        notes = []
+        for i in range(MAX_EPISODIC_NOTES + 3):
+            notes.append(_make_note(f"n{i}", i, created_at=old if i < 3 else new))
+        # 打乱顺序验证排序
+        import random
+        random.shuffle(notes)
+        state["episodic_notes"] = notes
+        dreamer = MemoryDreamer(state)
+        removed = dreamer._trim()
+        assert removed == 3
+        assert len(state["episodic_notes"]) == MAX_EPISODIC_NOTES
+        # 保留的是最新的
+        for n in state["episodic_notes"]:
+            assert n["created_at"] >= new
+
+    def test_all_same_time_keeps_by_position(self):
+        state = default_memory_state()
+        t = time.time()
+        n = MAX_EPISODIC_NOTES + 5
+        state["episodic_notes"] = [_make_note(f"n{i}", i, created_at=t) for i in range(n)]
+        dreamer = MemoryDreamer(state)
+        dreamer._trim()
+        assert len(state["episodic_notes"]) == MAX_EPISODIC_NOTES
+
+
+class TestDurableGCMtime:
+    """Durable GC 按 mtime 淘汰旧文件条目。"""
+
+    def test_mtime_sorted_eviction(self):
+        import tempfile
+        import os
+
+        with tempfile.TemporaryDirectory() as tmp:
+            topics_dir = Path(tmp) / ".agent" / "memory" / "topics"
+            topics_dir.mkdir(parents=True)
+
+            # 创建两个 topic 文件，一个旧一个新
+            old_file = topics_dir / "project-conventions.md"
+            new_file = topics_dir / "key-decisions.md"
+            old_file.write_text("# Project Conventions\n" + "\n".join(f"entry {i}" for i in range(25)))
+            new_file.write_text("# Key Decisions\n" + "\n".join(f"decision {i}" for i in range(25)))
+
+            # 设置不同的 mtime
+            old_mtime = time.time() - 86400
+            new_mtime = time.time()
+            os.utime(str(old_file), (old_mtime, old_mtime))
+            os.utime(str(new_file), (new_mtime, new_mtime))
+
+            state = default_memory_state()
+            dreamer = MemoryDreamer(state, durable_root=tmp)
+            removed = dreamer._gc_durable(max_entries=20)
+            assert removed == 10  # 5 from old + 5 from new
+
+    def test_chunked_gc_removes_oldest_chunk(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            from agent_runtime.features.memory.durable import DurableMemoryStore
+
+            store = DurableMemoryStore(tmp)
+            # 写入足够多的条目触发 chunked
+            entries = [(f"key-decisions", f"big {i}: " + "y" * 1000) for i in range(60)]
+            store.promote(entries)
+
+            chunk_dir = store.topics_dir / "key-decisions"
+            chunks_before = sorted(chunk_dir.glob("chunk-*.md"))
+            assert len(chunks_before) >= 2
+
+            state = default_memory_state()
+            dreamer = MemoryDreamer(state, durable_root=tmp)
+            # 限制为 15 条 → 应删除最旧 chunk
+            dreamer._gc_durable(max_entries=15)
+            chunks_after = sorted(chunk_dir.glob("chunk-*.md"))
+            # 至少删了 1 个 chunk
+            assert len(chunks_after) < len(chunks_before)
+
+
+class TestMemoryGCIntegration:
+    """GC 集成：Dream run 末尾触发 + 条数上限。"""
+
+    def test_trim_triggered_in_run(self):
+        state = default_memory_state()
+        n = MAX_EPISODIC_NOTES + 5
+        state["episodic_notes"] = [_make_note(f"n{i}", i) for i in range(n)]
+        stats, dreamer = run_memory_dream(state)
+        assert stats["trimmed"] == 5
+        assert len(state["episodic_notes"]) == MAX_EPISODIC_NOTES
+
+    def test_gc_triggered_in_run(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _setup_topics_dir(tmp, 30)
+            state = default_memory_state()
+            stats, dreamer = run_memory_dream(state, durable_root=tmp)
+            assert stats["durable_gc"] > 0
+
+    def test_both_gc_and_trim_in_run(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _setup_topics_dir(tmp, 25)
+            state = default_memory_state()
+            n = MAX_EPISODIC_NOTES + 3
+            state["episodic_notes"] = [_make_note(f"n{i}", i) for i in range(n)]
+            stats, dreamer = run_memory_dream(state, durable_root=tmp)
+            assert stats["trimmed"] == 3
+            assert stats["durable_gc"] == 5
+            assert len(state["episodic_notes"]) == MAX_EPISODIC_NOTES
+
+
 class TestDreamTraceHealth:
     def test_dream_summary_includes_new_fields(self):
         trace = dream_summary_to_trace({
