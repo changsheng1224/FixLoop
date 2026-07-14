@@ -96,6 +96,7 @@ def fit_repair_user_prompt(
     template_meta: dict | None = None,
 ) -> tuple[str, dict]:
     from agent_runtime.context_manager import TOTAL_BUDGET
+    from agent_runtime.tier_policy import load_orchestrator_pin_fields
 
     config = getattr(agent, "config", None)
     model = getattr(config, "model", "deepseek-v4-pro")
@@ -108,4 +109,16 @@ def fit_repair_user_prompt(
         provider=provider,
         total_limit=total_limit,
     )
+
+    # L2 与 L0 共读同一 tier_pins.yaml → orchestrator_pin_fields
+    pin_fields = load_orchestrator_pin_fields()
+    if pin_fields:
+        meta["orpin_fields"] = list(pin_fields)
+        # 验证钉扎字段在 fitted 输出中是否保留
+        preserved: dict[str, bool] = {}
+        for field in pin_fields:
+            prefix = f"{field}:"
+            preserved[field] = prefix in fitted_user or field in fitted_user[:200]
+        meta["orpin_preserved"] = preserved
+
     return fitted_user, merge_template_metadata(meta, template_meta)

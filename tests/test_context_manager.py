@@ -135,6 +135,130 @@ class TestContextManagerBuild:
         # 应该发生了裁剪
         assert len(meta.get("cuts", [])) > 0
 
+    def test_hard_cap_raises_context_too_large_error(self, agent):
+        """hard_cap 超限时 ContextManager.build() 抛出 ContextTooLargeError。"""
+        from agent_runtime.errors import ContextTooLargeError
+
+        # 设置极低硬顶（system+tool+workspace 常规就 >300 tokens）
+        agent.config.hard_cap = 100
+        cm = ContextManager(agent)
+        with pytest.raises(ContextTooLargeError) as exc_info:
+            cm.build("test")
+        e = exc_info.value
+        assert e.actual > 100
+        assert e.limit == 100
+        assert "100" in str(e)
+
+    def test_hard_cap_high_enough_does_not_raise(self, agent):
+        """hard_cap 足够大时不抛异常。"""
+        agent.config.hard_cap = 8000
+        cm = ContextManager(agent)
+        prompt, meta = cm.build("test")
+        assert meta["total_tokens"] <= 8000
+        assert "test" in prompt
+
+    def test_hard_cap_build_dynamic_context_raises(self, agent):
+        """build_dynamic_context() 也检查 hard_cap。"""
+        from agent_runtime.errors import ContextTooLargeError
+
+        agent.config.hard_cap = 50
+        cm = ContextManager(agent)
+        with pytest.raises(ContextTooLargeError):
+            cm.build_dynamic_context("test")
+
+    def test_hard_cap_build_for_native_raises(self, agent):
+        """build_for_native() 也检查 hard_cap。"""
+        from agent_runtime.errors import ContextTooLargeError
+
+        agent.config.hard_cap = 50
+        cm = ContextManager(agent)
+        with pytest.raises(ContextTooLargeError):
+            cm.build_for_native("test")
+
+
+class TestStateSection:
+    """_get_state() 注入 task_summary + phase + plan_todos 前 3 条。"""
+
+    @pytest.fixture
+    def agent_with_state(self, temp_workspace):
+        """创建带 plan_todos + task_summary + l2_phase 的 Agent。"""
+        config = AgentConfig(provider="fake", max_steps=4, prompt_budget=6000)
+        ws = WorkspaceContext.build(str(temp_workspace))
+        client = FakeModelClient(["<final>ok</final>"])
+        agent = Agent(config=config, model_client=client, workspace=ws)
+        # 注入 task_summary
+        agent.session.setdefault("memory", {}).setdefault("working", {})["task_summary"] = (
+            "修复 calculator.py 除零错误"
+        )
+        # 注入 plan_todos
+        agent.session["plan_todos"] = [
+            {"id": "1", "content": "定位错误文件 calculator.py:42", "status": "done"},
+            {"id": "2", "content": "检索相关测试和调用方", "status": "in_progress"},
+            {"id": "3", "content": "生成补丁并验证", "status": "pending"},
+            {"id": "4", "content": "运行全量测试确认无回归", "status": "pending"},
+        ]
+        # 注入 l2_phase
+        agent._l2_phase = "patching"
+        return agent
+
+    def test_state_section_has_todo_content(self, agent_with_state):
+        """state 段包含 plan_todos 的前 3 条内容文本（非仅计数）。"""
+        cm = ContextManager(agent_with_state)
+        state = cm._get_state()
+        assert "定位错误文件" in state
+        assert "检索相关测试" in state
+        assert "生成补丁并验证" in state
+        # 第 4 条不在前 3 条中
+        assert "运行全量测试" not in state
+
+    def test_state_section_has_status_icons(self, agent_with_state):
+        """state 段每条 todo 有状态图标。"""
+        cm = ContextManager(agent_with_state)
+        state = cm._get_state()
+        assert "+" in state   # done
+        assert ">" in state   # in_progress
+        assert "-" in state   # pending
+
+    def test_state_section_has_task_summary(self, agent_with_state):
+        """state 段包含 task_summary。"""
+        cm = ContextManager(agent_with_state)
+        state = cm._get_state()
+        assert "修复 calculator.py 除零错误" in state
+
+    def test_state_section_has_phase(self, agent_with_state):
+        """state 段包含 L2 repair phase。"""
+        cm = ContextManager(agent_with_state)
+        state = cm._get_state()
+        assert "patching" in state
+
+    def test_state_section_is_rendered_in_build(self, agent_with_state):
+        """state 段内容出现在 ContextManager.build() 的 prompt 输出中。"""
+        cm = ContextManager(agent_with_state)
+        prompt, _ = cm.build("fix the bug")
+        assert "定位错误文件" in prompt
+        assert "patching" in prompt
+
+    def test_state_section_empty_when_no_todos(self, agent):
+        """没有 plan_todos 时 state 段为空。"""
+        cm = ContextManager(agent)
+        state = cm._get_state()
+        assert state == ""
+
+    def test_state_section_truncated_by_budget(self, agent_with_state):
+        """超长 todo content 被 section_filler 按 BUDGET_STATE 截断。"""
+        # 构造超长 content 的 todo
+        agent_with_state.session["plan_todos"] = [
+            {"id": "1", "content": "第一步: " + "非常长的描述文本 " * 50, "status": "done"},
+            {"id": "2", "content": "第二步: " + "更多很长的描述 " * 50, "status": "in_progress"},
+        ]
+        cm = ContextManager(agent_with_state, total_budget=200)
+        prompt, meta = cm.build("short")
+        # state 段应被截断到 200 token 以内
+        state_tokens = meta["sections"].get("state", 0)
+        assert state_tokens <= 200
+        # prompt 总 token 在预算内
+        assert meta["total_tokens"] <= 200
+
 
 class TestHistoryCompression:
     """历史压缩测试。"""
@@ -278,3 +402,192 @@ class TestFitPriorityMatrix:
         cuts = meta.get("cuts", [])
         # 应至少有些 section 被裁剪
         assert len(cuts) >= 0  # 松断言：压缩管线可能保留压缩后的内容
+
+
+class TestSectionHardCapEnforce:
+    """Section 硬顶 enforce：每段独立 BUDGET_* 裁剪，不只依赖 TOTAL。"""
+
+    def _make_filler(self, budget, metadata, section_cap=10000):
+        from agent_runtime.context_manager import TokenBudget, scaled_section_budget
+        from agent_runtime.section_filler import SectionFiller
+
+        return SectionFiller(
+            budget=budget,
+            metadata=metadata,
+            section_cap=section_cap,
+            total_limit=section_cap,
+            scaled_budget=scaled_section_budget,
+        )
+
+    def test_section_budget_fits_when_total_has_room(self):
+        """TOTAL 充足但 section 自身超 BUDGET_* 时仍被裁剪。"""
+        from agent_runtime.context_manager import TokenBudget
+
+        budget = TokenBudget(model="gpt-4", total_limit=6000, provider="openai")
+        meta: dict = {"sections": {}, "cuts": []}
+        filler = self._make_filler(budget, meta, section_cap=5000)
+
+        # memory budget=800，但文本 2000 tokens → 应被裁剪到 800
+        long_memory = "memory content " * 400  # ~2000 tokens
+        filler.add_section("memory", long_memory, section_budget=800)
+        assert meta["sections"]["memory"] <= 800
+        assert any("section 预算" in c for c in meta["cuts"])
+
+    def test_total_budget_cut_distinct_from_section_cut(self):
+        """section 预算裁剪与总预算裁剪的 cut message 区分。"""
+        from agent_runtime.context_manager import TokenBudget
+
+        budget = TokenBudget(model="gpt-4", total_limit=6000, provider="openai")
+        meta: dict = {"sections": {}, "cuts": []}
+
+        # 极小 section_cap → 触发总预算裁剪
+        filler = self._make_filler(budget, meta, section_cap=200)
+        long_text = "x " * 500
+        filler.add_section("history", long_text, section_budget=2600)
+        assert meta["sections"]["history"] <= 200
+        assert any("总预算剩余" in c for c in meta["cuts"])
+
+    def test_stable_section_fitted_not_discarded(self):
+        """stable section 超 cap 时裁剪而非整段丢弃。"""
+        from agent_runtime.context_manager import TokenBudget, scaled_section_budget
+
+        budget = TokenBudget(model="gpt-4", total_limit=6000, provider="openai")
+        meta: dict = {"sections": {}, "cuts": []}
+
+        from agent_runtime.section_filler import SectionFiller
+
+        filler = SectionFiller(
+            budget=budget,
+            metadata=meta,
+            section_cap=5000,
+            total_limit=6000,
+            scaled_budget=scaled_section_budget,
+        )
+        # tools cap ≈ 900，但文本 5000 tokens → 应裁剪而非丢弃
+        huge_tools = "tool " * 1000
+        filler.add_stable_section("tools", huge_tools, section_limit=900)
+        assert meta["sections"]["tools"] > 0, "stable section should be fitted, not discarded"
+        assert any("裁剪 tools" in c for c in meta["cuts"])
+
+    def test_stable_section_still_discarded_when_no_remaining(self):
+        """stable section 在总预算完全耗尽时仍被丢弃。"""
+        from agent_runtime.context_manager import TokenBudget, scaled_section_budget
+
+        budget = TokenBudget(model="gpt-4", total_limit=6000, provider="openai")
+        meta: dict = {"sections": {}, "cuts": []}
+
+        from agent_runtime.section_filler import SectionFiller
+
+        filler = SectionFiller(
+            budget=budget,
+            metadata=meta,
+            section_cap=100,  # 极小 cap
+            total_limit=100,
+            scaled_budget=scaled_section_budget,
+        )
+        # 先填满总预算
+        filler.add_section("memory", "x " * 200, section_budget=800)
+        # 再加 stable section — 剩余为 0，应丢弃
+        filler.add_stable_section("tools", "tool " * 500, section_limit=900)
+        assert meta["sections"].get("tools", 0) == 0
+        assert any("丢弃 tools" in c for c in meta["cuts"])
+
+    def test_section_skipped_when_no_remaining(self):
+        """总预算耗尽后 section 被跳过。"""
+        from agent_runtime.context_manager import TokenBudget
+
+        budget = TokenBudget(model="gpt-4", total_limit=6000, provider="openai")
+        meta: dict = {"sections": {}, "cuts": []}
+        filler = self._make_filler(budget, meta, section_cap=50)
+
+        # 先填满
+        filler.add_section("memory", "xxx " * 50, section_budget=100)
+        # 再加 → 跳过
+        filler.add_section("history", "more content " * 50, section_budget=500)
+        assert meta["sections"].get("history", -1) == 0
+        assert any("跳过 history" in c for c in meta["cuts"])
+
+
+# ---------------------------------------------------------------------------
+# history 只读 JSONL（V1.5-Bonus2）：build 优先读 JSONL，不写回
+# ---------------------------------------------------------------------------
+
+
+class TestHistoryReadOnlyJsonl:
+    """ContextManager.build() 优先读 history.jsonl，篡改 session 内存不影响投影。"""
+
+    def test_build_reads_from_jsonl_not_session(self, agent, temp_workspace):
+        """record 写入 JSONL 后，清空 session history，build 仍能读到 JSONL 内容。"""
+        # 1. 写入历史（双写：session + JSONL）
+        agent.record({"role": "user", "content": "fix the import error"})
+        agent.record({"role": "assistant", "content": "let me check the files"})
+
+        # 2. 篡改 session 内存（模拟内存损坏或外部修改）
+        agent.session["history"] = [
+            {"role": "user", "content": "TAMPERED fake request"}
+        ]
+
+        # 3. build 应读 JSONL（原始内容），忽略被篡改的 session 内存
+        cm = ContextManager(agent)
+        prompt, _ = cm.build("new issue")
+        # JSONL 中的原始内容在 prompt 中
+        assert "fix the import error" in prompt
+        # 篡改内容不在 prompt 中
+        assert "TAMPERED" not in prompt
+
+    def test_build_does_not_write_jsonl(self, agent, temp_workspace):
+        """ContextManager.build() 不向 history.jsonl 写入任何内容。"""
+        import json
+        from pathlib import Path
+
+        jsonl_path = Path(str(temp_workspace)) / ".agent" / "history.jsonl"
+
+        # 1. 写入一条历史
+        agent.record({"role": "user", "content": "original entry"})
+        lines_before = len(jsonl_path.read_text(encoding="utf-8").strip().splitlines())
+
+        # 2. 多次 build
+        cm = ContextManager(agent)
+        for _ in range(3):
+            cm.build("another request")
+
+        # 3. JSONL 行数不变（build 不追加写入）
+        lines_after = len(jsonl_path.read_text(encoding="utf-8").strip().splitlines())
+        assert lines_after == lines_before, (
+            f"build should not write to JSONL; {lines_before} → {lines_after}"
+        )
+
+    def test_fallback_to_session_when_jsonl_missing(self, agent):
+        """JSONL 文件不存在时回退到 session.history。"""
+        # agent 未设置 cwd 或 JSONL 不存在 → read_history 回退 session
+        agent.session["history"] = [
+            {"role": "user", "content": "fallback entry"}
+        ]
+        cm = ContextManager(agent)
+        prompt, _ = cm.build("test")
+        assert "fallback entry" in prompt
+
+    def test_jsonl_and_session_in_sync_produces_same_result(self, agent, temp_workspace):
+        """正常情况（JSONL 与 session 同步）build 结果一致。"""
+        import json
+        from pathlib import Path
+
+        # 写入多条历史
+        for i in range(5):
+            agent.record({"role": "user", "content": f"question {i}"})
+
+        # 用 JSONL 路径 build
+        cm_jsonl = ContextManager(agent)
+        prompt_jsonl, _ = cm_jsonl.build("test")
+
+        # 清空 session history，从 JSONL 读取
+        agent.session["history"] = []
+        cm_fallback = ContextManager(agent)
+        prompt_fallback, _ = cm_fallback.build("test")
+
+        # JSONL 路径应保留原始内容
+        assert "question 0" in prompt_jsonl
+        # 清空 session 后 JSONL 仍能提供服务
+        assert "question 0" in prompt_fallback
+        # 两者一致（都从同一 JSONL 读取）
+        assert prompt_jsonl == prompt_fallback

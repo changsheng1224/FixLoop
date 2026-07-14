@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from agent_runtime.errors import ContextTooLargeError
+
 from agent_runtime.compression_pipeline import (
     DEFAULT_TOOL_TRUNCATION,
     L5_TRIGGER_RATIO,
@@ -48,6 +50,7 @@ BUDGET_MEMORY = 800
 BUDGET_KNOWLEDGE = 600  # 持久知识检索（episodic notes + durable facts）
 BUDGET_HISTORY = 2600
 KEEP_RECENT_HISTORY = 6  # 最近 N 条历史完整保留
+HARD_CAP = 8000  # 硬顶 token 数，超出拒绝 ask
 
 
 def scaled_section_budget(section_limit: int, total_limit: int) -> int:
@@ -92,7 +95,11 @@ class TokenBudget:
 
 
 class _DiskCache(dict):
-    """dict-like 磁盘缓存（key → .agent/summary_cache/<hash>.txt）。"""
+    """dict-like 磁盘缓存（key → .agent/summary_cache/<hash>.txt）。
+
+    内部用 content_hash 作为存储 key，外部透明使用原始 key。
+    写失败静默降级内存 dict。
+    """
 
     def __init__(self, cache_dir: Path):
         super().__init__()
@@ -111,14 +118,21 @@ class _DiskCache(dict):
     def _load(self):
         for p in self._dir.glob("*.txt"):
             try:
-                super().__setitem__(p.stem, p.read_text(encoding="utf-8"))
+                content = p.read_text(encoding="utf-8")
+                lines = content.split("\n", 1)
+                if len(lines) == 2:
+                    super().__setitem__(lines[0], lines[1])
+                elif len(lines) == 1:
+                    # 旧格式兼容（单行 value，key=filename_stem）
+                    super().__setitem__(p.stem, lines[0])
             except Exception:
                 pass
 
     def __setitem__(self, key, value):
         super().__setitem__(key, value)
         try:
-            self._path(key).write_text(str(value), encoding="utf-8")
+            # 文件格式：第一行原始 key，其余 value
+            self._path(key).write_text(f"{key}\n{value}", encoding="utf-8")
         except Exception:
             pass
 
@@ -162,35 +176,57 @@ class ContextManager:
             model = getattr(getattr(agent, "config", None), "model", "deepseek-v4-pro")
             provider = getattr(getattr(agent, "config", None), "provider", "deepseek")
             self.budget = TokenBudget(model=model, total_limit=limit, provider=provider)
+        self.hard_cap = int(
+            getattr(getattr(agent, "config", None), "hard_cap", HARD_CAP) or HARD_CAP
+        )
         cache_dir = Path(getattr(agent, "_cwd", ".")) / ".agent" / "summary_cache"
         self._summary_cache: dict[str, str] = _DiskCache(cache_dir)
         self.tier_policy = TierPolicy.from_agent(agent)
+
+    def _check_hard_cap(self, used: int) -> None:
+        """检查总 token 数是否超出硬顶；超出则抛 ContextTooLargeError。"""
+        if used > self.hard_cap:
+            raise ContextTooLargeError(actual=used, limit=self.hard_cap)
 
     def build(self, user_message: str) -> tuple[str, dict]:
         """组装完整 prompt，返回 (prompt_text, metadata)。
 
         metadata 含各 section token 数、裁剪日志和 prompt_cache_key。
+
+        Raises:
+            ContextTooLargeError: 若合计 tokens 超出硬顶限制。
         """
         metadata = self._base_metadata()
         sections = self._fill_sections(user_message, metadata)
+        self._check_hard_cap(metadata.get("total_tokens", 0))
         result_parts = [sections[name] for name in self.SECTION_ORDER if sections.get(name)]
         if sections.get("request"):
             result_parts.append(sections["request"])
         return "\n".join(result_parts), metadata
 
     def build_dynamic_context(self, user_message: str) -> tuple[str, dict]:
-        """组装动态上下文（不含 system / request）。"""
+        """组装动态上下文（不含 system / request）。
+
+        Raises:
+            ContextTooLargeError: 若合计 tokens 超出硬顶限制。
+        """
         metadata = self._base_metadata()
         sections = self._fill_sections(
             user_message, metadata, include_system=False, include_request=False
         )
+        self._check_hard_cap(metadata.get("total_tokens", 0))
         parts = [sections[name] for name in self.DYNAMIC_ORDER if sections.get(name)]
         return "\n\n".join(parts), metadata
 
     def build_for_native(self, user_message: str) -> tuple[str, str, dict]:
-        """Native API：stable system+tools + 动态 user 上下文（含 skills/task）。"""
+        """Native API：stable system+tools + 动态 user 上下文（含 skills/task）。
+
+        Raises:
+            ContextTooLargeError: 若合计 tokens 超出硬顶限制。
+        """
         metadata = self._base_metadata()
         sections = self._fill_sections(user_message, metadata)
+        self._check_hard_cap(metadata.get("total_tokens", 0))
         system_parts = [sections[name] for name in self.NATIVE_SYSTEM_ORDER if sections.get(name)]
         system_prompt = "\n\n".join(system_parts)
         user_parts = [sections[name] for name in self.DYNAMIC_ORDER if sections.get(name)]
@@ -300,7 +336,7 @@ class ContextManager:
         metadata["budget"] = self.budget.total_limit
         metadata["tokenizer_backend"] = self.budget.backend
         attach_context_projection(metadata, agent=self.agent, budget=self.budget)
-        history = self.agent.session.get("history", [])
+        history = self.agent.read_history()  # JSONL 优先，build 不写回
         if history and history_text:
             seal_history_at_build(self.agent.session, len(history), history_text)
         return sections
@@ -343,17 +379,14 @@ class ContextManager:
         return "\n\n".join(parts)
 
     def _get_state(self) -> str:
-        """返回当前 task state 摘要（plan 进度 + phase）。"""
-        todos = self.agent.session.get("plan_todos", [])
-        if not todos:
-            return ""
-        total = len(todos)
-        done = sum(1 for t in todos if t.get("status") == "done")
-        in_prog = [t["content"] for t in todos if t.get("status") == "in_progress"]
-        parts = [f"Task progress: {done}/{total} steps done"]
-        if in_prog:
-            parts.append(f"Current: {in_prog[0]}")
-        return " | ".join(parts)
+        """返回当前 task state 摘要：task_summary + phase + plan_todos 前 3 条。
+
+        经 section_filler 遵守 BUDGET_STATE (200 tokens)。超长时由 filler 截断。
+        与 count_state_section() 共用 context_projection.format_state_text()。
+        """
+        from agent_runtime.context_projection import format_state_text
+
+        return format_state_text(self.agent.session, agent=self.agent)
 
     def _get_workspace(self) -> str:
         workspace_text = getattr(self.agent._prefix, "workspace_text", "")
@@ -430,8 +463,12 @@ class ContextManager:
         return "\n".join(parts) if parts else ""
 
     def _get_compressed_history(self, metadata: dict | None = None) -> str:
-        """获取压缩后的对话历史（L0–L5 管线；已封印段单调追加）。"""
-        history = self.agent.session.get("history", [])
+        """获取压缩后的对话历史（L0–L5 管线；已封印段单调追加）。
+
+        优先从 .agent/history.jsonl 读取，文件缺失时回退 session 内存。
+        ContextManager 不写入 JSONL（写路径由 AgentLoop.record 独占）。
+        """
+        history = self.agent.read_history()
         if not history:
             return ""
 

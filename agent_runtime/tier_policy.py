@@ -16,8 +16,8 @@ PIN_CONTENT_MARKERS = ("[Earlier summary]",)
 PIN_ERROR_KEYWORDS = ("Traceback", "Fail", "FAILED", "error:")
 
 
-def _load_orchestrator_pin_markers() -> tuple[str, ...]:
-    """从 tier_pins.yaml 加载 orchestrator_pin_fields 作为 L0 钉扎标记。"""
+def load_orchestrator_pin_fields() -> tuple[str, ...]:
+    """从 tier_pins.yaml 加载 orchestrator_pin_fields（L0/L2 共用）。"""
     from pathlib import Path
 
     import yaml
@@ -32,7 +32,10 @@ def _load_orchestrator_pin_markers() -> tuple[str, ...]:
         return ()
 
 
-_orch_pins = _load_orchestrator_pin_markers()
+# Backward-compatible alias
+_load_orchestrator_pin_markers = load_orchestrator_pin_fields
+
+_orch_pins = load_orchestrator_pin_fields()
 PIN_CONTENT_MARKERS = PIN_CONTENT_MARKERS + _orch_pins
 LOW_VALUE_SYSTEM_PHRASES = ("工具调用格式错误",)
 
