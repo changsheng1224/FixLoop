@@ -196,7 +196,19 @@ class CLIProgressCallback(AgentCallback):
             file=self._output,
         )
 
+    def on_chunk(self, token: str) -> None:
+        """流式输出 chunk 到 stdout（REPL --stream 模式）。"""
+        import sys
+
+        sys.stdout.write(token)
+        sys.stdout.flush()
+
     def on_final_answer(self, text: str) -> None:
         """向 stderr 打印最终回答摘要。"""
+        # streaming 模式下先换行再打摘要
+        import sys
+
+        sys.stdout.write("\n")
+        sys.stdout.flush()
         preview = text[:100].replace("\n", " ")
         print(f"  {_GREEN}[done]{_RESET} → {preview}...", file=self._output)

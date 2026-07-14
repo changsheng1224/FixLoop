@@ -107,13 +107,14 @@ class Agent:
 
     # ---- 公开方法 ----
 
-    def ask(self, user_message: str, callback=None, *, skip_plan: bool = False) -> str:
+    def ask(self, user_message: str, callback=None, *, skip_plan: bool = False, stream: bool = False) -> str:
         """执行一次用户请求，返回最终答案。
 
         Args:
             user_message: 用户输入。
-            callback: 可选的 ProgressCallback 实例。
+            callback: 可选的 ProgressCallback 实例（streaming 时需含 on_chunk）。
             skip_plan: L2 repair 等场景跳过 plan 阶段（避免额外 LLM 调用）。
+            stream: 启用流式输出（REPL --stream 模式）。
 
         Returns:
             模型返回的最终答案文本。
@@ -128,7 +129,7 @@ class Agent:
             self.cancel_token = CancellationToken()
         self._active_cancel_token = self.cancel_token
 
-        loop = AgentLoop(agent=self)
+        loop = AgentLoop(agent=self, stream=stream)
         return loop.run(user_message, callback=callback, skip_plan=skip_plan)
 
     def _detect_workspace_switch(self) -> None:
