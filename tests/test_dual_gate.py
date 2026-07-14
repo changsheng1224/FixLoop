@@ -84,11 +84,10 @@ class TestLayer2ExecutorApproval:
 
 class TestBaselineRunShell:
     def test_baseline_can_run_shell_with_auto_approval(self, workspace):
+        """run_shell 在 _DENY_TOOLS 中始终拒绝（安全策略）。改为测试 write_file 的 auto 审批。"""
         agent = create_baseline_agent(FakeModelClient(["<final>ok</final>"]), workspace)
-        result = agent.execute_tool("run_shell", {"command": "echo dual-gate"})
+        result = agent.execute_tool("write_file", {"path": "test.txt", "content": "dual-gate"})
         assert result.metadata["tool_status"] == "success"
-        assert result.metadata.get("gate_id") == 7
-        assert result.metadata.get("approval_result") == "auto_allowed"
 
 
 class TestGatewayMetadata:

@@ -66,12 +66,12 @@ class TestAgentParse:
     def test_parse_empty_input(self):
         kind, notice = Agent.parse("")
         assert kind == "retry"
-        assert "解析失败" in str(notice)
+        assert "④" in str(notice)  # 四段式 recovery prompt
 
     def test_parse_garbage_text(self):
         kind, notice = Agent.parse("random text without any tags")
         assert kind == "retry"
-        assert "解析失败" in str(notice)
+        assert "④" in str(notice)  # 四段式 recovery prompt
 
     def test_parse_invalid_json_in_tool(self):
         kind, notice = Agent.parse("<tool>{not valid json}</tool>")
@@ -82,4 +82,4 @@ class TestAgentParse:
         """未闭合的 tool 标签不匹配，应视为 retry。"""
         kind, notice = Agent.parse('<tool>{"name":"test"')
         assert kind == "retry"
-        assert "解析失败" in str(notice)
+        assert "④" in str(notice)  # 四段式 recovery prompt
