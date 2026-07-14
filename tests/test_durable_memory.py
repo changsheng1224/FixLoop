@@ -553,6 +553,60 @@ class TestEpisodicDecayInDream:
         assert len(state["episodic_notes"]) == 1
 
 
+# ---------------------------------------------------------------------------
+# 用户画像 schema（V1.5-Bonus3）
+# ---------------------------------------------------------------------------
+
+
+class TestUserProfileStore:
+    @pytest.fixture
+    def store(self, tmp_path):
+        from agent_runtime.features.memory.durable import UserProfileStore
+
+        return UserProfileStore(str(tmp_path))
+
+    def test_set_and_get(self, store):
+        store.set("editor", "vscode", source="user")
+        pref = store.get("editor")
+        assert pref is not None
+        assert pref.value == "vscode"
+        assert pref.source == "user"
+
+    def test_list_all(self, store):
+        store.set("test_framework", "pytest", confidence=0.9)
+        store.set("formatter", "ruff")
+        prefs = store.list_all()
+        assert len(prefs) >= 2
+
+    def test_update_existing(self, store):
+        store.set("theme", "dark")
+        store.set("theme", "light")  # 更新
+        pref = store.get("theme")
+        assert pref.value == "light"
+
+    def test_remove_sets_empty(self, store):
+        store.set("temp", "value")
+        assert store.remove("temp") is True
+        pref = store.get("temp")
+        # 标记删除后存在但值为空
+        assert pref is not None
+
+    def test_get_nonexistent(self, store):
+        assert store.get("nonexistent") is None
+
+    def test_remove_nonexistent(self, store):
+        assert store.remove("missing") is False
+
+    def test_user_preference_to_dict(self):
+        from agent_runtime.features.memory.durable import UserPreference
+
+        pref = UserPreference(key="k", value="v", confidence=0.8, source="test")
+        d = pref.to_dict()
+        assert d["key"] == "k"
+        assert d["value"] == "v"
+        assert d["confidence"] == 0.8
+
+
 class TestPromoteAuthority:
     """promote 权威传播集成测试。"""
 

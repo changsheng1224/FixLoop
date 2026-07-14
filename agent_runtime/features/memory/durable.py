@@ -57,7 +57,7 @@ PREFIX_MAP = {
 
 @dataclass
 class UserPreference:
-    """结构化用户偏好条目。"""
+    """结构化用户偏好条目（轻量 pydantic 替代，零依赖）。"""
 
     key: str
     value: str
@@ -89,9 +89,56 @@ class UserPreference:
     def to_table_row(self) -> str:
         return f"| {self.key} | {self.value} | {self.confidence:.2f} | {self.source} |"
 
+    def to_dict(self) -> dict:
+        return {
+            "key": self.key,
+            "value": self.value,
+            "confidence": self.confidence,
+            "source": self.source,
+            "updated_at": self.updated_at,
+        }
+
     @staticmethod
     def table_header() -> str:
         return "| key | value | confidence | source |\n|-----|-------|------------|--------|"
+
+
+class UserProfileStore:
+    """用户画像持久存储（user-preferences topic 的轻量读写 API）。"""
+
+    def __init__(self, root: str):
+        self._store = DurableMemoryStore(root)
+
+    def get(self, key: str) -> UserPreference | None:
+        """按 key 读取单个偏好。"""
+        for pref in self._store.get_preferences():
+            if pref.key.lower() == key.lower():
+                return pref
+        return None
+
+    def set(self, key: str, value: str, *, confidence: float = 1.0, source: str = "") -> None:
+        """写入或更新一个偏好条目。"""
+        pref = UserPreference(
+            key=key,
+            value=value,
+            confidence=confidence,
+            source=source,
+        )
+        self._store.upsert_preference(pref)
+
+    def list_all(self) -> list[UserPreference]:
+        """列出全部偏好（含时间衰减）。"""
+        return self._store.get_preferences()
+
+    def remove(self, key: str) -> bool:
+        """移除一个偏好条目（设为空值即标记删除）。"""
+        pref = self.get(key)
+        if pref is None:
+            return False
+        pref.value = ""
+        pref.confidence = 0.0
+        self._store.upsert_preference(pref)
+        return True
 
 
 DECAY_RATE = 0.95  # 每天衰减 5%（模块级常量）
@@ -193,10 +240,13 @@ class DurableMemoryStore:
 
     def get_preferences(self) -> list[UserPreference]:
         """读取 user-preferences topic 的结构化条目（含时间衰减）。"""
-        entries = self._read_topic("user-preferences")
+        path = self._topic_path("user-preferences")
+        if not path.is_file():
+            return []
         prefs = []
         in_table = False
-        for line in entries:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
             if line.startswith("| key "):
                 in_table = True
                 continue
