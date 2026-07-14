@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -55,15 +54,41 @@ def _count_text(budget: TokenBudget | Any, text: str) -> int:
 
 
 def count_state_section(agent, budget: TokenBudget | Any) -> int:
-    """state 段：plan_todos 投影 token（Phase 1 占位）。"""
+    """state 段：与 ContextManager._get_state() 同格式的 token 估算。"""
     session = getattr(agent, "session", None) or {}
     todos = session.get("plan_todos")
     if not todos:
         return 0
-    try:
-        text = json.dumps(todos, ensure_ascii=False)
-    except (TypeError, ValueError):
-        text = str(todos)
+
+    parts: list[str] = []
+    # task_summary
+    mem = session.get("memory", {})
+    working = mem.get("working", {})
+    task_summary = (working.get("task_summary", "") or "").strip()
+    if task_summary:
+        parts.append(f"任务: {task_summary}")
+    # L2 phase
+    l2_phase = (getattr(agent, "_l2_phase", "") or "").strip()
+    if l2_phase:
+        parts.append(f"阶段: {l2_phase}")
+    # plan_todos
+    if todos:
+        total = len(todos)
+        done = sum(1 for t in todos if t.get("status") == "done")
+        parts.append(f"进度: {done}/{total}")
+        status_icon = {
+            "done": "+", "in_progress": ">", "pending": "-",
+            "blocked": "!", "cancelled": "x",
+        }
+        for t in todos[:3]:
+            icon = status_icon.get(t.get("status", ""), "?")
+            content = (t.get("content", "") or "").strip()
+            if content:
+                parts.append(f"  {icon} {content}")
+
+    if not parts:
+        return 0
+    text = "\n".join(parts)
     return _count_text(budget, text)
 
 

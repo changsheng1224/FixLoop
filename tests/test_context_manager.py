@@ -176,6 +176,90 @@ class TestContextManagerBuild:
             cm.build_for_native("test")
 
 
+class TestStateSection:
+    """_get_state() 注入 task_summary + phase + plan_todos 前 3 条。"""
+
+    @pytest.fixture
+    def agent_with_state(self, temp_workspace):
+        """创建带 plan_todos + task_summary + l2_phase 的 Agent。"""
+        config = AgentConfig(provider="fake", max_steps=4, prompt_budget=6000)
+        ws = WorkspaceContext.build(str(temp_workspace))
+        client = FakeModelClient(["<final>ok</final>"])
+        agent = Agent(config=config, model_client=client, workspace=ws)
+        # 注入 task_summary
+        agent.session.setdefault("memory", {}).setdefault("working", {})["task_summary"] = (
+            "修复 calculator.py 除零错误"
+        )
+        # 注入 plan_todos
+        agent.session["plan_todos"] = [
+            {"id": "1", "content": "定位错误文件 calculator.py:42", "status": "done"},
+            {"id": "2", "content": "检索相关测试和调用方", "status": "in_progress"},
+            {"id": "3", "content": "生成补丁并验证", "status": "pending"},
+            {"id": "4", "content": "运行全量测试确认无回归", "status": "pending"},
+        ]
+        # 注入 l2_phase
+        agent._l2_phase = "patching"
+        return agent
+
+    def test_state_section_has_todo_content(self, agent_with_state):
+        """state 段包含 plan_todos 的前 3 条内容文本（非仅计数）。"""
+        cm = ContextManager(agent_with_state)
+        state = cm._get_state()
+        assert "定位错误文件" in state
+        assert "检索相关测试" in state
+        assert "生成补丁并验证" in state
+        # 第 4 条不在前 3 条中
+        assert "运行全量测试" not in state
+
+    def test_state_section_has_status_icons(self, agent_with_state):
+        """state 段每条 todo 有状态图标。"""
+        cm = ContextManager(agent_with_state)
+        state = cm._get_state()
+        assert "+" in state   # done
+        assert ">" in state   # in_progress
+        assert "-" in state   # pending
+
+    def test_state_section_has_task_summary(self, agent_with_state):
+        """state 段包含 task_summary。"""
+        cm = ContextManager(agent_with_state)
+        state = cm._get_state()
+        assert "修复 calculator.py 除零错误" in state
+
+    def test_state_section_has_phase(self, agent_with_state):
+        """state 段包含 L2 repair phase。"""
+        cm = ContextManager(agent_with_state)
+        state = cm._get_state()
+        assert "patching" in state
+
+    def test_state_section_is_rendered_in_build(self, agent_with_state):
+        """state 段内容出现在 ContextManager.build() 的 prompt 输出中。"""
+        cm = ContextManager(agent_with_state)
+        prompt, _ = cm.build("fix the bug")
+        assert "定位错误文件" in prompt
+        assert "patching" in prompt
+
+    def test_state_section_empty_when_no_todos(self, agent):
+        """没有 plan_todos 时 state 段为空。"""
+        cm = ContextManager(agent)
+        state = cm._get_state()
+        assert state == ""
+
+    def test_state_section_truncated_by_budget(self, agent_with_state):
+        """超长 todo content 被 section_filler 按 BUDGET_STATE 截断。"""
+        # 构造超长 content 的 todo
+        agent_with_state.session["plan_todos"] = [
+            {"id": "1", "content": "第一步: " + "非常长的描述文本 " * 50, "status": "done"},
+            {"id": "2", "content": "第二步: " + "更多很长的描述 " * 50, "status": "in_progress"},
+        ]
+        cm = ContextManager(agent_with_state, total_budget=200)
+        prompt, meta = cm.build("short")
+        # state 段应被截断到 200 token 以内
+        state_tokens = meta["sections"].get("state", 0)
+        assert state_tokens <= 200
+        # prompt 总 token 在预算内
+        assert meta["total_tokens"] <= 200
+
+
 class TestHistoryCompression:
     """历史压缩测试。"""
 

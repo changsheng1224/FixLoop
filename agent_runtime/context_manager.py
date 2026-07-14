@@ -368,17 +368,41 @@ class ContextManager:
         return "\n\n".join(parts)
 
     def _get_state(self) -> str:
-        """返回当前 task state 摘要（plan 进度 + phase）。"""
+        """返回当前 task state 摘要：task_summary + phase + plan_todos 前 3 条。
+
+        经 section_filler 遵守 BUDGET_STATE (200 tokens)。超长时由 filler 截断。
+        """
+        parts: list[str] = []
+
+        # 1. task_summary（修复任务摘要）
+        mem = self.agent.session.get("memory", {})
+        working = mem.get("working", {})
+        task_summary = (working.get("task_summary", "") or "").strip()
+        if task_summary:
+            parts.append(f"任务: {task_summary}")
+
+        # 2. L2 repair phase
+        l2_phase = (getattr(self.agent, "_l2_phase", "") or "").strip()
+        if l2_phase:
+            parts.append(f"阶段: {l2_phase}")
+
+        # 3. plan_todos 前 3 条（含状态标记）
         todos = self.agent.session.get("plan_todos", [])
-        if not todos:
-            return ""
-        total = len(todos)
-        done = sum(1 for t in todos if t.get("status") == "done")
-        in_prog = [t["content"] for t in todos if t.get("status") == "in_progress"]
-        parts = [f"Task progress: {done}/{total} steps done"]
-        if in_prog:
-            parts.append(f"Current: {in_prog[0]}")
-        return " | ".join(parts)
+        if todos:
+            total = len(todos)
+            done = sum(1 for t in todos if t.get("status") == "done")
+            parts.append(f"进度: {done}/{total}")
+            status_icon = {
+                "done": "+", "in_progress": ">", "pending": "-",
+                "blocked": "!", "cancelled": "x",
+            }
+            for t in todos[:3]:
+                icon = status_icon.get(t.get("status", ""), "?")
+                content = (t.get("content", "") or "").strip()
+                if content:
+                    parts.append(f"  {icon} {content}")
+
+        return "\n".join(parts) if parts else ""
 
     def _get_workspace(self) -> str:
         workspace_text = getattr(self.agent._prefix, "workspace_text", "")
