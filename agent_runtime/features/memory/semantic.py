@@ -312,6 +312,47 @@ def derive_embed_query(user_message: str, task_summary: str = "") -> str:
     return " ".join(parts)[:200].strip()
 
 
+# HyDE (Hypothetical Document Embedding) — 查询改写入开关
+HYDE_ENABLED = False
+
+HYDE_PROMPT = (
+    "Write a short hypothetical answer (1-2 sentences) to the following query "
+    "about a software project. Only output the answer, no explanation.\n"
+    "Query: {query}"
+)
+
+
+def recall_with_hyde(
+    state: dict,
+    query: str,
+    light_client=None,
+    *,
+    limit: int = 3,
+) -> list[dict]:
+    """HyDE 查询改写：LLM 生成假设性答案 → embed → 检索。
+
+    与 derive_embed_query 规则版共用同一标注集做 recall@k A/B 对比。
+    当 light_client=None 或 HYDE_ENABLED=False 时降级为规则版。
+    """
+    if not HYDE_ENABLED or light_client is None:
+        # 降级：规则版 derive_embed_query
+        rewritten = derive_embed_query(query)
+        return retrieval_candidates_semantic(state, rewritten, limit=limit)
+
+    try:
+        prompt = HYDE_PROMPT.format(query=query[:300])
+        hypothetical = light_client.complete(prompt, max_new_tokens=128)
+        if hypothetical and hypothetical.strip():
+            # 嵌入假设性答案并检索
+            rewritten = hypothetical.strip()[:200]
+            return retrieval_candidates_semantic(state, rewritten, limit=limit)
+    except Exception:
+        pass
+
+    # 失败降级
+    return retrieval_candidates_semantic(state, query, limit=limit)
+
+
 def retrieval_candidates_semantic(state: dict, query: str, limit: int = 3) -> list[dict]:
     """合并 keyword 与 semantic 检索结果，按 kind 权重排序后去重。
 

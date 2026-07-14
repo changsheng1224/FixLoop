@@ -82,6 +82,14 @@ def semantic_retrieval(state: dict, query: str, k: int = 5) -> list[str]:
     return [r.get("text", "") for r in results]
 
 
+def hyde_retrieval(state: dict, query: str, k: int = 5) -> list[str]:
+    """HyDE retrieval: recall_with_hyde (rule fallback when no light_client)。"""
+    from agent_runtime.features.memory.semantic import recall_with_hyde
+
+    results = recall_with_hyde(state, query, light_client=None, limit=k)
+    return [r.get("text", "") for r in results]
+
+
 def compute_metrics(
     retrieved: list[str],
     relevant: list[str],
@@ -156,6 +164,24 @@ def main(output_path: Path | None = None) -> dict:
     sem_avg_recall = round(sum(m["recall"] for m in sem_metrics_list) / max(len(sem_metrics_list), 1), 3)
     sem_avg_precision = round(sum(m["precision"] for m in sem_metrics_list) / max(len(sem_metrics_list), 1), 3)
 
+    # --- HyDE baseline (rule fallback, no light_client) ---
+    hyde_metrics_list = []
+    for label in labels:
+        try:
+            retrieved = hyde_retrieval(state, label["query"], k=5)
+        except Exception:
+            retrieved = []
+        metrics = compute_metrics(
+            retrieved, label["relevant_texts"],
+            label["relevant_topics"], ALL_TOPICS,
+        )
+        metrics["query"] = label["query"]
+        metrics["method"] = "hyde"
+        hyde_metrics_list.append(metrics)
+
+    hyde_avg_recall = round(sum(m["recall"] for m in hyde_metrics_list) / max(len(hyde_metrics_list), 1), 3)
+    hyde_avg_precision = round(sum(m["precision"] for m in hyde_metrics_list) / max(len(hyde_metrics_list), 1), 3)
+
     report = {
         "dataset": str(LABELS_PATH),
         "num_queries": len(labels),
@@ -169,9 +195,16 @@ def main(output_path: Path | None = None) -> dict:
             "avg_precision@5": sem_avg_precision,
             "details": sem_metrics_list,
         },
+        "hyde": {
+            "avg_recall@5": hyde_avg_recall,
+            "avg_precision@5": hyde_avg_precision,
+            "details": hyde_metrics_list,
+        },
         "comparison": {
-            "recall_delta": round(sem_avg_recall - kw_avg_recall, 3),
-            "precision_delta": round(sem_avg_precision - kw_avg_precision, 3),
+            "recall_delta_sem_kw": round(sem_avg_recall - kw_avg_recall, 3),
+            "precision_delta_sem_kw": round(sem_avg_precision - kw_avg_precision, 3),
+            "recall_delta_hyde_kw": round(hyde_avg_recall - kw_avg_recall, 3),
+            "precision_delta_hyde_kw": round(hyde_avg_precision - kw_avg_precision, 3),
         },
     }
 
@@ -183,7 +216,9 @@ def main(output_path: Path | None = None) -> dict:
     print(f"\n=== 检索质量评估 ===")
     print(f"Keyword  baseline: recall@5={kw_avg_recall:.3f}  precision@5={kw_avg_precision:.3f}")
     print(f"Semantic         : recall@5={sem_avg_recall:.3f}  precision@5={sem_avg_precision:.3f}")
-    print(f"Δ (semantic-kw)  : recall={sem_avg_recall - kw_avg_recall:+.3f}  precision={sem_avg_precision - kw_avg_precision:+.3f}")
+    print(f"HyDE (rule fallback): recall@5={hyde_avg_recall:.3f}  precision@5={hyde_avg_precision:.3f}")
+    print(f"Δ sem-kw : recall={sem_avg_recall - kw_avg_recall:+.3f}  precision={sem_avg_precision - kw_avg_precision:+.3f}")
+    print(f"Δ hyde-kw: recall={hyde_avg_recall - kw_avg_recall:+.3f}  precision={hyde_avg_precision - kw_avg_precision:+.3f}")
 
     return report
 
