@@ -160,7 +160,8 @@ def _build_agent(args, config, workspace, model_client) -> Agent:
                 agent.dry_run = args.dry_run
                 resume_state = evaluate_resume_state(agent)
                 status = resume_state["status"]
-                agent.session.setdefault("resume_status", status)
+                agent.session["resume_status"] = status
+                agent.session["resume_state"] = resume_state
                 print(f"[agent_runtime] 恢复会话 {session_id} (status={status})", file=sys.stderr)
                 if resume_state["stale_files"]:
                     print(f"  ⚠ 文件已变更: {resume_state['stale_files']}", file=sys.stderr)

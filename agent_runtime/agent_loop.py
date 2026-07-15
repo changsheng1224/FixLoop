@@ -204,7 +204,13 @@ class AgentLoop:
         try:
             from agent_runtime.checkpoint import create_checkpoint
 
-            create_checkpoint(self.agent, ts, ts.user_request, trigger="user_cancel")
+            create_checkpoint(
+                self.agent,
+                ts,
+                ts.user_request,
+                trigger="user_cancel",
+                in_flight_tool=inflight,
+            )
         except Exception:
             pass
         self._cancel_all_todos()
@@ -474,12 +480,6 @@ class AgentLoop:
         # 每 tool 步 checkpoint（成功时），供 --resume 从最后成功步继续
         tool_success = result.metadata.get("tool_status") == "success"
         if tool_success:
-            try:
-                from agent_runtime.checkpoint import create_checkpoint
-
-                create_checkpoint(self.agent, ts, ts.user_request, trigger="step_end")
-            except Exception:
-                pass
             self._advance_todo()
 
         # StepGuard 步进健康评估（stall + goal drift）— 每步都评估
@@ -520,7 +520,12 @@ class AgentLoop:
                     )
                     result_text = result_text + hint
                     self.agent.record({"role": "tool", "content": result_text, "tool_name": tool_name})
-                    return f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
+                    next_message = f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
+                    self._persist_step_checkpoint(
+                        ts, tool_name, tool_args, result_text, next_message, result,
+                        step=step, path=path,
+                    )
+                    return next_message
                 # goal_drift 仍终止
                 ts.stop_with_reason(verdict.reason, "stopped", detail=verdict.detail)
                 self.stop_reason = verdict.reason
@@ -529,7 +534,12 @@ class AgentLoop:
                 # warning 级（drift 预警，不终止）
                 self._emit("goal_drift_warning", {"detail": verdict.detail})
         self.agent.record({"role": "tool", "content": result_text, "tool_name": tool_name})
-        return f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
+        next_message = f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
+        self._persist_step_checkpoint(
+            ts, tool_name, tool_args, result_text, next_message, result,
+            step=step, path=path,
+        )
+        return next_message
 
     # ---- XML 路径辅助 ----
 
@@ -781,11 +791,77 @@ class AgentLoop:
                 todo["status"] = "cancelled"
                 self._emit("todo_updated", {"todo": dict(todo)})
 
+    def _persist_step_checkpoint(
+        self,
+        ts,
+        tool_name: str,
+        tool_args: dict,
+        result_text: str,
+        next_user_message: str,
+        result,
+        *,
+        step: int,
+        path: ReactPath,
+    ) -> None:
+        """保存可重入 tool step checkpoint，并立即落盘 session/task_state。"""
+        token = getattr(self.agent, "cancel_token", None)
+        if token is not None and token.is_cancelled:
+            return
+        meta = getattr(result, "metadata", None) or {}
+        if meta.get("tool_status") != "success":
+            return
+        try:
+            from agent_runtime.checkpoint import create_checkpoint, file_content_hash
+            from agent_runtime.session_store import SessionStore
+
+            affected_paths = list(meta.get("affected_paths") or [])
+            if tool_name in ("write_file", "patch_file") and tool_args.get("path"):
+                affected_path = str(tool_args["path"])
+                if affected_path not in affected_paths:
+                    affected_paths.append(affected_path)
+            effects = [
+                {
+                    "path": path,
+                    "post_hash": file_content_hash(self.agent._cwd, path),
+                }
+                for path in affected_paths
+            ]
+            payload = {
+                "resume_kind": "tool_step",
+                "step_index": step,
+                "path": str(path),
+                "tool": tool_name,
+                "tool_args": dict(tool_args),
+                "tool_result": result_text[:8000],
+                "result_metadata": dict(meta),
+                "next_user_message": next_user_message[:10000],
+                "history_len": len(self.agent.session.get("history", [])),
+                "task_state": ts.to_dict(),
+                "effects": effects,
+            }
+            cp = create_checkpoint(
+                self.agent,
+                ts,
+                ts.user_request,
+                trigger="step_end",
+                last_tool=tool_name,
+                step_payload=payload,
+            )
+            ts.checkpoint_id = cp.get("run_id", "") if cp else ""
+            SessionStore(root=self.agent._cwd).save(self.agent.session)
+            self._get_store().write_task_state(ts)
+        except Exception:
+            pass
+
     # ---- 入口 ----
 
     def run(self, user_message: str, callback=None, *, skip_plan: bool = False) -> str:
         from agent_runtime.log_context import log_context
         from agent_runtime.task_state import TaskState
+
+        resume_state = self._consume_step_resume_state()
+        if resume_state is not None:
+            return self._run_from_step_resume(resume_state, callback=callback)
 
         shared = getattr(self.agent, "shared_run_id", None)
         agent_name = getattr(self.agent, "_agent_name", "") or "agent"
@@ -826,6 +902,61 @@ class AgentLoop:
                 else:
                     answer = self._run_with_text_parsing(user_message, ts, callback)
                 # Memory Dream: ask() 结束后自动维护记忆
+                self._run_memory_dream()
+                return answer
+        finally:
+            cb.remove_listener(self._circuit_trace_listener)
+
+    def _consume_step_resume_state(self) -> dict | None:
+        """取出一次性 step resume 状态；不满足条件时保持普通 ask 行为。"""
+        resume_state = self.agent.session.get("resume_state")
+        if not isinstance(resume_state, dict):
+            return None
+        if resume_state.get("status") != "step-resumable":
+            return None
+        checkpoint = resume_state.get("last_checkpoint")
+        if not isinstance(checkpoint, dict):
+            return None
+        self.agent.session.pop("resume_state", None)
+        return resume_state
+
+    def _run_from_step_resume(self, resume_state: dict, callback=None) -> str:
+        """从最后一个成功 tool step 后继续 XML ReAct 循环。"""
+        from agent_runtime.log_context import log_context
+        from agent_runtime.task_state import TaskState
+
+        checkpoint = resume_state["last_checkpoint"]
+        ts_data = checkpoint.get("task_state") or {}
+        ts = TaskState.from_dict(ts_data)
+        ts.status = "running"
+        ts.stop_reason = ""
+        ts.final_answer = ""
+        self._task_state = ts
+        self._call_timings = []
+        self._retry_count = 0
+        self._no_progress_steps = 0
+        user_message = checkpoint.get("next_user_message", "")
+
+        cb = self.agent.circuit_breaker
+        cb.add_listener(self._circuit_trace_listener)
+        try:
+            with log_context(run_id=ts.run_id, agent=getattr(self.agent, "_agent_name", "") or "agent"):
+                self._emit(
+                    "run_resumed",
+                    {
+                        "resume_status": "step-resumable",
+                        "step_index": checkpoint.get("step_index", 0),
+                        "tool": checkpoint.get("tool", ""),
+                    },
+                )
+                self._step_guard.reset(
+                    task_summary=self._get_task_summary_text(),
+                    suspect_files=self._extract_suspect_files(),
+                )
+                if checkpoint.get("path") == "native" and hasattr(self.agent.model_client, "chat_with_tools"):
+                    answer = self._run_with_native_tools(user_message, ts, callback)
+                else:
+                    answer = self._run_with_text_parsing(user_message, ts, callback)
                 self._run_memory_dream()
                 return answer
         finally:
