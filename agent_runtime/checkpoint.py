@@ -58,6 +58,7 @@ def create_checkpoint(
     *,
     last_tool: str = "",
     in_flight_tool: str = "",
+    step_payload: dict | None = None,
 ) -> dict:
     """创建检查点，记录当前状态。
 
@@ -68,6 +69,7 @@ def create_checkpoint(
         trigger: 触发原因（step_end/user_cancel/ask_end）。
         last_tool: 最近执行成功的工具名（step_end 时有效）。
         in_flight_tool: cancel 时正在执行中的工具名（user_cancel 时有效）。
+        step_payload: step-level resume 所需的工具输入、输出和副作用信息。
 
     Raises:
         ValueError: trigger 不在 VALID_TRIGGERS 中。
@@ -105,6 +107,8 @@ def create_checkpoint(
     }
     if trigger == "user_cancel" and in_flight_tool:
         checkpoint["in_flight_tool"] = in_flight_tool
+    if step_payload:
+        checkpoint.update(step_payload)
 
     # 存入 session
     agent.session.setdefault("checkpoints", []).append(checkpoint)
@@ -140,9 +144,26 @@ def evaluate_resume_state(agent) -> dict:
         if current_id.get(key) != saved_id.get(key):
             result["identity_diff"].append(key)
 
+    _validate_step_effects(agent, last, result)
+
     # 判定状态
     if result["stale_files"] or result["identity_diff"]:
         result["status"] = "workspace-mismatch" if result["identity_diff"] else "partial-stale"
+    elif (
+        last.get("trigger") == "step_end"
+        and last.get("resume_kind") == "tool_step"
+        and last.get("next_user_message")
+    ):
+        result["status"] = "step-resumable"
+        result["resume_observation"] = {
+            "tool": last.get("tool", ""),
+            "tool_args": last.get("tool_args", {}),
+            "tool_result": last.get("tool_result", ""),
+            "next_user_message": last.get("next_user_message", ""),
+            "step_index": last.get("step_index", 0),
+            "task_state": last.get("task_state", {}),
+            "effects": last.get("effects", []),
+        }
 
     return result
 
@@ -167,3 +188,30 @@ def _file_freshness(root: str, path: str) -> str:
     except OSError:
         pass
     return ""
+
+
+def file_content_hash(root: str, path: str) -> str:
+    """计算文件内容 SHA256；文件不存在或不可读时返回空字符串。"""
+    try:
+        p = Path(root) / path
+        if p.is_file():
+            return hashlib.sha256(p.read_bytes()).hexdigest()
+    except OSError:
+        pass
+    return ""
+
+
+def _validate_step_effects(agent, checkpoint: dict, result: dict) -> None:
+    """校验写类工具的 post-state hash，避免重复/错误续跑。"""
+    if checkpoint.get("resume_kind") != "tool_step":
+        return
+    for effect in checkpoint.get("effects", []) or []:
+        path = str(effect.get("path", "") or "")
+        if not path:
+            continue
+        expected = str(effect.get("post_hash", "") or "")
+        if not expected:
+            continue
+        current = file_content_hash(agent._cwd, path)
+        if current != expected:
+            result["stale_files"].append(path if current else f"{path} (deleted)")

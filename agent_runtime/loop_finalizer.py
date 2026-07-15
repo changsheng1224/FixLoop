@@ -84,7 +84,17 @@ def finalize_agent_run(loop, ts) -> None:
                 if ts.stop_reason == StopReason.USER_CANCEL.value
                 else "ask_end"
             )
-            cp = create_checkpoint(agent, ts, ts.user_request, trigger=trigger)
+            cp = create_checkpoint(
+                agent,
+                ts,
+                ts.user_request,
+                trigger=trigger,
+                in_flight_tool=(
+                    str(ts.node_timings.get("in_flight_tool", "") or "")
+                    if trigger == "user_cancel"
+                    else ""
+                ),
+            )
             ts.checkpoint_id = cp.get("run_id", "") if cp else ""
             store.write_task_state(ts)
             compress_stats = store.compress_trace_if_needed(ts.run_id)
