@@ -88,7 +88,7 @@ class TestResumeSkipsParse:
         assert result.repair_run_id == "resume-001"
 
     def test_resume_repair_skips_parse(self, tmp_path):
-        """resume_run_id 有效时 _repair_impl 跳过 parse 直接返回 state。"""
+        """checkpoint 字段恢复保留 retry/phase/suspects 等关键状态。"""
         from src.repair.pipeline import RepairPipelineMixin
         from src.state import RepairState, SuspectLocation
 
@@ -105,19 +105,79 @@ class TestResumeSkipsParse:
         (Path(repo) / ".agent" / "runs" / "resume-001").mkdir(parents=True)
         save_repair_checkpoint(state, repo)
 
-        # 创建新的 state（模拟重启）
+        # 创建新的 state（模拟重启）并恢复 checkpoint 字段
         new_state = RepairState(issue_input="test issue")
         new_state.repair_run_id = "resume-001"
 
-        from unittest.mock import MagicMock
-
         mixin = RepairPipelineMixin()
-        mixin._repo_root = repo
-        mixin.retriever = None
-        mixin._snapshot_repo = MagicMock(return_value={})
+        checkpoint = load_repair_checkpoint(repo, "resume-001")
+        assert checkpoint is not None
 
-        result = mixin._repair_impl(new_state)
-        # resume 路径直接返回 state（跳过 parse/localize）
-        assert result.retry_count == 1
-        assert result.phase == "patch"
-        assert len(result.suspect_locations) == 1
+        mixin._restore_state_from_repair_checkpoint(new_state, checkpoint)
+
+        assert new_state.retry_count == 1
+        assert new_state.phase == "patch"
+        assert len(new_state.suspect_locations) == 1
+        assert new_state.repair_plan is not None
+        assert new_state.repair_plan.issue_type == "type_error"
+
+    def test_resume_repair_reenters_patch_loop(self, tmp_path):
+        """有效 checkpoint 应跳过 parse/localize，并继续执行 patch loop。"""
+        from src.orchestrator import Orchestrator
+        from src.repair.checkpoint_load import save_repair_checkpoint
+        from src.state import CandidatePatch, RepairPlan, RepairState, SuspectLocation
+
+        repo = str(tmp_path)
+        state = RepairState(issue_input="test issue")
+        state.repair_run_id = "resume-002"
+        state.retry_count = 1
+        state.phase = "patch"
+        state.feedback = "previous verifier feedback"
+        state.suspect_locations = [
+            SuspectLocation(file_path="a.py", start_line=10, end_line=12, confidence=0.9)
+        ]
+        state.repair_plan = RepairPlan(issue_type="type_error")
+        state.blackboard_snapshot = {"entries": {"scratch:feedback": "previous verifier feedback"}}
+        (Path(repo) / ".agent" / "runs" / "resume-002").mkdir(parents=True)
+        save_repair_checkpoint(state, repo)
+
+        class ResumeOrchestrator(Orchestrator):
+            def __init__(self):
+                super().__init__(None, None, None, use_pytest_verify=False)
+                self._repo_root = repo
+                self.patch_calls = 0
+
+            def _snapshot_repo(self):
+                return {}
+
+            def _restore_repo_snapshot(self, snapshot):
+                return None
+
+            def _parse_issue(self, issue):
+                raise AssertionError("resume path should skip parse")
+
+            def _run_localize_and_retrieve(self, state):
+                raise AssertionError("resume path should skip localize/retrieve")
+
+            def _run_patcher(self, state):
+                self.patch_calls += 1
+                assert state.feedback == "previous verifier feedback"
+                assert state.suspect_locations
+                return [
+                    CandidatePatch(
+                        file_path="a.py",
+                        original_lines="old",
+                        patched_lines="new",
+                    )
+                ], {
+                    "total_ms": 1,
+                    "model_call_ms": 0,
+                    "parse_apply_ms": 1,
+                }
+
+        orch = ResumeOrchestrator()
+        result = orch.repair("test issue", repair_timeout_s=0, resume_run_id="resume-002")
+
+        assert orch.patch_calls == 1
+        assert result.status == "fixed"
+        assert result.node_timings.get("verify_skipped") is True

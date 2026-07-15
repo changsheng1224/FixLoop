@@ -8,6 +8,8 @@ from typing import Any
 
 DEFAULT_BASE_URL = "https://api.deepseek.com/anthropic/v1"
 DEFAULT_MODEL = "deepseek-v4-pro"
+DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 
 _FAKE_DEFAULT_OUTPUT = "<final>FakeClient 未预设输出，请指定 --provider 为真实 Provider。</final>"
 
@@ -47,6 +49,29 @@ def create_model_client(
         from agent_runtime.providers.clients import FakeModelClient
 
         return FakeModelClient([_FAKE_DEFAULT_OUTPUT])
+
+    if provider == "ollama":
+        from agent_runtime.providers.clients import OllamaModelClient
+
+        kwargs: dict[str, Any] = {
+            "model": model or os.environ.get("OLLAMA_MODEL", "qwen3.5:9b"),
+            "host": base_url or os.environ.get("OLLAMA_BASE_URL", DEFAULT_OLLAMA_BASE_URL),
+        }
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        return OllamaModelClient(**kwargs)
+
+    if provider == "openai":
+        from agent_runtime.providers.clients import OpenAICompatibleModelClient
+
+        kwargs: dict[str, Any] = {
+            "model": model or os.environ.get("OPENAI_MODEL", "gpt-4o"),
+            "base_url": base_url or os.environ.get("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL),
+            "api_key": api_key if api_key is not None else os.environ.get("OPENAI_API_KEY", ""),
+        }
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        return OpenAICompatibleModelClient(**kwargs)
 
     from agent_runtime.providers.clients import AnthropicCompatibleModelClient
 

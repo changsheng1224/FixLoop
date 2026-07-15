@@ -17,12 +17,14 @@ def trace_tree_summary(run_dir: str | Path) -> str:
     每步工具调用显示 tool name + preview + timing。
     """
     path = Path(run_dir) / "trace.jsonl"
-    if not path.is_file():
-        return f"(trace not found: {path})"
+    raw_lines = read_trace_path(path)
+    trace_exists = path.is_file() or path.with_suffix(".jsonl.gz").is_file()
+    if not raw_lines:
+        return "(empty trace)" if trace_exists else f"(trace not found: {path})"
 
     lines = []
     events = []
-    for line_text in path.read_text(encoding="utf-8").splitlines():
+    for line_text in raw_lines:
         if not line_text.strip():
             continue
         try:
@@ -66,11 +68,12 @@ def trace_tree_summary(run_dir: str | Path) -> str:
 def trace_step_prompt(run_dir: str | Path, step: int) -> str:
     """从 trace 中提取第 N 步的 prompt 文本（来自 context_built）。"""
     path = Path(run_dir) / "trace.jsonl"
-    if not path.is_file():
+    raw_lines = read_trace_path(path)
+    if not raw_lines:
         return "(trace not found)"
 
     context_seen = 0
-    for line_text in path.read_text(encoding="utf-8").splitlines():
+    for line_text in raw_lines:
         if not line_text.strip():
             continue
         try:

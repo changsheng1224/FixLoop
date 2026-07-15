@@ -701,6 +701,8 @@ class OpenAICompatibleModelClient:
         self, prompt: str, max_new_tokens: int = 512, on_chunk=None, cancel_token=None
     ):
         """OpenAI Responses API 流式调用。"""
+        from agent_runtime.cancellation import CancelledError
+
         payload = self._build_payload(prompt, max_new_tokens, stream=True)
         body = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
@@ -731,18 +733,19 @@ class OpenAICompatibleModelClient:
                             on_chunk(delta)
                 except json.JSONDecodeError:
                     pass
+        if cancel_token is not None and cancel_token.is_cancelled:
+            raise CancelledError(cancel_token.reason)
         full_text = "".join(parts)
         if not full_text:
             full_text = self._extract_text(json.loads("{}"))
         return full_text
 
-    @staticmethod
-    def _build_payload(prompt, max_new_tokens, stream):
+    def _build_payload(self, prompt, max_new_tokens, stream):
         return {
-            "model": "gpt-4o",
+            "model": self.model,
             "input": [{"role": "user", "content": [{"type": "input_text", "text": prompt}]}],
             "max_output_tokens": max_new_tokens,
-            "temperature": 0.2,
+            "temperature": self.temperature,
             "stream": stream,
         }
 

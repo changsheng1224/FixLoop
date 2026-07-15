@@ -5,7 +5,12 @@ import tempfile
 from pathlib import Path
 
 from agent_runtime.bootstrap import create_model_client, load_dotenv
-from agent_runtime.providers.clients import AnthropicCompatibleModelClient, FakeModelClient
+from agent_runtime.providers.clients import (
+    AnthropicCompatibleModelClient,
+    FakeModelClient,
+    OllamaModelClient,
+    OpenAICompatibleModelClient,
+)
 
 
 class TestBootstrapLoadDotenv:
@@ -42,3 +47,31 @@ class TestBootstrapCreateModelClient:
         finally:
             del os.environ["DEEPSEEK_API_KEY"]
             del os.environ["DEEPSEEK_BASE_URL"]
+
+    def test_openai_provider_uses_openai_client(self):
+        client = create_model_client(
+            provider="openai",
+            model="gpt-test",
+            base_url="https://openai.test/v1",
+            api_key="sk-openai",
+            temperature=0.7,
+        )
+
+        assert isinstance(client, OpenAICompatibleModelClient)
+        assert client.model == "gpt-test"
+        assert client.base_url == "https://openai.test/v1"
+        assert client.api_key == "sk-openai"
+        assert client.temperature == 0.7
+
+    def test_ollama_provider_uses_ollama_client(self):
+        client = create_model_client(
+            provider="ollama",
+            model="qwen-test",
+            base_url="http://127.0.0.1:11434",
+            temperature=0.4,
+        )
+
+        assert isinstance(client, OllamaModelClient)
+        assert client.model == "qwen-test"
+        assert client.host == "http://127.0.0.1:11434"
+        assert client.temperature == 0.4
