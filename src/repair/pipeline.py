@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor
-
 from pathlib import Path
 
 from agent_runtime.logging_setup import get_logger
@@ -12,21 +11,21 @@ from src.eval.runner import run_pytest
 from src.repair.blackboard_mixin import BlackboardMixin
 from src.repair.degrade import run_baseline_fallback, should_degrade_to_baseline
 from src.repair.l2_ask_mixin import L2AskMixin
+from src.repair.output_parsers import parse_retrieved_context, parse_suspect_list
+from src.repair.phase_clock import PhaseTimeoutError, RepairPhaseClock
+from src.repair.prompt_router import repair_plan_intent_snapshot
+from src.repair.run_context import RepairRunContext
 from src.repair.termination import (
     RepairTerminalStatus,
     finalize_repair_state,
     mark_fixed_skip_verify,
 )
-from src.repair.output_parsers import parse_retrieved_context, parse_suspect_list
-from src.repair.phase_clock import PhaseTimeoutError, RepairPhaseClock
 from src.repair.timing_schema import (
     finalize_phases,
     set_parallel_wall_ms,
     set_phase_ms,
     set_repair_total_ms,
 )
-from src.repair.prompt_router import repair_plan_intent_snapshot
-from src.repair.run_context import RepairRunContext
 from src.state import CandidatePatch, RepairState, RetrievedContext, SuspectLocation
 
 log = get_logger("repair.pipeline")
@@ -95,19 +94,27 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 data = json.loads(raw[start:end])
                 if isinstance(data, dict) and "issue_type" in data:
                     if tracer:
-                        tracer.emit("orchestrator", "planner_invoked", {
-                            "fallback": "llm",
-                            "plan_rationale": str(data.get("reasoning", ""))[:200],
-                        })
+                        tracer.emit(
+                            "orchestrator",
+                            "planner_invoked",
+                            {
+                                "fallback": "llm",
+                                "plan_rationale": str(data.get("reasoning", ""))[:200],
+                            },
+                        )
                     return data
         except Exception:
             pass
 
         if tracer:
-            tracer.emit("orchestrator", "planner_invoked", {
-                "fallback": "rule",
-                "plan_rationale": "",
-            })
+            tracer.emit(
+                "orchestrator",
+                "planner_invoked",
+                {
+                    "fallback": "rule",
+                    "plan_rationale": "",
+                },
+            )
         return None
 
     def _apply_planner_result(self, plan_dict: dict, plan) -> None:
@@ -119,9 +126,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         if plan_dict.get("subtasks"):
             from src.state import RepairSubTask
 
-            plan.subtasks = [
-                RepairSubTask.from_dict(s) for s in plan_dict["subtasks"]
-            ]
+            plan.subtasks = [RepairSubTask.from_dict(s) for s in plan_dict["subtasks"]]
         plan.intent_parser = "llm"
 
     # ── composite subtasks 编排 ──
@@ -137,18 +142,18 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         subtasks = []
         for i, f in enumerate(plan.suspect_files):
             sid = f"fix_{Path(f).stem}"
-            subtasks.append(RepairSubTask(
-                id=sid,
-                goal=f"修复 {f} 中的错误",
-                suspect_files=[f],
-                depends_on=[] if i == 0 else [subtasks[0].id],
-            ))
+            subtasks.append(
+                RepairSubTask(
+                    id=sid,
+                    goal=f"修复 {f} 中的错误",
+                    suspect_files=[f],
+                    depends_on=[] if i == 0 else [subtasks[0].id],
+                )
+            )
         # 至少 2 个
         return subtasks if len(subtasks) >= 2 else []
 
-    def _run_subtask_cycle(
-        self, state, subtask, patches_by_subtask: dict
-    ) -> list:
+    def _run_subtask_cycle(self, state, subtask, patches_by_subtask: dict) -> list:
         """执行单个子任务的 localize 子循环。
 
         缩窄 suspect_files 后定位嫌疑位置。
@@ -158,11 +163,15 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
         tracer = self._active_repair_ctx().repair_tracer if self._active_repair_ctx() else None
         if tracer:
-            tracer.emit("orchestrator", "subtask_started", {
-                "subtask_id": subtask.id,
-                "goal": subtask.goal,
-                "suspect_files": subtask.suspect_files,
-            })
+            tracer.emit(
+                "orchestrator",
+                "subtask_started",
+                {
+                    "subtask_id": subtask.id,
+                    "goal": subtask.goal,
+                    "suspect_files": subtask.suspect_files,
+                },
+            )
 
         # 缩窄 suspect_files
         plan = state.repair_plan
@@ -180,10 +189,14 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         patches_by_subtask[subtask.id] = state.suspect_locations
 
         if tracer:
-            tracer.emit("orchestrator", "subtask_done", {
-                "subtask_id": subtask.id,
-                "suspect_count": len(state.suspect_locations),
-            })
+            tracer.emit(
+                "orchestrator",
+                "subtask_done",
+                {
+                    "subtask_id": subtask.id,
+                    "suspect_count": len(state.suspect_locations),
+                },
+            )
         log.info("[subtask] 完成: %s, suspects=%d", subtask.id, len(state.suspect_locations))
         return state.suspect_locations
 
@@ -284,9 +297,12 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 if retry < 1:
                     log.warning(
                         "[localizer] parse 失败 (retry %d), raw[:200]=%r",
-                        retry + 1, answer.strip()[:200],
+                        retry + 1,
+                        answer.strip()[:200],
                     )
-                    prompt += "\n\n【重试】上次输出未包含有效 JSON。请严格按 SuspectList JSON 格式输出。"
+                    prompt += (
+                        "\n\n【重试】上次输出未包含有效 JSON。请严格按 SuspectList JSON 格式输出。"
+                    )
             log.warning("[localizer] 2 次重试后仍无有效 suspects")
             return [], timing
 
@@ -299,6 +315,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             context, ret_timing = self._rule_retrieve(suspects, issue)
             state.node_timings["retrieval_path"] = "rule"
         else:
+
             def run_retriever():
                 prompt = self._retriever_prompt([], plan=plan, issue=issue)
                 for retry in range(2):
@@ -319,7 +336,10 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     if ctx.related_tests:
                         return ctx, timing
                     if retry < 1:
-                        prompt += "\n\n【重试】上次输出未包含有效 JSON。请严格按 RetrievedContext JSON 格式输出。"
+                        prompt += (
+                            "\n\n【重试】上次输出未包含有效 JSON。"
+                            "请严格按 RetrievedContext JSON 格式输出。"
+                        )
                 return ctx, timing
 
             with ThreadPoolExecutor(max_workers=2) as pool:
@@ -371,16 +391,17 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 state.blackboard_snapshot = cp.get("blackboard_snapshot", {})
                 state.retrieved_context = (
                     RetrievedContext.from_dict(cp["retrieved_context"])
-                    if cp.get("retrieved_context") else None
+                    if cp.get("retrieved_context")
+                    else None
                 )
                 state.suspect_locations = [
-                    SuspectLocation.from_dict(s)
-                    for s in cp.get("suspect_locations", [])
+                    SuspectLocation.from_dict(s) for s in cp.get("suspect_locations", [])
                 ]
                 if cp.get("repair_plan"):
                     plan_data = cp["repair_plan"]
                     if isinstance(plan_data, dict):
                         from src.state import RepairPlan
+
                         state.repair_plan = RepairPlan.from_dict(plan_data)
 
                 # 跳过 parse/localize，直接进入 patch 循环
@@ -479,7 +500,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 # ── composite subtasks 路径 ──
                 if state.repair_plan and state.repair_plan.issue_type == "composite":
                     # 优先使用 Planner 生成的 subtasks，否则规则生成
-                    subtasks = list(state.repair_plan.subtasks) if state.repair_plan.subtasks else []
+                    subtasks = (
+                        list(state.repair_plan.subtasks) if state.repair_plan.subtasks else []
+                    )
                     if not subtasks:
                         subtasks = self._generate_subtasks(state.repair_plan)
                     if subtasks:
@@ -493,7 +516,8 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                             state.status = "patched"
                             log.info(
                                 "[composite] %d subtasks -> %d patches merged",
-                                len(subtasks), len(merged),
+                                len(subtasks),
+                                len(merged),
                             )
                         return state
 
@@ -503,7 +527,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 state.phase = "localize"
                 t0 = time.time()
                 with phase_lock.read():
-                    suspects, context, loc_timing, ret_timing = self._run_localize_and_retrieve(state)
+                    suspects, context, loc_timing, ret_timing = self._run_localize_and_retrieve(
+                        state
+                    )
                 wall_ms = int((time.time() - t0) * 1000)
                 if phase_clock is not None:
                     phase_clock.consume("localize", wall_ms)
@@ -551,8 +577,11 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     if cooldown is not None and cooldown.cooldown_active:
                         saved_temp = self.patcher.config.temperature
                         self.patcher.config.temperature = cooldown.suggested_temperature
-                        log.info("[cooldown] temperature: %.1f → %.1f", saved_temp,
-                                 cooldown.suggested_temperature)
+                        log.info(
+                            "[cooldown] temperature: %.1f → %.1f",
+                            saved_temp,
+                            cooldown.suggested_temperature,
+                        )
 
                     state.phase = "patch"
                     if phase_clock is not None:
@@ -609,7 +638,8 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                             from src.tools.ast_parser import check_semantic_equivalence
 
                             result = check_semantic_equivalence(
-                                patch.original_lines, patch.patched_lines,
+                                patch.original_lines,
+                                patch.patched_lines,
                             )
                             detail = result.get("detail", "")
                             # 跳过 syntax error（非签名级变更，由 verifier 最终裁决）
@@ -618,13 +648,16 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                                 semantic_drift = True
                                 tracer = ctx.repair_tracer
                                 if tracer:
-                                    tracer.emit("orchestrator", "semantic_check", {
-                                        "status": "drift",
-                                        "detail": detail,
-                                        "file": patch.file_path,
-                                    })
-                                log.warning("[semantic] drift: %s → %s",
-                                             patch.file_path, detail)
+                                    tracer.emit(
+                                        "orchestrator",
+                                        "semantic_check",
+                                        {
+                                            "status": "drift",
+                                            "detail": detail,
+                                            "file": patch.file_path,
+                                        },
+                                    )
+                                log.warning("[semantic] drift: %s → %s", patch.file_path, detail)
                                 break
                         except Exception:
                             pass
@@ -677,7 +710,8 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     else:
                         self._revert_changes(state)
                     state.feedback = self._build_feedback(
-                        state.verification_result, state=state,
+                        state.verification_result,
+                        state=state,
                     )
                     self._write_feedback_to_blackboard(state.feedback)
 
@@ -688,9 +722,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
                         cooldown = VerifyCooldown()
                         self._verify_cooldown = cooldown
-                    cooldown.record_failure(
-                        state.verification_result.failure_logs
-                    )
+                    cooldown.record_failure(state.verification_result.failure_logs)
                     if cooldown.cooldown_active:
                         state.feedback += f"\n\n{cooldown.cooldown_hint}"
                     state.retry_count += 1
@@ -740,6 +772,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         if state.repair_run_id:
             try:
                 from src.repair.checkpoint_load import save_repair_checkpoint
+
                 save_repair_checkpoint(state, self._repo_root)
             except Exception:
                 pass
@@ -748,9 +781,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         log.info("总耗时: %dms, status=%s", total_ms, state.status)
         return state
 
-    def _rule_retrieve(
-        self, suspects: list, issue: str
-    ) -> tuple["RetrievedContext", dict]:
+    def _rule_retrieve(self, suspects: list, issue: str) -> tuple[RetrievedContext, dict]:
         """规则检索（不调 LLM）：从 suspects 提取函数名 → grep 搜索 → 构建 RetrievedContext。"""
         import re
         import time
@@ -779,16 +810,20 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
         ctx = ToolContext(root=self._repo_root)
         for kw in list(keywords)[:5]:  # 最多 5 个关键词
-            grep_out = tool_grep(ctx, {"pattern": kw, "path": ".", "glob": "*.py", "max_results": 10})
+            grep_out = tool_grep(
+                ctx, {"pattern": kw, "path": ".", "glob": "*.py", "max_results": 10}
+            )
             if grep_out and not grep_out.startswith("Error") and grep_out != "(无匹配)":
                 for line in grep_out.splitlines():
                     parts = line.split(":", 2)
                     if len(parts) >= 3:
-                        similar_snippets.append({
-                            "file": parts[0],
-                            "line": parts[1],
-                            "text": parts[2].strip()[:200],
-                        })
+                        similar_snippets.append(
+                            {
+                                "file": parts[0],
+                                "line": parts[1],
+                                "text": parts[2].strip()[:200],
+                            }
+                        )
 
         # 找对应测试文件
         for s in suspects:
@@ -831,7 +866,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             state_payload = state.to_dict()
             state_payload["saved_at"] = time.time()
             tmp = state_path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(state_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.write_text(
+                json.dumps(state_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
             tmp.replace(state_path)
 
             # 轻量 checkpoint

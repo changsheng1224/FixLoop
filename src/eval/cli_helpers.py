@@ -44,8 +44,7 @@ def print_eval_report(report: EvalReport, verbose: bool, report_path: Path) -> N
             if c.skill_labeled:
                 mark = "OK" if c.skill_match else "MISS"
                 print(
-                    f"       skill[{mark}]: expected={c.expected_skill} "
-                    f"matched={c.matched_skill}",
+                    f"       skill[{mark}]: expected={c.expected_skill} matched={c.matched_skill}",
                     file=sys.stderr,
                 )
 
@@ -89,6 +88,7 @@ def run_eval(
     if with_judge:
         from agent_runtime.bootstrap import create_model_client
         from src.eval.judge import JudgeClient
+
         try:
             light = create_model_client(provider="deepseek")
             judge_client = JudgeClient(light)
@@ -103,8 +103,7 @@ def run_eval(
         judge_client=judge_client,
     )
     ids = runner.list_cases() if case_ids is None else case_ids
-    report = runner.run_all(ids, report_path=report_path, resume=resume,
-                            repetitions=pass_at_k)
+    report = runner.run_all(ids, report_path=report_path, resume=resume, repetitions=pass_at_k)
 
     if markdown is not None:
         from src.eval.metrics import write_metrics_markdown

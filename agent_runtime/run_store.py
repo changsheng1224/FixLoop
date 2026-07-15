@@ -127,7 +127,7 @@ class RunStore:
 
         FIXLOOP_ENCRYPT_KEY 设置时加密 user_request / final_answer。
         """
-        from agent_runtime.crypto_utils import is_encryption_enabled, encrypt
+        from agent_runtime.crypto_utils import encrypt, is_encryption_enabled
 
         run_dir = self.start_run(task_state)
         path = run_dir / "task_state.json"

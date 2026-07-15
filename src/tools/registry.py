@@ -34,7 +34,10 @@ def build_repair_tools(context) -> dict:
         "schema": auto_schema(GrepArgs),
         "risky": False,
         "execution_tier": TIER_HOST,
-        "description": "内容搜索（rg 优先，Python fallback）。参数: pattern, path, glob, ignore_case, context_lines, max_results",
+        "description": (
+            "内容搜索（rg 优先，Python fallback）。"
+            "参数: pattern, path, glob, ignore_case, context_lines, max_results"
+        ),
         "run": lambda args: tool_grep(context, args),
     }
 

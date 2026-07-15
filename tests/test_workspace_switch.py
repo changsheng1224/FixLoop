@@ -1,10 +1,5 @@
 """Workspace 切换检测单测：cwd/root_hash 变更 → prefix rebuild + recent_files clear。"""
 
-import tempfile
-from pathlib import Path
-
-import pytest
-
 
 class TestWorkspaceSwitchDetection:
     def test_first_call_records_baseline(self, temp_workspace):

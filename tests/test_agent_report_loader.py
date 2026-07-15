@@ -1,7 +1,5 @@
 """agent_report_loader 单测。"""
 
-import json
-
 from agent_runtime.model_timing import summarize_ttft
 from src.repair.agent_report_loader import merge_agent_report, project_token_usage_by_agent
 

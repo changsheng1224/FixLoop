@@ -1,10 +1,5 @@
 """Skill 向量 RAG 单测：SkillCatalog.embed_index + match_skill_semantic + regex 回退。"""
 
-import tempfile
-from pathlib import Path
-
-import pytest
-
 from src.skills.catalog import SkillCatalog
 from src.skills.matcher import match_skill, match_skill_semantic
 from src.skills.models import SkillSpec
@@ -14,23 +9,27 @@ def _make_skills(n: int = 10) -> list[SkillSpec]:
     """生成 N 个 synthetic SkillSpec（模拟真实 YAML 结构）。"""
     skills = []
     for i in range(n):
-        skills.append(SkillSpec(
-            name=f"python_error_{i:03d}",
-            language="python",
-            trigger_pattern=(
-                f"Error{i % 5}Type" if i % 5 == 0
-                else f"ExceptionType{i % 3}" if i % 3 == 0
-                else f"ModuleNotFoundError{i}"
-            ),
-            example_issue=(
-                f"TypeError at file_{i}.py:line {i * 10}"
-                if i % 2 == 0
-                else f"ImportError in module_{i}"
-            ),
-            priority=10 - (i % 3),
-            suggested_tools=["grep", "read_file", "ast_parse"],
-            prompt_hint=f"Fix error type {i} by checking types",
-        ))
+        skills.append(
+            SkillSpec(
+                name=f"python_error_{i:03d}",
+                language="python",
+                trigger_pattern=(
+                    f"Error{i % 5}Type"
+                    if i % 5 == 0
+                    else f"ExceptionType{i % 3}"
+                    if i % 3 == 0
+                    else f"ModuleNotFoundError{i}"
+                ),
+                example_issue=(
+                    f"TypeError at file_{i}.py:line {i * 10}"
+                    if i % 2 == 0
+                    else f"ImportError in module_{i}"
+                ),
+                priority=10 - (i % 3),
+                suggested_tools=["grep", "read_file", "ast_parse"],
+                prompt_hint=f"Fix error type {i} by checking types",
+            )
+        )
     return skills
 
 
@@ -99,12 +98,16 @@ class TestMatchSkillSemantic:
     def test_rank_key_priority_order(self):
         """高 priority 的 skill 排前。"""
         s1 = SkillSpec(
-            name="high_priority", language="python",
-            trigger_pattern="Error", priority=10,
+            name="high_priority",
+            language="python",
+            trigger_pattern="Error",
+            priority=10,
         )
         s2 = SkillSpec(
-            name="low_priority", language="python",
-            trigger_pattern="Error", priority=1,
+            name="low_priority",
+            language="python",
+            trigger_pattern="Error",
+            priority=1,
         )
         catalog = SkillCatalog([s1, s2])
         result = match_skill_semantic("Error occurred", catalog=catalog)
@@ -131,11 +134,14 @@ class TestSemanticFallback:
         """sem.search 异常时回退 regex。"""
         skills = _make_skills(60)
         catalog = SkillCatalog(skills)
+
         # 注入异常索引
         class BadSem:
             available = True
+
             def search(self, *a, **kw):
                 raise RuntimeError("simulated failure")
+
         catalog._embed_index = BadSem()
         result = match_skill_semantic(
             "TypeError at calc.py:42",

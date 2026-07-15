@@ -1,13 +1,9 @@
 """RAG 三层统一叙事单测：derive_embed_query 一致 + embed_cache_hit_rate + trace 字段。"""
 
-import pytest
-
-from agent_runtime.features.memory.core import default_memory_state
 from agent_runtime.features.memory.semantic import (
     SemanticMemory,
     derive_embed_query,
 )
-
 
 # ---------------------------------------------------------------------------
 # derive_embed_query 三层共用
@@ -16,15 +12,11 @@ from agent_runtime.features.memory.semantic import (
 
 class TestDeriveEmbedQuery:
     def test_extracts_exception_type(self):
-        query = derive_embed_query(
-            "TypeError at calculator.py:42\n  File \"src/calc.py\", line 42"
-        )
+        query = derive_embed_query('TypeError at calculator.py:42\n  File "src/calc.py", line 42')
         assert "TypeError" in query
 
     def test_extracts_file_name(self):
-        query = derive_embed_query(
-            'ImportError in app.py\n  File "src/utils/helpers.py", line 15'
-        )
+        query = derive_embed_query('ImportError in app.py\n  File "src/utils/helpers.py", line 15')
         assert "helpers.py" in query or "utils" in query
 
     def test_fallback_to_task_summary(self):
@@ -69,7 +61,6 @@ class TestEmbedCacheHitRate:
 
     def test_semantic_memory_delegates_to_module(self):
         from agent_runtime.features.memory.semantic import (
-            SemanticMemory,
             get_embed_cache_hit_rate,
         )
 
@@ -104,8 +95,13 @@ class TestRAGLayersIntegration:
 
         # 注入 episodic + durable 数据
         agent.session["memory"]["episodic_notes"] = [
-            {"text": "TypeError at calculator.py:42", "tags": ["error"],
-             "kind": "error", "note_index": 1, "created_at": 1e12},
+            {
+                "text": "TypeError at calculator.py:42",
+                "tags": ["error"],
+                "kind": "error",
+                "note_index": 1,
+                "created_at": 1e12,
+            },
         ]
 
         cm = ContextManager(agent)

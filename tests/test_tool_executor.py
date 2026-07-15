@@ -1,7 +1,8 @@
 """ToolExecutor 7 道闸口单测。"""
 
-import pytest
 from pathlib import Path
+
+import pytest
 
 from agent_runtime.config import AgentConfig
 from agent_runtime.providers.clients import FakeModelClient
@@ -241,10 +242,8 @@ class TestGate5SemanticDuplicate:
         """write_file 相同 args → 精确重复。"""
         agent = _make_agent()
         agent.session["history"] = [
-            {"tool_name": "write_file",
-             "tool_args": {"path": "app.py", "content": "x=1"}},
-            {"tool_name": "write_file",
-             "tool_args": {"path": "app.py", "content": "x=1"}},
+            {"tool_name": "write_file", "tool_args": {"path": "app.py", "content": "x=1"}},
+            {"tool_name": "write_file", "tool_args": {"path": "app.py", "content": "x=1"}},
         ]
         exe = ToolExecutor(agent, approval_policy="auto")
         assert exe._is_duplicate("write_file", {"path": "app.py", "content": "x=1"})
@@ -253,10 +252,8 @@ class TestGate5SemanticDuplicate:
         """write_file 相同 path 不同 content → 不重复。"""
         agent = _make_agent()
         agent.session["history"] = [
-            {"tool_name": "write_file",
-             "tool_args": {"path": "app.py", "content": "x=1"}},
-            {"tool_name": "write_file",
-             "tool_args": {"path": "app.py", "content": "x=2"}},
+            {"tool_name": "write_file", "tool_args": {"path": "app.py", "content": "x=1"}},
+            {"tool_name": "write_file", "tool_args": {"path": "app.py", "content": "x=2"}},
         ]
         exe = ToolExecutor(agent, approval_policy="auto")
         assert not exe._is_duplicate("write_file", {"path": "app.py", "content": "x=3"})
@@ -379,8 +376,9 @@ class TestLoopDetection:
 
 
 def _make_agent():
-    from agent_runtime.workspace import WorkspaceContext
     import tempfile
+
+    from agent_runtime.workspace import WorkspaceContext
 
     tmp = tempfile.mkdtemp()
     ws = WorkspaceContext.build(tmp)

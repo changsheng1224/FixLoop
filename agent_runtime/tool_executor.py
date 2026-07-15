@@ -90,8 +90,7 @@ class ToolExecutor:
             return self._rejected(
                 1,
                 "allowed_tools",
-                f"Error: 工具 '{name}' 不在允许列表中。"
-                f"可用工具: {', '.join(sorted(allowed))}",
+                f"Error: 工具 '{name}' 不在允许列表中。可用工具: {', '.join(sorted(allowed))}",
             )
 
         # ---- Gate 2: 工具存在检查 ----
@@ -203,7 +202,9 @@ class ToolExecutor:
 
     # ---- 内部方法 ----
 
-    def _rejected(self, gate_id: int, tool_error_code: str, content: str, **extra) -> ToolExecutionResult:
+    def _rejected(
+        self, gate_id: int, tool_error_code: str, content: str, **extra
+    ) -> ToolExecutionResult:
         """构造 Executor 闸口拒绝结果。"""
         return ToolExecutionResult(
             content=content,
@@ -395,10 +396,19 @@ class ToolExecutor:
     _APPROVAL_TIER_ASK = "ask"
     _APPROVAL_TIER_DENY = "deny"
 
-    _READ_TOOLS_FOR_APPROVAL = frozenset({
-        "read_file", "list_files", "search", "grep", "ast_parse",
-        "inspect_file", "find_test", "git_blame", "git_diff",
-    })
+    _READ_TOOLS_FOR_APPROVAL = frozenset(
+        {
+            "read_file",
+            "list_files",
+            "search",
+            "grep",
+            "ast_parse",
+            "inspect_file",
+            "find_test",
+            "git_blame",
+            "git_diff",
+        }
+    )
     _ASK_TOOLS = frozenset({"write_file", "patch_file"})
     _DENY_TOOLS = frozenset({"run_shell"})
 
@@ -433,8 +443,19 @@ class ToolExecutor:
         return mapping.get(name)
 
     # 读类工具：仅按 (name, path) 语义去重（不比较 start/end/pattern 等参数）
-    _READ_TOOLS = frozenset({"read_file", "list_files", "search", "grep", "ast_parse",
-                              "inspect_file", "find_test", "git_blame", "git_diff"})
+    _READ_TOOLS = frozenset(
+        {
+            "read_file",
+            "list_files",
+            "search",
+            "grep",
+            "ast_parse",
+            "inspect_file",
+            "find_test",
+            "git_blame",
+            "git_diff",
+        }
+    )
 
     def _is_duplicate(self, name: str, args: dict) -> bool:
         """检查最近 2 次调用是否重复。
@@ -612,7 +633,13 @@ class QuotaEnforcer:
     限制每类工具在单次会话中的最大调用次数 + 并发 subprocess 上限。
     """
 
-    def __init__(self, max_writes: int = 20, max_shell: int = 10, max_total: int = 50, max_concurrent_shell: int = 3):
+    def __init__(
+        self,
+        max_writes: int = 20,
+        max_shell: int = 10,
+        max_total: int = 50,
+        max_concurrent_shell: int = 3,
+    ):
         import threading
 
         self._limits = {"write": max_writes, "shell": max_shell, "total": max_total}

@@ -1,7 +1,5 @@
 """Planner Agent 单测：LLM 单次 JSON → RepairPlan + 回落规则。"""
 
-import pytest
-
 
 class TestPlannerPrompt:
     def test_prompt_contains_json_schema(self):
@@ -20,10 +18,11 @@ class TestPlannerPrompt:
 class TestCreatePlanner:
     def test_planner_has_minimal_config(self):
         """Planner 配置设置正确。"""
-        from src.agents.planner import create_planner
+        import tempfile
+
         from agent_runtime.providers.clients import FakeModelClient
         from agent_runtime.workspace import WorkspaceContext
-        import tempfile
+        from src.agents.planner import create_planner
 
         with tempfile.TemporaryDirectory() as tmp:
             ws = WorkspaceContext.build(tmp)
@@ -32,10 +31,11 @@ class TestCreatePlanner:
             assert agent.config.max_steps == 1  # 只做单次 complete
 
     def test_planner_has_no_tools(self):
-        from src.agents.planner import create_planner
+        import tempfile
+
         from agent_runtime.providers.clients import FakeModelClient
         from agent_runtime.workspace import WorkspaceContext
-        import tempfile
+        from src.agents.planner import create_planner
 
         with tempfile.TemporaryDirectory() as tmp:
             ws = WorkspaceContext.build(tmp)

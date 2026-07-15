@@ -1,7 +1,5 @@
 """Retriever Agentic RAG 单测：prompt 增强 + retrieval_path + retrieval_steps。"""
 
-import pytest
-
 
 class TestRetrieverSystemPrompt:
     def test_prompt_contains_agentic_keywords(self):

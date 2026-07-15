@@ -76,18 +76,26 @@ def build_retriever_template_and_variables(
         lines = ["根据以下嫌疑位置搜索相关代码："]
         for s in suspects:
             lines.append(f"  - {s.file_path}:{s.start_line} {s.function_name or ''}")
-        return "retriever_suspects", {
-            "suspects_list": "\n".join(lines[1:]),
-            "header": lines[0],
-            "skill_hint_block": skill_hint_block,
-        }, render
+        return (
+            "retriever_suspects",
+            {
+                "suspects_list": "\n".join(lines[1:]),
+                "header": lines[0],
+                "skill_hint_block": skill_hint_block,
+            },
+            render,
+        )
 
     if plan and plan.suspect_files:
-        return "retriever_plan", {
-            "issue": issue or plan.reasoning,
-            "suspect_files": ", ".join(plan.suspect_files),
-            "skill_hint_block": skill_hint_block,
-        }, render
+        return (
+            "retriever_plan",
+            {
+                "issue": issue or plan.reasoning,
+                "suspect_files": ", ".join(plan.suspect_files),
+                "skill_hint_block": skill_hint_block,
+            },
+            render,
+        )
 
     return "retriever_fallback", {"skill_hint_block": skill_hint_block}, render
 

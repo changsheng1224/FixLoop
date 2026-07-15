@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from agent_runtime.l2_context import l2_payload_from_agent
-
 from src.repair.l2_binding import bind_l2_context, clear_l2_context, make_repair_task_id
 from src.state import AgentAskRef
 

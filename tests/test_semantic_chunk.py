@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import pytest
-
 from agent_runtime.features.memory.semantic import (
-    EMBED_MAX_CHARS,
     ChunkedMemoryNote,
     _chunk_text,
 )
-
 
 # ---------------------------------------------------------------------------
 # _chunk_text
@@ -56,8 +52,10 @@ class TestChunkText:
 
 class FakeModel:
     """Fake embedding model for testing."""
+
     def encode(self, text: str):
         import numpy as np
+
         # Deterministic "embedding" from text hash
         h = hash(text) % 1024
         vec = np.array([float(h % 100) / 100], dtype=np.float32)
@@ -80,8 +78,6 @@ class TestChunkedMemoryNote:
         assert len(cmn.chunks) >= 3
 
     def test_max_similarity_returns_best(self):
-        import numpy as np
-
         model = FakeModel()
         cmn = ChunkedMemoryNote("hello world", {"text": "test"}, model, max_chars=800)
         # use same text for query → should have high sim

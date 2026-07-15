@@ -1,8 +1,5 @@
 """危险工具双层闸：Gateway (L1) + Executor Gate 7 (L2) 集成测试。"""
 
-import pytest
-
-from agent_runtime.config import AgentConfig
 from agent_runtime.providers.clients import FakeModelClient
 from src.agents.factory import create_baseline_agent, create_localizer, create_patcher
 from src.middleware import REPAIR_PERMISSION_TABLE, ToolGateway, build_repair_gateway

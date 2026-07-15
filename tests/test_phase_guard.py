@@ -6,8 +6,6 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-import pytest
-
 from src.repair.phase_guard import PhaseReadWriteLock
 
 

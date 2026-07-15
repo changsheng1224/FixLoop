@@ -53,11 +53,7 @@ def finalize_agent_run(loop, ts) -> None:
                 "model_attempts": ts.attempts,
                 "tool_steps": ts.tool_steps,
             },
-            "quota_usage": (
-                agent.quota.quota_summary()
-                if getattr(agent, "quota", None)
-                else {}
-            ),
+            "quota_usage": (agent.quota.quota_summary() if getattr(agent, "quota", None) else {}),
             "plan_todos": list(loop._plan_todos),
             "memory_health": loop._build_memory_health(),
             **report_token,
@@ -79,11 +75,7 @@ def finalize_agent_run(loop, ts) -> None:
             store.write_task_state_named(shared, f"task_state.{agent_name}.json", ts)
             store.write_agent_report(shared, agent_name, report_body)
         else:
-            trigger = (
-                "user_cancel"
-                if ts.stop_reason == StopReason.USER_CANCEL.value
-                else "ask_end"
-            )
+            trigger = "user_cancel" if ts.stop_reason == StopReason.USER_CANCEL.value else "ask_end"
             cp = create_checkpoint(
                 agent,
                 ts,

@@ -81,9 +81,7 @@ class SkillSpec(BaseModel):
         unknown = [tool for tool in value if tool not in KNOWN_SKILL_TOOLS]
         if unknown:
             allowed = ", ".join(REPAIR_CANONICAL_TOOL_NAMES)
-            raise ValueError(
-                f"unknown suggested_tools: {unknown}; known tools: {allowed}"
-            )
+            raise ValueError(f"unknown suggested_tools: {unknown}; known tools: {allowed}")
         return value
 
     def matches(self, text: str) -> bool:
@@ -106,7 +104,7 @@ class MatchedSkill:
     candidates_count: int = 1
 
     @classmethod
-    def from_spec(cls, spec: SkillSpec, *, candidates_count: int = 1) -> "MatchedSkill":
+    def from_spec(cls, spec: SkillSpec, *, candidates_count: int = 1) -> MatchedSkill:
         return cls(
             name=spec.name,
             language=spec.language,

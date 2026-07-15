@@ -16,6 +16,7 @@ def _estimate_repair_cost(token_summary: dict, state) -> float:
     except Exception:
         return 0.0
 
+
 # Repair trace 可选事件（Orchestrator / Agent 写入）
 REPAIR_TRACE_EVENTS = frozenset(
     {
@@ -109,16 +110,19 @@ class RepairRunTracer:
         self.store.write_agent_report(self.run_id, agent_name, body)
 
     def finalize(self, state, token_summary: dict) -> None:
+        from agent_runtime.tool_rejection import build_rejection_observability_payload
         from src.eval.token_usage import summarize_agent_tool_usage
-        from src.repair.agent_report_loader import load_agent_reports_from_run, project_token_usage_by_agent
+        from src.repair.agent_report_loader import (
+            load_agent_reports_from_run,
+            project_token_usage_by_agent,
+        )
+        from src.repair.blackboard_merge import BLACKBOARD_SCHEMA_VERSION
         from src.repair.context_waterfall import build_context_waterfall
+        from src.repair.l2_binding import L2_BINDING_SCHEMA_VERSION
+        from src.repair.prompt_router import repair_plan_intent_snapshot
         from src.repair.rejection_aggregate import (
             aggregate_rejection_from_agent_reports,
         )
-        from agent_runtime.tool_rejection import build_rejection_observability_payload
-        from src.repair.l2_binding import L2_BINDING_SCHEMA_VERSION
-        from src.repair.blackboard_merge import BLACKBOARD_SCHEMA_VERSION
-        from src.repair.prompt_router import repair_plan_intent_snapshot
         from src.repair.timing_schema import phases_for_report
         from src.repair.ttft_aggregate import aggregate_ttft_from_agent_reports
 

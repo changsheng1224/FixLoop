@@ -7,8 +7,6 @@ from src.agents.localizer import create_localizer
 from src.agents.patcher import create_patcher
 from src.agents.retriever import create_retriever
 from src.middleware import ToolGateway
-
-
 from src.tools.composite import REPAIR_CANONICAL_TOOL_NAMES
 
 
@@ -108,6 +106,7 @@ class TestToolGatewayIntegration:
         )
         assert gw.can_call("patcher", "write_file") is True
         assert gw.can_call("patcher", "ast_parse") is False
+
 
 class TestSharedGateway:
     def test_default_gateways_are_isolated_between_agents(self, client, workspace):

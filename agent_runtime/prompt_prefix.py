@@ -107,7 +107,9 @@ def _resolve_repo_root(workspace, repo_root: str | Path | None) -> Path:
     return Path(".")
 
 
-def _resolve_assets(workspace, repo_root: str | Path | None, assets: PromptAssets | None) -> PromptAssets:
+def _resolve_assets(
+    workspace, repo_root: str | Path | None, assets: PromptAssets | None
+) -> PromptAssets:
     if assets is not None:
         return assets
     return load_prompt_assets(_resolve_repo_root(workspace, repo_root))

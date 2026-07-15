@@ -4,7 +4,6 @@ Agent 是最外层的用户接口，封装了模型客户端、工具注册表�
 """
 
 import json
-import re
 from pathlib import Path
 from typing import Literal
 
@@ -107,7 +106,9 @@ class Agent:
 
     # ---- 公开方法 ----
 
-    def ask(self, user_message: str, callback=None, *, skip_plan: bool = False, stream: bool = False) -> str:
+    def ask(
+        self, user_message: str, callback=None, *, skip_plan: bool = False, stream: bool = False
+    ) -> str:
         """执行一次用户请求，返回最终答案。
 
         Args:
@@ -141,7 +142,9 @@ class Agent:
         import os
 
         current = os.getcwd()
-        current_hash = self.workspace.fingerprint() if hasattr(self.workspace, "fingerprint") else ""
+        current_hash = (
+            self.workspace.fingerprint() if hasattr(self.workspace, "fingerprint") else ""
+        )
         last_cwd = getattr(self, "_last_cwd", None)
         last_hash = getattr(self, "_last_root_hash", None)
 
@@ -266,7 +269,6 @@ class Agent:
         Args:
             item: 包含 role 和 content 的字典；user 消息会递增 turn_id。
         """
-        import json
         from pathlib import Path
 
         from agent_runtime.turn_tracking import stamp_turn_id
@@ -287,13 +289,16 @@ class Agent:
 
     def read_history(self) -> list[dict]:
         """从 history.jsonl 读取历史投影（回退 session 内存）。"""
-        import json
         from pathlib import Path
 
         path = Path(self._cwd) / ".agent" / "history.jsonl"
         if path.is_file():
             try:
-                return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+                return [
+                    json.loads(line)
+                    for line in path.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ]
             except Exception:
                 pass
         return self.session.get("history", [])
@@ -493,9 +498,7 @@ class Agent:
         # Candidate 抽取 hook（after_tool）
         self._extract_memory_candidates_from_tool(name, args, result_text)
 
-    def _extract_memory_candidates_from_tool(
-        self, name: str, args: dict, result_text: str
-    ) -> None:
+    def _extract_memory_candidates_from_tool(self, name: str, args: dict, result_text: str) -> None:
         """从工具结果中规则抽取 Candidate 并写入 session 暂存区。"""
         try:
             from agent_runtime.features.memory.candidate import candidates_from_tool

@@ -8,10 +8,9 @@ LLM 路径：light_client 仅填 kind/confidence 规划字段，禁止自由建 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
-
 
 # ── 路径隔离 ──
 
@@ -48,17 +47,20 @@ def resolve_memory_path(root: str | Path, raw_path: str) -> Path:
     except ValueError as e:
         raise MemoryPathError(raw_path, detail=str(e)) from e
 
+
 # ── 候选数据结构 ──
 
 CANDIDATE_KINDS = ("error", "decision", "observation", "fact")
 CandidateKind = Literal["error", "decision", "observation", "fact"]
 
-ALLOWED_TOPICS = frozenset({
-    "project-conventions",
-    "key-decisions",
-    "dependency-facts",
-    "user-preferences",
-})
+ALLOWED_TOPICS = frozenset(
+    {
+        "project-conventions",
+        "key-decisions",
+        "dependency-facts",
+        "user-preferences",
+    }
+)
 
 
 @dataclass
@@ -90,15 +92,21 @@ class Candidate:
     @property
     def promotion(self) -> tuple[str, str]:
         """转为 durable.promote() 所需的 (topic, text) 格式。"""
-        text = f"{self.key}\nkind={self.kind} confidence={self.confidence:.2f} source={self.source}\n{self.value}"
+        text = (
+            f"{self.key}\n"
+            f"kind={self.kind} confidence={self.confidence:.2f} source={self.source}\n"
+            f"{self.value}"
+        )
         return (self.topic, text)
 
 
 # ── 规则抽取 ──
 
 _STACK_FILE_RE = re.compile(r'File\s+"([^"]+)",\s*line\s+(\d+)')
-_ERROR_TYPE_RE = re.compile(r"(TypeError|ValueError|ImportError|AttributeError|KeyError|"
-                            r"ModuleNotFoundError|SyntaxError|NameError|IndexError)")
+_ERROR_TYPE_RE = re.compile(
+    r"(TypeError|ValueError|ImportError|AttributeError|KeyError|"
+    r"ModuleNotFoundError|SyntaxError|NameError|IndexError)"
+)
 _STACK_BODY_RE = re.compile(r"^\s{2,}(.+)", re.MULTILINE)
 
 
@@ -113,14 +121,16 @@ def extract_from_stack(traceback_text: str) -> list[Candidate]:
     error_type = error_match.group(1) if error_match else "UnknownError"
 
     for file_path, line_no in files[:3]:
-        result.append(Candidate(
-            topic="key-decisions",
-            key=f"error:{file_path}:{line_no}",
-            value=f"{error_type} at {file_path}:{line_no}",
-            kind="error",
-            confidence=0.8,
-            source="stack_parse",
-        ))
+        result.append(
+            Candidate(
+                topic="key-decisions",
+                key=f"error:{file_path}:{line_no}",
+                value=f"{error_type} at {file_path}:{line_no}",
+                kind="error",
+                confidence=0.8,
+                source="stack_parse",
+            )
+        )
 
     # 提取堆栈中的代码片段
     import hashlib
@@ -130,14 +140,16 @@ def extract_from_stack(traceback_text: str) -> list[Candidate]:
         snippet = snippet.strip()
         if len(snippet) > 10 and not snippet.startswith("..."):
             sid = hashlib.sha256(snippet.encode()).hexdigest()[:8]
-            result.append(Candidate(
-                topic="project-conventions",
-                key=f"stack_snippet:{sid}",
-                value=f"堆栈代码: {snippet[:150]}",
-                kind="observation",
-                confidence=0.6,
-                source="stack_parse",
-            ))
+            result.append(
+                Candidate(
+                    topic="project-conventions",
+                    key=f"stack_snippet:{sid}",
+                    value=f"堆栈代码: {snippet[:150]}",
+                    kind="observation",
+                    confidence=0.6,
+                    source="stack_parse",
+                )
+            )
 
     return result
 
@@ -158,27 +170,31 @@ def extract_from_tool_result(
     error_keywords = ["Error:", "Traceback", "FAILED", "error:", "assert"]
     if any(kw in result_text for kw in error_keywords):
         first_line = result_text.split("\n")[0][:150]
-        result.append(Candidate(
-            topic="key-decisions",
-            key=f"tool_error:{tool_name}:{hash(first_line) & 0xFFFF:04x}",
-            value=f"{tool_name} 错误: {first_line}",
-            kind="error",
-            confidence=0.7,
-            source=tool_name,
-        ))
+        result.append(
+            Candidate(
+                topic="key-decisions",
+                key=f"tool_error:{tool_name}:{hash(first_line) & 0xFFFF:04x}",
+                value=f"{tool_name} 错误: {first_line}",
+                kind="error",
+                confidence=0.7,
+                source=tool_name,
+            )
+        )
 
     # git blame → dependency facts
     if tool_name in ("git_blame", "search") and path:
         blob = result_text[:200].strip()
         if blob:
-            result.append(Candidate(
-                topic="dependency-facts",
-                key=f"tool:{tool_name}:{path}",
-                value=f"{tool_name}({path}): {blob[:120]}",
-                kind="fact",
-                confidence=0.5,
-                source=tool_name,
-            ))
+            result.append(
+                Candidate(
+                    topic="dependency-facts",
+                    key=f"tool:{tool_name}:{path}",
+                    value=f"{tool_name}({path}): {blob[:120]}",
+                    kind="fact",
+                    confidence=0.5,
+                    source=tool_name,
+                )
+            )
 
     return result
 
@@ -196,14 +212,16 @@ def extract_from_final_answer(answer: str, issue: str = "") -> list[Candidate]:
         for line in answer.split("\n")[:5]:
             line = line.strip()
             if len(line) > 20 and any(w in line.lower() for w in decision_words[:3]):
-                result.append(Candidate(
-                    topic="key-decisions",
-                    key=f"decision:{hash(line) & 0xFFFF:04x}",
-                    value=line[:200],
-                    kind="decision",
-                    confidence=0.6,
-                    source="final_answer",
-                ))
+                result.append(
+                    Candidate(
+                        topic="key-decisions",
+                        key=f"decision:{hash(line) & 0xFFFF:04x}",
+                        value=line[:200],
+                        kind="decision",
+                        confidence=0.6,
+                        source="final_answer",
+                    )
+                )
                 break
 
     # 惯例/约定检测
@@ -211,14 +229,16 @@ def extract_from_final_answer(answer: str, issue: str = "") -> list[Candidate]:
     for line in answer.split("\n")[:10]:
         line = line.strip()
         if len(line) > 15 and any(w in line.lower() for w in convention_signals):
-            result.append(Candidate(
-                topic="project-conventions",
-                key=f"convention:{hash(line) & 0xFFFF:04x}",
-                value=line[:200],
-                kind="observation",
-                confidence=0.5,
-                source="final_answer",
-            ))
+            result.append(
+                Candidate(
+                    topic="project-conventions",
+                    key=f"convention:{hash(line) & 0xFFFF:04x}",
+                    value=line[:200],
+                    kind="observation",
+                    confidence=0.5,
+                    source="final_answer",
+                )
+            )
             break
 
     return result
@@ -227,9 +247,9 @@ def extract_from_final_answer(answer: str, issue: str = "") -> list[Candidate]:
 # ── LLM 辅助（仅填规划字段，禁止自由建 topic） ──
 
 LLM_FILL_PROMPT = (
-    'Classify this memory candidate. Only output a JSON object with two fields:\n'
+    "Classify this memory candidate. Only output a JSON object with two fields:\n"
     '{{"kind": "error|decision|observation|fact", "confidence": 0.0-1.0}}\n'
-    '\nContent: {text}'
+    "\nContent: {text}"
 )
 
 
@@ -246,7 +266,7 @@ def llm_fill_candidate(candidate: Candidate, light_client) -> Candidate:
             data = json.loads(raw[start:end])
             if data.get("kind") in CANDIDATE_KINDS:
                 candidate.kind = data["kind"]
-            if "confidence" in data and isinstance(data["confidence"], (int, float)):
+            if "confidence" in data and isinstance(data["confidence"], int | float):
                 candidate.confidence = min(1.0, max(0.0, float(data["confidence"])))
     except Exception:
         pass
@@ -254,6 +274,7 @@ def llm_fill_candidate(candidate: Candidate, light_client) -> Candidate:
 
 
 # ── 冲突门控 ──
+
 
 @dataclass
 class CandidateGateResult:
@@ -274,7 +295,11 @@ def gate_candidate(
     按权威序（user > agent > auto）判定：高权威可覆盖低权威，反之拒绝。
     未指定 authority 时从 candidate.source 自动推断。
     """
-    from agent_runtime.features.memory.durable import _resolve_conflict, _subject_key, source_to_authority
+    from agent_runtime.features.memory.durable import (
+        _resolve_conflict,
+        _subject_key,
+        source_to_authority,
+    )
 
     if not authority:
         authority = source_to_authority(candidate.source)
@@ -292,9 +317,13 @@ def gate_candidate(
             if resolution.value == "override":
                 return CandidateGateResult(allowed=True, resolution="override")
             elif resolution.value == "equivalent":
-                return CandidateGateResult(allowed=False, reason="内容等效", resolution="equivalent")
+                return CandidateGateResult(
+                    allowed=False, reason="内容等效", resolution="equivalent"
+                )
             elif resolution.value == "invalid":
-                return CandidateGateResult(allowed=False, reason="低权威不可覆盖高权威", resolution="invalid")
+                return CandidateGateResult(
+                    allowed=False, reason="低权威不可覆盖高权威", resolution="invalid"
+                )
             break
 
     # 新条目
@@ -305,6 +334,7 @@ def gate_candidate(
 
 
 # ── Hook 入口 ──
+
 
 def candidates_from_tool(name: str, args: dict, result_text: str) -> list[Candidate]:
     """after_tool hook：从工具结果抽取候选。"""

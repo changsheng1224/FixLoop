@@ -7,15 +7,12 @@ import os
 import pytest
 
 from agent_runtime.crypto_utils import (
-    _FERNET,
-    _FERNET_LOADED,
     _get_fernet,
     decrypt,
     encrypt,
     encrypt_if_enabled,
     is_encryption_enabled,
 )
-
 
 # ---------------------------------------------------------------------------
 # 环境隔离 helper
@@ -38,6 +35,7 @@ def _reset_fernet_cache():
 def _set_key():
     """设置有效的 Fernet 密钥。"""
     from cryptography.fernet import Fernet
+
     key = Fernet.generate_key().decode()
     os.environ["FIXLOOP_ENCRYPT_KEY"] = key
     return key
@@ -114,7 +112,9 @@ class TestEncryptDecrypt:
 
     def test_roundtrip_multiline(self):
         _set_key()
-        text = "--- a/app.py\n+++ b/app.py\n@@ -42,6 +42,8 @@\n+    if x is None:\n+        return 0"
+        text = (
+            "--- a/app.py\n+++ b/app.py\n@@ -42,6 +42,8 @@\n+    if x is None:\n+        return 0"
+        )
         encrypted = encrypt(text)
         decrypted = decrypt(encrypted)
         assert decrypted == text
@@ -153,6 +153,7 @@ class TestWrongKey:
         os.environ["FIXLOOP_ENCRYPT_KEY"] = key1
         # 重置缓存让新 key 生效
         import agent_runtime.crypto_utils as mod
+
         mod._FERNET = None
         mod._FERNET_LOADED = False
 

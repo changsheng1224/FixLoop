@@ -2,7 +2,10 @@
 
 import pytest
 
+from agent_runtime.config import AgentConfig
 from agent_runtime.context_manager import TokenBudget, fit_prompt_to_budget, fit_repair_user_prompt
+from agent_runtime.providers.clients import FakeModelClient
+from agent_runtime.runtime import Agent
 from agent_runtime.tokenizer_registry import lookup_token_rule
 from agent_runtime.tokenizers import (
     TiktokenCounter,
@@ -11,9 +14,6 @@ from agent_runtime.tokenizers import (
     resolve_token_counter,
     resolve_tokenizer_spec,
 )
-from agent_runtime.config import AgentConfig
-from agent_runtime.providers.clients import FakeModelClient
-from agent_runtime.runtime import Agent
 from agent_runtime.workspace import WorkspaceContext
 
 
@@ -100,6 +100,7 @@ class TestResolveTokenCounter:
 
     def test_tiktoken_load_failure_uses_offline_approximation(self, monkeypatch):
         import tiktoken
+
         import agent_runtime.tokenizers as tokenizers_mod
 
         def fail_load(*args, **kwargs):
@@ -152,7 +153,10 @@ class TestResolveTokenCounter:
 
     def test_env_override_tokenizer_id(self, monkeypatch):
         monkeypatch.setenv("DEEPSEEK_TOKENIZER_ID", "deepseek-ai/deepseek-coder-6.7b-base")
-        assert resolve_deepseek_tokenizer_id("deepseek-v4-pro") == "deepseek-ai/deepseek-coder-6.7b-base"
+        assert (
+            resolve_deepseek_tokenizer_id("deepseek-v4-pro")
+            == "deepseek-ai/deepseek-coder-6.7b-base"
+        )
 
 
 class TestResolveDeepseekTokenizerId:
@@ -163,7 +167,9 @@ class TestResolveDeepseekTokenizerId:
         assert "V3" in resolve_deepseek_tokenizer_id("deepseek-v3")
 
     def test_default_model(self):
-        assert resolve_deepseek_tokenizer_id("deepseek-v4-pro") == "deepseek-ai/deepseek-llm-7b-chat"
+        assert (
+            resolve_deepseek_tokenizer_id("deepseek-v4-pro") == "deepseek-ai/deepseek-llm-7b-chat"
+        )
 
 
 class TestTokenBudgetIntegration:

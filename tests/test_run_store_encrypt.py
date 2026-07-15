@@ -1,8 +1,6 @@
 """敏感产物加密接线单测：FIXLOOP_ENCRYPT_KEY → 落盘非明文 + 可读回。"""
 
 import json
-import tempfile
-from pathlib import Path
 
 import pytest
 
@@ -11,6 +9,7 @@ import pytest
 def encryption_key():
     """生成临时 Fernet 密钥。"""
     from cryptography.fernet import Fernet
+
     return Fernet.generate_key().decode()
 
 
@@ -35,7 +34,9 @@ class TestEncryptTaskState:
         monkeypatch.setenv("FIXLOOP_ENCRYPT_KEY", encryption_key)
         # reload crypto_utils to pick up the key
         import importlib
+
         import agent_runtime.crypto_utils as cu
+
         importlib.reload(cu)
 
         from agent_runtime.run_store import RunStore
@@ -62,7 +63,9 @@ class TestEncryptTaskState:
         """加密时 _encrypted=True 标记存在。"""
         monkeypatch.setenv("FIXLOOP_ENCRYPT_KEY", encryption_key)
         import importlib
+
         import agent_runtime.crypto_utils as cu
+
         importlib.reload(cu)
 
         from agent_runtime.run_store import RunStore
@@ -81,7 +84,9 @@ class TestEncryptTaskState:
         """空字段不加密。"""
         monkeypatch.setenv("FIXLOOP_ENCRYPT_KEY", encryption_key)
         import importlib
+
         import agent_runtime.crypto_utils as cu
+
         importlib.reload(cu)
 
         from agent_runtime.run_store import RunStore

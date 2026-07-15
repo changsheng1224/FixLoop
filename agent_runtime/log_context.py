@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
-from typing import Iterator
 
 _run_id: ContextVar[str | None] = ContextVar("fixloop_log_run_id", default=None)
 _agent: ContextVar[str | None] = ContextVar("fixloop_log_agent", default=None)

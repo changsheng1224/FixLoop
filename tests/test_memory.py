@@ -181,15 +181,27 @@ class TestKindWeightRetrieval:
 
     def test_decision_before_observation_same_score(self):
         """同相似度时 decision 排 observation 前。"""
-        from agent_runtime.features.memory.episodic import retrieval_candidates
         from agent_runtime.features.memory.core import default_memory_state
+        from agent_runtime.features.memory.episodic import retrieval_candidates
 
         state = default_memory_state()
         state["episodic_notes"] = [
-            {"text": "obs note", "tags": ["test"], "kind": "observation",
-             "created_at": 1000, "note_index": 1, "retrieve_count": 0},
-            {"text": "decision note", "tags": ["test"], "kind": "decision",
-             "created_at": 1000, "note_index": 2, "retrieve_count": 0},
+            {
+                "text": "obs note",
+                "tags": ["test"],
+                "kind": "observation",
+                "created_at": 1000,
+                "note_index": 1,
+                "retrieve_count": 0,
+            },
+            {
+                "text": "decision note",
+                "tags": ["test"],
+                "kind": "decision",
+                "created_at": 1000,
+                "note_index": 2,
+                "retrieve_count": 0,
+            },
         ]
         results = retrieval_candidates(state, "test", limit=2)
         assert len(results) == 2
@@ -199,15 +211,27 @@ class TestKindWeightRetrieval:
 
     def test_error_before_decision_same_score(self):
         """同相似度时 error 排 decision 前。"""
-        from agent_runtime.features.memory.episodic import retrieval_candidates
         from agent_runtime.features.memory.core import default_memory_state
+        from agent_runtime.features.memory.episodic import retrieval_candidates
 
         state = default_memory_state()
         state["episodic_notes"] = [
-            {"text": "decision note", "tags": ["test"], "kind": "decision",
-             "created_at": 1000, "note_index": 1, "retrieve_count": 0},
-            {"text": "error note", "tags": ["test"], "kind": "error",
-             "created_at": 1000, "note_index": 2, "retrieve_count": 0},
+            {
+                "text": "decision note",
+                "tags": ["test"],
+                "kind": "decision",
+                "created_at": 1000,
+                "note_index": 1,
+                "retrieve_count": 0,
+            },
+            {
+                "text": "error note",
+                "tags": ["test"],
+                "kind": "error",
+                "created_at": 1000,
+                "note_index": 2,
+                "retrieve_count": 0,
+            },
         ]
         results = retrieval_candidates(state, "test", limit=2)
         assert results[0]["kind"] == "error"
@@ -215,16 +239,27 @@ class TestKindWeightRetrieval:
 
     def test_higher_base_score_overrides_kind(self):
         """高基准分 observation 可超越低基准分 decision。"""
-        from agent_runtime.features.memory.episodic import retrieval_candidates
         from agent_runtime.features.memory.core import default_memory_state
+        from agent_runtime.features.memory.episodic import retrieval_candidates
 
         state = default_memory_state()
         state["episodic_notes"] = [
-            {"text": "decision low", "tags": ["low"], "kind": "decision",
-             "created_at": 1000, "note_index": 1, "retrieve_count": 0},
-            {"text": "obs high score", "tags": ["high", "high", "high"],
-             "kind": "observation",
-             "created_at": 1000, "note_index": 2, "retrieve_count": 0},
+            {
+                "text": "decision low",
+                "tags": ["low"],
+                "kind": "decision",
+                "created_at": 1000,
+                "note_index": 1,
+                "retrieve_count": 0,
+            },
+            {
+                "text": "obs high score",
+                "tags": ["high", "high", "high"],
+                "kind": "observation",
+                "created_at": 1000,
+                "note_index": 2,
+                "retrieve_count": 0,
+            },
         ]
         # "high" query → obs matches 3 tags (score=9) vs decision 1 tag (score=3*1.5=4.5)
         # obs 基准分更高 → 排前
@@ -233,13 +268,19 @@ class TestKindWeightRetrieval:
 
     def test_kind_weight_in_score_field(self):
         """返回结果的 score 字段已含 kind 权重。"""
-        from agent_runtime.features.memory.episodic import retrieval_candidates
         from agent_runtime.features.memory.core import default_memory_state
+        from agent_runtime.features.memory.episodic import retrieval_candidates
 
         state = default_memory_state()
         state["episodic_notes"] = [
-            {"text": "note", "tags": ["test"], "kind": "error",
-             "created_at": 1000, "note_index": 1, "retrieve_count": 0},
+            {
+                "text": "note",
+                "tags": ["test"],
+                "kind": "error",
+                "created_at": 1000,
+                "note_index": 1,
+                "retrieve_count": 0,
+            },
         ]
         results = retrieval_candidates(state, "test", limit=1)
         assert "score" in results[0]
@@ -262,23 +303,25 @@ class TestAutoPromote:
 
     def test_auto_promote_off_does_not_write(self, tmp_path):
         """AUTO_PROMOTE=False 时只累加 retrieve_count，不写 durable。"""
-        from agent_runtime.features.memory.episodic import AUTO_PROMOTE, retrieval_candidates
-        from agent_runtime.features.memory.durable import DurableMemoryStore
         from agent_runtime.features.memory.core import default_memory_state
+        from agent_runtime.features.memory.durable import DurableMemoryStore
+        from agent_runtime.features.memory.episodic import AUTO_PROMOTE, retrieval_candidates
 
         assert AUTO_PROMOTE is False  # 确保默认关
 
         store = DurableMemoryStore(str(tmp_path))
         store.ensure_dirs()
         state = default_memory_state()
-        state["episodic_notes"] = [{
-            "text": "use pytest for testing",
-            "tags": ["pytest", "testing"],
-            "kind": "decision",
-            "created_at": 1000,
-            "note_index": 1,
-            "retrieve_count": 0,
-        }]
+        state["episodic_notes"] = [
+            {
+                "text": "use pytest for testing",
+                "tags": ["pytest", "testing"],
+                "kind": "decision",
+                "created_at": 1000,
+                "note_index": 1,
+                "retrieve_count": 0,
+            }
+        ]
 
         # 多次检索触发 PROMOTE_THRESHOLD
         for _ in range(5):
@@ -296,21 +339,23 @@ class TestAutoPromote:
 
         monkeypatch.setattr(ep_mod, "AUTO_PROMOTE", True)
 
-        from agent_runtime.features.memory.episodic import retrieval_candidates
-        from agent_runtime.features.memory.durable import DurableMemoryStore
         from agent_runtime.features.memory.core import default_memory_state
+        from agent_runtime.features.memory.durable import DurableMemoryStore
+        from agent_runtime.features.memory.episodic import retrieval_candidates
 
         store = DurableMemoryStore(str(tmp_path))
         store.ensure_dirs()
         state = default_memory_state()
-        state["episodic_notes"] = [{
-            "text": "use ruff format for linting",
-            "tags": ["ruff", "linting"],
-            "kind": "decision",
-            "created_at": 1000,
-            "note_index": 1,
-            "retrieve_count": 0,
-        }]
+        state["episodic_notes"] = [
+            {
+                "text": "use ruff format for linting",
+                "tags": ["ruff", "linting"],
+                "kind": "decision",
+                "created_at": 1000,
+                "note_index": 1,
+                "retrieve_count": 0,
+            }
+        ]
 
         for _ in range(3):
             retrieval_candidates(state, "ruff", limit=3, durable_store=store)
@@ -322,8 +367,8 @@ class TestAutoPromote:
 
     def test_promote_threshold_shared_with_dream(self):
         """episodic.PROMOTE_THRESHOLD 与 dream.PROMOTE_SUGGEST_HIT_MIN 同源。"""
-        from agent_runtime.features.memory.episodic import PROMOTE_THRESHOLD
         from agent_runtime.features.memory.dream import PROMOTE_SUGGEST_HIT_MIN
+        from agent_runtime.features.memory.episodic import PROMOTE_THRESHOLD
 
         assert PROMOTE_SUGGEST_HIT_MIN == PROMOTE_THRESHOLD
 
@@ -333,21 +378,23 @@ class TestAutoPromote:
 
         monkeypatch.setattr(ep_mod, "AUTO_PROMOTE", True)
 
-        from agent_runtime.features.memory.episodic import retrieval_candidates
-        from agent_runtime.features.memory.durable import DurableMemoryStore
         from agent_runtime.features.memory.core import default_memory_state
+        from agent_runtime.features.memory.durable import DurableMemoryStore
+        from agent_runtime.features.memory.episodic import retrieval_candidates
 
         store = DurableMemoryStore(str(tmp_path))
         store.ensure_dirs()
         state = default_memory_state()
-        state["episodic_notes"] = [{
-            "text": "decision below threshold",
-            "tags": ["test"],
-            "kind": "decision",
-            "created_at": 1000,
-            "note_index": 1,
-            "retrieve_count": 0,
-        }]
+        state["episodic_notes"] = [
+            {
+                "text": "decision below threshold",
+                "tags": ["test"],
+                "kind": "decision",
+                "created_at": 1000,
+                "note_index": 1,
+                "retrieve_count": 0,
+            }
+        ]
 
         # 只检索 2 次（未达 PROMOTE_THRESHOLD=3）
         for _ in range(2):

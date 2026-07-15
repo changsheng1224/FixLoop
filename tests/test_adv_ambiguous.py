@@ -1,8 +1,9 @@
 """意图对抗 case_adv_ambiguous 单测：模糊 issue → exhausted。"""
 
+from pathlib import Path
+
 import pytest
 import yaml
-from pathlib import Path
 
 
 class TestAdvAmbiguousCase:

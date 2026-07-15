@@ -40,9 +40,7 @@ class TestVerifyStrategyExecutionTier:
     def test_pytest_strategy_marks_host_tier(self, tmp_path):
         from src.repair.verify import PytestVerifyStrategy
 
-        (tmp_path / "test_x.py").write_text(
-            "def test_pass(): assert True\n", encoding="utf-8"
-        )
+        (tmp_path / "test_x.py").write_text("def test_pass(): assert True\n", encoding="utf-8")
         run = PytestVerifyStrategy().run(str(tmp_path))
         assert run.internal.get("execution_tier") == "host"
         assert run.internal.get("requested_tier") == "host"
@@ -78,8 +76,8 @@ class TestVerifyStrategyExecutionTier:
         assert run.internal.get("trusted_execution") is False
 
     def test_docker_strategy_unavailable_marks_no_actual_tier(self, monkeypatch, tmp_path):
-        from src.repair.verify import DockerVerifyStrategy
         from src.harness.sandbox_verify import SandboxNotAvailableError
+        from src.repair.verify import DockerVerifyStrategy
 
         monkeypatch.setattr(
             "src.harness.sandbox_verify.assert_sandbox_available",

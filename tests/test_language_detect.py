@@ -1,7 +1,5 @@
 """language_detect 单测。"""
 
-from pathlib import Path
-
 from src.repair.language_detect import DEFAULT_LANGUAGE, detect_repair_language
 
 
@@ -17,7 +15,7 @@ class TestDetectRepairLanguage:
     def test_java_from_stack(self):
         issue = (
             'Exception in thread "main" java.lang.NullPointerException\n'
-            '    at com.example.Bar.main(Bar.java:10)'
+            "    at com.example.Bar.main(Bar.java:10)"
         )
         lang, source = detect_repair_language(issue)
         assert lang == "java"

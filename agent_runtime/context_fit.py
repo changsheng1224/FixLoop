@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
-from agent_runtime.context_projection import attach_fit_context_projection
+from typing import TYPE_CHECKING
+
 from agent_runtime.context_metadata import merge_template_metadata
+from agent_runtime.context_projection import attach_fit_context_projection
 from agent_runtime.task_section import reserve_section_budget, task_preservation_metadata
+
+if TYPE_CHECKING:
+    from agent_runtime.context_manager import TokenBudget
 
 __all__ = ["fit_prompt_to_budget", "fit_repair_user_prompt"]
 
@@ -61,9 +66,7 @@ def fit_prompt_to_budget(
     if preserve_user:
         metadata.update(task_preservation_metadata(user_tokens, total_limit))
         remaining = reserve_section_budget(total_limit, user_tokens)
-        system_text, sys_tokens = _fit_system_to_remaining(
-            budget, system_text, remaining, metadata
-        )
+        system_text, sys_tokens = _fit_system_to_remaining(budget, system_text, remaining, metadata)
         metadata["sections"]["system"] = sys_tokens
         metadata["total_tokens"] = sys_tokens + user_tokens
         attach_fit_context_projection(metadata)

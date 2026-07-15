@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from src.repair.prompt_router import apply_prompt_routing
 from src.skills.skill_block import (
-    SKILL_BLOCK_HEADER,
     ROLE_LABELS,
+    SKILL_BLOCK_HEADER,
     render_skill_hint_for_plan,
     skill_hint_rendered_trace,
 )

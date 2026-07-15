@@ -53,8 +53,10 @@ def _add_eval_run_args(parser: argparse.ArgumentParser) -> None:
         help="生成 Markdown 指标报告（默认 output/report.md）",
     )
     parser.add_argument(
-        "--jobs", "-j",
-        type=int, default=1,
+        "--jobs",
+        "-j",
+        type=int,
+        default=1,
         help="并行 eval workers（1=串行，>1 按 case 并行；注意 API 限流）",
     )
     parser.add_argument(
@@ -201,15 +203,16 @@ def main() -> int:
     )
 
     p_cleanup = sub.add_parser("cleanup", help="清理过期的 trace runs")
+    p_cleanup.add_argument("--repo", default=".", help="仓库路径")
     p_cleanup.add_argument(
-        "--repo", default=".", help="仓库路径"
-    )
-    p_cleanup.add_argument(
-        "--older-than", type=int, default=None,
+        "--older-than",
+        type=int,
+        default=None,
         help="删除超过 N 天的 run（默认 FIXLOOP_RUN_TTL_DAYS 或 30）",
     )
     p_cleanup.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="仅列出待删除目录，不实际删除",
     )
 
@@ -424,9 +427,9 @@ def _print_repair_result(state, verbose: bool) -> None:
             if total == 0:
                 continue
             legacy_internal = f"{agent}_internal"
-            intern = (state.node_timings.get("phases_internal") or {}).get(phase) or state.node_timings.get(
-                legacy_internal, {}
-            )
+            intern = (state.node_timings.get("phases_internal") or {}).get(
+                phase
+            ) or state.node_timings.get(legacy_internal, {})
             print(
                 f"  {agent}: {total}ms "
                 f"(prompt={intern.get('prompt_build_ms', 0)}ms, "
@@ -496,7 +499,7 @@ def _cleanup(args) -> int:
     store = RunStore(root=repo)
 
     if args.dry_run:
-        print(f"[cleanup] DRY-RUN — 不会实际删除", file=sys.stderr)
+        print("[cleanup] DRY-RUN — 不会实际删除", file=sys.stderr)
 
     older_than = args.older_than if args.older_than is not None else store.ttl_days
     if older_than <= 0:

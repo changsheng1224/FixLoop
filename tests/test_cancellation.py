@@ -6,8 +6,8 @@ import time
 import pytest
 
 from agent_runtime.cancellation import (
-    CancelledError,
     CancellationToken,
+    CancelledError,
     run_with_cancellation,
 )
 from agent_runtime.config import AgentConfig
@@ -257,7 +257,6 @@ class TestPatcherCompleteOnceCancel:
 class TestSandboxVerifyCancel:
     def test_run_sandbox_verification_aborts_when_cancelled(self, temp_workspace, monkeypatch):
         from src.harness.sandbox_verify import run_sandbox_verification_flow
-        from src.state import VerificationResult
 
         token = CancellationToken()
         token.cancel()
@@ -310,7 +309,9 @@ class TestSandboxVerifyCancel:
 
         threading.Thread(target=cancel_soon, daemon=True).start()
         t0 = time.time()
-        result = mgr.execute(Sandbox(id="abc", profile="python"), "sleep 99", timeout=30, cancel_token=token)
+        result = mgr.execute(
+            Sandbox(id="abc", profile="python"), "sleep 99", timeout=30, cancel_token=token
+        )
         elapsed = time.time() - t0
         assert killed == [True]
         assert result.cancelled is True
@@ -401,9 +402,11 @@ class TestRepairCancel:
         from src.repair.termination import RepairTerminalStatus
 
         ws = WorkspaceContext.build(str(temp_workspace))
-        loc = FakeModelClient(['<final>[{"file_path":"app.py","start_line":1,"end_line":1,"reason":"x"}]</final>'])
+        loc = FakeModelClient(
+            ['<final>[{"file_path":"app.py","start_line":1,"end_line":1,"reason":"x"}]</final>']
+        )
         ret = FakeModelClient(['<final>{"related_tests":[]}</final>'])
-        pat = FakeModelClient(['<final>[]</final>'])
+        pat = FakeModelClient(["<final>[]</final>"])
         orch = Orchestrator(
             create_localizer(loc, ws),
             create_retriever(ret, ws),

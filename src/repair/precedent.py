@@ -61,9 +61,7 @@ class RepairPrecedentStore:
     # ---- 语义闸口 ----
 
     @staticmethod
-    def _semantic_filter(
-        query: str, precedents: list[dict], threshold: float
-    ) -> list[dict]:
+    def _semantic_filter(query: str, precedents: list[dict], threshold: float) -> list[dict]:
         """用 SemanticMemory cosine 相似度过滤低置信度先例。"""
         try:
             from agent_runtime.features.memory.semantic import SemanticMemory
@@ -116,9 +114,11 @@ class RepairPrecedentStore:
         entries = self._read_all()
         # 去重：同 issue_type + case_id 覆盖旧条目
         if case_id:
-            entries = [e for e in entries if not (
-                e.get("issue_type") == issue_type and e.get("case_id") == case_id
-            )]
+            entries = [
+                e
+                for e in entries
+                if not (e.get("issue_type") == issue_type and e.get("case_id") == case_id)
+            ]
         entries.append(entry)
         self._write_all(entries)
 

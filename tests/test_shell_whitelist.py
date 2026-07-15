@@ -1,7 +1,5 @@
 """run_shell 白名单扩展单测：白名单内/黑名单/未注册命令拒绝。"""
 
-import pytest
-
 from agent_runtime.security import (
     SHELL_COMMAND_BLOCKLIST,
     SHELL_COMMAND_WHITELIST,

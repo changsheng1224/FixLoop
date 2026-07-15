@@ -10,13 +10,12 @@ from pathlib import Path
 from typing import Any
 
 from agent_runtime.features.memory.core import MAX_EPISODIC_NOTES
+from agent_runtime.features.memory.episodic import PROMOTE_THRESHOLD as _PROMOTE_THRESHOLD
 
 _DEFAULT_TTL_DAYS = 30
 MAX_DURABLE_ENTRIES_PER_TOPIC = 20
 
-
 # 与 episodic.PROMOTE_THRESHOLD 同源（统一配置面）
-from agent_runtime.features.memory.episodic import PROMOTE_THRESHOLD as _PROMOTE_THRESHOLD
 PROMOTE_SUGGEST_HIT_MIN = _PROMOTE_THRESHOLD  # kind=decision 且 retrieve_count≥N 时建议晋升
 
 
@@ -87,7 +86,7 @@ class MemoryDreamer:
         置信度公式: confidence *= DECAY_RATE ** days_since_created
         低于 CONFIDENCE_FLOOR 的笔记视为过期。
         """
-        from agent_runtime.features.memory.durable import CONFIDENCE_FLOOR, apply_confidence_decay
+        from agent_runtime.features.memory.durable import apply_confidence_decay
 
         ttl_cutoff = time.time() - ttl_days * 86400 if ttl_days > 0 else 0
         notes = self._state.get("episodic_notes", [])
@@ -100,9 +99,7 @@ class MemoryDreamer:
                 continue
             # 置信度时间衰减
             if "confidence" in n:
-                decayed, valid = apply_confidence_decay(
-                    n["confidence"], created
-                )
+                decayed, valid = apply_confidence_decay(n["confidence"], created)
                 n["confidence"] = decayed
                 if not valid:
                     decay_expired += 1
@@ -130,7 +127,6 @@ class MemoryDreamer:
         self.stats["trimmed"] = removed
         return removed
 
-
     def _suggest_promotions(self, hit_min: int = PROMOTE_SUGGEST_HIT_MIN) -> int:
         """扫描 episodic notes，kind=decision 且 retrieve_count≥N 生成晋升建议。
 
@@ -144,13 +140,15 @@ class MemoryDreamer:
                 continue
             rc = note.get("retrieve_count", 0)
             if rc >= hit_min:
-                suggestions.append({
-                    "text": note.get("text", "")[:200],
-                    "retrieve_count": rc,
-                    "kind": note.get("kind"),
-                    "source": note.get("source", ""),
-                    "note_index": note.get("note_index"),
-                })
+                suggestions.append(
+                    {
+                        "text": note.get("text", "")[:200],
+                        "retrieve_count": rc,
+                        "kind": note.get("kind"),
+                        "source": note.get("source", ""),
+                        "note_index": note.get("note_index"),
+                    }
+                )
         self.promotion_hints = suggestions
         self.stats["promotion_suggestions"] = len(suggestions)
         return len(suggestions)
@@ -174,7 +172,7 @@ class MemoryDreamer:
         for md_file in sorted(topics_dir.glob("*.md")):
             try:
                 lines = md_file.read_text(encoding="utf-8").splitlines()
-                count = sum(1 for l in lines if l.strip() and not l.startswith("#"))
+                count = sum(1 for line in lines if line.strip() and not line.startswith("#"))
                 routing[md_file.stem] = count
                 total += count
             except OSError:
@@ -200,8 +198,8 @@ class MemoryDreamer:
         for md_file in md_files:
             try:
                 lines = md_file.read_text(encoding="utf-8").splitlines()
-                headers = [l for l in lines if l.startswith("#")]
-                entries = [l for l in lines if l.strip() and not l.startswith("#")]
+                headers = [line for line in lines if line.startswith("#")]
+                entries = [line for line in lines if line.strip() and not line.startswith("#")]
                 if len(entries) <= max_entries:
                     continue
                 removed = len(entries) - max_entries
@@ -213,22 +211,28 @@ class MemoryDreamer:
                 pass
 
         # chunked topic GC
-        for chunk_dir in sorted(topics_dir.glob("*"), key=lambda p: p.stat().st_mtime if p.is_dir() else 0):
+        for chunk_dir in sorted(
+            topics_dir.glob("*"), key=lambda p: p.stat().st_mtime if p.is_dir() else 0
+        ):
             if not chunk_dir.is_dir() or not (chunk_dir / "chunk-0.md").is_file():
                 continue
             try:
                 total_entries = 0
                 for cf in sorted(chunk_dir.glob("chunk-*.md")):
                     lines = cf.read_text(encoding="utf-8").splitlines()
-                    total_entries += sum(1 for l in lines if l.strip() and not l.startswith("#"))
+                    total_entries += sum(
+                        1 for line in lines if line.strip() and not line.startswith("#")
+                    )
                 if total_entries <= max_entries:
                     continue
                 # 删除最旧 chunk
-                chunks = sorted(chunk_dir.glob("chunk-*.md"), key=lambda p: int(p.stem.split("-")[1]))
+                chunks = sorted(
+                    chunk_dir.glob("chunk-*.md"), key=lambda p: int(p.stem.split("-")[1])
+                )
                 while total_entries > max_entries and len(chunks) > 1:
                     oldest = chunks.pop(0)
                     lines = oldest.read_text(encoding="utf-8").splitlines()
-                    removed = sum(1 for l in lines if l.strip() and not l.startswith("#"))
+                    removed = sum(1 for line in lines if line.strip() and not line.startswith("#"))
                     total_entries -= removed
                     oldest.unlink()
                     total_removed += removed

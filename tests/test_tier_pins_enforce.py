@@ -73,10 +73,9 @@ class TestFitRepairPins:
     def test_orch_pin_field_stack_survives(self, agent):
         """orchestrator_pin_fields 中 'stack' 在超长文本中保留。"""
         user_text = (
-            f"stack: File \"{SUSPECT_FILE}\", line 42, in add\n"
+            f'stack: File "{SUSPECT_FILE}", line 42, in add\n'
             "    return a + b\n"
-            "TypeError: unsupported operand type(s) for +: 'int' and 'str'\n"
-            + "filler " * 400
+            "TypeError: unsupported operand type(s) for +: 'int' and 'str'\n" + "filler " * 400
         )
         fitted, _ = fit_repair_user_prompt(agent, user_text, "system " * 500)
         assert SUSPECT_FILE in fitted
@@ -112,12 +111,16 @@ class TestL0FilterPins:
     def test_error_keyword_content_is_pinned(self):
         """含 'FAILED' / 'error:' 关键词的 content 被钉扎。"""
         policy = TierPolicy(pin_roles=frozenset())
-        assert is_pinned_history_item(
-            {"role": "tool", "content": "FAILED: test_add - AssertionError"}, policy
-        ) is True
-        assert is_pinned_history_item(
-            {"role": "tool", "content": "error: module not found"}, policy
-        ) is True
+        assert (
+            is_pinned_history_item(
+                {"role": "tool", "content": "FAILED: test_add - AssertionError"}, policy
+            )
+            is True
+        )
+        assert (
+            is_pinned_history_item({"role": "tool", "content": "error: module not found"}, policy)
+            is True
+        )
 
     def test_orch_pin_field_issue_is_pinned(self):
         """content 开头含 orchestator_pin_fields 时钉扎。"""
@@ -158,7 +161,7 @@ class TestL0FilterPins:
         """非 tool 角色的 pin 条目不受 tool rejection 影响，正确保留。"""
         policy = TierPolicy(pin_roles=frozenset({"user"}))
         history = [
-            {"role": "user", "content": "fix the bug"},      # pin role → 保留
+            {"role": "user", "content": "fix the bug"},  # pin role → 保留
             {"role": "system", "content": "Error: Traceback ... 分析"},  # pin content → 保留
             {"role": "system", "content": "plain system message"},  # 无 pin → 保留
         ]
@@ -205,9 +208,9 @@ class TestTierPinsContextManagerIntegration:
             {"id": "1", "content": f"定位 {SUSPECT_FILE}:42 检查类型转换", "status": "done"},
             {"id": "2", "content": "检索调用方并搜索类似修复", "status": "in_progress"},
         ]
-        agent.session.setdefault("memory", {}).setdefault("working", {})[
-            "task_summary"
-        ] = f"修复 {SUSPECT_FILE} TypeError"
+        agent.session.setdefault("memory", {}).setdefault("working", {})["task_summary"] = (
+            f"修复 {SUSPECT_FILE} TypeError"
+        )
 
         cm = ContextManager(agent, total_budget=500)
         prompt, meta = cm.build("fix it")
@@ -247,9 +250,8 @@ class TestTierPinsL2FitRepair:
         agent.config.prompt_budget = 300
         user_text = (
             "issue: UNIQUE_BUG_123 TypeError at calc.py:42\n"
-            "stack: File \"calc.py\", line 42, in add\n"
-            "TypeError: unsupported operand\n"
-            + "padding " * 200
+            'stack: File "calc.py", line 42, in add\n'
+            "TypeError: unsupported operand\n" + "padding " * 200
         )
         fitted, meta = fit_repair_user_prompt(agent, user_text, "sys")
         assert "UNIQUE_BUG_123" in fitted
@@ -258,23 +260,19 @@ class TestTierPinsL2FitRepair:
 
     def test_l0_and_l2_read_same_pin_fields(self):
         """L0 (tier_policy) 与 L2 (context_fit) 从同一 tier_pins.yaml 读取 pin 字段。"""
-        from agent_runtime.tier_policy import load_orchestrator_pin_fields, PIN_CONTENT_MARKERS
+        from agent_runtime.tier_policy import PIN_CONTENT_MARKERS, load_orchestrator_pin_fields
 
         pin_fields = load_orchestrator_pin_fields()
         # orchestrator_pin_fields 应已合并到 PIN_CONTENT_MARKERS（L0 使用）
         for field in pin_fields:
             assert field in PIN_CONTENT_MARKERS, (
-                f"'{field}' should be in PIN_CONTENT_MARKERS (L0), "
-                f"but got {PIN_CONTENT_MARKERS}"
+                f"'{field}' should be in PIN_CONTENT_MARKERS (L0), but got {PIN_CONTENT_MARKERS}"
             )
 
     def test_pin_field_request_survives(self, agent):
         """'request' 钉扎字段在超长文本中保留。"""
         agent.config.prompt_budget = 400
-        user_text = (
-            "request: fix all import errors in src/utils.py\n"
-            + "details " * 200
-        )
+        user_text = "request: fix all import errors in src/utils.py\n" + "details " * 200
         fitted, meta = fit_repair_user_prompt(agent, user_text, "sys")
         assert "src/utils.py" in fitted
         assert meta["orpin_preserved"].get("request") is True

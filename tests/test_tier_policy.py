@@ -43,7 +43,11 @@ class TestL0FilterHistory:
 
     def test_drops_rejected_tool_result(self, policy):
         history = [
-            {"role": "tool", "tool_name": "read_file", "content": "Error: 工具 'write_file' 不在允许列表中。"},
+            {
+                "role": "tool",
+                "tool_name": "read_file",
+                "content": "Error: 工具 'write_file' 不在允许列表中。",
+            },
         ]
         filtered, stats = l0_filter_history(history, policy)
         assert filtered == []

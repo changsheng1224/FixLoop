@@ -29,11 +29,7 @@ def _event_indices(events: list[dict], name: str) -> list[int]:
 
 
 def _react_phases(events: list[dict]) -> list[str]:
-    return [
-        row["payload"]["phase"]
-        for row in events
-        if row.get("event") == "react_phase"
-    ]
+    return [row["payload"]["phase"] for row in events if row.get("event") == "react_phase"]
 
 
 class TestXmlReactTrace:
@@ -65,7 +61,9 @@ class TestXmlReactTrace:
         assert phases.index(ReactPhase.OBSERVATION) < phases.index(ReactPhase.RECORDING)
 
         acting = next(
-            row for row in events if row.get("event") == "react_phase" and row["payload"]["phase"] == "acting"
+            row
+            for row in events
+            if row.get("event") == "react_phase" and row["payload"]["phase"] == "acting"
         )
         assert acting["payload"]["path"] == "xml"
         assert acting["payload"]["tool"] == "list_files"

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import signal
 import sys
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import Callable, Iterator
 
 from agent_runtime.cancellation import CancellationToken
 

@@ -1,7 +1,6 @@
 """难度重标定脚本单测。"""
 
 import json
-from pathlib import Path
 
 import yaml
 
@@ -18,12 +17,16 @@ class TestRelabelDifficulty:
         from scripts.relabel_case_difficulty import relabel
 
         report = tmp_path / "eval_report.json"
-        report.write_text(json.dumps({
-            "by_case": {
-                "case_001": {"fix_rate": 0.95},
-                "case_005": {"fix_rate": 0.55},
-            }
-        }))
+        report.write_text(
+            json.dumps(
+                {
+                    "by_case": {
+                        "case_001": {"fix_rate": 0.95},
+                        "case_005": {"fix_rate": 0.55},
+                    }
+                }
+            )
+        )
 
         cases = tmp_path / "cases"
         for cid in ("case_001", "case_005"):

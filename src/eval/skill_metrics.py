@@ -75,9 +75,7 @@ def skill_result_fields_from_plan(
 ) -> tuple[str | None, str | None, bool, bool]:
     """Derive eval CaseResult skill fields from repair plan (single source of truth)."""
     skill_labeled = "expected_skill" in meta
-    expected = (
-        normalize_skill_label(meta.get("expected_skill")) if skill_labeled else None
-    )
+    expected = normalize_skill_label(meta.get("expected_skill")) if skill_labeled else None
     matched = plan.skill.matched_skill if plan else None
     skill_match = _skills_match(expected, matched) if skill_labeled else False
     return expected, matched, skill_match, skill_labeled
@@ -115,9 +113,7 @@ def load_skill_eval_cases(
     """Load labeled cases with expected_skill from metadata.yaml."""
     root = Path(cases_dir)
     if case_ids is None:
-        ids = sorted(
-            p.name for p in root.iterdir() if p.is_dir() and p.name.startswith("case_")
-        )
+        ids = sorted(p.name for p in root.iterdir() if p.is_dir() and p.name.startswith("case_"))
     else:
         ids = case_ids
 
@@ -183,15 +179,11 @@ def compute_skill_metrics(rows: list[dict] | list[SkillEvalRow]) -> dict:
         expected_rows = by_expected.get(skill, [])
         predicted_rows = by_predicted.get(skill, [])
         tp = sum(
-            1
-            for row in expected_rows
-            if normalize_skill_label(row.get("matched_skill")) == skill
+            1 for row in expected_rows if normalize_skill_label(row.get("matched_skill")) == skill
         )
         fn = len(expected_rows) - tp
         fp = sum(
-            1
-            for row in predicted_rows
-            if normalize_skill_label(row.get("expected_skill")) != skill
+            1 for row in predicted_rows if normalize_skill_label(row.get("expected_skill")) != skill
         )
         support = len(expected_rows)
         recall = tp / support if support else 0.0
@@ -266,9 +258,7 @@ def format_skill_markdown(report: SkillEvalReport) -> str:
 
     summary = report.summary
     parts.append("## Summary")
-    parts.append(
-        "| total | correct | accuracy | macro_recall | no_match |"
-    )
+    parts.append("| total | correct | accuracy | macro_recall | no_match |")
     parts.append("| --- | --- | --- | --- | --- |")
     parts.append(
         f"| {summary.get('total', 0)} | {summary.get('correct', 0)} | "

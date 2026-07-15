@@ -9,9 +9,7 @@ from typing import Any
 DEFAULT_BASE_URL = "https://api.deepseek.com/anthropic/v1"
 DEFAULT_MODEL = "deepseek-v4-pro"
 
-_FAKE_DEFAULT_OUTPUT = (
-    "<final>FakeClient 未预设输出，请指定 --provider 为真实 Provider。</final>"
-)
+_FAKE_DEFAULT_OUTPUT = "<final>FakeClient 未预设输出，请指定 --provider 为真实 Provider。</final>"
 
 
 def load_dotenv(cwd: Path | None = None) -> None:

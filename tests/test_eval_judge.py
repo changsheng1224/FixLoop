@@ -6,7 +6,6 @@ from src.eval.judge import JudgeClient, _parse_judge_response
 from src.eval.metrics import compute_judge_summary
 from src.eval.models import CaseResult
 
-
 # ---------------------------------------------------------------------------
 # _parse_judge_response
 # ---------------------------------------------------------------------------
@@ -72,8 +71,7 @@ class TestJudgeSummary:
 
     def test_single_judged_case(self):
         results = [
-            CaseResult(case_id="a", judge_score=7,
-                        actual_lines=5, minimal_lines=3),
+            CaseResult(case_id="a", judge_score=7, actual_lines=5, minimal_lines=3),
         ]
         s = compute_judge_summary(results)
         assert s["judged_cases"] == 1

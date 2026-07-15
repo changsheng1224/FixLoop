@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import random
-from datetime import datetime, timezone
+from collections.abc import Mapping
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
-from typing import Mapping
 
 __all__ = [
     "RateLimitExceededError",
@@ -40,8 +40,8 @@ def parse_retry_after(headers: Mapping[str, str] | None) -> float | None:
     try:
         retry_at = parsedate_to_datetime(raw)
         if retry_at.tzinfo is None:
-            retry_at = retry_at.replace(tzinfo=timezone.utc)
-        now = datetime.now(timezone.utc)
+            retry_at = retry_at.replace(tzinfo=UTC)
+        now = datetime.now(UTC)
         return max(0.0, (retry_at - now).total_seconds())
     except (TypeError, ValueError, OverflowError):
         return None

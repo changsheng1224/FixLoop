@@ -5,12 +5,8 @@ from __future__ import annotations
 import os
 import tempfile
 import time
-from pathlib import Path
 
-import pytest
-
-from agent_runtime.run_store import RunStore, _DEFAULT_RUN_TTL_DAYS
-
+from agent_runtime.run_store import _DEFAULT_RUN_TTL_DAYS, RunStore
 
 # ---------------------------------------------------------------------------
 # cleanup_older_than 基本功能

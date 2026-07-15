@@ -135,16 +135,7 @@ class TestPatchFile:
 
     def test_patch_multi_hunk_diff(self, ctx, temp_workspace):
         (temp_workspace / "multi.py").write_text("line1\nold\nline3\nfoo\n")
-        diff = (
-            "@@ -1,3 +1,3 @@\n"
-            " line1\n"
-            "-old\n"
-            "+new\n"
-            " line3\n"
-            "@@ -4,1 +4,2 @@\n"
-            " foo\n"
-            "+bar\n"
-        )
+        diff = "@@ -1,3 +1,3 @@\n line1\n-old\n+new\n line3\n@@ -4,1 +4,2 @@\n foo\n+bar\n"
         result = tool_patch_file(ctx, {"path": "multi.py", "diff": diff})
         assert "已修补" in result
         assert "2 个 hunk" in result

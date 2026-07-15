@@ -10,7 +10,6 @@ import yaml
 
 from src.skills.catalog import SkillCatalog, _compute_directory_hash
 
-
 # ---------------------------------------------------------------------------
 # content_hash
 # ---------------------------------------------------------------------------
@@ -21,15 +20,27 @@ class TestContentHash:
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp)
             (d / "test.yaml").write_text(
-                yaml.dump({"name": "test_a", "language": "python",
-                           "trigger_pattern": "TypeError", "priority": 10,
-                           "guidance": ["check types"]})
+                yaml.dump(
+                    {
+                        "name": "test_a",
+                        "language": "python",
+                        "trigger_pattern": "TypeError",
+                        "priority": 10,
+                        "guidance": ["check types"],
+                    }
+                )
             )
             h1 = _compute_directory_hash(d)
             (d / "test.yaml").write_text(
-                yaml.dump({"name": "test_b", "language": "python",
-                           "trigger_pattern": "ValueError", "priority": 20,
-                           "guidance": ["check values"]})
+                yaml.dump(
+                    {
+                        "name": "test_b",
+                        "language": "python",
+                        "trigger_pattern": "ValueError",
+                        "priority": 20,
+                        "guidance": ["check values"],
+                    }
+                )
             )
             h2 = _compute_directory_hash(d)
             assert h1 != h2
@@ -38,9 +49,15 @@ class TestContentHash:
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp)
             (d / "test.yaml").write_text(
-                yaml.dump({"name": "test", "language": "python",
-                           "trigger_pattern": "Error", "priority": 5,
-                           "guidance": ["fix"]})
+                yaml.dump(
+                    {
+                        "name": "test",
+                        "language": "python",
+                        "trigger_pattern": "Error",
+                        "priority": 5,
+                        "guidance": ["fix"],
+                    }
+                )
             )
             h1 = _compute_directory_hash(d)
             h2 = _compute_directory_hash(d)
@@ -56,9 +73,15 @@ class TestContentHash:
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp)
             (d / "test.yaml").write_text(
-                yaml.dump({"name": "test", "language": "python",
-                           "trigger_pattern": "Error", "priority": 5,
-                           "guidance": ["fix"]})
+                yaml.dump(
+                    {
+                        "name": "test",
+                        "language": "python",
+                        "trigger_pattern": "Error",
+                        "priority": 5,
+                        "guidance": ["fix"],
+                    }
+                )
             )
             cat = SkillCatalog.load_from_directory(d)
             assert cat.content_hash
@@ -97,9 +120,15 @@ class TestRebuildIndex:
 
             # 修改 skill
             (d / "test.yaml").write_text(
-                yaml.dump({"name": "new_skill", "language": "python",
-                           "trigger_pattern": "NewError", "priority": 99,
-                           "guidance": ["fix new"]})
+                yaml.dump(
+                    {
+                        "name": "new_skill",
+                        "language": "python",
+                        "trigger_pattern": "NewError",
+                        "priority": 99,
+                        "guidance": ["fix new"],
+                    }
+                )
             )
             cat2 = SkillCatalog.load_from_directory(d)
             assert cat2.rebuild_index(cache) is True
@@ -126,9 +155,15 @@ class TestRebuildIndex:
 def _setup(tmp: str) -> tuple[Path, Path]:
     d = Path(tmp)
     (d / "test.yaml").write_text(
-        yaml.dump({"name": "test_skill", "language": "python",
-                   "trigger_pattern": "Error", "priority": 10,
-                   "guidance": ["check types"]})
+        yaml.dump(
+            {
+                "name": "test_skill",
+                "language": "python",
+                "trigger_pattern": "Error",
+                "priority": 10,
+                "guidance": ["check types"],
+            }
+        )
     )
     cache = d / ".agent" / ".skill_index.json"
     return d, cache

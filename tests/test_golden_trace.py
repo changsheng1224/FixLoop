@@ -1,21 +1,18 @@
 """Golden trace 回归单测：关键事件名序列 golden diff。"""
 
 import json
-import tempfile
 from pathlib import Path
-
-import pytest
 
 # Golden event sequence（精简后的关键事件名）
 GOLDEN_EVENT_NAMES = [
     "repair_started",
-    "agent_ask_started",       # localizer
+    "agent_ask_started",  # localizer
     "agent_ask_finished",
-    "agent_ask_started",       # retriever
+    "agent_ask_started",  # retriever
     "agent_ask_finished",
-    "skill_matched",           # skill resolution
-    "blackboard_written",      # blackboard merge
-    "agent_ask_started",       # patcher
+    "skill_matched",  # skill resolution
+    "blackboard_written",  # blackboard merge
+    "agent_ask_started",  # patcher
     "agent_ask_finished",
 ]
 

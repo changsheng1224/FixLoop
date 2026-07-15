@@ -1,9 +1,7 @@
 """Retry-After + jitter 策略单测。"""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
-
-import pytest
 
 from agent_runtime.providers.retry_policy import (
     RateLimitExceededError,
@@ -24,7 +22,7 @@ class TestParseRetryAfter:
         assert parse_retry_after(None) is None
 
     def test_http_date_future(self):
-        future = datetime.now(timezone.utc) + timedelta(seconds=45)
+        future = datetime.now(UTC) + timedelta(seconds=45)
         headers = {"Retry-After": format_datetime(future, usegmt=True)}
         delay = parse_retry_after(headers)
         assert delay is not None

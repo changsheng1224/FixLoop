@@ -40,16 +40,7 @@ class TestApplyPlan:
 
     def test_multi_hunk_diff(self):
         text = "line1\nold\nline3\nfoo\n"
-        diff = (
-            "@@ -1,3 +1,3 @@\n"
-            " line1\n"
-            "-old\n"
-            "+new\n"
-            " line3\n"
-            "@@ -4,1 +4,2 @@\n"
-            " foo\n"
-            "+bar\n"
-        )
+        diff = "@@ -1,3 +1,3 @@\n line1\n-old\n+new\n line3\n@@ -4,1 +4,2 @@\n foo\n+bar\n"
         plan = parse_patch_input({"diff": diff})
         result = apply_plan(text, plan)
         assert result == "line1\nnew\nline3\nfoo\nbar\n"
@@ -72,7 +63,9 @@ class TestPreview:
         assert "+y" in text
 
     def test_try_build_patch_preview_success(self):
-        meta, err = try_build_patch_preview("f.py", "hello", {"old_text": "hello", "new_text": "world"})
+        meta, err = try_build_patch_preview(
+            "f.py", "hello", {"old_text": "hello", "new_text": "world"}
+        )
         assert err is None
         assert meta["hunk_count"] == 1
         assert "preview_text" in meta
@@ -82,24 +75,29 @@ class TestPreview:
         assert meta is None
         assert "0 次" in err
 
+
 class TestPatchEquivalence:
     def test_full_match(self):
         from src.eval.patch_utils import patch_equivalence
+
         diff = "--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-old\n+new\n"
         assert patch_equivalence(diff, diff) == "full"
 
     def test_none_no_common_files(self):
         from src.eval.patch_utils import patch_equivalence
+
         a = "--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-old\n+new\n"
         b = "--- a/y.py\n+++ b/y.py\n@@ -1 +1 @@\n-old\n+new\n"
         assert patch_equivalence(a, b) == "none"
 
     def test_none_empty(self):
         from src.eval.patch_utils import patch_equivalence
+
         assert patch_equivalence("", "") == "none"
 
     def test_partial_overlap(self):
         from src.eval.patch_utils import patch_equivalence
+
         a = "--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-old\n+new\n"
         b = "--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-older\n+newer\n--- a/y.py\n+++ b/y.py\n"
         assert patch_equivalence(a, b) == "partial"

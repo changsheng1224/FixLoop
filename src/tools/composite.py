@@ -35,7 +35,6 @@ REPAIR_CANONICAL_TOOL_NAMES: tuple[str, ...] = (
 
 def build_repair_canonical_tools(ctx: ToolContext) -> dict:
     """Repair 流水线 canonical 工具全集（字典序固定，各 phase 共用）。"""
-    from agent_runtime.schema_utils import auto_schema
 
     tools = build_tool_registry(ctx)
     tools.update(build_repair_tools(ctx))
@@ -45,7 +44,10 @@ def build_repair_canonical_tools(ctx: ToolContext) -> dict:
         "schema": tools["read_file"]["schema"],
         "risky": False,
         "execution_tier": "host",
-        "description": "read_file + ast_parse 组合：一次调用完成文件读取与 AST 解析。参数: path, start(默认1), end(默认200)",
+        "description": (
+            "read_file + ast_parse 组合：一次调用完成文件读取与 AST 解析。"
+            "参数: path, start(默认1), end(默认200)"
+        ),
         "run": lambda args: tool_inspect_file(ctx, args),
     }
     return {name: tools[name] for name in REPAIR_CANONICAL_TOOL_NAMES}

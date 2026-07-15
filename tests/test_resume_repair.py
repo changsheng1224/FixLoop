@@ -1,6 +1,5 @@
 """L2 --resume-repair 续跑单测：写盘→load→跳过 parse/localize。"""
 
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -91,7 +90,7 @@ class TestResumeSkipsParse:
     def test_resume_repair_skips_parse(self, tmp_path):
         """resume_run_id 有效时 _repair_impl 跳过 parse 直接返回 state。"""
         from src.repair.pipeline import RepairPipelineMixin
-        from src.state import RepairPlan, RepairState, SuspectLocation
+        from src.state import RepairState, SuspectLocation
 
         repo = str(tmp_path)
         # 保存 checkpoint

@@ -89,7 +89,6 @@ class TestBuildContextSections:
         assert ctx["skills"] == meta["sections"]["skills"]
         assert ctx["system"] == meta["sections"]["system"] + meta["sections"]["workspace"]
 
-
     def test_oversized_stable_section_is_fitted_not_discarded(self, agent, monkeypatch):
         """stable 段超 cap 时裁剪而非丢弃（Section 硬顶 enforce）。"""
         cm = ContextManager(agent)

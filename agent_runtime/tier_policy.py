@@ -102,8 +102,8 @@ def is_pinned_history_item(item: dict, policy: TierPolicy) -> bool:
     if any(marker in content for marker in PIN_CONTENT_MARKERS):
         return True
     # orchestrator pin fields: 匹配 content 中以 "field:" 开头的行（如 "issue: ..."）
-    for field in _orch_pins:
-        if field in content[:50] or f"\n{field}:" in content.lower()[:200]:
+    for pin_field in _orch_pins:
+        if pin_field in content[:50] or f"\n{pin_field}:" in content.lower()[:200]:
             return True
     if any(keyword in content for keyword in PIN_ERROR_KEYWORDS):
         return True

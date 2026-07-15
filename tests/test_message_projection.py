@@ -48,7 +48,9 @@ class TestMessageProjectionHelpers:
         init_run_projection(agent.session, "find bug in a.py")
         agent.session["memory"]["working"]["recent_files"] = ["b.py"]
         assert agent.session[PROJECTION_STATE_KEY].user_query == "find bug in a.py"
-        assert agent.session[PROJECTION_STATE_KEY].memory_snapshot["working"]["recent_files"] == ["a.py"]
+        assert agent.session[PROJECTION_STATE_KEY].memory_snapshot["working"]["recent_files"] == [
+            "a.py"
+        ]
 
     def test_seal_history_at_build(self, agent):
         init_run_projection(agent.session, "q")
@@ -104,9 +106,7 @@ class TestContextManagerSealedHistory:
         prefix1 = build_context_prefix(agent, meta1)
 
         agent.update_memory_after_tool("read_file", {"path": "x.py"}, "content")
-        agent.session["history"].append(
-            {"role": "assistant", "content": "read x.py", "turn_id": 1}
-        )
+        agent.session["history"].append({"role": "assistant", "content": "read x.py", "turn_id": 1})
         _, meta2 = cm.build("done reading")
         prefix2 = build_context_prefix(agent, meta2)
         assert check_prefix_aligned(prefix1, prefix2)

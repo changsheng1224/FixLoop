@@ -61,9 +61,7 @@ class JudgeClient:
         return score, reason
 
     @staticmethod
-    def compare_with_precision(
-        judge_score: int, patch_precision: float
-    ) -> str:
+    def compare_with_precision(judge_score: int, patch_precision: float) -> str:
         """对照 judge 评分与机械 patch_precision。
 
         Returns:
@@ -86,6 +84,7 @@ def _parse_judge_response(raw: str) -> tuple[int, str]:
         pass
     # 尝试从 markdown 代码块中提取
     import re
+
     m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     if m:
         try:

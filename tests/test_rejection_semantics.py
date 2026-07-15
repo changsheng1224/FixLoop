@@ -3,8 +3,6 @@
 import json
 from pathlib import Path
 
-import pytest
-
 from agent_runtime.config import AgentConfig
 from agent_runtime.providers.clients import FakeModelClient, FakeNativeToolClient
 from agent_runtime.runtime import Agent
@@ -199,7 +197,9 @@ class TestRepairRejectionAggregation:
                 '"function_name":"","reason":"stack","confidence":0.9}]</final>',
             ]
         )
-        ret_client = FakeNativeToolClient(['<final>{"related_tests":["test_calc.py::test_add"]}</final>'])
+        ret_client = FakeNativeToolClient(
+            ['<final>{"related_tests":["test_calc.py::test_add"]}</final>']
+        )
         pat_client = FakeModelClient(
             ['<final>[{"file_path":"calc.py","diff":"-old\\n+new","explanation":"fix"}]</final>']
         )
@@ -224,8 +224,11 @@ class TestRepairRejectionAggregation:
         assert report["tool_rejections_by_gate"]["gateway"] == 2
 
         trace_lines = (
-            temp_workspace / ".agent" / "runs" / state.repair_run_id / "trace.jsonl"
-        ).read_text(encoding="utf-8").strip().splitlines()
+            (temp_workspace / ".agent" / "runs" / state.repair_run_id / "trace.jsonl")
+            .read_text(encoding="utf-8")
+            .strip()
+            .splitlines()
+        )
         finished = json.loads(trace_lines[-1])
         assert finished["event"] == "repair_finished"
         assert finished["payload"]["gateway_denials"] == 2

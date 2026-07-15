@@ -2,21 +2,17 @@
 
 from __future__ import annotations
 
-import time
-
-import pytest
-
 import tempfile
+import time
 from pathlib import Path
 
+from agent_runtime.features.memory.core import MAX_EPISODIC_NOTES, default_memory_state
 from agent_runtime.features.memory.dream import (
     MAX_DURABLE_ENTRIES_PER_TOPIC,
     MemoryDreamer,
-    _DEFAULT_TTL_DAYS,
     dream_summary_to_trace,
     run_memory_dream,
 )
-from agent_runtime.features.memory.core import MAX_EPISODIC_NOTES, default_memory_state
 
 
 def _make_note(text: str, index: int, created_at: float | None = None) -> dict:
@@ -185,10 +181,15 @@ class TestRun:
 
 class TestDreamSummaryToTrace:
     def test_all_fields(self):
-        trace = dream_summary_to_trace({
-            "deduped": 2, "expired": 1, "trimmed": 0,
-            "total_before": 10, "total_after": 7,
-        })
+        trace = dream_summary_to_trace(
+            {
+                "deduped": 2,
+                "expired": 1,
+                "trimmed": 0,
+                "total_before": 10,
+                "total_after": 7,
+            }
+        )
         assert trace["deduped"] == 2
         assert trace["expired"] == 1
         assert trace["total_before"] == 10
@@ -273,7 +274,7 @@ def _count_entries(topics_root: Path) -> int:
     if not md.is_file():
         return 0
     lines = md.read_text(encoding="utf-8").splitlines()
-    return sum(1 for l in lines if l.strip() and not l.startswith("#"))
+    return sum(1 for line in lines if line.strip() and not line.startswith("#"))
 
 
 # ---------------------------------------------------------------------------
@@ -335,8 +336,12 @@ class TestSuggestPromotions:
     def test_decision_above_threshold_suggests(self):
         state = default_memory_state()
         state["episodic_notes"] = [
-            {**_make_note("fix import", 1), "kind": "decision",
-             "retrieve_count": 5, "source": "patcher"},
+            {
+                **_make_note("fix import", 1),
+                "kind": "decision",
+                "retrieve_count": 5,
+                "source": "patcher",
+            },
         ]
         dreamer = MemoryDreamer(state)
         n = dreamer._suggest_promotions(hit_min=3)
@@ -361,8 +366,12 @@ class TestSuggestPromotions:
     def test_suggestions_in_run_stats(self):
         state = default_memory_state()
         state["episodic_notes"] = [
-            {**_make_note("use pytest", 1), "kind": "decision",
-             "retrieve_count": 4, "source": "localizer"},
+            {
+                **_make_note("use pytest", 1),
+                "kind": "decision",
+                "retrieve_count": 4,
+                "source": "localizer",
+            },
         ]
         stats, dreamer = run_memory_dream(state)
         assert stats["promotion_suggestions"] == 1
@@ -427,6 +436,7 @@ class TestTrimByTime:
             notes.append(_make_note(f"n{i}", i, created_at=old if i < 3 else new))
         # 打乱顺序验证排序
         import random
+
         random.shuffle(notes)
         state["episodic_notes"] = notes
         dreamer = MemoryDreamer(state)
@@ -451,8 +461,8 @@ class TestDurableGCMtime:
     """Durable GC 按 mtime 淘汰旧文件条目。"""
 
     def test_mtime_sorted_eviction(self):
-        import tempfile
         import os
+        import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
             topics_dir = Path(tmp) / ".agent" / "memory" / "topics"
@@ -461,7 +471,9 @@ class TestDurableGCMtime:
             # 创建两个 topic 文件，一个旧一个新
             old_file = topics_dir / "project-conventions.md"
             new_file = topics_dir / "key-decisions.md"
-            old_file.write_text("# Project Conventions\n" + "\n".join(f"entry {i}" for i in range(25)))
+            old_file.write_text(
+                "# Project Conventions\n" + "\n".join(f"entry {i}" for i in range(25))
+            )
             new_file.write_text("# Key Decisions\n" + "\n".join(f"decision {i}" for i in range(25)))
 
             # 设置不同的 mtime
@@ -483,7 +495,7 @@ class TestDurableGCMtime:
 
             store = DurableMemoryStore(tmp)
             # 写入足够多的条目触发 chunked
-            entries = [(f"key-decisions", f"big {i}: " + "y" * 1000) for i in range(60)]
+            entries = [("key-decisions", f"big {i}: " + "y" * 1000) for i in range(60)]
             store.promote(entries)
 
             chunk_dir = store.topics_dir / "key-decisions"
@@ -535,11 +547,18 @@ class TestMemoryGCIntegration:
 
 class TestDreamTraceHealth:
     def test_dream_summary_includes_new_fields(self):
-        trace = dream_summary_to_trace({
-            "deduped": 1, "expired": 0, "trimmed": 2, "durable_gc": 3,
-            "total_before": 10, "total_after": 4,
-            "promotion_suggestions": 2, "routing_entries": 15,
-        })
+        trace = dream_summary_to_trace(
+            {
+                "deduped": 1,
+                "expired": 0,
+                "trimmed": 2,
+                "durable_gc": 3,
+                "total_before": 10,
+                "total_after": 4,
+                "promotion_suggestions": 2,
+                "routing_entries": 15,
+            }
+        )
         assert trace["durable_gc"] == 3
         assert trace["promotion_suggestions"] == 2
         assert trace["routing_entries"] == 15

@@ -1,8 +1,12 @@
 """事件记忆 — Episodic Memory：会话级工具执行笔记。"""
 
 import time
+from typing import TYPE_CHECKING
 
 from agent_runtime.features.memory.core import MAX_EPISODIC_NOTES
+
+if TYPE_CHECKING:
+    from agent_runtime.features.memory.durable import DurableMemoryStore
 
 # kind=decision 笔记被检索 >= PROMOTE_THRESHOLD 次时触发晋升逻辑
 PROMOTE_THRESHOLD = 3
@@ -85,7 +89,11 @@ def retrieval_candidates(
             if note.get("kind") == "decision":
                 note["retrieve_count"] = note.get("retrieve_count", 0) + 1
                 # 仅当 AUTO_PROMOTE=True 且达到阈值才写入 durable
-                if AUTO_PROMOTE and note["retrieve_count"] >= PROMOTE_THRESHOLD and durable_store is not None:
+                if (
+                    AUTO_PROMOTE
+                    and note["retrieve_count"] >= PROMOTE_THRESHOLD
+                    and durable_store is not None
+                ):
                     promotions.append(("key-decisions", f"Decision: {note['text']}"))
             scored.append((score, note))
     scored.sort(key=lambda x: x[0], reverse=True)

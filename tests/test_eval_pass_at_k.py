@@ -5,8 +5,6 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-import pytest
-
 from src.eval.metrics import compute_pass_at_k
 from src.eval.models import CaseResult
 from src.eval.runner import DEFAULT_CASES_DIR, EvalRunner
@@ -14,6 +12,7 @@ from src.eval.runner import DEFAULT_CASES_DIR, EvalRunner
 
 def _fake_factory(repo_path: str):
     from src.eval.fake_runner import FakePatchOrchestrator
+
     return FakePatchOrchestrator(repo_path, cases_dir=DEFAULT_CASES_DIR)
 
 

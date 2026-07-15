@@ -54,8 +54,11 @@ def _count_text(budget: TokenBudget | Any, text: str) -> int:
 
 
 _STATUS_ICON = {
-    "done": "+", "in_progress": ">", "pending": "-",
-    "blocked": "!", "cancelled": "x",
+    "done": "+",
+    "in_progress": ">",
+    "pending": "-",
+    "blocked": "!",
+    "cancelled": "x",
 }
 
 

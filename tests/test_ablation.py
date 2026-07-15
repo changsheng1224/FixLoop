@@ -57,7 +57,10 @@ class TestAblationRunnerFake:
             )
             report = runner.run(case_ids=["case_001", "case_002"], repetitions=2)
             assert set(report["summary_by_variant"].keys()) == {
-                "full", "single", "no_retriever", "naive",
+                "full",
+                "single",
+                "no_retriever",
+                "naive",
             }
             assert report["summary_by_variant"]["full"]["total"] == 4
             assert report["summary_by_variant"]["full"]["fixed"] == 4

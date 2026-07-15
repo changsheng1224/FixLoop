@@ -1,4 +1,4 @@
-﻿"""Patch parse/apply service extracted from Orchestrator."""
+"""Patch parse/apply service extracted from Orchestrator."""
 
 from __future__ import annotations
 
@@ -208,6 +208,8 @@ def _apply_unified_diff(text: str, diff: str) -> str | None:
             return replaced
 
     return None
+
+
 def extract_json_block(text: str) -> str:
     """从文本中提取 JSON 块（优先处理 markdown 代码块）。"""
     text = text.strip()
@@ -242,6 +244,8 @@ def extract_json_block(text: str) -> str:
                         return text[last_start : i + 1]
 
     return text
+
+
 class PatchApplier:
     """Parse and apply candidate patches under a repo root."""
 
@@ -293,6 +297,7 @@ class PatchApplier:
             applied.append(p)
         return applied
 
+
 def parse_patches(answer: str) -> list[CandidatePatch]:
     import json
 
@@ -315,4 +320,3 @@ def parse_patches(answer: str) -> list[CandidatePatch]:
         except (json.JSONDecodeError, KeyError):
             continue
     return []
-

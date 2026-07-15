@@ -266,8 +266,7 @@ class SemanticMemory:
                     if emb is None:
                         continue
                     sim = float(
-                        np.dot(query_emb, emb)
-                        / (np.linalg.norm(query_emb) * np.linalg.norm(emb))
+                        np.dot(query_emb, emb) / (np.linalg.norm(query_emb) * np.linalg.norm(emb))
                     )
                     if sim > 0.3:
                         scores.append((sim, note))

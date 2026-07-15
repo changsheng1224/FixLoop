@@ -176,4 +176,3 @@ class TestWorkspaceFingerprintDenoise:
 
         ws_after = WorkspaceContext.build(str(temp_workspace))
         assert ws_after.fingerprint() != before
-

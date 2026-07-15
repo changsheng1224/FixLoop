@@ -38,6 +38,7 @@ def _get_fernet():
 
     try:
         from cryptography.fernet import Fernet
+
         _FERNET = Fernet(key.encode())
     except Exception:
         _FERNET = None

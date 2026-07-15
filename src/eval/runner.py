@@ -123,14 +123,12 @@ def extract_agent_timings(node_timings: dict | None) -> dict:
     token_usage = node_timings.get("token_usage") or {}
     if isinstance(token_usage, dict):
         sections = token_usage.get("sections") or token_usage.get("token_usage") or {}
-        result["context_tokens"] = sum(
-            int(v) for v in sections.values()
-        ) if isinstance(sections, dict) else 0
+        result["context_tokens"] = (
+            sum(int(v) for v in sections.values()) if isinstance(sections, dict) else 0
+        )
         result["cache_hit_rate"] = float(token_usage.get("cache_hit_rate", 0) or 0)
     result["total_tool_steps"] = int(
-        node_timings.get("total_tool_steps", 0)
-        or node_timings.get("tool_steps", 0)
-        or 0
+        node_timings.get("total_tool_steps", 0) or node_timings.get("tool_steps", 0) or 0
     )
     # p50 ttft 从 agent_reports 延迟计算（此处存原始值）
     ttft_vals = node_timings.get("ttft_ms")
@@ -183,11 +181,13 @@ class EvalRunner:
             return set()
         result = set()
         for e in entries:
-            result.add((
-                str(e.get("case_id", "")),
-                str(e.get("variant", "")),
-                int(e.get("rep", 0)),
-            ))
+            result.add(
+                (
+                    str(e.get("case_id", "")),
+                    str(e.get("variant", "")),
+                    int(e.get("rep", 0)),
+                )
+            )
         return result
 
     def _save_checkpoint_entry(self, case_id: str, variant: str = "", rep: int = 0) -> None:
@@ -215,8 +215,11 @@ class EvalRunner:
         if hasattr(self, "_cached_fake_mode"):
             return self._cached_fake_mode
         from src.eval.fake_runner import FakePatchOrchestrator
+
         try:
-            self._cached_fake_mode = isinstance(self.orchestrator_factory("."), FakePatchOrchestrator)
+            self._cached_fake_mode = isinstance(
+                self.orchestrator_factory("."), FakePatchOrchestrator
+            )
         except Exception:
             self._cached_fake_mode = False
         return self._cached_fake_mode
@@ -262,7 +265,9 @@ class EvalRunner:
                 results.append(result)
                 if resume:
                     self._save_checkpoint_entry(
-                        case_id, variant=variant, rep=run_idx,
+                        case_id,
+                        variant=variant,
+                        rep=run_idx,
                     )
 
         if resume and not results:
@@ -294,7 +299,9 @@ class EvalRunner:
             tmp_repo = Path(tmp) / "repo"
             _copy_case_repo(case_dir / "repo", tmp_repo)
 
-            pre_code, pre_out = (0, "") if (is_fake and language != "python") else run_pytest(tmp_repo)
+            pre_code, pre_out = (
+                (0, "") if (is_fake and language != "python") else run_pytest(tmp_repo)
+            )
 
             t0 = time.time()
             error = ""
@@ -308,7 +315,9 @@ class EvalRunner:
                 error = str(exc)
             duration_ms = int((time.time() - t0) * 1000)
 
-            post_code, post_out = (0, "") if (is_fake and language != "python") else run_pytest(tmp_repo)
+            post_code, post_out = (
+                (0, "") if (is_fake and language != "python") else run_pytest(tmp_repo)
+            )
             fixed = post_code == 0
 
             original_snapshot = Path(tmp) / "original"
@@ -329,7 +338,9 @@ class EvalRunner:
             if state and getattr(state, "node_timings", None):
                 node_timings = state.node_timings
                 token_usage = node_timings.get("token_usage") or {}
-                permission_denied_by_tool = dict(node_timings.get("permission_denied_by_tool") or {})
+                permission_denied_by_tool = dict(
+                    node_timings.get("permission_denied_by_tool") or {}
+                )
                 if isinstance(token_usage, dict):
                     total_tokens = int(
                         node_timings.get("total_tokens", 0) or token_usage.get("total_tokens", 0)
@@ -351,7 +362,8 @@ class EvalRunner:
             judge_score, judge_reason = 0, ""
             if self.judge_client and actual_patch:
                 judge_score, judge_reason = self.judge_client.evaluate(
-                    issue, actual_patch,
+                    issue,
+                    actual_patch,
                 )
 
             # 计算 patch equivalence（vs expected_patch.diff）

@@ -1,8 +1,6 @@
 """动态 Agent 裁剪单测：simple issue 跳过 Retriever。"""
 
-import pytest
-
-from src.repair_factory import AgentProfile, _SIMPLE_ISSUE_TYPES
+from src.repair_factory import _SIMPLE_ISSUE_TYPES, AgentProfile
 from src.state import RepairPlan
 
 
@@ -50,9 +48,7 @@ class TestPruneAgents:
 
         from src.repair.pipeline import RepairPipelineMixin
 
-        RepairPipelineMixin._prune_agents_for_issue(
-            mock, RepairPlan(issue_type="import_error")
-        )
+        RepairPipelineMixin._prune_agents_for_issue(mock, RepairPlan(issue_type="import_error"))
         assert mock.retriever is None
 
     def test_prune_keeps_retriever_for_type_error(self):
@@ -64,9 +60,7 @@ class TestPruneAgents:
 
         from src.repair.pipeline import RepairPipelineMixin
 
-        RepairPipelineMixin._prune_agents_for_issue(
-            mock, RepairPlan(issue_type="type_error")
-        )
+        RepairPipelineMixin._prune_agents_for_issue(mock, RepairPlan(issue_type="type_error"))
         assert mock.retriever == "fake_retriever"
 
     def test_prune_marks_prompt_variant(self):
@@ -99,6 +93,8 @@ class TestPipelineSkipsRetriever:
         state = RepairState(issue_input="import error")
         state.repair_plan = RepairPlan(issue_type="import_error")
 
-        with patch.object(mixin, "_run_localizer_only", return_value=([], None, {}, {})) as mock_only:
+        with patch.object(
+            mixin, "_run_localizer_only", return_value=([], None, {}, {})
+        ) as mock_only:
             mixin._run_localize_and_retrieve(state)
             mock_only.assert_called_once()

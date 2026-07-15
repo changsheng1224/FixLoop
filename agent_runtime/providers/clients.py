@@ -8,9 +8,9 @@ import time
 import urllib.error
 import urllib.request
 
+from agent_runtime.errors import EmptyModelResponse
 from agent_runtime.model_timing import ModelCallTiming
 from agent_runtime.providers.http_timing import read_http_body_with_timing
-from agent_runtime.errors import EmptyModelResponse
 from agent_runtime.providers.session_usage import SessionUsageMixin
 
 
@@ -697,7 +697,9 @@ class OpenAICompatibleModelClient:
         _check_empty_response(result, model=self.model)
         return result
 
-    def complete_stream(self, prompt: str, max_new_tokens: int = 512, on_chunk=None, cancel_token=None):
+    def complete_stream(
+        self, prompt: str, max_new_tokens: int = 512, on_chunk=None, cancel_token=None
+    ):
         """OpenAI Responses API 流式调用。"""
         payload = self._build_payload(prompt, max_new_tokens, stream=True)
         body = json.dumps(payload).encode("utf-8")

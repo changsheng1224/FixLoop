@@ -84,9 +84,7 @@ class TestAstParseLocalized:
     def test_localized_window_clamped(self, temp_workspace):
         """窗口边界 clamp 到文件范围。"""
         ctx = ToolContext(root=str(temp_workspace))
-        (temp_workspace / "mod.py").write_text(
-            "def first():\n    pass\n", encoding="utf-8"
-        )
+        (temp_workspace / "mod.py").write_text("def first():\n    pass\n", encoding="utf-8")
         # start_line=1, window_start = max(1, 1-20) = 1 → 正常
         result = ast_parse(ctx, {"path": "mod.py", "start_line": 1, "end_line": 2})
         data = json.loads(result)

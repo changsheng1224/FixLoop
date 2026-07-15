@@ -98,11 +98,7 @@ class TestCircuitBreaker:
         cb = CircuitBreaker(failure_threshold=2)
         for _ in range(2):
             with pytest.raises(RateLimitExceededError):
-                cb.call(
-                    lambda: (_ for _ in ()).throw(
-                        RateLimitExceededError("429 exhausted")
-                    )
-                )
+                cb.call(lambda: (_ for _ in ()).throw(RateLimitExceededError("429 exhausted")))
         assert cb.state == "closed"
         assert cb.call(lambda: "ok") == "ok"
 
@@ -114,7 +110,9 @@ class TestCircuitBreakerTraceEvents:
         events: list[tuple[str, dict]] = []
         cb = CircuitBreaker(failure_threshold=2, recovery_timeout=30)
         cb.add_listener(lambda event, payload: events.append((event, payload)))
-        fail = lambda: (_ for _ in ()).throw(RuntimeError("fail"))
+
+        def fail():
+            return (_ for _ in ()).throw(RuntimeError("fail"))
 
         with pytest.raises(RuntimeError):
             cb.call(fail)
@@ -128,9 +126,13 @@ class TestCircuitBreakerTraceEvents:
 
     def test_emits_half_open_probe_and_circuit_closed(self):
         events: list[tuple[str, dict]] = []
-        cb = CircuitBreaker(failure_threshold=2, recovery_timeout=0.05, half_open_success_threshold=2)
+        cb = CircuitBreaker(
+            failure_threshold=2, recovery_timeout=0.05, half_open_success_threshold=2
+        )
         cb.add_listener(lambda event, payload: events.append((event, payload)))
-        fail = lambda: (_ for _ in ()).throw(RuntimeError("fail"))
+
+        def fail():
+            return (_ for _ in ()).throw(RuntimeError("fail"))
 
         for _ in range(2):
             with pytest.raises(RuntimeError):
@@ -152,7 +154,9 @@ class TestCircuitBreakerTraceEvents:
         events: list[tuple[str, dict]] = []
         cb = CircuitBreaker(failure_threshold=2, recovery_timeout=0.05)
         cb.add_listener(lambda event, payload: events.append((event, payload)))
-        fail = lambda: (_ for _ in ()).throw(RuntimeError("fail"))
+
+        def fail():
+            return (_ for _ in ()).throw(RuntimeError("fail"))
 
         for _ in range(2):
             with pytest.raises(RuntimeError):

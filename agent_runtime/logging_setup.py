@@ -14,9 +14,9 @@ from agent_runtime.log_context import get_log_context
 LOGGER_ROOT = "fixloop"
 _DEFAULT_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
 _DATE_FORMAT = "%H:%M:%S"
-_RECORD_BUILTIN_KEYS = frozenset(
-    logging.makeLogRecord({}).__dict__.keys()
-) | frozenset({"message", "asctime"})
+_RECORD_BUILTIN_KEYS = frozenset(logging.makeLogRecord({}).__dict__.keys()) | frozenset(
+    {"message", "asctime"}
+)
 
 
 class JsonFormatter(logging.Formatter):
@@ -24,9 +24,7 @@ class JsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         payload: dict = {
-            "ts": datetime.fromtimestamp(record.created, tz=UTC).strftime(
-                "%Y-%m-%dT%H:%M:%S."
-            )
+            "ts": datetime.fromtimestamp(record.created, tz=UTC).strftime("%Y-%m-%dT%H:%M:%S.")
             + f"{int(record.msecs):03d}Z",
             "level": record.levelname,
             "logger": record.name,

@@ -1,7 +1,5 @@
 """LLM 调用预算硬顶单测：max_llm_calls + budget_exhausted。"""
 
-import pytest
-
 
 class TestLLMBudgetHardCap:
     def test_budget_exhausted_stops_early(self, temp_workspace):
@@ -16,11 +14,14 @@ class TestLLMBudgetHardCap:
         config = AgentConfig(provider="fake", max_steps=5, max_llm_calls_per_repair=1)
         agent = Agent(
             config=config,
-            model_client=FakeModelClient([
-                '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
-                "<final>should not reach</final>",
-            ]),
-            workspace=ws, cwd=str(temp_workspace),
+            model_client=FakeModelClient(
+                [
+                    '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
+                    "<final>should not reach</final>",
+                ]
+            ),
+            workspace=ws,
+            cwd=str(temp_workspace),
         )
         loop = AgentLoop(agent)
         answer = loop.run("test budget")
@@ -38,11 +39,14 @@ class TestLLMBudgetHardCap:
         config = AgentConfig(provider="fake", max_steps=2, max_llm_calls_per_repair=0)
         agent = Agent(
             config=config,
-            model_client=FakeModelClient([
-                '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
-                "<final>all good</final>",
-            ]),
-            workspace=ws, cwd=str(temp_workspace),
+            model_client=FakeModelClient(
+                [
+                    '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
+                    "<final>all good</final>",
+                ]
+            ),
+            workspace=ws,
+            cwd=str(temp_workspace),
         )
         loop = AgentLoop(agent)
         answer = loop.run("test no limit")
@@ -60,7 +64,8 @@ class TestLLMBudgetHardCap:
         agent = Agent(
             config=config,
             model_client=FakeModelClient(["<final>ok</final>"]),
-            workspace=ws, cwd=str(temp_workspace),
+            workspace=ws,
+            cwd=str(temp_workspace),
         )
         agent.ask("test")
         # 验证 config 字段

@@ -165,15 +165,13 @@ class TestSandboxExecutionTier:
         for name in ("sandbox_build", "sandbox_test", "sandbox_verify"):
             spec = registry.get(name)
             assert spec is not None, f"missing tool: {name}"
-            assert spec.get("execution_tier") == "container", (
-                f"{name} should be container tier"
-            )
+            assert spec.get("execution_tier") == "container", f"{name} should be container tier"
 
     def test_assert_sandbox_available_raises_when_docker_missing(self, monkeypatch):
-        from src.harness.sandbox_verify import SandboxNotAvailableError, assert_sandbox_available
-
         # 强制 import docker 时失败
         import builtins
+
+        from src.harness.sandbox_verify import SandboxNotAvailableError, assert_sandbox_available
 
         real_import = builtins.__import__
 

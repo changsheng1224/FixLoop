@@ -7,8 +7,8 @@ workspace 写窗口单飞：同一时刻最多一个 write phase。
 from __future__ import annotations
 
 import threading
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Generator
 
 
 class PhaseReadWriteLock:

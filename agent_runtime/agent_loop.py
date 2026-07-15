@@ -6,8 +6,10 @@
 import json
 import time as _time
 
+from agent_runtime.cancellation import CancelledError, run_with_cancellation
 from agent_runtime.compression_pipeline import truncate_tool_result_for_agent
 from agent_runtime.context_metadata import build_trace_payload
+from agent_runtime.errors import ContextTooLargeError, EmptyModelResponse
 from agent_runtime.loop_limits import NATIVE_MAX_TURNS_MESSAGE, max_parse_attempts
 from agent_runtime.model_timing import (
     ModelCallTiming,
@@ -20,12 +22,10 @@ from agent_runtime.parse_recovery import (
     failure_invalid_tool_payload,
 )
 from agent_runtime.providers.retry_policy import RateLimitExceededError
-from agent_runtime.react_phases import ReactPhase, ReactPath
+from agent_runtime.react_phases import ReactPath, ReactPhase
 from agent_runtime.step_clock import StepClock, StepTimeoutError
 from agent_runtime.step_guard import StepContext, StepGuard
 from agent_runtime.stop_reasons import StopReason
-from agent_runtime.cancellation import CancelledError, run_with_cancellation
-from agent_runtime.errors import ContextTooLargeError, EmptyModelResponse
 
 # StepGuard stall 检测：仅"可能修改文件"的工具才计入停滞
 _MODIFYING_TOOLS = frozenset({"write_file", "patch_file", "run_shell"})
@@ -110,9 +110,9 @@ class AgentLoop:
         sections = meta.get("sections") or meta.get("context_sections") or {}
         for name, tokens in sections.items():
             try:
-                self._context_section_totals[name] = (
-                    self._context_section_totals.get(name, 0) + int(tokens)
-                )
+                self._context_section_totals[name] = self._context_section_totals.get(
+                    name, 0
+                ) + int(tokens)
             except (ValueError, TypeError):
                 pass
         cuts = meta.get("cuts") or []
@@ -142,7 +142,9 @@ class AgentLoop:
             return {
                 "episodic_notes": len(episodic),
                 "episodic_cap": MAX_EPISODIC_NOTES,
-                "durable_entries": sum(1 for _ in store.topics_dir.glob("*.md") if store.topics_dir.is_dir()),
+                "durable_entries": sum(
+                    1 for _ in store.topics_dir.glob("*.md") if store.topics_dir.is_dir()
+                ),
                 "avg_confidence": avg_conf,
                 "dream_deduped": dream.get("deduped", 0),
                 "dream_expired": dream.get("expired", 0),
@@ -161,9 +163,7 @@ class AgentLoop:
         build_count = self._context_built_count
         cache_hit_rate = 0.0
         if build_count > 0:
-            cache_hit_rate = round(
-                1.0 - (self._cache_key_changes / build_count), 3
-            )
+            cache_hit_rate = round(1.0 - (self._cache_key_changes / build_count), 3)
         return {
             "sections": dict(self._context_section_totals),
             "build_count": build_count,
@@ -316,7 +316,9 @@ class AgentLoop:
             timings,
             default_attempt=default_attempt,
         )
-        ts.node_timings["ttft_ms_total"] = int(ts.node_timings.get("ttft_ms_total", 0) or 0) + ttft_total
+        ts.node_timings["ttft_ms_total"] = (
+            int(ts.node_timings.get("ttft_ms_total", 0) or 0) + ttft_total
+        )
 
     def _notify(self, method: str, callback, **kwargs: object) -> None:
         """统一回调入口：XML 与 Native 路径共用。
@@ -407,7 +409,9 @@ class AgentLoop:
             result = self.agent.execute_tool(tool_name, tool_args)
         finally:
             self._in_flight_tool = ""
-        if (msg := self._abort_if_cancelled(ts, phase="post_tool", in_flight=tool_name)) is not None:
+        if (
+            msg := self._abort_if_cancelled(ts, phase="post_tool", in_flight=tool_name)
+        ) is not None:
             raise CancelledError("user", answer=msg)
         result_text = result.content if hasattr(result, "content") else str(result)
         te_ms = int((_time.time() - t0) * 1000)
@@ -463,15 +467,17 @@ class AgentLoop:
         if error_code == "loop_detected":
             from agent_runtime.tool_executor import _canonical_args_hash
 
-            self._emit("loop_detected", {
-                "tool": tool_name,
-                "args_hash": _canonical_args_hash(tool_name, tool_args),
-                "window_size": int(
-                    getattr(self.agent.config, "loop_detect_threshold", 3) or 3
-                ),
-            })
+            self._emit(
+                "loop_detected",
+                {
+                    "tool": tool_name,
+                    "args_hash": _canonical_args_hash(tool_name, tool_args),
+                    "window_size": int(getattr(self.agent.config, "loop_detect_threshold", 3) or 3),
+                },
+            )
             ts.stop_with_reason(
-                StopReason.CIRCUIT_BREAKER, "stopped",
+                StopReason.CIRCUIT_BREAKER,
+                "stopped",
                 detail=f"死循环检测: {tool_name} 连续高频调用",
             )
             self.stop_reason = StopReason.CIRCUIT_BREAKER
@@ -519,11 +525,19 @@ class AgentLoop:
                         "请检查当前 todo 列表，考虑重新规划或尝试不同策略。"
                     )
                     result_text = result_text + hint
-                    self.agent.record({"role": "tool", "content": result_text, "tool_name": tool_name})
+                    self.agent.record(
+                        {"role": "tool", "content": result_text, "tool_name": tool_name}
+                    )
                     next_message = f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
                     self._persist_step_checkpoint(
-                        ts, tool_name, tool_args, result_text, next_message, result,
-                        step=step, path=path,
+                        ts,
+                        tool_name,
+                        tool_args,
+                        result_text,
+                        next_message,
+                        result,
+                        step=step,
+                        path=path,
                     )
                     return next_message
                 # goal_drift 仍终止
@@ -536,8 +550,14 @@ class AgentLoop:
         self.agent.record({"role": "tool", "content": result_text, "tool_name": tool_name})
         next_message = f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
         self._persist_step_checkpoint(
-            ts, tool_name, tool_args, result_text, next_message, result,
-            step=step, path=path,
+            ts,
+            tool_name,
+            tool_args,
+            result_text,
+            next_message,
+            result,
+            step=step,
+            path=path,
         )
         return next_message
 
@@ -595,16 +615,19 @@ class AgentLoop:
         ts.node_timings["prompt_build_ms"] += int((_time.time() - t0) * 1000)
         return prompt_text
 
-    def _xml_call_model(self, ts, prompt_text: str, *, step: int, callback=None) -> tuple[str, float]:
+    def _xml_call_model(
+        self, ts, prompt_text: str, *, step: int, callback=None
+    ) -> tuple[str, float]:
         # LLM 调用预算硬顶
         max_calls = getattr(self.agent.config, "max_llm_calls_per_repair", 0) or 0
         if max_calls > 0 and self._llm_call_count >= max_calls:
-            ts.stop_with_reason(StopReason.BUDGET_EXHAUSTED, "stopped",
-                detail=f"max_llm_calls={max_calls}")
+            ts.stop_with_reason(
+                StopReason.BUDGET_EXHAUSTED, "stopped", detail=f"max_llm_calls={max_calls}"
+            )
             self.stop_reason = StopReason.BUDGET_EXHAUSTED
-            raise CancelledError("budget", answer=(
-                f"<final>LLM 调用达到硬顶 ({max_calls})，任务终止。</final>"
-            ))
+            raise CancelledError(
+                "budget", answer=(f"<final>LLM 调用达到硬顶 ({max_calls})，任务终止。</final>")
+            )
         self._llm_call_count += 1
         ts.record_attempt()
         t1 = _time.time()
@@ -638,22 +661,29 @@ class AgentLoop:
                 break  # 成功，退出重试循环
             except EmptyModelResponse:
                 self._empty_retries += 1
-                self._emit("empty_model_response", {
-                    "attempt": empty_try + 1,
-                    "step": step,
-                })
+                self._emit(
+                    "empty_model_response",
+                    {
+                        "attempt": empty_try + 1,
+                        "step": step,
+                    },
+                )
                 if empty_try < self.MAX_EMPTY_RETRIES - 1:
                     _time.sleep(0.5 * (empty_try + 1))
                 else:
                     ts.stop_with_reason(
-                        StopReason.API_ERROR, "stopped",
+                        StopReason.API_ERROR,
+                        "stopped",
                         detail="empty_model_response_exhausted",
                     )
                     self.stop_reason = StopReason.API_ERROR
-                    raise CancelledError("api_error", answer=(
-                        "<final>API 错误: 模型连续返回空响应，已重试 "
-                        f"{self.MAX_EMPTY_RETRIES} 次。</final>"
-                    ))
+                    raise CancelledError(
+                        "api_error",
+                        answer=(
+                            "<final>API 错误: 模型连续返回空响应，已重试 "
+                            f"{self.MAX_EMPTY_RETRIES} 次。</final>"
+                        ),
+                    )
 
         ts.node_timings.setdefault("model_call_ms", 0)
         ts.node_timings["model_call_ms"] += int((_time.time() - t1) * 1000)
@@ -668,8 +698,7 @@ class AgentLoop:
         self._retry_count += 1
         delay = min(2 ** (self._retry_count - 1), 8)
         _log_loop(
-            f"  [loop] retry#{self._retry_count} backoff={delay}s "
-            f"raw[:100]={raw.strip()[:100]}\n"
+            f"  [loop] retry#{self._retry_count} backoff={delay}s raw[:100]={raw.strip()[:100]}\n"
         )
         try:
             from pathlib import Path
@@ -728,7 +757,13 @@ class AgentLoop:
         self._plan_todos = todos
         if todos:
             self.agent.session["plan_todos"] = todos
-            self._emit("plan_phase", {"source": "llm" if getattr(self.agent, "light_client", None) else "rule", "count": len(todos)})
+            self._emit(
+                "plan_phase",
+                {
+                    "source": ("llm" if getattr(self.agent, "light_client", None) else "rule"),
+                    "count": len(todos),
+                },
+            )
             self._emit("plan_created", {"todos": list(todos)})
             self._start_next_todo()
         else:
@@ -742,7 +777,7 @@ class AgentLoop:
             try:
                 prompt = (
                     "将以下任务分解为 2-5 个步骤。只输出 JSON 数组：\n"
-                    f"[{{\"id\":\"1\",\"content\":\"...\",\"status\":\"pending\"}},...]\n\n{user_message[:500]}"
+                    f'[{{"id":"1","content":"...","status":"pending"}},...]\n\n{user_message[:500]}'
                 )
                 raw = light.complete(prompt, max_new_tokens=256)
                 start = raw.find("[")
@@ -758,10 +793,34 @@ class AgentLoop:
         todos = []
         i = 1
         if any(w in msg for w in ("error", "fix", "bug", "repair", "修复")):
-            todos.append({"id": str(i), "content": "Analyze error and locate suspect code", "status": "pending"})
-            todos.append({"id": str(i + 1), "content": "Retrieve related context and tests", "status": "pending"})
-            todos.append({"id": str(i + 2), "content": "Generate and apply fix patch", "status": "pending"})
-            todos.append({"id": str(i + 3), "content": "Verify fix passes tests", "status": "pending"})
+            todos.append(
+                {
+                    "id": str(i),
+                    "content": "Analyze error and locate suspect code",
+                    "status": "pending",
+                }
+            )
+            todos.append(
+                {
+                    "id": str(i + 1),
+                    "content": "Retrieve related context and tests",
+                    "status": "pending",
+                }
+            )
+            todos.append(
+                {
+                    "id": str(i + 2),
+                    "content": "Generate and apply fix patch",
+                    "status": "pending",
+                }
+            )
+            todos.append(
+                {
+                    "id": str(i + 3),
+                    "content": "Verify fix passes tests",
+                    "status": "pending",
+                }
+            )
         else:
             todos.append({"id": str(i), "content": "Read relevant files", "status": "pending"})
             todos.append({"id": str(i + 1), "content": "Analyze and respond", "status": "pending"})
@@ -940,7 +999,10 @@ class AgentLoop:
         cb = self.agent.circuit_breaker
         cb.add_listener(self._circuit_trace_listener)
         try:
-            with log_context(run_id=ts.run_id, agent=getattr(self.agent, "_agent_name", "") or "agent"):
+            with log_context(
+                run_id=ts.run_id,
+                agent=getattr(self.agent, "_agent_name", "") or "agent",
+            ):
                 self._emit(
                     "run_resumed",
                     {
@@ -953,7 +1015,9 @@ class AgentLoop:
                     task_summary=self._get_task_summary_text(),
                     suspect_files=self._extract_suspect_files(),
                 )
-                if checkpoint.get("path") == "native" and hasattr(self.agent.model_client, "chat_with_tools"):
+                if checkpoint.get("path") == "native" and hasattr(
+                    self.agent.model_client, "chat_with_tools"
+                ):
                     answer = self._run_with_native_tools(user_message, ts, callback)
                 else:
                     answer = self._run_with_text_parsing(user_message, ts, callback)
@@ -972,7 +1036,8 @@ class AgentLoop:
             system_prompt, user_message, budget_meta = self.agent.build_for_native(user_message)
         except ContextTooLargeError as e:
             ts.stop_with_reason(
-                StopReason.CONTEXT_OVERFLOW, "stopped",
+                StopReason.CONTEXT_OVERFLOW,
+                "stopped",
                 detail=f"actual={e.actual} limit={e.limit}",
             )
             return self._complete_run(ts, e.user_message)
@@ -984,9 +1049,7 @@ class AgentLoop:
         )
 
         context_prefix = build_context_prefix(self.agent, budget_meta)
-        attach_projection_metadata(
-            budget_meta, self.agent.session, context_prefix=context_prefix
-        )
+        attach_projection_metadata(budget_meta, self.agent.session, context_prefix=context_prefix)
         self._last_token_meta = budget_meta
         self._last_budget_meta = budget_meta
         self._accumulate_context_stats(budget_meta)
@@ -1011,7 +1074,13 @@ class AgentLoop:
                     step_clock = StepClock(step_timeout_s)
                 step_clock.check(step=step, path="native")
                 if callback is not None:
-                    self._notify("on_step_start", callback, step=step, max_steps=self.max_steps, path="native")
+                    self._notify(
+                        "on_step_start",
+                        callback,
+                        step=step,
+                        max_steps=self.max_steps,
+                        path="native",
+                    )
             elif phase == ReactPhase.ACTING:
                 step_clock.check(step=step, path="native")
             self._notify_react_phase(
@@ -1043,8 +1112,11 @@ class AgentLoop:
         t0 = _time.time()
         self._emit("model_request_start", {"step": 1, "attempt": 1})
         self._notify(
-            "on_pre_model", callback, step=1,
-            prompt_preview=user_message[:200], path="native",
+            "on_pre_model",
+            callback,
+            step=1,
+            prompt_preview=user_message[:200],
+            path="native",
         )
         try:
             result = self._invoke_model_call(
@@ -1083,8 +1155,12 @@ class AgentLoop:
         elapsed_ms = int((_time.time() - t0) * 1000)
         ts.node_timings["model_call_ms"] = elapsed_ms
         self._notify(
-            "on_post_model", callback, step=1,
-            raw_preview=answer[:200], elapsed_ms=elapsed_ms, path="native",
+            "on_post_model",
+            callback,
+            step=1,
+            raw_preview=answer[:200],
+            elapsed_ms=elapsed_ms,
+            path="native",
         )
 
         if answer.strip() == NATIVE_MAX_TURNS_MESSAGE:
@@ -1125,27 +1201,40 @@ class AgentLoop:
             if (msg := self._maybe_step_timeout(ts, step_clock, step, "xml")) is not None:
                 return msg
             if callback is not None:
-                self._notify("on_step_start", callback, step=step, max_steps=self.max_steps, path="xml")
+                self._notify(
+                    "on_step_start",
+                    callback,
+                    step=step,
+                    max_steps=self.max_steps,
+                    path="xml",
+                )
 
             try:
-                prompt_text = self._xml_build_context(ts, user_message, step=step, callback=callback)
+                prompt_text = self._xml_build_context(
+                    ts, user_message, step=step, callback=callback
+                )
             except ContextTooLargeError as e:
                 ts.stop_with_reason(
-                    StopReason.CONTEXT_OVERFLOW, "stopped",
+                    StopReason.CONTEXT_OVERFLOW,
+                    "stopped",
                     detail=f"actual={e.actual} limit={e.limit}",
                 )
                 return self._complete_run(ts, e.user_message)
             # _check_hard_cap 返回 <final> 字符串时直接终止（不发给模型）
             if prompt_text.startswith("<final>"):
                 ts.stop_with_reason(
-                    StopReason.CONTEXT_OVERFLOW, "stopped",
+                    StopReason.CONTEXT_OVERFLOW,
+                    "stopped",
                     detail="hard_cap via legacy _check_hard_cap",
                 )
                 return self._complete_run(ts, prompt_text)
 
             self._notify(
-                "on_pre_model", callback, step=step,
-                prompt_preview=prompt_text[:200], path="xml",
+                "on_pre_model",
+                callback,
+                step=step,
+                prompt_preview=prompt_text[:200],
+                path="xml",
             )
             try:
                 raw, t1 = self._xml_call_model(ts, prompt_text, step=step, callback=callback)
@@ -1166,8 +1255,12 @@ class AgentLoop:
 
             t_parse = int((_time.time() - t1) * 1000)
             self._notify(
-                "on_post_model", callback, step=step,
-                raw_preview=raw[:200], elapsed_ms=t_parse, path="xml",
+                "on_post_model",
+                callback,
+                step=step,
+                raw_preview=raw[:200],
+                elapsed_ms=t_parse,
+                path="xml",
             )
 
             if (msg := self._maybe_step_timeout(ts, step_clock, step, "xml")) is not None:
@@ -1181,16 +1274,20 @@ class AgentLoop:
                 ok, err_msg = self._validate_final_answer(final_text)
                 if not ok and self._json_retry_count < self.MAX_JSON_RETRIES:
                     self._json_retry_count += 1
-                    self._emit("json_retry", {
-                        "attempt": self._json_retry_count,
-                        "error": err_msg,
-                    })
+                    self._emit(
+                        "json_retry",
+                        {
+                            "attempt": self._json_retry_count,
+                            "error": err_msg,
+                        },
+                    )
                     # 走 ParseRetry → _handle_parse_retry，回到 Acting
                     from agent_runtime.parse_recovery import (
                         ParseFailure,
                         ParseRetry,
                         build_recovery_prompt,
                     )
+
                     failure = ParseFailure(
                         kind="json_in_tool",
                         snippet=final_text[:500],
@@ -1215,9 +1312,7 @@ class AgentLoop:
 
             if kind == "tool":
                 if not isinstance(payload, dict) or "name" not in payload:
-                    user_message = self._xml_invalid_tool_retry(
-                        ts, payload, raw=raw, step=step
-                    )
+                    user_message = self._xml_invalid_tool_retry(ts, payload, raw=raw, step=step)
                     continue
                 if (msg := self._maybe_step_timeout(ts, step_clock, step, "xml")) is not None:
                     return msg
@@ -1237,7 +1332,8 @@ class AgentLoop:
                 if self.stop_reason:
                     # StepGuard 触发终止（stall / goal_drift）
                     return self._complete_run(
-                        ts, user_message,
+                        ts,
+                        user_message,
                         recording={"step": step, "path": "xml", "callback": callback},
                     )
                 continue
@@ -1357,8 +1453,14 @@ class AgentLoop:
                     f"上一轮 final answer 缺少必填字段: {missing}。"
                     f"请输出包含 {list(schema.keys())} 的完整 JSON。"
                 )
-            type_map = {"str": str, "int": int, "float": (int, float), "bool": bool,
-                        "list": list, "dict": dict}
+            type_map = {
+                "str": str,
+                "int": int,
+                "float": (int, float),
+                "bool": bool,
+                "list": list,
+                "dict": dict,
+            }
             for field, ftype in schema.items():
                 expected = type_map.get(ftype)
                 if expected is None:
@@ -1390,9 +1492,9 @@ class AgentLoop:
         # Step 2: 移除第一个结构化标签前的自然语言前缀
         m = re.search(r"<(tool|final)>", cleaned)
         if m and m.start() > 0:
-            prefix = cleaned[:m.start()].strip()
+            prefix = cleaned[: m.start()].strip()
             if prefix:
-                cleaned = cleaned[m.start():]
+                cleaned = cleaned[m.start() :]
 
         cleaned = cleaned.strip()
         return cleaned if cleaned else raw.strip()
@@ -1406,7 +1508,16 @@ class AgentLoop:
 
         root = getattr(self.agent, "_cwd", "") or ""
         stats, dreamer = run_memory_dream(mem, durable_root=root)
-        if any(stats.get(k, 0) for k in ("deduped", "expired", "trimmed", "durable_gc", "promotion_suggestions")):
+        if any(
+            stats.get(k, 0)
+            for k in (
+                "deduped",
+                "expired",
+                "trimmed",
+                "durable_gc",
+                "promotion_suggestions",
+            )
+        ):
             self._emit("memory_dream", dream_summary_to_trace(stats, dreamer))
         # 存储 dream stats 供 _build_memory_health 合并
         self._last_dream_stats = stats
@@ -1444,11 +1555,14 @@ class AgentLoop:
             history = self.agent.session.get("history", [])
             called_tools = {h.get("tool_name") for h in history if h.get("tool_name")}
             if "stack_parse" not in called_tools:
-                self._emit("tool_order_warning", {
-                    "agent": "localizer",
-                    "tool": "ast_parse",
-                    "expected_before": "stack_parse",
-                })
+                self._emit(
+                    "tool_order_warning",
+                    {
+                        "agent": "localizer",
+                        "tool": "ast_parse",
+                        "expected_before": "stack_parse",
+                    },
+                )
         preview = meta.get("patch_preview")
         if preview:
             self._emit("tool_preview", {"tool": tool_name, **preview})

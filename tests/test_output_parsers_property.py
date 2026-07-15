@@ -3,13 +3,12 @@
 依赖: hypothesis（仅 dev），未安装时自动 skip。
 """
 
-import json
-
 import pytest
 
 try:
     from hypothesis import given, settings
     from hypothesis.strategies import text
+
     HAS_HYPOTHESIS = True
 except ImportError:
     HAS_HYPOTHESIS = False
@@ -31,7 +30,7 @@ if HAS_HYPOTHESIS:
         @settings(max_examples=200)
         def test_load_json_never_crashes(self, s):
             result = _load_json(s)
-            assert result is None or isinstance(result, (dict, list))
+            assert result is None or isinstance(result, dict | list)
 
         @given(text())
         @settings(max_examples=200)
@@ -66,11 +65,22 @@ class TestBasicFuzzFallback:
 
     def test_malformed_inputs_dont_crash(self):
         broken = [
-            "{", "}", "[}", "{]", "'", "\x00\x01\x02",
-            "null", "undefined", "NaN", "Infinity",
-            "function(){}", "while(true){}",
-            "{{{{{{{{{", "}}}}}}}}}",
-            "{\"a\": 1, \"b\": }", "[1, 2, ]",
+            "{",
+            "}",
+            "[}",
+            "{]",
+            "'",
+            "\x00\x01\x02",
+            "null",
+            "undefined",
+            "NaN",
+            "Infinity",
+            "function(){}",
+            "while(true){}",
+            "{{{{{{{{{",
+            "}}}}}}}}}",
+            '{"a": 1, "b": }',
+            "[1, 2, ]",
             "a" * 10000,  # 超长串
             "\n" * 1000,
         ]

@@ -61,7 +61,7 @@ class TestDiagnoseParseFailure:
         assert "read_file" in failure.snippet
 
     def test_wrong_xml_tag(self):
-        failure = diagnose_parse_failure('<read_file>src/main.py</read_file>')
+        failure = diagnose_parse_failure("<read_file>src/main.py</read_file>")
         assert failure.kind == "wrong_xml_tag"
         assert failure.error_offset == 0
         assert "read_file" in failure.error_message
@@ -180,8 +180,11 @@ class TestFourSectionPrompt:
         )
 
         failure = ParseFailure(
-            kind="empty", snippet="", error_offset=None,
-            error_message="empty", hint="empty",
+            kind="empty",
+            snippet="",
+            error_offset=None,
+            error_message="empty",
+            hint="empty",
         )
         prompt = build_recovery_prompt(failure, last_tool_call=None)
         assert "①" not in prompt  # section ① 完全跳过

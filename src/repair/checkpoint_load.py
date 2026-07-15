@@ -35,7 +35,7 @@ def save_repair_checkpoint(state, repo_root: str) -> Path:
     return path
 
 
-def load_repair_checkpoint(repo_root: str, run_id: str) -> "dict | None":
+def load_repair_checkpoint(repo_root: str, run_id: str) -> dict | None:
     """从 .agent/runs/<run_id>/repair_checkpoint.json 加载 RepairState dict。
 
     Returns:

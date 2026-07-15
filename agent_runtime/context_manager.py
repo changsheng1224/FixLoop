@@ -9,8 +9,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_runtime.errors import ContextTooLargeError
-
 from agent_runtime.compression_pipeline import (
     DEFAULT_TOOL_TRUNCATION,
     L5_TRIGGER_RATIO,
@@ -18,26 +16,29 @@ from agent_runtime.compression_pipeline import (
     l5_auto_compact,
     make_summarizer,
     run_compression_pipeline,
+)
+from agent_runtime.compression_pipeline import (
     truncate_tool_content as _truncate_tool_content,
 )
-from agent_runtime.tier_policy import TierPolicy, filter_relevant_results
+
+# Re-export fit helpers for test / L2 import compatibility.
+from agent_runtime.context_fit import fit_prompt_to_budget, fit_repair_user_prompt  # noqa: F401
 from agent_runtime.context_projection import attach_context_projection
+from agent_runtime.errors import ContextTooLargeError
 from agent_runtime.message_projection import (
     get_sealed_history,
     run_memory_snapshot,
     run_user_query,
     seal_history_at_build,
 )
-from agent_runtime.tokenizers import resolve_token_counter, resolve_tokenizer_spec
+from agent_runtime.section_filler import SectionFiller
 from agent_runtime.task_section import (
     render_task_message,
     reserve_section_budget,
     task_preservation_metadata,
 )
-from agent_runtime.section_filler import SectionFiller
-
-# Re-export fit helpers for test / L2 import compatibility.
-from agent_runtime.context_fit import fit_prompt_to_budget, fit_repair_user_prompt  # noqa: F401
+from agent_runtime.tier_policy import TierPolicy, filter_relevant_results
+from agent_runtime.tokenizers import resolve_token_counter, resolve_tokenizer_spec
 
 # Section token 预算分配（以 REF_TOTAL_BUDGET 为参考布局，随 prompt_budget 等比缩放）
 REF_TOTAL_BUDGET = 6000
@@ -110,6 +111,7 @@ class _DiskCache(dict):
     @staticmethod
     def _hash_key(key: str) -> str:
         import hashlib
+
         return hashlib.sha256(key.encode()).hexdigest()[:16]
 
     def _path(self, key: str) -> Path:
@@ -136,6 +138,7 @@ class _DiskCache(dict):
         except Exception:
             pass
 
+
 class ContextManager:
     """Prompt 组装器：按预算拼接 section，超限时自动裁剪。
 
@@ -156,14 +159,20 @@ class ContextManager:
         "skills",
         "workspace",
         "memory",
-        "knowledge",   # 持久知识检索（episodic notes + durable facts）
+        "knowledge",  # 持久知识检索（episodic notes + durable facts）
         "history",
         "state",
     )
     NATIVE_SYSTEM_ORDER = ("system", "tools")
     DYNAMIC_ORDER = ("skills", "workspace", "memory", "knowledge", "history", "state")
 
-    def __init__(self, agent, total_budget: int | None = None, *, budget: TokenBudget | None = None):
+    def __init__(
+        self,
+        agent,
+        total_budget: int | None = None,
+        *,
+        budget: TokenBudget | None = None,
+    ):
         self.agent = agent
         if budget is not None:
             self.budget = budget
@@ -328,9 +337,7 @@ class ContextManager:
         skills_tokens = metadata["sections"].get("skills", 0)
         ws_tokens = metadata["sections"].get("workspace", 0)
         if sys_tokens or tools_tokens or skills_tokens or ws_tokens:
-            metadata["sections"]["prefix"] = (
-                sys_tokens + tools_tokens + skills_tokens + ws_tokens
-            )
+            metadata["sections"]["prefix"] = sys_tokens + tools_tokens + skills_tokens + ws_tokens
 
         metadata["total_tokens"] = used
         metadata["budget"] = self.budget.total_limit
@@ -491,9 +498,7 @@ class ContextManager:
 
         return self._format_projected_history(history, metadata)
 
-    def _format_projected_history(
-        self, history: list, metadata: dict | None = None
-    ) -> str:
+    def _format_projected_history(self, history: list, metadata: dict | None = None) -> str:
         """对 history 切片跑 L0–L5 并格式化为 history section 文本。"""
         if not history:
             return ""
@@ -503,7 +508,9 @@ class ContextManager:
         include_header = not (sealed_count > 0 and sealed_text)
 
         projected = run_compression_pipeline(
-            history, self.budget, metadata=meta,
+            history,
+            self.budget,
+            metadata=meta,
             summarizer=make_summarizer(self.agent),
             summary_cache=self._summary_cache,
             history_window=history_window_budget(self.budget.total_limit),
@@ -517,9 +524,7 @@ class ContextManager:
 
         return self._format_split_history(projected, pipe, include_header)
 
-    def _format_split_history(
-        self, projected: list, pipe: dict, include_header: bool
-    ) -> str:
+    def _format_split_history(self, projected: list, pipe: dict, include_header: bool) -> str:
         """格式化未触发 L5 的 history：早期摘要 + 最近对话。"""
         recent = projected[-KEEP_RECENT_HISTORY:]
         old = projected[:-KEEP_RECENT_HISTORY]
@@ -578,9 +583,7 @@ class ContextManager:
         失败：退化为简单裁剪（保留最近 8 条）
         """
         if trigger_tokens is None:
-            trigger_tokens = int(
-                L5_TRIGGER_RATIO * history_window_budget(self.budget.total_limit)
-            )
+            trigger_tokens = int(L5_TRIGGER_RATIO * history_window_budget(self.budget.total_limit))
         meta: dict = {}
         return l5_auto_compact(
             history,

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Iterator
 
 from agent_runtime.cancellation import CancellationToken
 from agent_runtime.signal_cancel import sigint_cancel_scope

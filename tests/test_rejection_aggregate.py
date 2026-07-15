@@ -1,7 +1,6 @@
 """rejection_aggregate 单测。"""
 
 import json
-from pathlib import Path
 
 from src.repair.rejection_aggregate import (
     GATEWAY_AGENT_ERROR_PREFIX,
@@ -79,9 +78,7 @@ class TestGatewayAgentErrors:
             errors,
             {"localizer": {"write_file": 1}},
         )
-        assert errors["localizer"] == (
-            f"parse failed; {GATEWAY_AGENT_ERROR_PREFIX} write_file×1"
-        )
+        assert errors["localizer"] == (f"parse failed; {GATEWAY_AGENT_ERROR_PREFIX} write_file×1")
 
     def test_apply_skips_duplicate_gateway_suffix(self):
         errors = {

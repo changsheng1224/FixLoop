@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 from src.blackboard import Blackboard
 from src.prompts.repair_tasks import build_patcher_variables
 from src.repair.blackboard_merge import read_suspects_from_blackboard
 from src.repair.blackboard_subscribe import render_patcher_prefix_blocks
 from src.repair.prompt_router import collect_patcher_user_hints, is_composite_multi_file
-from src.repair.repair_context_blocks import build_repair_context_blocks
 from src.repair.suspect_blocks import render_suspects_diff_only, render_suspects_with_snippets
 from src.skills.skill_block import SkillBlockRender, render_skill_hint_for_plan
 from src.state import RepairPlan, RetrievedContext, SuspectLocation
@@ -70,8 +69,10 @@ def assemble_patcher_variables(
         suspects_block = prefix_blocks.suspects_block
         if not suspects_block:
             suspects_block = _render_suspects_block(
-                effective_suspects, read_snippet,
-                diff_only=diff_only, read_line_range=read_line_range,
+                effective_suspects,
+                read_snippet,
+                diff_only=diff_only,
+                read_line_range=read_line_range,
             )
 
         test_text = prefix_blocks.test_blocks
@@ -88,12 +89,12 @@ def assemble_patcher_variables(
             "entry_counts": prefix_blocks.entry_counts,
         }
     else:
-        effective_suspects = suspects or (
-            fallback_suspects(plan, issue) if plan else []
-        )
+        effective_suspects = suspects or (fallback_suspects(plan, issue) if plan else [])
         suspects_block = _render_suspects_block(
-            effective_suspects, read_snippet,
-            diff_only=diff_only, read_line_range=read_line_range,
+            effective_suspects,
+            read_snippet,
+            diff_only=diff_only,
+            read_line_range=read_line_range,
         )
         test_blocks = read_test_context(context, effective_suspects, plan)
         test_text = ""
@@ -117,8 +118,10 @@ def assemble_patcher_variables(
                     extra_lines.append(f"  - {fp}")
                     extra_lines.append(snippet)
 
-    render = render_skill_hint_for_plan(plan, "patcher") if plan else SkillBlockRender(
-        text="", role="patcher", source="none"
+    render = (
+        render_skill_hint_for_plan(plan, "patcher")
+        if plan
+        else SkillBlockRender(text="", role="patcher", source="none")
     )
     if skill_render is not None:
         render = skill_render

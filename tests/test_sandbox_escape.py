@@ -31,7 +31,9 @@ def _docker_available() -> bool:
         return False
 
 
-def _run_in_sandbox(mgr: SandboxManager, sandbox: Sandbox, command: str, timeout: int = ESCAPE_TIMEOUT_S) -> ExecResult:
+def _run_in_sandbox(
+    mgr: SandboxManager, sandbox: Sandbox, command: str, timeout: int = ESCAPE_TIMEOUT_S
+) -> ExecResult:
     """在容器内执行命令并返回 ExecResult。"""
     return mgr.execute(sandbox, f"/bin/sh -c {_sh_quote(command)}", timeout=timeout)
 
@@ -81,9 +83,9 @@ class TestSandboxEscape:
         stderr = (result.stderr or "").lower()
         stdout = (result.stdout or "").lower()
         combined = stderr + stdout
-        assert (
-            "read-only" in combined or "permission denied" in combined
-        ), f"应包含 'read-only' 或 'permission denied'，实际输出: {combined[:200]}"
+        assert "read-only" in combined or "permission denied" in combined, (
+            f"应包含 'read-only' 或 'permission denied'，实际输出: {combined[:200]}"
+        )
 
     def test_read_only_rootfs_blocks_write_to_root(self, sandbox_mgr, sandbox):
         """read_only rootfs 应阻止向 /root 写入。"""
@@ -95,7 +97,8 @@ class TestSandboxEscape:
     def test_network_none_blocks_curl(self, sandbox_mgr, sandbox):
         """network_mode=none 应阻止 outbound HTTP 请求。"""
         result = _run_in_sandbox(
-            sandbox_mgr, sandbox,
+            sandbox_mgr,
+            sandbox,
             "curl --connect-timeout 5 --max-time 8 http://example.com 2>&1",
             timeout=15,
         )
@@ -107,7 +110,8 @@ class TestSandboxEscape:
     def test_network_none_blocks_ping(self, sandbox_mgr, sandbox):
         """network_mode=none 应阻止 ICMP。"""
         result = _run_in_sandbox(
-            sandbox_mgr, sandbox,
+            sandbox_mgr,
+            sandbox,
             "ping -c 1 -W 5 8.8.8.8 2>&1 || true",
             timeout=15,
         )
@@ -143,16 +147,18 @@ class TestSandboxEscape:
             return  # 被容器超时终止 → 隔离生效
         # 如果没超时，验证进程数被限制
         combined = (result.stdout or "") + (result.stderr or "")
-        assert (
-            result.exit_code != 0 or "spawned" in combined or "resource" in combined.lower()
-        ), f"fork 炸弹应超时或被限制，实际: exit_code={result.exit_code} elapsed={elapsed:.1f}s"
+        assert result.exit_code != 0 or "spawned" in combined or "resource" in combined.lower(), (
+            f"fork 炸弹应超时或被限制，实际: exit_code={result.exit_code} elapsed={elapsed:.1f}s"
+        )
 
     # ── 向量 4: 特权禁止 ──
 
     def test_unprivileged_blocks_mount(self, sandbox_mgr, sandbox):
         """非特权容器应禁止 mount 操作。"""
         result = _run_in_sandbox(sandbox_mgr, sandbox, "mount -t tmpfs tmpfs /tmp 2>&1")
-        assert result.exit_code != 0, f"mount 应被禁止（非特权容器），实际 exit_code={result.exit_code}"
+        assert result.exit_code != 0, (
+            f"mount 应被禁止（非特权容器），实际 exit_code={result.exit_code}"
+        )
         combined = (result.stdout or "") + (result.stderr or "")
         assert (
             "permission denied" in combined.lower()
@@ -164,7 +170,8 @@ class TestSandboxEscape:
     def test_unprivileged_no_cap_sys_admin(self, sandbox_mgr, sandbox):
         """非特权容器不应有 CAP_SYS_ADMIN。"""
         result = _run_in_sandbox(
-            sandbox_mgr, sandbox,
+            sandbox_mgr,
+            sandbox,
             "cat /proc/1/status 2>&1 | grep -i cap || echo 'no status file'",
             timeout=5,
         )
@@ -181,13 +188,12 @@ class TestSandboxEscape:
     def test_device_access_blocked(self, sandbox_mgr, sandbox):
         """容器不应能访问宿主机块设备。"""
         result = _run_in_sandbox(
-            sandbox_mgr, sandbox,
+            sandbox_mgr,
+            sandbox,
             "dd if=/dev/sda of=/dev/null bs=1 count=1 2>&1",
             timeout=5,
         )
-        assert result.exit_code != 0, (
-            f"设备访问应被阻止，实际 exit_code={result.exit_code}"
-        )
+        assert result.exit_code != 0, f"设备访问应被阻止，实际 exit_code={result.exit_code}"
         combined = (result.stdout or "") + (result.stderr or "")
         assert (
             "no such file" in combined.lower()
@@ -198,13 +204,12 @@ class TestSandboxEscape:
     def test_proc_sys_write_blocked(self, sandbox_mgr, sandbox):
         """容器不应能修改 /proc/sys 内核参数。"""
         result = _run_in_sandbox(
-            sandbox_mgr, sandbox,
+            sandbox_mgr,
+            sandbox,
             "echo 1 > /proc/sys/net/ipv4/ip_forward 2>&1",
             timeout=5,
         )
-        assert result.exit_code != 0, (
-            f"修改 /proc/sys 应被阻止，实际 exit_code={result.exit_code}"
-        )
+        assert result.exit_code != 0, f"修改 /proc/sys 应被阻止，实际 exit_code={result.exit_code}"
 
     # ── 向量 6: 敏感文件读取 ──
 

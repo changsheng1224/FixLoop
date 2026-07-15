@@ -42,20 +42,17 @@ def temp_repo():
         root = Path(tmp)
         (root / "src").mkdir(parents=True)
         (root / "src" / "calc.py").write_text(
-            "\n".join(
-                [f"# line {i}: some code here for testing purposes" for i in range(1, 61)]
-            )
+            "\n".join([f"# line {i}: some code here for testing purposes" for i in range(1, 61)])
         )
         (root / "src" / "utils.py").write_text(
-            "\n".join(
-                [f"# util line {i}: helper function body goes here" for i in range(1, 31)]
-            )
+            "\n".join([f"# util line {i}: helper function body goes here" for i in range(1, 31)])
         )
         yield root
 
 
 def _read_snippet(repo_root: Path):
     """模拟 _read_code_snippet（markdown 格式）。"""
+
     def reader(file_path: str, start_line: int, end_line: int) -> str:
         path = Path(file_path)
         if not path.is_absolute():
@@ -71,11 +68,13 @@ def _read_snippet(repo_root: Path):
             block.append(f"    {marker} {lines[i]}")
         block.append("    ```")
         return "\n".join(block)
+
     return reader
 
 
 def _read_line_range(repo_root: Path):
     """模拟 _read_line_range（原始行，无 markdown 包装）。"""
+
     def reader(file_path: str, start_line: int, end_line: int) -> str:
         path = Path(file_path)
         if not path.is_absolute():
@@ -86,6 +85,7 @@ def _read_line_range(repo_root: Path):
         ctx_start = max(0, start_line - 1)
         ctx_end = min(len(lines), end_line)
         return "\n".join(lines[ctx_start:ctx_end])
+
     return reader
 
 
@@ -156,7 +156,7 @@ class TestRenderSuspectsDiffOnly:
         assert "-" in text
         # 上下文行 line 38-39 → 空格前缀
         lines = text.split("\n")
-        suspect_markers = [l for l in lines if l.startswith("-")]
+        suspect_markers = [line for line in lines if line.startswith("-")]
         assert len(suspect_markers) >= 1
 
     def test_diff_format_has_context_lines(self, temp_repo):
@@ -166,7 +166,7 @@ class TestRenderSuspectsDiffOnly:
         text = render_suspects_diff_only(suspects, reader, context_lines=2)
         lines = text.split("\n")
         # 有空格前缀的上下文行（非 diff header / hunk header）
-        context_lines_found = [l for l in lines if l.startswith(" ") and "line" in l]
+        context_lines_found = [line for line in lines if line.startswith(" ") and "line" in line]
         assert len(context_lines_found) >= 1
 
     def test_diff_only_vs_full_snippet_token_count(self, temp_repo):
@@ -180,8 +180,7 @@ class TestRenderSuspectsDiffOnly:
 
         # diff 格式不应比 full snippet 更长
         assert len(diff_text) <= len(full_text), (
-            f"diff-only ({len(diff_text)} chars) should be <= "
-            f"full snippet ({len(full_text)} chars)"
+            f"diff-only ({len(diff_text)} chars) should be <= full snippet ({len(full_text)} chars)"
         )
         # diff 格式不含 markdown code block 包装
         assert "```" not in diff_text
@@ -196,10 +195,15 @@ class TestRenderSuspectsDiffOnly:
 
     def test_file_unreadable_graceful(self):
         """文件不可读时 diff-only 返回占位信息不崩溃。"""
-        suspects = [SuspectLocation(
-            file_path="nonexistent.py", start_line=1, end_line=3,
-            reason="test", confidence=1.0,
-        )]
+        suspects = [
+            SuspectLocation(
+                file_path="nonexistent.py",
+                start_line=1,
+                end_line=3,
+                reason="test",
+                confidence=1.0,
+            )
+        ]
         reader = _read_line_range(Path("/tmp"))
         text = render_suspects_diff_only(suspects, reader)
         assert "不可读" in text

@@ -101,9 +101,7 @@ def _skip_name(name: str, ignored_names: frozenset[str]) -> bool:
 
 
 def _rel_has_ignored(rel_posix: str, ignored_names: frozenset[str]) -> bool:
-    return any(
-        part.startswith(".") or part in ignored_names for part in Path(rel_posix).parts
-    )
+    return any(part.startswith(".") or part in ignored_names for part in Path(rel_posix).parts)
 
 
 def _glob_matches(pattern: str, rel_posix: str, basename: str) -> bool:

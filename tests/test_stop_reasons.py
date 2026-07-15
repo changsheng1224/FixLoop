@@ -16,7 +16,6 @@ from agent_runtime.stop_reasons import (
     stop_reason_detail_from_legacy,
 )
 from agent_runtime.task_state import TaskState
-from agent_runtime.workspace import WorkspaceContext
 
 
 class TestStopReasonNormalize:

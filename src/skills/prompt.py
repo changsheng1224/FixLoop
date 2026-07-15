@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from src.skills.skill_block import (
     SkillHintRole,
+)
+from src.skills.skill_block import (
     render_skill_hint_for_plan as _render_skill_hint_for_plan,
 )
 from src.state import RepairPlan

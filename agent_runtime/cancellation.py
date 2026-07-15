@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
-from typing import Callable, TypeVar
+from typing import TypeVar
 
 T = TypeVar("T")
 

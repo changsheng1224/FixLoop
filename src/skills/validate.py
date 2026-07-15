@@ -48,9 +48,7 @@ class SkillValidationReport:
         return not self.errors
 
     def summary_line(self) -> str:
-        return (
-            f"Summary: {len(self.errors)} error(s), {len(self.warnings)} warning(s)"
-        )
+        return f"Summary: {len(self.errors)} error(s), {len(self.warnings)} warning(s)"
 
 
 def _load_specs(directory: Path) -> tuple[list[tuple[Path, SkillSpec]], list[SkillValidationIssue]]:
