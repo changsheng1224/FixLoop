@@ -11,6 +11,7 @@ from agent_runtime.config import AgentConfig
 from agent_runtime.logging_setup import add_log_level_argument, setup_logging_from_args
 from agent_runtime.repl_input import read_repl_input
 from agent_runtime.runtime import Agent
+from agent_runtime.session_store import SessionStore
 from agent_runtime.workspace import WorkspaceContext
 
 
@@ -22,7 +23,9 @@ def _ensure_ask_token(agent: Agent):
     return agent.cancel_token
 
 
-def _ask_with_repl_cancel(agent: Agent, user_message: str, callback=None, stream: bool = False) -> str:
+def _ask_with_repl_cancel(
+    agent: Agent, user_message: str, callback=None, stream: bool = False
+) -> str:
     from agent_runtime.repl_cancel import repl_cancel_scope
 
     token = _ensure_ask_token(agent)
@@ -379,7 +382,11 @@ def _handle_command(cmd: str, agent: Agent) -> str:
         print("  (当前暂无持久记忆条目)")
     elif name == "/config":
         if len(parts) < 2:
-            print(f"可配置项: max_steps(当前:{agent.config.max_steps}), approval(当前:{agent.config.approval})")
+            print(
+                "可配置项: "
+                f"max_steps(当前:{agent.config.max_steps}), "
+                f"approval(当前:{agent.config.approval})"
+            )
             print("用法: /config max_steps=10 或 /config approval=auto")
         else:
             for arg in parts[1:]:
@@ -411,7 +418,13 @@ def _handle_command(cmd: str, agent: Agent) -> str:
         if not todos:
             print("(无计划)")
         else:
-            marks = {"done": "✓", "in_progress": "→", "pending": " ", "blocked": "✗", "cancelled": "✕"}
+            marks = {
+                "done": "✓",
+                "in_progress": "→",
+                "pending": " ",
+                "blocked": "✗",
+                "cancelled": "✕",
+            }
             sub = parts[1] if len(parts) > 1 else ""
             if sub == "done" and len(parts) > 2:
                 tid = parts[2]
@@ -430,6 +443,7 @@ def _handle_command(cmd: str, agent: Agent) -> str:
         name = parts[1] if len(parts) > 1 else None
         if not name:
             import time
+
             name = time.strftime("session_%Y%m%d_%H%M%S")
         agent.session["id"] = name
         SessionStore(agent._cwd).save(agent.session)
@@ -462,7 +476,9 @@ def _handle_command(cmd: str, agent: Agent) -> str:
         if rid is None:
             # 找最近的 run
             if store.runs_dir.exists():
-                runs = sorted(store.runs_dir.iterdir(), key=lambda p: p.stat().st_mtime_ns, reverse=True)
+                runs = sorted(
+                    store.runs_dir.iterdir(), key=lambda p: p.stat().st_mtime_ns, reverse=True
+                )
                 if runs:
                     rid = runs[0].name
         if rid:
@@ -472,6 +488,7 @@ def _handle_command(cmd: str, agent: Agent) -> str:
             print("(无可用 trace)")
     elif name == "/prompt":
         from agent_runtime.run_store import RunStore
+
         store = RunStore(agent._cwd)
         latest = store.runs_dir
         if latest.exists():
@@ -479,7 +496,7 @@ def _handle_command(cmd: str, agent: Agent) -> str:
             if traces:
                 run_id = traces[0].name
                 lines = store.read_trace_lines(run_id)
-                context = [l for l in lines if '"context_built"' in l]
+                context = [line for line in lines if '"context_built"' in line]
                 if context:
                     print(f"最近 prompt (run={run_id[:8]}):")
                     print(context[-1][:500])

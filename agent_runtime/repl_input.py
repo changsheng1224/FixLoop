@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import atexit
 import os
-from typing import Callable
+from collections.abc import Callable
 
 # 启用命令历史（Unix: readline 零依赖；Windows: pyreadline3）
 _HISTFILE = os.path.expanduser(os.path.join("~", ".fixloop_history"))
+
 
 def _setup_history():
     """跨平台命令历史：Unix readline / Windows pyreadline3。"""
@@ -27,6 +28,7 @@ def _setup_history():
         atexit.register(readline.write_history_file, _HISTFILE)
     except Exception:
         pass
+
 
 _setup_history()
 

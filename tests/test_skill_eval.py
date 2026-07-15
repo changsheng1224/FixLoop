@@ -5,10 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
-from src.eval.models import CaseResult
 from src.eval.case_io import load_case_metadata
+from src.eval.models import CaseResult
 from src.eval.runner import DEFAULT_CASES_DIR, build_eval_report
 from src.eval.skill_metrics import (
     SkillEvalReport,
@@ -18,6 +16,7 @@ from src.eval.skill_metrics import (
     run_skill_eval,
     skill_metrics_from_case_results,
 )
+
 
 def _expected_by_case() -> dict[str, str | None]:
     expected: dict[str, str | None] = {}

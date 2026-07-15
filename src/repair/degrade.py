@@ -87,7 +87,9 @@ def should_degrade_to_baseline(
     return _had_verify_failure(state)
 
 
-def build_degraded_baseline_prompt(state: RepairState, host: BaselineDegradeHost | None = None) -> str:
+def build_degraded_baseline_prompt(
+    state: RepairState, host: BaselineDegradeHost | None = None
+) -> str:
     """构造带 Multi-Agent / Blackboard 上下文的 baseline prompt。"""
     lines = [
         "请修复以下 issue（Multi-Agent 流水线 verify 已失败 "
@@ -222,11 +224,7 @@ def run_baseline_fallback(
 
     state.node_timings["baseline_degrade_ms"] = int((time.time() - t0) * 1000)
 
-    if (
-        run_verify
-        and state.candidate_patches
-        and state.status != RepairTerminalStatus.FAILED
-    ):
+    if run_verify and state.candidate_patches and state.status != RepairTerminalStatus.FAILED:
         t_verify = time.time()
         state.verification_result = host._run_verifier(state)
         state.node_timings["baseline_verify_ms"] = int((time.time() - t_verify) * 1000)

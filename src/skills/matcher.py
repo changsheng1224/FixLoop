@@ -19,9 +19,7 @@ def match_skill(
     """Return the best matching Skill for *issue*, or ``None``."""
     registry = catalog or get_default_catalog()
     candidates = [
-        spec
-        for spec in registry.skills
-        if spec.language == language and spec.matches(issue)
+        spec for spec in registry.skills if spec.language == language and spec.matches(issue)
     ]
     if not candidates:
         return None
@@ -64,8 +62,7 @@ def match_skill_semantic(
 
     # regex 精确确认（signal > noise）
     best_matches = [
-        spec for spec in registry.skills
-        if spec.language == language and spec.matches(issue)
+        spec for spec in registry.skills if spec.language == language and spec.matches(issue)
     ]
     if best_matches:
         best_matches.sort(key=_rank_key)

@@ -1,14 +1,12 @@
 """歧义 LLM fallback 单测：unknown→LLM 分类 / 失败保持 unknown。"""
 
-import pytest
-
 
 class TestLLMClassifyIssue:
     def test_unknown_triggers_llm_classify(self):
         """issue_type='unknown' 时调用 _llm_classify_issue。"""
         from unittest.mock import MagicMock, patch
 
-        from src.orchestrator import Orchestrator, ROUTED_ISSUE_TYPES
+        from src.orchestrator import Orchestrator
 
         orch = Orchestrator.__new__(Orchestrator)
         orch._light_client = MagicMock()
@@ -58,7 +56,7 @@ class TestLLMClassifyIssue:
         """分类 prompt 包含所有 ROUTED_ISSUE_TYPES。"""
         from unittest.mock import MagicMock
 
-        from src.orchestrator import Orchestrator, ROUTED_ISSUE_TYPES
+        from src.orchestrator import ROUTED_ISSUE_TYPES, Orchestrator
 
         orch = Orchestrator.__new__(Orchestrator)
         orch._light_client = MagicMock()

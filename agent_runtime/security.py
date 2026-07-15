@@ -9,24 +9,26 @@ L3 (持久化前): .env 不入索引
 import os
 
 # Shell 子进程允许透传的环境变量白名单（严格固定，不可运行时扩展）
-SHELL_ENV_WHITELIST = frozenset({
-    "HOME",
-    "PATH",
-    "PWD",
-    "TEMP",
-    "TMP",
-    "USER",
-    "USERNAME",
-    "LANG",
-    "LC_ALL",
-    "SYSTEMROOT",
-    "COMSPEC",
-    "PATHEXT",
-    "USERPROFILE",
-    "APPDATA",
-    "LOCALAPPDATA",
-    "WINDIR",
-})
+SHELL_ENV_WHITELIST = frozenset(
+    {
+        "HOME",
+        "PATH",
+        "PWD",
+        "TEMP",
+        "TMP",
+        "USER",
+        "USERNAME",
+        "LANG",
+        "LC_ALL",
+        "SYSTEMROOT",
+        "COMSPEC",
+        "PATHEXT",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "WINDIR",
+    }
+)
 
 
 def shell_env(allowlist: set[str] | frozenset[str] | None = None, root: str = "") -> dict:
@@ -72,26 +74,74 @@ def looks_sensitive_env_name(name: str) -> bool:
 
 
 # Shell 命令白名单/黑名单（仅匹配命令名，不含参数）
-SHELL_COMMAND_WHITELIST = frozenset({
-    "pytest", "python", "python3", "py",
-    "git", "rg", "grep", "find", "ls", "dir",
-    "cat", "head", "tail", "wc", "echo", "test",
-    "ruff", "mypy", "black", "isort",
-    "pip", "poetry", "npm", "yarn",
-    "cp", "mv", "rm", "mkdir", "rmdir",
-    "curl", "wget",
-})
+SHELL_COMMAND_WHITELIST = frozenset(
+    {
+        "pytest",
+        "python",
+        "python3",
+        "py",
+        "git",
+        "rg",
+        "grep",
+        "find",
+        "ls",
+        "dir",
+        "cat",
+        "head",
+        "tail",
+        "wc",
+        "echo",
+        "test",
+        "ruff",
+        "mypy",
+        "black",
+        "isort",
+        "pip",
+        "poetry",
+        "npm",
+        "yarn",
+        "cp",
+        "mv",
+        "rm",
+        "mkdir",
+        "rmdir",
+        "curl",
+        "wget",
+    }
+)
 
-SHELL_COMMAND_BLOCKLIST = frozenset({
-    "sudo", "su", "chmod", "chown", "mount", "umount",
-    "reboot", "shutdown", "halt", "poweroff",
-    "dd", "mkfs", "fdisk", "parted",
-    "iptables", "ufw", "firewall-cmd",
-    "kill", "pkill", "killall",
-    "docker", "podman", "kubectl",
-    "ssh", "scp", "rsync", "nc",
-    "wget",  # 比 curl 更可能下载恶意 payload
-})
+SHELL_COMMAND_BLOCKLIST = frozenset(
+    {
+        "sudo",
+        "su",
+        "chmod",
+        "chown",
+        "mount",
+        "umount",
+        "reboot",
+        "shutdown",
+        "halt",
+        "poweroff",
+        "dd",
+        "mkfs",
+        "fdisk",
+        "parted",
+        "iptables",
+        "ufw",
+        "firewall-cmd",
+        "kill",
+        "pkill",
+        "killall",
+        "docker",
+        "podman",
+        "kubectl",
+        "ssh",
+        "scp",
+        "rsync",
+        "nc",
+        "wget",  # 比 curl 更可能下载恶意 payload
+    }
+)
 
 
 def check_shell_command(command: str) -> tuple[bool, str]:

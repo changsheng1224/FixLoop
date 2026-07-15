@@ -52,7 +52,9 @@ class BlackboardMixin:
         self._emit_bb_trace("blackboard_snapshot", bb.snapshot())
         return write_stats
 
-    def resolve_blackboard_conflict(self, key: str, strategy: str = "prefer_localizer") -> list[dict]:
+    def resolve_blackboard_conflict(
+        self, key: str, strategy: str = "prefer_localizer"
+    ) -> list[dict]:
         """公开 API：仲裁 Blackboard 冲突。
 
         Args:

@@ -107,8 +107,10 @@ def build_ablation_variants(
     if fake:
         factory = fake_orchestrator_factory(cases_path)
         all_variants = {
-            "full": factory, "single": factory,
-            "no_retriever": factory, "naive": factory,
+            "full": factory,
+            "single": factory,
+            "no_retriever": factory,
+            "naive": factory,
         }
     else:
         all_variants = {

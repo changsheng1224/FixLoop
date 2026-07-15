@@ -156,13 +156,14 @@ def _reset_registry_for_tests() -> None:
 
 # ── HTTP 端点 ──
 
+
 class _MetricsHandler(http.server.BaseHTTPRequestHandler):
     """GET /metrics → Prometheus 文本；POST /reset → 清零。"""
 
     def log_message(self, format, *args):
         pass  # 静默 HTTP 日志
 
-    def do_GET(self):
+    def do_GET(self):  # noqa: N802 - http.server protocol method
         if self.path == "/metrics":
             body = get_registry().render()
             self.send_response(200)
@@ -178,7 +179,7 @@ class _MetricsHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-    def do_POST(self):
+    def do_POST(self):  # noqa: N802 - http.server protocol method
         if self.path == "/reset":
             get_registry().reset()
             self.send_response(200)

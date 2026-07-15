@@ -1,10 +1,12 @@
 """补充测试：semantic.py 和 context_manager.py 低覆盖路径。"""
 
-from agent_runtime.config import AgentConfig
 from agent_runtime.compression_pipeline import (
     TOOL_TRUNCATION_TOKENS,
+)
+from agent_runtime.compression_pipeline import (
     truncate_tool_content as _truncate_tool_content,
 )
+from agent_runtime.config import AgentConfig
 from agent_runtime.context_manager import (
     ContextManager,
     TokenBudget,

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from src.prompts.repair_tasks import build_localizer_variables, build_retriever_template_and_variables
+from src.prompts.repair_tasks import (
+    build_localizer_variables,
+    build_retriever_template_and_variables,
+)
 from src.repair.prompt_router import apply_prompt_routing
 from src.skills.prompt import format_skill_hint
 from src.state import RepairPlan, SkillContext

@@ -1,7 +1,6 @@
 """repair 退出码映射与配置预检单测。"""
 
 from src.cli_exit_codes import (
-    REPAIR_EXIT_CONFIG,
     REPAIR_EXIT_FAIL,
     REPAIR_EXIT_OK,
     REPAIR_EXIT_TIMEOUT,

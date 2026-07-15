@@ -1,17 +1,15 @@
 """file_listing 与 list_files glob/depth 测试。"""
 
 from agent_runtime.file_listing import list_directory_entries
-from agent_runtime.tools import IGNORED_PATH_NAMES, tool_list_files
 from agent_runtime.tool_context import ToolContext
+from agent_runtime.tools import IGNORED_PATH_NAMES, tool_list_files
 
 
 class TestFileListing:
     def test_shallow_lists_files_and_dirs(self, tmp_path):
         (tmp_path / "a.py").write_text("x")
         (tmp_path / "src").mkdir()
-        lines, total = list_directory_entries(
-            tmp_path, depth=1, ignored_names=IGNORED_PATH_NAMES
-        )
+        lines, total = list_directory_entries(tmp_path, depth=1, ignored_names=IGNORED_PATH_NAMES)
         assert total == 2
         assert "[F] a.py" in lines
         assert "[D] src" in lines
@@ -30,9 +28,7 @@ class TestFileListing:
         src.mkdir()
         (src / "calc.py").write_text("1")
         (tmp_path / "root.py").write_text("2")
-        lines, total = list_directory_entries(
-            tmp_path, depth=2, ignored_names=IGNORED_PATH_NAMES
-        )
+        lines, total = list_directory_entries(tmp_path, depth=2, ignored_names=IGNORED_PATH_NAMES)
         assert total == 2
         assert "[F] root.py" in lines
         assert "[F] src/calc.py" in lines
@@ -66,9 +62,7 @@ class TestFileListing:
         (tmp_path / ".git").mkdir()
         (tmp_path / ".git" / "config").write_text("x")
         (tmp_path / "ok.py").write_text("1")
-        lines, total = list_directory_entries(
-            tmp_path, depth=3, ignored_names=IGNORED_PATH_NAMES
-        )
+        lines, total = list_directory_entries(tmp_path, depth=3, ignored_names=IGNORED_PATH_NAMES)
         assert total == 1
         assert lines == ["[F] ok.py"]
 

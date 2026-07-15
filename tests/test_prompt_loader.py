@@ -51,7 +51,9 @@ class TestLoadRolePrompt:
     def test_non_patcher_role_ignores_issue_type(self):
         from src.prompts.loader import load_role_prompt, load_system_prompt
 
-        assert load_role_prompt("localizer", "type_error") == load_system_prompt("localizer").strip()
+        assert (
+            load_role_prompt("localizer", "type_error") == load_system_prompt("localizer").strip()
+        )
 
 
 class TestLoadLocalizerHints:
@@ -88,6 +90,7 @@ class TestLoadPatcherUserHints:
 
         text = load_patcher_user_hint("composite", file_count=3)
         assert "3" in text
+
 
 class TestPatcherPromptDedup:
     def test_user_prompt_no_type_error_system_hints(self, temp_workspace):

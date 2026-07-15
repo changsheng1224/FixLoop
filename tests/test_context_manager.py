@@ -215,9 +215,9 @@ class TestStateSection:
         """state 段每条 todo 有状态图标。"""
         cm = ContextManager(agent_with_state)
         state = cm._get_state()
-        assert "+" in state   # done
-        assert ">" in state   # in_progress
-        assert "-" in state   # pending
+        assert "+" in state  # done
+        assert ">" in state  # in_progress
+        assert "-" in state  # pending
 
     def test_state_section_has_task_summary(self, agent_with_state):
         """state 段包含 task_summary。"""
@@ -307,8 +307,16 @@ class TestFitPriorityMatrix:
         mem["working"]["recent_files"] = ["app.py", "utils/helpers.py", "test_app.py"]
         # knowledge：episodic notes（正确键名 episodic_notes）
         mem["episodic_notes"] = [
-            {"text": "之前 import error 的根因是 sys.path 未包含 src/", "score": 0.85, "note_index": 0},
-            {"text": "app.py 的 validate 函数在空列表时会抛 IndexError", "score": 0.7, "note_index": 1},
+            {
+                "text": "之前 import error 的根因是 sys.path 未包含 src/",
+                "score": 0.85,
+                "note_index": 0,
+            },
+            {
+                "text": "app.py 的 validate 函数在空列表时会抛 IndexError",
+                "score": 0.7,
+                "note_index": 1,
+            },
         ]
         agent.session["plan_todos"] = [
             {"id": "1", "content": "定位错误文件 app.py:42", "status": "done"},
@@ -348,7 +356,9 @@ class TestFitPriorityMatrix:
             )
 
         # 不变式 3: 最大 budget 下所有 section 都存活
-        assert len(surviving_seq[0]) >= 5, f"最大 budget 下应有 ≥5 个 section，实际: {surviving_seq[0]}"
+        assert len(surviving_seq[0]) >= 5, (
+            f"最大 budget 下应有 ≥5 个 section，实际: {surviving_seq[0]}"
+        )
 
     def test_history_cut_before_knowledge(self, agent):
         """history 先于 knowledge 被裁（填充顺序最后 → 最先被 squeeze）。"""
@@ -366,8 +376,8 @@ class TestFitPriorityMatrix:
         # 宽松预算下两者都应有内容
         if full_sections.get("history", 0) > 0 and full_sections.get("knowledge", 0) > 0:
             # 紧缩预算下 history 应比 knowledge 缩减更多
-            hist_ratio = tight_sections.get("history", 0) / max(full_sections.get("history", 1), 1)
-            know_ratio = tight_sections.get("knowledge", 0) / max(full_sections.get("knowledge", 1), 1)
+            tight_sections.get("history", 0) / max(full_sections.get("history", 1), 1)
+            tight_sections.get("knowledge", 0) / max(full_sections.get("knowledge", 1), 1)
             # history 的缩减比例应 ≥ knowledge（即 history 被裁更多或同等）
             # 允许两者同时为 0 的情况
             pass  # 宽松验证：history 不晚于 knowledge 消失
@@ -394,7 +404,7 @@ class TestFitPriorityMatrix:
         """极小 budget 下 request 仍存活，低优先级 section 先消失。"""
         self._populate_all_sections(agent)
         s = self._surviving_sections(agent, 200)
-        assert "request" in s, f"request 在 budget=200 时应存活"
+        assert "request" in s, "request 在 budget=200 时应存活"
         # 关键不变式：history/knowledge 不应同时与 system 共存且比例失衡
         # 当 budget 极度紧张时，低优先级 section 应被裁剪
         cm = ContextManager(agent, total_budget=200)
@@ -408,7 +418,7 @@ class TestSectionHardCapEnforce:
     """Section 硬顶 enforce：每段独立 BUDGET_* 裁剪，不只依赖 TOTAL。"""
 
     def _make_filler(self, budget, metadata, section_cap=10000):
-        from agent_runtime.context_manager import TokenBudget, scaled_section_budget
+        from agent_runtime.context_manager import scaled_section_budget
         from agent_runtime.section_filler import SectionFiller
 
         return SectionFiller(
@@ -523,9 +533,7 @@ class TestHistoryReadOnlyJsonl:
         agent.record({"role": "assistant", "content": "let me check the files"})
 
         # 2. 篡改 session 内存（模拟内存损坏或外部修改）
-        agent.session["history"] = [
-            {"role": "user", "content": "TAMPERED fake request"}
-        ]
+        agent.session["history"] = [{"role": "user", "content": "TAMPERED fake request"}]
 
         # 3. build 应读 JSONL（原始内容），忽略被篡改的 session 内存
         cm = ContextManager(agent)
@@ -537,7 +545,6 @@ class TestHistoryReadOnlyJsonl:
 
     def test_build_does_not_write_jsonl(self, agent, temp_workspace):
         """ContextManager.build() 不向 history.jsonl 写入任何内容。"""
-        import json
         from pathlib import Path
 
         jsonl_path = Path(str(temp_workspace)) / ".agent" / "history.jsonl"
@@ -560,17 +567,13 @@ class TestHistoryReadOnlyJsonl:
     def test_fallback_to_session_when_jsonl_missing(self, agent):
         """JSONL 文件不存在时回退到 session.history。"""
         # agent 未设置 cwd 或 JSONL 不存在 → read_history 回退 session
-        agent.session["history"] = [
-            {"role": "user", "content": "fallback entry"}
-        ]
+        agent.session["history"] = [{"role": "user", "content": "fallback entry"}]
         cm = ContextManager(agent)
         prompt, _ = cm.build("test")
         assert "fallback entry" in prompt
 
     def test_jsonl_and_session_in_sync_produces_same_result(self, agent, temp_workspace):
         """正常情况（JSONL 与 session 同步）build 结果一致。"""
-        import json
-        from pathlib import Path
 
         # 写入多条历史
         for i in range(5):

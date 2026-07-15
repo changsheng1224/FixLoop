@@ -32,7 +32,7 @@ def java_ast_parse(context, args: dict) -> str:
     # 类型定义
     if tree.types:
         for typ in tree.types:
-            kind = ("interface" if getattr(typ, "interface", False) else "class")
+            kind = "interface" if getattr(typ, "interface", False) else "class"
             lines.append(f"[{kind}] {typ.name} (line {typ.position.line if typ.position else '?'})")
             # 方法
             for member in getattr(typ, "body", []) or []:
@@ -40,7 +40,11 @@ def java_ast_parse(context, args: dict) -> str:
                     params = ", ".join(
                         f"{p.type.name} {p.name}" for p in getattr(member, "parameters", []) or []
                     )
-                    lines.append(f"  method: {member.name}({params}) → {member.return_type.name if member.return_type else 'void'} (line {member.position.line if member.position else '?'})")
+                    return_type = member.return_type.name if member.return_type else "void"
+                    line_no = member.position.line if member.position else "?"
+                    lines.append(
+                        f"  method: {member.name}({params}) → {return_type} (line {line_no})"
+                    )
     if not lines:
         return "(无结构)"
     return "\n".join(lines)

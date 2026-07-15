@@ -1,7 +1,5 @@
 """prompt_prefix 单测：System Prompt 构建、缓存 key、工具签名。"""
 
-import hashlib
-
 from agent_runtime.prefix_stable import hash_stable_prefix
 from agent_runtime.prompt_prefix import (
     PromptPrefix,

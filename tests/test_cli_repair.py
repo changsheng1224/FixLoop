@@ -26,6 +26,7 @@ class TestCliRepair:
                 '"patched_lines":"x = 2","explanation":"fix"}]</final>',
             ]
         )
+
         def _fake_create(model_client=None, **kwargs):
             if model_client is not None:
                 return model_client

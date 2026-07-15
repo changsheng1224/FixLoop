@@ -2,9 +2,7 @@
 
 import time
 
-import pytest
-
-from agent_runtime.step_clock import StepClock, StepTimeoutError
+from agent_runtime.step_clock import StepClock
 
 
 class TestStepClock:

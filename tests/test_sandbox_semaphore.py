@@ -8,6 +8,7 @@ class TestSandboxSemaphore:
         """默认 FIXLOOP_MAX_SANDBOXES=4。"""
         monkeypatch.delenv("FIXLOOP_MAX_SANDBOXES", raising=False)
         import importlib
+
         import src.harness.sandbox_manager as sm
 
         importlib.reload(sm)
@@ -17,6 +18,7 @@ class TestSandboxSemaphore:
         """FIXLOOP_MAX_SANDBOXES 可通过环境变量覆盖。"""
         monkeypatch.setenv("FIXLOOP_MAX_SANDBOXES", "2")
         import importlib
+
         import src.harness.sandbox_manager as sm
 
         importlib.reload(sm)
@@ -26,6 +28,7 @@ class TestSandboxSemaphore:
         """Semaphore 容量等于 _MAX_SANDBOXES。"""
         monkeypatch.setenv("FIXLOOP_MAX_SANDBOXES", "3")
         import importlib
+
         import src.harness.sandbox_manager as sm
 
         importlib.reload(sm)

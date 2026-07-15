@@ -8,7 +8,6 @@ from agent_runtime.tokenizer_assets import (
     DEFAULT_DEEPSEEK_TOKENIZER_REPO,
     download_tokenizer,
     is_tokenizer_cached_locally,
-    local_tokenizer_dir,
     local_tokenizer_json,
     local_tokenizer_root,
     repo_id_to_dirname,
@@ -62,7 +61,10 @@ class TestLocalDeepseekTokenizer:
         def _fake_download(repo_id: str, filename: str, dest: Path) -> None:
             if filename == "tokenizer.json":
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_text('{"version":"1.0","truncation":null,"padding":null,"added_tokens":[]}', encoding="utf-8")
+                dest.write_text(
+                    '{"version":"1.0","truncation":null,"padding":null,"added_tokens":[]}',
+                    encoding="utf-8",
+                )
 
         monkeypatch.setattr(
             "agent_runtime.tokenizer_assets._download_file",

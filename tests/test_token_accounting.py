@@ -30,8 +30,11 @@ class TestSnapshotFromSession:
 
     def test_with_cache_tokens(self):
         usage = {
-            "input_tokens": 1000, "output_tokens": 500,
-            "cache_read_tokens": 800, "cache_creation_tokens": 200, "calls": 5,
+            "input_tokens": 1000,
+            "output_tokens": 500,
+            "cache_read_tokens": 800,
+            "cache_creation_tokens": 200,
+            "calls": 5,
         }
         snap = snapshot_from_session(usage)
         assert snap["cache_read_tokens"] == 800
@@ -41,8 +44,10 @@ class TestSnapshotFromSession:
 class TestBuildReportTokenFields:
     def test_includes_cache_fields(self):
         usage = {
-            "input_tokens": 1000, "output_tokens": 500,
-            "cache_read_tokens": 600, "cache_creation_tokens": 400,
+            "input_tokens": 1000,
+            "output_tokens": 500,
+            "cache_read_tokens": 600,
+            "cache_creation_tokens": 400,
         }
         report = build_report_token_fields(usage)
         assert "cache_read_tokens" in report
@@ -52,14 +57,22 @@ class TestBuildReportTokenFields:
 
 class TestMergeSnapshots:
     def test_sums_cache_tokens(self):
-        s1 = snapshot_from_session({
-            "input_tokens": 500, "output_tokens": 200,
-            "cache_read_tokens": 300, "cache_creation_tokens": 100,
-        })
-        s2 = snapshot_from_session({
-            "input_tokens": 300, "output_tokens": 100,
-            "cache_read_tokens": 200, "cache_creation_tokens": 100,
-        })
+        s1 = snapshot_from_session(
+            {
+                "input_tokens": 500,
+                "output_tokens": 200,
+                "cache_read_tokens": 300,
+                "cache_creation_tokens": 100,
+            }
+        )
+        s2 = snapshot_from_session(
+            {
+                "input_tokens": 300,
+                "output_tokens": 100,
+                "cache_read_tokens": 200,
+                "cache_creation_tokens": 100,
+            }
+        )
         merged = merge_session_snapshots(s1, s2)
         assert merged["cache_read_tokens"] == 500
         assert merged["cache_hit_rate"] == round(500 / 700, 4)

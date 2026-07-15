@@ -10,21 +10,16 @@
 
 from __future__ import annotations
 
-import os
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from unittest.mock import patch
-
-import pytest
 
 from agent_runtime.config import AgentConfig
 from agent_runtime.providers.clients import FakeModelClient
+from agent_runtime.runtime import Agent
 from agent_runtime.tokenizers import clear_token_counter_cache, resolve_token_counter
 from agent_runtime.warm_context import WarmContext, create_warm_context
 from agent_runtime.workspace import WorkspaceContext
-from agent_runtime.runtime import Agent
-
 
 # ---------------------------------------------------------------------------
 # WarmContext 基本功能
@@ -251,7 +246,7 @@ class TestParallelAgentCreation:
 
     def test_parallel_tokenizer_is_cache_safe(self):
         """并行线程中调用 resolve_token_counter 命中同一缓存。"""
-        wc = create_warm_context(model="deepseek-v4-pro", provider="deepseek")
+        create_warm_context(model="deepseek-v4-pro", provider="deepseek")
         results = []
 
         def get_counter():
@@ -285,8 +280,8 @@ class TestWireOrchestratorWarmContext:
 
     def test_wire_orchestrator_creates_with_warm_context(self, tmp_path: Path):
         """wire_orchestrator 使用 WarmContext 并行创建 Agent。"""
-        from src.repair_factory import wire_orchestrator
         from src.orchestrator import Orchestrator
+        from src.repair_factory import wire_orchestrator
 
         orch = wire_orchestrator(
             FakeModelClient(outputs=["<final>ok</final>"]),
@@ -308,8 +303,8 @@ class TestWireOrchestratorWarmContext:
 
     def test_wire_orchestrator_without_retriever(self, tmp_path: Path):
         """with_retriever=False 时不创建 retriever。"""
-        from src.repair_factory import wire_orchestrator
         from src.orchestrator import Orchestrator
+        from src.repair_factory import wire_orchestrator
 
         orch = wire_orchestrator(
             FakeModelClient(outputs=["<final>ok</final>"]),

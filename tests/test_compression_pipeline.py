@@ -19,7 +19,6 @@ from agent_runtime.compression_pipeline import (
     l5_auto_compact,
     run_compression_pipeline,
     score_turn,
-    truncate_tool_content,
 )
 from agent_runtime.config import AgentConfig
 from agent_runtime.context_manager import ContextManager, TokenBudget, history_window_budget
@@ -125,7 +124,9 @@ class TestL2Snip:
 
     def test_l2_keeps_turns_with_errors(self, budget):
         history = _long_exploration_history(8)
-        history[5]["content"] = "Error: Traceback (most recent call last):\n" + history[5]["content"]
+        history[5]["content"] = (
+            "Error: Traceback (most recent call last):\n" + history[5]["content"]
+        )
         meta: dict = {}
         result = l2_snip(history, budget, meta, history_window=_history_window(budget))
         assert "Error: Traceback" in "\n".join(str(i.get("content", "")) for i in result)
@@ -547,15 +548,27 @@ class TestSummaryCachePersistence:
 
         # 第一次：无缓存 → 调 summarizer
         meta1: dict = {}
-        l5_auto_compact(history, budget, meta1, summarizer=summarizer,
-                        summary_cache=disk_cache, trigger_tokens=10)
+        l5_auto_compact(
+            history,
+            budget,
+            meta1,
+            summarizer=summarizer,
+            summary_cache=disk_cache,
+            trigger_tokens=10,
+        )
         assert len(summarizer_calls) == 1
         assert meta1["compression_pipeline"]["l5_summary_cache_hit"] is False
 
         # 第二次：同 history → 缓存命中，不调 summarizer
         meta2: dict = {}
-        l5_auto_compact(history, budget, meta2, summarizer=summarizer,
-                        summary_cache=disk_cache, trigger_tokens=10)
+        l5_auto_compact(
+            history,
+            budget,
+            meta2,
+            summarizer=summarizer,
+            summary_cache=disk_cache,
+            trigger_tokens=10,
+        )
         assert len(summarizer_calls) == 1  # 未增加
         assert meta2["compression_pipeline"]["l5_summary_cache_hit"] is True
 
@@ -568,8 +581,14 @@ class TestSummaryCachePersistence:
             return "should not be called"
 
         meta3: dict = {}
-        l5_auto_compact(history, budget, meta3, summarizer=summarizer2,
-                        summary_cache=disk_cache2, trigger_tokens=10)
+        l5_auto_compact(
+            history,
+            budget,
+            meta3,
+            summarizer=summarizer2,
+            summary_cache=disk_cache2,
+            trigger_tokens=10,
+        )
         assert len(summarizer_calls2) == 0  # 磁盘加载后命中
         assert meta3["compression_pipeline"]["l5_summary_cache_hit"] is True
 
@@ -603,7 +622,7 @@ class TestSummaryCachePersistence:
         cm.build("fix the bug")
 
         # 缓存目录应有文件（如果 L5 触发了摘要）
-        cache_files = list(cache_dir.glob("*.txt")) if cache_dir.is_dir() else []
+        list(cache_dir.glob("*.txt")) if cache_dir.is_dir() else []
         # 至少 _DiskCache 目录存在
         assert cm._summary_cache._dir.is_dir()
 
@@ -627,7 +646,9 @@ class TestIncrementalSummary:
         history1 = _long_user_history(30, pad=200)
         meta1: dict = {}
         result1 = l5_auto_compact(
-            history1, budget, meta1,
+            history1,
+            budget,
+            meta1,
             summarizer=lambda p: "round 1 summary",
             trigger_tokens=10,
         )
@@ -641,7 +662,9 @@ class TestIncrementalSummary:
 
         meta2: dict = {}
         result2 = l5_auto_compact(
-            history2, budget, meta2,
+            history2,
+            budget,
+            meta2,
             summarizer=lambda p: "round 2 incremental summary",
             trigger_tokens=10,
         )
@@ -651,13 +674,14 @@ class TestIncrementalSummary:
     def test_cache_key_includes_offset_with_existing_summary(self, budget):
         """增量模式下 cache key 含 offset → 不同轮次不同 key。"""
         from agent_runtime.compression_pipeline import (
-            _summary_cache_key,
             l5_auto_compact,
         )
 
         history1 = _long_user_history(25, pad=200)
         r1 = l5_auto_compact(
-            history1, budget, {},
+            history1,
+            budget,
+            {},
             summarizer=lambda p: "s1",
             trigger_tokens=10,
         )
@@ -671,8 +695,10 @@ class TestIncrementalSummary:
             summarizer_calls.append(prompt)
             return "s2 incremental"
 
-        r2 = l5_auto_compact(
-            history2, budget, {},
+        l5_auto_compact(
+            history2,
+            budget,
+            {},
             summarizer=counted_summarizer,
             trigger_tokens=10,
         )
@@ -687,7 +713,9 @@ class TestIncrementalSummary:
 
         history1 = _long_user_history(20, pad=200)
         r1 = l5_auto_compact(
-            history1, budget, {},
+            history1,
+            budget,
+            {},
             summarizer=lambda p: "initial summary",
             trigger_tokens=10,
         )
@@ -698,7 +726,9 @@ class TestIncrementalSummary:
 
         summarizer_inputs = []
         r2 = l5_auto_compact(
-            history2, budget, {},
+            history2,
+            budget,
+            {},
             summarizer=lambda p: summarizer_inputs.append(p) or "updated summary",
             trigger_tokens=10,
         )
@@ -717,7 +747,9 @@ class TestIncrementalSummary:
 
         history1 = _long_user_history(20, pad=200)
         r1 = l5_auto_compact(
-            history1, budget, {},
+            history1,
+            budget,
+            {},
             summarizer=lambda p: "first summary",
             trigger_tokens=10,
         )
@@ -733,11 +765,13 @@ class TestIncrementalSummary:
             return "incremental summary"
 
         # 第一次增量
-        l5_auto_compact(history2, budget, {}, summarizer=counted,
-                        summary_cache=cache, trigger_tokens=10)
+        l5_auto_compact(
+            history2, budget, {}, summarizer=counted, summary_cache=cache, trigger_tokens=10
+        )
         assert len(calls) == 1
 
         # 第二次增量（同输入）→ 缓存命中
-        l5_auto_compact(history2, budget, {}, summarizer=counted,
-                        summary_cache=cache, trigger_tokens=10)
+        l5_auto_compact(
+            history2, budget, {}, summarizer=counted, summary_cache=cache, trigger_tokens=10
+        )
         assert len(calls) == 1  # 未增加

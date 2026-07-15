@@ -32,7 +32,6 @@ class PythonTestRunner:
         Returns:
             VerificationResult 实例。
         """
-        from src.harness.sandbox_results import verification_result_for_user_cancel
 
         if cancel_token is not None and cancel_token.is_cancelled:
             return verification_result_for_user_cancel()

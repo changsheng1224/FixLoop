@@ -121,7 +121,10 @@ def repair_plan_intent_snapshot(plan: RepairPlan) -> dict:
 
 def fallback_suspect_uses_import_line(issue_type: str) -> bool:
     """Localizer 降级定位是否优先 import 行。"""
-    return resolve_prompt_routing(RepairPlan(issue_type=issue_type)).localizer_hints_key == "import_first"
+    return (
+        resolve_prompt_routing(RepairPlan(issue_type=issue_type)).localizer_hints_key
+        == "import_first"
+    )
 
 
 def is_composite_multi_file(plan: RepairPlan | None) -> bool:

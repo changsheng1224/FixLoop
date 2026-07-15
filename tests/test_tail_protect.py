@@ -5,10 +5,9 @@ import pytest
 from agent_runtime.compression_pipeline import (
     TAIL_PROTECT_TOKENS,
     effective_tail_protect_tokens,
+    group_history_into_turns,
     l3_microcompact,
     protected_turn_indices,
-    group_history_into_turns,
-    count_history_tokens,
 )
 from agent_runtime.config import AgentConfig
 from agent_runtime.context_manager import ContextManager, TokenBudget, history_window_budget

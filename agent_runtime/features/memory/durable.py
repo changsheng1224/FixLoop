@@ -2,7 +2,7 @@
 
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
@@ -39,6 +39,7 @@ def source_to_authority(source: str) -> str:
         if key in s:
             return auth
     return "auto"
+
 
 DURABLE_TOPICS = [
     "project-conventions",
@@ -147,10 +148,12 @@ class UserProfileStore:
 DECAY_RATE = 0.95  # 每天衰减 5%（模块级常量）
 CONFIDENCE_FLOOR = 0.1  # 置信度低于此阈值不参与召回
 CHUNK_THRESHOLD_BYTES = 32768  # 32KB — topic 文件超此阈值拆分为 chunked 存储
-CHUNK_ENTRIES_PER_FILE = 15    # 每个 chunk 文件最大条目数
+CHUNK_ENTRIES_PER_FILE = 15  # 每个 chunk 文件最大条目数
 
 
-def apply_confidence_decay(confidence: float, updated_at: float, *, now: float | None = None) -> tuple[float, bool]:
+def apply_confidence_decay(
+    confidence: float, updated_at: float, *, now: float | None = None
+) -> tuple[float, bool]:
     """按时间衰减置信度。返回 (衰减后 confidence, 是否仍有效)。
 
     formula: confidence *= DECAY_RATE ** days_since_update
@@ -158,11 +161,12 @@ def apply_confidence_decay(confidence: float, updated_at: float, *, now: float |
     """
     if now is None:
         import time as _time
+
         now = _time.time()
     days = (now - updated_at) / 86400
     if days <= 1:
         return confidence, True
-    decayed = round(confidence * (DECAY_RATE ** days), 3)
+    decayed = round(confidence * (DECAY_RATE**days), 3)
     valid = decayed >= CONFIDENCE_FLOOR
     return decayed, valid
 
@@ -278,7 +282,9 @@ class DurableMemoryStore:
         if not replaced:
             existing.append(pref)
         lines = [header] + [p.to_table_row() for p in existing]
-        (self.topics_dir / "user-preferences.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        (self.topics_dir / "user-preferences.md").write_text(
+            "\n".join(lines) + "\n", encoding="utf-8"
+        )
         self._update_index()
 
     def ensure_dirs(self):
@@ -350,7 +356,9 @@ class DurableMemoryStore:
         for chunk_file in sorted(chunk_dir.glob("chunk-*.md"))[:max_chunks]:
             try:
                 entries.extend(
-                    e.strip() for e in chunk_file.read_text(encoding="utf-8").split("\n---\n") if e.strip()
+                    e.strip()
+                    for e in chunk_file.read_text(encoding="utf-8").split("\n---\n")
+                    if e.strip()
                 )
             except OSError:
                 pass
@@ -375,7 +383,9 @@ class DurableMemoryStore:
             path = topic_or_path
             if not path.exists():
                 return []
-            return [e.strip() for e in path.read_text(encoding="utf-8").split("\n---\n") if e.strip()]
+            return [
+                e.strip() for e in path.read_text(encoding="utf-8").split("\n---\n") if e.strip()
+            ]
 
         topic = topic_or_path
         if strategy == "chunked":
@@ -394,7 +404,9 @@ class DurableMemoryStore:
         for chunk_file in sorted(chunk_dir.glob("chunk-*.md")):
             try:
                 entries.extend(
-                    e.strip() for e in chunk_file.read_text(encoding="utf-8").split("\n---\n") if e.strip()
+                    e.strip()
+                    for e in chunk_file.read_text(encoding="utf-8").split("\n---\n")
+                    if e.strip()
                 )
             except OSError:
                 pass
@@ -410,6 +422,7 @@ class DurableMemoryStore:
             chunk_dir = self.topics_dir / topic
             if chunk_dir.is_dir():
                 import shutil
+
                 shutil.rmtree(str(chunk_dir), ignore_errors=True)
             return
 
@@ -420,6 +433,7 @@ class DurableMemoryStore:
             chunk_dir = self.topics_dir / topic
             if chunk_dir.is_dir():
                 import shutil
+
                 shutil.rmtree(str(chunk_dir), ignore_errors=True)
             inline_path.write_text(test_text, encoding="utf-8")
         else:
@@ -432,11 +446,9 @@ class DurableMemoryStore:
             for old in chunk_dir.glob("chunk-*.md"):
                 old.unlink()
             for ci in range(0, len(entries), CHUNK_ENTRIES_PER_FILE):
-                chunk_entries = entries[ci:ci + CHUNK_ENTRIES_PER_FILE]
+                chunk_entries = entries[ci : ci + CHUNK_ENTRIES_PER_FILE]
                 chunk_path = chunk_dir / f"chunk-{ci // CHUNK_ENTRIES_PER_FILE}.md"
-                chunk_path.write_text(
-                    "\n\n---\n\n".join(chunk_entries) + "\n", encoding="utf-8"
-                )
+                chunk_path.write_text("\n\n---\n\n".join(chunk_entries) + "\n", encoding="utf-8")
 
     @staticmethod
     def _upsert_entry(entries: list[str], new_text: str, authority: str = "auto") -> list[str]:
@@ -457,9 +469,7 @@ class DurableMemoryStore:
                     # 互斥版本链：追加新版本，保留历史（含时间戳）
                     ver = sum(1 for e in entries if _subject_key(e) == new_subject) + 1
                     ts = int(_time.time())
-                    entries.append(
-                        new_text.replace("\n", f"  # v{ver} @{ts}\n", 1)
-                    )
+                    entries.append(new_text.replace("\n", f"  # v{ver} @{ts}\n", 1))
                 return entries
         entries.append(new_text)
         return entries
@@ -513,7 +523,10 @@ class DurableMemoryStore:
 
 
 def promote_durable_memory(
-    user_message: str, final_answer: str, store: DurableMemoryStore | None = None, root: str = ".",
+    user_message: str,
+    final_answer: str,
+    store: DurableMemoryStore | None = None,
+    root: str = ".",
     light_client=None,
 ) -> bool:
     """检测用户保存意图并从回答中提取 Convention/Decision 等条目写入 durable。
@@ -541,7 +554,7 @@ def _llm_extract_promotions(text: str, client) -> list[tuple[str, str]]:
     topics = ", ".join(DURABLE_TOPICS)
     prompt = (
         f"从以下文本提取知识条目。只输出 JSON 数组：\n"
-        f"[{{\"topic\":\"{DURABLE_TOPICS[0]}\",\"text\":\"...\"}},...]\n"
+        f'[{{"topic":"{DURABLE_TOPICS[0]}","text":"..."}},...]\n'
         f"topic 只能从 [{topics}] 中选择。\n\n{text[:500]}"
     )
     try:

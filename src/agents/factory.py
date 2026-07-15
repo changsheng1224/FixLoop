@@ -21,14 +21,26 @@ BASELINE_SYSTEM_PROMPT = (
 
 # 分 Agent 预算表 — prompt_budget 从 RepairBudgetContext 统一来源读取
 _AGENT_DEFAULTS: dict[MultiAgentRole, dict] = {
-    "localizer": {"max_steps": 6, "max_new_tokens": 4096,
-                  "prompt_budget": _DEFAULT_ALLOCATIONS["localizer"]},
-    "retriever": {"max_steps": 4, "max_new_tokens": 2048,
-                  "prompt_budget": _DEFAULT_ALLOCATIONS["retriever"]},
-    "patcher":   {"max_steps": 6, "max_new_tokens": 4096,
-                  "prompt_budget": _DEFAULT_ALLOCATIONS["patcher"]},
-    "verifier":  {"max_steps": 4, "max_new_tokens": 4096,
-                  "prompt_budget": _DEFAULT_ALLOCATIONS["verifier"]},
+    "localizer": {
+        "max_steps": 6,
+        "max_new_tokens": 4096,
+        "prompt_budget": _DEFAULT_ALLOCATIONS["localizer"],
+    },
+    "retriever": {
+        "max_steps": 4,
+        "max_new_tokens": 2048,
+        "prompt_budget": _DEFAULT_ALLOCATIONS["retriever"],
+    },
+    "patcher": {
+        "max_steps": 6,
+        "max_new_tokens": 4096,
+        "prompt_budget": _DEFAULT_ALLOCATIONS["patcher"],
+    },
+    "verifier": {
+        "max_steps": 4,
+        "max_new_tokens": 4096,
+        "prompt_budget": _DEFAULT_ALLOCATIONS["verifier"],
+    },
 }
 
 
@@ -81,8 +93,8 @@ def create_repair_agent(
         light = light_client if role in ("localizer", "retriever") else None
 
     # 表驱动 JSON mode：四 L2 角色默认启用（provider 不支持时降级文本 + 多级 parse）
-    _JSON_MODE_ROLES = frozenset({"localizer", "retriever", "patcher", "verifier"})
-    json_mode = role in _JSON_MODE_ROLES
+    json_mode_roles = frozenset({"localizer", "retriever", "patcher", "verifier"})
+    json_mode = role in json_mode_roles
     if json_mode:
         system_prompt += "\n\n【输出格式】只输出合法 JSON（不要包裹在 ```json 或 <final> 中）。"
     agent = Agent(
@@ -114,7 +126,9 @@ def create_localizer(
     )
 
 
-def create_patcher(model_client, workspace, cwd: str = "", approval: str = "auto", **kwargs) -> Agent:
+def create_patcher(
+    model_client, workspace, cwd: str = "", approval: str = "auto", **kwargs
+) -> Agent:
     return create_repair_agent("patcher", model_client, workspace, cwd, approval=approval, **kwargs)
 
 
@@ -126,12 +140,20 @@ def create_retriever(
     )
 
 
-def create_verifier(model_client, workspace, cwd: str = "", approval: str = "auto", **kwargs) -> Agent:
-    return create_repair_agent("verifier", model_client, workspace, cwd, approval=approval, **kwargs)
+def create_verifier(
+    model_client, workspace, cwd: str = "", approval: str = "auto", **kwargs
+) -> Agent:
+    return create_repair_agent(
+        "verifier", model_client, workspace, cwd, approval=approval, **kwargs
+    )
 
 
-def create_baseline_agent(model_client, workspace, cwd: str = "", approval: str = "auto", **kwargs) -> Agent:
-    return create_repair_agent("baseline", model_client, workspace, cwd, approval=approval, **kwargs)
+def create_baseline_agent(
+    model_client, workspace, cwd: str = "", approval: str = "auto", **kwargs
+) -> Agent:
+    return create_repair_agent(
+        "baseline", model_client, workspace, cwd, approval=approval, **kwargs
+    )
 
 
 __all__ = [

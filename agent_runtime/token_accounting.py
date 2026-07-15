@@ -121,6 +121,7 @@ def build_report_token_fields(
 def load_pricing_table() -> dict:
     """加载 pricing_table.yaml → {model: {input, output, cache_read}}。"""
     from pathlib import Path
+
     import yaml
 
     path = Path(__file__).parent / "pricing_table.yaml"
@@ -151,9 +152,5 @@ def estimate_cost(report: dict, *, model: str = "deepseek-v4-pro") -> float:
     cache_price = float(rates.get("cache_read", input_price))
 
     # non-cache input + output + cache
-    cost = (
-        (inp - cache) * input_price
-        + out * output_price
-        + cache * cache_price
-    ) / 1_000_000
+    cost = ((inp - cache) * input_price + out * output_price + cache * cache_price) / 1_000_000
     return round(cost, 6)

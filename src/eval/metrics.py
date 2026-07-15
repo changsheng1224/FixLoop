@@ -328,7 +328,9 @@ def format_markdown(report: EvalReport) -> str:
             ]
             for issue_type, metrics in sorted(report.by_type.items())
         ]
-        parts.append(_markdown_table(["issue_type", "fixed", "total", "fix_rate", "precision"], rows))
+        parts.append(
+            _markdown_table(["issue_type", "fixed", "total", "fix_rate", "precision"], rows)
+        )
         parts.append("")
 
     if report.by_difficulty:
@@ -343,7 +345,9 @@ def format_markdown(report: EvalReport) -> str:
             ]
             for difficulty, metrics in sorted(report.by_difficulty.items())
         ]
-        parts.append(_markdown_table(["difficulty", "fixed", "total", "fix_rate", "precision"], rows))
+        parts.append(
+            _markdown_table(["difficulty", "fixed", "total", "fix_rate", "precision"], rows)
+        )
 
     return "\n".join(parts).strip() + "\n"
 

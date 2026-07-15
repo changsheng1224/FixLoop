@@ -2,20 +2,13 @@
 
 from __future__ import annotations
 
-import pytest
-
 from agent_runtime.step_guard import (
-    DEFAULT_DRIFT_TERMINATE,
-    DEFAULT_DRIFT_WARN,
-    DEFAULT_STALL_THRESHOLD,
     StepContext,
     StepGuard,
-    StepVerdict,
     _extract_filenames,
     _tool_target_file,
 )
 from agent_runtime.stop_reasons import StopReason
-
 
 # ---------------------------------------------------------------------------
 # 工具函数
@@ -125,18 +118,17 @@ class TestDriftDetection:
         guard = StepGuard()
         guard.reset(task_summary="fix pricing.py", suspect_files={"pricing.py"})
         # 操作 pricing.py → 不漂移
-        assert guard.evaluate(
-            StepContext(tool_name="read_file", tool_args={"path": "pricing.py"})
-        ) is None
+        assert (
+            guard.evaluate(StepContext(tool_name="read_file", tool_args={"path": "pricing.py"}))
+            is None
+        )
         assert guard.drift_count == 0
 
     def test_unrelated_file_increments_drift(self):
         guard = StepGuard()
         guard.reset(task_summary="fix pricing.py", suspect_files={"pricing.py"})
         # 操作无关文件 → 漂移计数
-        guard.evaluate(
-            StepContext(tool_name="read_file", tool_args={"path": "unrelated.py"})
-        )
+        guard.evaluate(StepContext(tool_name="read_file", tool_args={"path": "unrelated.py"}))
         assert guard.drift_count == 1
 
     def test_drift_warning_then_terminate(self):
@@ -189,14 +181,10 @@ class TestDriftDetection:
         guard = StepGuard(drift_warn=1, drift_terminate=10)
         guard.reset(task_summary="fix pricing.py", suspect_files={"pricing.py"})
 
-        v1 = guard.evaluate(
-            StepContext(tool_name="read_file", tool_args={"path": "other.py"})
-        )
+        v1 = guard.evaluate(StepContext(tool_name="read_file", tool_args={"path": "other.py"}))
         assert v1 is not None and v1.reason == ""  # warning
 
-        v2 = guard.evaluate(
-            StepContext(tool_name="read_file", tool_args={"path": "other.py"})
-        )
+        v2 = guard.evaluate(StepContext(tool_name="read_file", tool_args={"path": "other.py"}))
         assert v2 is None  # 不再重复 warn
 
     def test_no_suspect_files_skips_drift(self):
@@ -232,9 +220,7 @@ class TestDriftDetection:
         assert "app.py" in guard.suspect_files
         assert "helpers.py" in guard.suspect_files
         # 操作无关文件
-        guard.evaluate(
-            StepContext(tool_name="read_file", tool_args={"path": "other.py"})
-        )
+        guard.evaluate(StepContext(tool_name="read_file", tool_args={"path": "other.py"}))
         assert guard.drift_count == 1
 
 
@@ -343,7 +329,7 @@ class TestStepGuardInAgentLoop:
         loop._step_guard = StepGuard(stall_threshold=3)
         loop._step_guard.reset(task_summary="fix 问题", suspect_files=set())
 
-        answer = loop.run("fix 问题")
+        loop.run("fix 问题")
         # stall 不终止，replan 提示注入到 tool 结果中
         history = agent.session.get("history", [])
         tool_msgs = [h["content"] for h in history if h.get("role") == "tool"]

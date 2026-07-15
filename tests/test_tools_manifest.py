@@ -8,7 +8,6 @@ from pathlib import Path
 from src.middleware import REPAIR_PERMISSION_TABLE
 from src.tools.manifest import load_tools_manifest, merge_permission_table
 
-
 # ---------------------------------------------------------------------------
 # load_tools_manifest
 # ---------------------------------------------------------------------------
@@ -33,9 +32,7 @@ class TestLoadManifest:
             agent_dir = Path(tmp) / ".agent"
             agent_dir.mkdir()
             (agent_dir / "tools.yaml").write_text(
-                "tools:\n"
-                "  write_file: [patcher, localizer]\n"
-                "  search: ['*']\n"
+                "tools:\n  write_file: [patcher, localizer]\n  search: ['*']\n"
             )
             result = load_tools_manifest(tmp)
             assert result["write_file"] == {"patcher", "localizer"}
@@ -46,9 +43,7 @@ class TestLoadManifest:
             agent_dir = Path(tmp) / ".agent"
             agent_dir.mkdir()
             (agent_dir / "tools.yaml").write_text(
-                "tools:\n"
-                "  read_file: [patcher]\n"
-                "  nonexistent_tool: [localizer]\n"
+                "tools:\n  read_file: [patcher]\n  nonexistent_tool: [localizer]\n"
             )
             result = load_tools_manifest(tmp)
             assert "read_file" in result
@@ -58,9 +53,7 @@ class TestLoadManifest:
         with tempfile.TemporaryDirectory() as tmp:
             agent_dir = Path(tmp) / ".agent"
             agent_dir.mkdir()
-            (agent_dir / "tools.yaml").write_text(
-                "tools:\n  grep: '*'\n"
-            )
+            (agent_dir / "tools.yaml").write_text("tools:\n  grep: '*'\n")
             result = load_tools_manifest(tmp)
             assert result["grep"] == {"*"}
 
@@ -111,9 +104,7 @@ class TestGatewayWithManifest:
         with tempfile.TemporaryDirectory() as tmp:
             agent_dir = Path(tmp) / ".agent"
             agent_dir.mkdir()
-            (agent_dir / "tools.yaml").write_text(
-                "tools:\n  write_file: [patcher, localizer]\n"
-            )
+            (agent_dir / "tools.yaml").write_text("tools:\n  write_file: [patcher, localizer]\n")
             gw = build_repair_gateway(tmp)
             # manifest 允许 localizer 写文件
             assert gw.can_call("localizer", "write_file")

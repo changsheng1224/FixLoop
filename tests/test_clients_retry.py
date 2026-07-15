@@ -2,10 +2,10 @@
 
 import io
 import json
+import urllib.error
 from unittest.mock import patch
 
 import pytest
-import urllib.error
 
 from agent_runtime.providers.clients import AnthropicCompatibleModelClient
 from agent_runtime.providers.retry_policy import RateLimitExceededError

@@ -16,7 +16,8 @@ class TestCheckpointTrigger:
         agent = Agent(
             config=AgentConfig(provider="fake"),
             model_client=FakeModelClient([]),
-            workspace=ws, cwd=str(temp_workspace),
+            workspace=ws,
+            cwd=str(temp_workspace),
         )
         ts = TaskState.create(user_request="test")
         for trigger in sorted(VALID_TRIGGERS):
@@ -35,7 +36,8 @@ class TestCheckpointTrigger:
         agent = Agent(
             config=AgentConfig(provider="fake"),
             model_client=FakeModelClient([]),
-            workspace=ws, cwd=str(temp_workspace),
+            workspace=ws,
+            cwd=str(temp_workspace),
         )
         ts = TaskState.create(user_request="test")
         with pytest.raises(ValueError, match="非法 trigger"):
@@ -53,7 +55,8 @@ class TestCheckpointTrigger:
         agent = Agent(
             config=AgentConfig(provider="fake"),
             model_client=FakeModelClient([]),
-            workspace=ws, cwd=str(temp_workspace),
+            workspace=ws,
+            cwd=str(temp_workspace),
         )
         ts = TaskState.create(user_request="test")
         cp = create_checkpoint(agent, ts, "test", trigger="step_end", last_tool="read_file")
@@ -71,11 +74,16 @@ class TestCheckpointTrigger:
         agent = Agent(
             config=AgentConfig(provider="fake"),
             model_client=FakeModelClient([]),
-            workspace=ws, cwd=str(temp_workspace),
+            workspace=ws,
+            cwd=str(temp_workspace),
         )
         ts = TaskState.create(user_request="test")
         cp = create_checkpoint(
-            agent, ts, "test", trigger="user_cancel", in_flight_tool="write_file",
+            agent,
+            ts,
+            "test",
+            trigger="user_cancel",
+            in_flight_tool="write_file",
         )
         assert cp["in_flight_tool"] == "write_file"
 
@@ -91,7 +99,8 @@ class TestCheckpointTrigger:
         agent = Agent(
             config=AgentConfig(provider="fake"),
             model_client=FakeModelClient([]),
-            workspace=ws, cwd=str(temp_workspace),
+            workspace=ws,
+            cwd=str(temp_workspace),
         )
         ts = TaskState.create(user_request="test")
         cp = create_checkpoint(agent, ts, "test", trigger="ask_end")

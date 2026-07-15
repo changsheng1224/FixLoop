@@ -1,7 +1,5 @@
 """AST 语义等价进主路径单测：drift 检测 + 跳过 verify + trace。"""
 
-import pytest
-
 from src.tools.ast_parser import (
     _extract_signatures,
     check_semantic_equivalence,

@@ -6,9 +6,13 @@ import hashlib
 import json
 from functools import lru_cache
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from src.skills.models import SkillSpec
 from src.skills.validate import format_report, validate_directory
+
+if TYPE_CHECKING:
+    from agent_runtime.features.memory.semantic import SemanticMemory
 
 _BUILTIN_DIR = Path(__file__).resolve().parent
 
@@ -25,7 +29,7 @@ class SkillCatalog:
         self.content_hash = content_hash or _compute_skills_hash(
             Path.cwd() / ".agent" / ".skill_cache"  # default path, overridden by caller
         )
-        self._embed_index: "SemanticMemory | None" = None
+        self._embed_index: SemanticMemory | None = None
 
     def build_embed_index(self) -> bool:
         """预构建语义向量索引（复用 semantic.py SemanticMemory）。
@@ -41,9 +45,12 @@ class SkillCatalog:
                 self._embed_index = None
                 return False
             for spec in self.skills:
-                sem.add({
-                    "text": f"{spec.name}: {spec.trigger_pattern} {getattr(spec, 'example_issue', '')[:200]}",
-                })
+                example = getattr(spec, "example_issue", "")[:200]
+                sem.add(
+                    {
+                        "text": f"{spec.name}: {spec.trigger_pattern} {example}",
+                    }
+                )
             self._embed_index = sem
             return True
         except Exception:
@@ -58,9 +65,7 @@ class SkillCatalog:
         return self._embed_index
 
     @classmethod
-    def load_from_directory(
-        cls, directory: Path, *, strict: bool = True
-    ) -> "SkillCatalog":
+    def load_from_directory(cls, directory: Path, *, strict: bool = True) -> SkillCatalog:
         report = validate_directory(directory)
         if strict and not report.ok:
             raise SkillCatalogError(format_report(report, directory=directory))
@@ -99,8 +104,12 @@ class SkillCatalog:
             "content_hash": self.content_hash,
             "skill_count": self.skill_count,
             "skills": [
-                {"name": s.name, "language": s.language,
-                 "priority": s.priority, "trigger_pattern": s.trigger_pattern}
+                {
+                    "name": s.name,
+                    "language": s.language,
+                    "priority": s.priority,
+                    "trigger_pattern": s.trigger_pattern,
+                }
                 for s in self.skills
             ],
         }

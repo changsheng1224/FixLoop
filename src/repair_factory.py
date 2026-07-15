@@ -27,16 +27,19 @@ from src.tools.composite import build_repair_canonical_tools
 # full    = 全部四个 Agent
 _SIMPLE_ISSUE_TYPES = frozenset({"import_error", "syntax_error"})
 
+
 @dataclass(frozen=True)
 class AgentProfile:
     """问题类型对应的 Agent 参与配置。"""
+
     with_retriever: bool = True
 
     @classmethod
-    def for_issue_type(cls, issue_type: str) -> "AgentProfile":
+    def for_issue_type(cls, issue_type: str) -> AgentProfile:
         if issue_type in _SIMPLE_ISSUE_TYPES:
             return cls(with_retriever=False)
         return cls(with_retriever=True)
+
 
 O = TypeVar("O", bound=Orchestrator)
 
@@ -134,7 +137,9 @@ def wire_orchestrator(
         retriever = fut_ret.result() if fut_ret else None
 
     patcher = create_patcher(client, ws, cwd=repo, **_agent_kw("patcher"))
-    normalized_tier = execution_tier if execution_tier in {"auto", "container", "host", "static"} else "auto"
+    normalized_tier = (
+        execution_tier if execution_tier in {"auto", "container", "host", "static"} else "auto"
+    )
     use_pytest_verify = (not skip_verify) and normalized_tier in {"auto", "host"}
     allow_static_verify_fallback = (not skip_verify) and normalized_tier == "static"
     should_try_verifier = (not skip_verify) and normalized_tier in {"auto", "container"}

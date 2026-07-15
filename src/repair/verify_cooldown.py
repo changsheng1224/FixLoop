@@ -10,7 +10,7 @@ import hashlib
 __all__ = ["VerifyCooldown"]
 
 _COOLDOWN_MAX_CONSECUTIVE = 2  # 连续 N 次相同失败触发冷却
-_TEMPERATURE_REDUCTION = 0.5   # 冷却时 temperature 降至此值
+_TEMPERATURE_REDUCTION = 0.5  # 冷却时 temperature 降至此值
 
 
 class VerifyCooldown:
@@ -66,5 +66,5 @@ class VerifyCooldown:
 def _hash_failures(logs: list[str]) -> str:
     if not logs:
         return ""
-    combined = "\n".join(str(l)[:200] for l in logs[:5])
+    combined = "\n".join(str(line)[:200] for line in logs[:5])
     return hashlib.sha256(combined.encode()).hexdigest()[:16]

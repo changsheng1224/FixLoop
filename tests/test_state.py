@@ -126,6 +126,7 @@ class TestRepairPhase:
 
     def test_phase_transitions(self):
         from src.state import REPAIR_PHASES
+
         assert "localize" in REPAIR_PHASES
         assert "retrieve" in REPAIR_PHASES
         assert "patch" in REPAIR_PHASES
@@ -151,6 +152,7 @@ class TestRepairStatePersistence:
 
     def test_persist_and_restore_roundtrip(self, tmp_path):
         import json
+
         state = RepairState(
             issue_input="TypeError at calc.py:1",
             phase="done",
@@ -164,6 +166,7 @@ class TestRepairStatePersistence:
         assert restored.issue_input == state.issue_input
         assert restored.status == "fixed"
         assert restored.phase == "done"
+
 
 class TestBlackboardSnapshot:
     def test_snapshot_in_state_to_dict(self):
@@ -214,10 +217,7 @@ class TestRepairPlanSubtasks:
         assert plan.subtasks[1].depends_on == ["1"]
 
     def test_roundtrip_with_subtasks(self):
-        plan = RepairPlan(
-            issue_type="composite",
-            subtasks=[RepairSubTask(id="1", goal="fix")]
-        )
+        plan = RepairPlan(issue_type="composite", subtasks=[RepairSubTask(id="1", goal="fix")])
         d = plan.to_dict()
         assert len(d["subtasks"]) == 1
         plan2 = RepairPlan.from_dict(d)

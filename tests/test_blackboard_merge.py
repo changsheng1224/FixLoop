@@ -113,8 +113,12 @@ class TestMergeBlackboardForPatch:
 
     def test_conflict_recorded_before_resolve(self):
         bb = Blackboard()
-        bb.write("suspect:k.py:1", {"file_path": "k.py", "start_line": 1, "end_line": 1}, "localizer")
-        bb.write("suspect:k.py:1", {"file_path": "k.py", "start_line": 1, "end_line": 2}, "retriever")
+        bb.write(
+            "suspect:k.py:1", {"file_path": "k.py", "start_line": 1, "end_line": 1}, "localizer"
+        )
+        bb.write(
+            "suspect:k.py:1", {"file_path": "k.py", "start_line": 1, "end_line": 2}, "retriever"
+        )
         state = RepairState(issue_input="err")
         meta = merge_blackboard_for_patch(state, bb)
         assert meta["conflicts_resolved"]
@@ -181,14 +185,23 @@ class TestLocalizerRetrieverDedupe:
     def test_merge_integration_dedupes(self):
         """完整 merge 流程：去重后保持最高置信度条目。"""
         from src.blackboard import Blackboard
-        from src.repair.blackboard_merge import merge_blackboard_for_patch, write_localize_phase_to_blackboard
+        from src.repair.blackboard_merge import (
+            merge_blackboard_for_patch,
+            write_localize_phase_to_blackboard,
+        )
         from src.state import RepairState, SuspectLocation
 
         bb = Blackboard()
         suspects = [
-            SuspectLocation(file_path="calc.py", start_line=42, end_line=44, confidence=0.95, reason="highest"),
-            SuspectLocation(file_path="calc.py", start_line=42, end_line=44, confidence=0.6, reason="lower"),
-            SuspectLocation(file_path="utils.py", start_line=15, end_line=16, confidence=0.8, reason="unique"),
+            SuspectLocation(
+                file_path="calc.py", start_line=42, end_line=44, confidence=0.95, reason="highest"
+            ),
+            SuspectLocation(
+                file_path="calc.py", start_line=42, end_line=44, confidence=0.6, reason="lower"
+            ),
+            SuspectLocation(
+                file_path="utils.py", start_line=15, end_line=16, confidence=0.8, reason="unique"
+            ),
         ]
         write_localize_phase_to_blackboard(bb, suspects, None)
         state = RepairState(issue_input="test")

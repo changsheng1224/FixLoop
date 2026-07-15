@@ -30,11 +30,13 @@ def build_context_waterfall(
 
         entries: list[dict] = []
         for name, tokens in sections.items():
-            entries.append({
-                "section": name,
-                "tokens": tokens,
-                "pct": round(tokens / total * 100, 1),
-            })
+            entries.append(
+                {
+                    "section": name,
+                    "tokens": tokens,
+                    "pct": round(tokens / total * 100, 1),
+                }
+            )
         entries.sort(key=lambda e: e["tokens"], reverse=True)
         by_agent[agent_name] = entries
 
@@ -46,11 +48,13 @@ def build_context_waterfall(
         grand_total = sum(totals.values())
         totals_entry = []
         for name, tokens in sorted(totals.items(), key=lambda x: x[1], reverse=True):
-            totals_entry.append({
-                "section": name,
-                "tokens": tokens,
-                "pct": round(tokens / grand_total * 100, 1),
-            })
+            totals_entry.append(
+                {
+                    "section": name,
+                    "tokens": tokens,
+                    "pct": round(tokens / grand_total * 100, 1),
+                }
+            )
         by_agent["_totals"] = totals_entry
 
     return by_agent
@@ -97,8 +101,7 @@ def waterfall_to_ascii(waterfall: dict[str, list[dict]]) -> str:
             bar_len = max(1, int(entry["pct"] / 100 * max_bar))
             bar = "█" * bar_len
             lines.append(
-                f"    {entry['section']:12s} {entry['tokens']:>5d} tok "
-                f"({entry['pct']:5.1f}%) {bar}"
+                f"    {entry['section']:12s} {entry['tokens']:>5d} tok ({entry['pct']:5.1f}%) {bar}"
             )
 
     # 总计
@@ -110,8 +113,7 @@ def waterfall_to_ascii(waterfall: dict[str, list[dict]]) -> str:
             bar_len = max(1, int(entry["pct"] / 100 * max_bar))
             bar = "█" * bar_len
             lines.append(
-                f"    {entry['section']:12s} {entry['tokens']:>5d} tok "
-                f"({entry['pct']:5.1f}%) {bar}"
+                f"    {entry['section']:12s} {entry['tokens']:>5d} tok ({entry['pct']:5.1f}%) {bar}"
             )
 
     return "\n".join(lines)

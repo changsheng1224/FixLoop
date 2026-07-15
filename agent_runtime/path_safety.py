@@ -21,9 +21,7 @@ def is_path_under_root(path: Path, root: Path) -> bool:
 def _reject_escape(raw_path: str, *, via_symlink: bool = False, detail: str = "") -> None:
     if via_symlink:
         extra = f" → {detail}" if detail else ""
-        raise ValueError(
-            f"符号链接逃逸被拦截: {raw_path}（symlink 目标在 workspace 外{extra}）"
-        )
+        raise ValueError(f"符号链接逃逸被拦截: {raw_path}（symlink 目标在 workspace 外{extra}）")
     raise ValueError(f"路径逃逸被拦截: {raw_path}（禁止访问 workspace 外路径）")
 
 

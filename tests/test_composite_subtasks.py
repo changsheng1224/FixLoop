@@ -1,7 +1,5 @@
 """Composite subtasks 编排单测：子任务生成 + 编排 + trace 事件。"""
 
-import pytest
-
 from src.state import CandidatePatch, RepairPlan, RepairSubTask, SuspectLocation
 
 
@@ -85,7 +83,9 @@ class TestMergeSubtaskPatches:
 
         mixin = RepairPipelineMixin()
         st1 = RepairSubTask(id="fix_a", goal="fix a.py", suspect_files=["a.py"])
-        st2 = RepairSubTask(id="fix_b", goal="fix b.py", suspect_files=["b.py"], depends_on=["fix_a"])
+        st2 = RepairSubTask(
+            id="fix_b", goal="fix b.py", suspect_files=["b.py"], depends_on=["fix_a"]
+        )
 
         patch_a = CandidatePatch(file_path="a.py", diff="-old\n+new")
         patch_b = CandidatePatch(file_path="b.py", diff="-bad\n+good")
@@ -120,7 +120,7 @@ class TestRunSubtaskCycle:
         from src.repair.pipeline import RepairPipelineMixin
         from src.state import RepairState
 
-        mixin = RepairPipelineMixin()
+        RepairPipelineMixin()
         plan = RepairPlan(suspect_files=["a.py", "b.py"])
         state = RepairState(issue_input="test")
         state.repair_plan = plan

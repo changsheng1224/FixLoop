@@ -97,9 +97,7 @@ def attach_projection_metadata(
         state.last_context_prefix = prefix
 
     metadata["projection_step"] = step
-    metadata["sealed_history_count"] = (
-        state.sealed_history_count if state is not None else 0
-    )
+    metadata["sealed_history_count"] = state.sealed_history_count if state is not None else 0
     metadata["prefix_monotonic"] = monotonic
     metadata["prefix_aligned"] = monotonic
     metadata["prefix_fingerprint"] = fingerprint_prefix(prefix)

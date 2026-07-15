@@ -11,7 +11,6 @@ from agent_runtime.providers.clients import FakeModelClient
 from agent_runtime.runtime import Agent
 from agent_runtime.workspace import WorkspaceContext
 
-
 # ---------------------------------------------------------------------------
 # AgentCallback 基类
 # ---------------------------------------------------------------------------
@@ -158,10 +157,12 @@ class TestCallbackInAgentLoop:
         """XML 路径：回调收到工具执行事件。"""
         config = AgentConfig(provider="fake", max_steps=3)
         ws = WorkspaceContext.build(str(temp_workspace))
-        client = FakeModelClient([
-            '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
-            "<final>done</final>",
-        ])
+        client = FakeModelClient(
+            [
+                '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
+                "<final>done</final>",
+            ]
+        )
         agent = Agent(config=config, model_client=client, workspace=ws)
         loop = AgentLoop(agent)
 
@@ -181,27 +182,36 @@ class TestCallbackInAgentLoop:
 
             def on_step_start(self, step, max_steps, *, path=""):
                 self.called.add("on_step_start")
+
             def on_pre_model(self, step, prompt_preview, *, path=""):
                 self.called.add("on_pre_model")
+
             def on_post_model(self, step, raw_preview, elapsed_ms, *, path=""):
                 self.called.add("on_post_model")
+
             def on_pre_tool(self, step, tool_name, tool_args, *, path=""):
                 self.called.add("on_pre_tool")
+
             def on_post_tool(self, step, tool_name, result_preview, elapsed_ms, *, path=""):
                 self.called.add("on_post_tool")
+
             def on_tool_executed(self, step, name, result_preview, elapsed_ms, status):
                 self.called.add("on_tool_executed")
+
             def on_react_phase(self, phase, step, max_steps, *, tool=""):
                 self.called.add("on_react_phase")
+
             def on_final_answer(self, text):
                 self.called.add("on_final_answer")
 
         config = AgentConfig(provider="fake", max_steps=3)
         ws = WorkspaceContext.build(str(temp_workspace))
-        client = FakeModelClient([
-            '<tool>{"name":"read_file","args":{"path":"test.py"}}</tool>',
-            "<final>done</final>",
-        ])
+        client = FakeModelClient(
+            [
+                '<tool>{"name":"read_file","args":{"path":"test.py"}}</tool>',
+                "<final>done</final>",
+            ]
+        )
         agent = Agent(config=config, model_client=client, workspace=ws)
         loop = AgentLoop(agent)
 
@@ -210,9 +220,14 @@ class TestCallbackInAgentLoop:
         assert "done" in answer
 
         expected = {
-            "on_step_start", "on_pre_model", "on_post_model",
-            "on_pre_tool", "on_post_tool", "on_tool_executed",
-            "on_react_phase", "on_final_answer",
+            "on_step_start",
+            "on_pre_model",
+            "on_post_model",
+            "on_pre_tool",
+            "on_post_tool",
+            "on_tool_executed",
+            "on_react_phase",
+            "on_final_answer",
         }
         missing = expected - tracker.called
         assert not missing, f"未触发的钩子: {missing}"
@@ -226,18 +241,25 @@ class TestCallbackInAgentLoop:
 
             def on_step_start(self, step, max_steps, *, path=""):
                 self.called.add("on_step_start")
+
             def on_pre_model(self, step, prompt_preview, *, path=""):
                 self.called.add("on_pre_model")
+
             def on_post_model(self, step, raw_preview, elapsed_ms, *, path=""):
                 self.called.add("on_post_model")
+
             def on_pre_tool(self, step, tool_name, tool_args, *, path=""):
                 self.called.add("on_pre_tool")
+
             def on_post_tool(self, step, tool_name, result_preview, elapsed_ms, *, path=""):
                 self.called.add("on_post_tool")
+
             def on_tool_executed(self, step, name, result_preview, elapsed_ms, status):
                 self.called.add("on_tool_executed")
+
             def on_react_phase(self, phase, step, max_steps, *, tool=""):
                 self.called.add("on_react_phase")
+
             def on_final_answer(self, text):
                 self.called.add("on_final_answer")
 
@@ -246,10 +268,12 @@ class TestCallbackInAgentLoop:
         config = AgentConfig(provider="fake", max_steps=3)
         ws = WorkspaceContext.build(str(temp_workspace))
         # 需要 tool → final 序列才能触发全部 8 个钩子
-        client = FakeNativeToolClient(outputs=[
-            '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
-            "<final>done</final>",
-        ])
+        client = FakeNativeToolClient(
+            outputs=[
+                '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
+                "<final>done</final>",
+            ]
+        )
         agent = Agent(config=config, model_client=client, workspace=ws)
         loop = AgentLoop(agent)
 
@@ -258,9 +282,14 @@ class TestCallbackInAgentLoop:
         assert answer
 
         expected = {
-            "on_step_start", "on_pre_model", "on_post_model",
-            "on_pre_tool", "on_post_tool", "on_tool_executed",
-            "on_react_phase", "on_final_answer",
+            "on_step_start",
+            "on_pre_model",
+            "on_post_model",
+            "on_pre_tool",
+            "on_post_tool",
+            "on_tool_executed",
+            "on_react_phase",
+            "on_final_answer",
         }
         missing = expected - tracker.called
         assert not missing, f"未触发的钩子: {missing}"
@@ -277,7 +306,6 @@ class TestNotifyHelper:
     def test_notify_none_callback_silent(self):
         """callback=None 时不抛异常。"""
         from agent_runtime.agent_loop import AgentLoop
-        from agent_runtime.task_state import TaskState
 
         # 空 Agent 仅用于测试 _notify
         loop = AgentLoop.__new__(AgentLoop)
@@ -364,8 +392,9 @@ class TestCallbackChain:
         assert called == ["bad", "good"]
 
     def test_fail_fast_raises(self):
-        from agent_runtime.callbacks import AgentCallback, CallbackChain
         import pytest
+
+        from agent_runtime.callbacks import AgentCallback, CallbackChain
 
         called: list[str] = []
 
@@ -445,11 +474,12 @@ class TestStreamingCallback:
 
     def test_agent_ask_accepts_stream_param(self):
         """Agent.ask() 接受 stream 参数。"""
+        import tempfile
+
         from agent_runtime.config import AgentConfig
         from agent_runtime.providers.clients import FakeModelClient
         from agent_runtime.runtime import Agent
         from agent_runtime.workspace import WorkspaceContext
-        import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
             ws = WorkspaceContext.build(tmp)
@@ -463,12 +493,13 @@ class TestStreamingCallback:
 
     def test_agent_loop_has_stream_flag(self):
         """AgentLoop 接收 stream 参数。"""
+        import tempfile
+
         from agent_runtime.agent_loop import AgentLoop
         from agent_runtime.config import AgentConfig
         from agent_runtime.providers.clients import FakeModelClient
         from agent_runtime.runtime import Agent
         from agent_runtime.workspace import WorkspaceContext
-        import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
             ws = WorkspaceContext.build(tmp)

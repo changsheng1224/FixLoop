@@ -5,12 +5,11 @@ from __future__ import annotations
 import tempfile
 
 from agent_runtime.config import AgentConfig
-from agent_runtime.context_manager import ContextManager, TokenBudget, TOTAL_BUDGET
+from agent_runtime.context_manager import TOTAL_BUDGET, ContextManager, TokenBudget
 from agent_runtime.providers.clients import FakeModelClient
-from agent_runtime.repair_budget import RepairBudgetContext, _DEFAULT_ALLOCATIONS
+from agent_runtime.repair_budget import _DEFAULT_ALLOCATIONS, RepairBudgetContext
 from agent_runtime.runtime import Agent
 from agent_runtime.workspace import WorkspaceContext
-
 
 # ---------------------------------------------------------------------------
 # RepairBudgetContext 基本功能
@@ -197,33 +196,36 @@ class TestAgentBudgetDefaults:
         from src.agents.factory import _AGENT_DEFAULTS as FACTORY_DEFAULTS
 
         for role, defaults in FACTORY_DEFAULTS.items():
-            assert "prompt_budget" in defaults, (
-                f"{role} 缺少 prompt_budget 字段"
-            )
-            assert defaults["prompt_budget"] > 0, (
-                f"{role} prompt_budget 应为正数"
-            )
+            assert "prompt_budget" in defaults, f"{role} 缺少 prompt_budget 字段"
+            assert defaults["prompt_budget"] > 0, f"{role} prompt_budget 应为正数"
 
     def test_localizer_budget_is_2k(self):
         from src.agents.factory import _AGENT_DEFAULTS as FACTORY_DEFAULTS
+
         assert FACTORY_DEFAULTS["localizer"]["prompt_budget"] == 2000
 
     def test_patcher_budget_is_4k(self):
         from src.agents.factory import _AGENT_DEFAULTS as FACTORY_DEFAULTS
+
         assert FACTORY_DEFAULTS["patcher"]["prompt_budget"] == 4000
 
     def test_create_repair_agent_uses_role_budget(self, temp_workspace):
         """create_repair_agent 产出 Agent 的 prompt_budget 正确。"""
-        from src.agents.factory import create_repair_agent
         from agent_runtime.workspace import WorkspaceContext
+        from src.agents.factory import create_repair_agent
 
         ws = WorkspaceContext.build(str(temp_workspace))
         client = FakeModelClient(outputs=["<final>ok</final>"])
 
-        for role, expected in [("localizer", 2000), ("retriever", 3000),
-                                ("patcher", 4000), ("verifier", 1000)]:
-            agent = create_repair_agent(role, client, ws, cwd=str(temp_workspace),
-                                        approval="auto", dry_run=True)
+        for role, expected in [
+            ("localizer", 2000),
+            ("retriever", 3000),
+            ("patcher", 4000),
+            ("verifier", 1000),
+        ]:
+            agent = create_repair_agent(
+                role, client, ws, cwd=str(temp_workspace), approval="auto", dry_run=True
+            )
             assert agent.config.prompt_budget == expected, (
                 f"{role}: expected prompt_budget={expected}, got={agent.config.prompt_budget}"
             )
@@ -271,8 +273,8 @@ class TestBudgetE2E:
 
     def test_wire_orchestrator_injects_budget(self, tmp_path):
         """wire_orchestrator 创建 RepairBudgetContext 并注入各 Agent。"""
-        from src.repair_factory import wire_orchestrator
         from src.orchestrator import Orchestrator
+        from src.repair_factory import wire_orchestrator
 
         orch = wire_orchestrator(
             FakeModelClient(outputs=["<final>ok</final>"]),

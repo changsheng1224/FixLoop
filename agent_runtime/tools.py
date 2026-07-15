@@ -247,8 +247,12 @@ def tool_grep(context, args: dict) -> str:
 
 
 def _grep_rg(
-    pattern: str, target: Path, glob_filter: str,
-    ignore_case: bool, context_lines: int, max_results: int,
+    pattern: str,
+    target: Path,
+    glob_filter: str,
+    ignore_case: bool,
+    context_lines: int,
+    max_results: int,
 ) -> tuple[list[str] | None, int]:
     """rg 搜索，失败返回 None。"""
     try:
@@ -262,7 +266,7 @@ def _grep_rg(
         cmd.extend([pattern, str(target)])
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode == 0:
-            lines = [l for l in result.stdout.splitlines() if l.strip()]
+            lines = [line for line in result.stdout.splitlines() if line.strip()]
             return lines, len(lines)
         elif result.returncode == 1:
             return [], 0
@@ -272,8 +276,12 @@ def _grep_rg(
 
 
 def _grep_python(
-    pattern: str, target: Path, glob_filter: str,
-    ignore_case: bool, context_lines: int, max_results: int,
+    pattern: str,
+    target: Path,
+    glob_filter: str,
+    ignore_case: bool,
+    context_lines: int,
+    max_results: int,
 ) -> tuple[list[str], int]:
     """Python re + rglob fallback 搜索。"""
     import re
@@ -287,14 +295,25 @@ def _grep_python(
 
     matches: list[str] = []
     total = 0
-    rglob = target.rglob if glob_filter else lambda: target.rglob("*")
+    target.rglob if glob_filter else lambda: target.rglob("*")
 
-    for filepath in (target.rglob(glob_filter) if glob_filter else target.rglob("*")):
+    for filepath in target.rglob(glob_filter) if glob_filter else target.rglob("*"):
         if filepath.is_dir():
             continue
         if any(ign in filepath.parts for ign in IGNORED_PATH_NAMES):
             continue
-        if filepath.suffix not in (".py", ".txt", ".md", ".toml", ".yaml", ".yml", ".cfg", ".ini", ".json", ".sh"):
+        if filepath.suffix not in (
+            ".py",
+            ".txt",
+            ".md",
+            ".toml",
+            ".yaml",
+            ".yml",
+            ".cfg",
+            ".ini",
+            ".json",
+            ".sh",
+        ):
             continue
         try:
             text = filepath.read_text(encoding="utf-8")
@@ -373,7 +392,9 @@ def _format_grep_result(lines: list[str], total: int, max_results: int) -> str:
     merged = _merge_adjacent_lines(lines)
     result = "\n".join(merged)
     if total > len(lines):
-        result += f"\n... 另有 {total - len(lines)} 条匹配未显示（可缩小 path/glob 或提高 max_results）"
+        result += (
+            f"\n... 另有 {total - len(lines)} 条匹配未显示（可缩小 path/glob 或提高 max_results）"
+        )
     return result
 
 
@@ -452,10 +473,7 @@ def tool_patch_file(context, args: dict) -> str:
         if count == 0:
             return "Error: old_text 在文件中未找到（出现 0 次）。old_text 必须恰好出现 1 次。"
         if count > 1:
-            return (
-                f"Error: old_text 出现 {count} 次，必须恰好出现 1 次。"
-                "请提供更多上下文使其唯一。"
-            )
+            return f"Error: old_text 出现 {count} 次，必须恰好出现 1 次。请提供更多上下文使其唯一。"
 
     new_text = apply_plan(text, plan)
     if new_text is None:
@@ -482,7 +500,8 @@ def tool_run_shell(context, args: dict) -> str:
     Args 必须包含 'command'，可选 'timeout'(默认20s)。
     环境变量经过白名单过滤；输出经 redact_text 脱敏。
     """
-    from agent_runtime.security import check_shell_command, redact_text, shell_env as _shell_env
+    from agent_runtime.security import check_shell_command, redact_text
+    from agent_runtime.security import shell_env as _shell_env
 
     command = args.get("command", "")
     if not command:
@@ -648,7 +667,10 @@ def build_tool_registry(context) -> dict:
         "schema": auto_schema(GrepArgs),
         "risky": False,
         "execution_tier": TIER_HOST,
-        "description": "内容搜索（rg 优先，Python fallback）。参数: pattern, path, glob, ignore_case, context_lines, max_results",
+        "description": (
+            "内容搜索（rg 优先，Python fallback）。"
+            "参数: pattern, path, glob, ignore_case, context_lines, max_results"
+        ),
         "run": lambda args: tool_grep(context, args),
     }
 

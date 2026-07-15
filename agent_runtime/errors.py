@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-class EmptyModelResponse(Exception):
+class EmptyModelResponse(Exception):  # noqa: N818 - public API name kept stable
     """模型返回空响应（无 HTTP body）。"""
 
     def __init__(self, model: str = "", detail: str = ""):

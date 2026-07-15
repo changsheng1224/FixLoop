@@ -2,7 +2,10 @@
 
 from src.blackboard import Blackboard
 from src.prompts.patcher_task_builder import assemble_patcher_variables
-from src.repair.blackboard_merge import write_feedback_to_blackboard, write_localize_phase_to_blackboard
+from src.repair.blackboard_merge import (
+    write_feedback_to_blackboard,
+    write_localize_phase_to_blackboard,
+)
 from src.repair.blackboard_subscribe import (
     PATCHER_PREFIX_SUBSCRIPTIONS,
     render_patcher_prefix_blocks,
@@ -14,7 +17,9 @@ from src.state import RepairPlan, RetrievedContext, SuspectLocation
 class TestSubscribePrefixes:
     def test_subscribe_prefixes_batch_read(self):
         bb = Blackboard()
-        bb.write("suspect:a.py:1", {"file_path": "a.py", "start_line": 1, "end_line": 1}, "localizer")
+        bb.write(
+            "suspect:a.py:1", {"file_path": "a.py", "start_line": 1, "end_line": 1}, "localizer"
+        )
         bb.write("context:related_tests", ["test_a.py"], "retriever")
         result = subscribe_prefixes(bb, ["suspect:", "context:"])
         assert len(result["suspect:"]) == 1

@@ -78,9 +78,7 @@ def create_checkpoint(
         checkpoint 字典。
     """
     if trigger not in VALID_TRIGGERS:
-        raise ValueError(
-            f"非法 trigger '{trigger}'，允许值: {sorted(VALID_TRIGGERS)}"
-        )
+        raise ValueError(f"非法 trigger '{trigger}'，允许值: {sorted(VALID_TRIGGERS)}")
 
     # 从 working memory 提取关键文件
     key_files = {}

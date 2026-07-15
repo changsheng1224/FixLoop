@@ -84,9 +84,11 @@ class TestQuotaIntegration:
         assert result.metadata["tool_error_code"] == "approval_denied"
         assert quota.acquire_shell() is True
 
+
 class TestConcurrentShellLimit:
     def test_acquire_blocks_when_full(self):
         from agent_runtime.tool_executor import QuotaEnforcer
+
         q = QuotaEnforcer(max_concurrent_shell=2)
         assert q.acquire_shell() is True
         assert q.acquire_shell() is True
@@ -96,6 +98,7 @@ class TestConcurrentShellLimit:
 
     def test_release_without_acquire_is_safe(self):
         from agent_runtime.tool_executor import QuotaEnforcer
+
         q = QuotaEnforcer()
         q.release_shell()  # 不应抛异常
 
@@ -159,8 +162,7 @@ class TestRoleQuotas:
         from agent_runtime.runtime import _role_quota
 
         quotas = {
-            role: _role_quota(role)
-            for role in ("localizer", "retriever", "patcher", "verifier")
+            role: _role_quota(role) for role in ("localizer", "retriever", "patcher", "verifier")
         }
         # 每个角色是独立实例
         ids = {id(q) for q in quotas.values()}

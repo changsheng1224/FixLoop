@@ -136,9 +136,7 @@ class TestAgentLoopStopConditions:
         # 应该有 retry 记录
         history_roles = [h["role"] for h in agent.session["history"]]
         assert "system" in history_roles  # retry 通知以 system 角色记录
-        system_msgs = [
-            h["content"] for h in agent.session["history"] if h["role"] == "system"
-        ]
+        system_msgs = [h["content"] for h in agent.session["history"] if h["role"] == "system"]
         assert any("④" in m for m in system_msgs)  # 四段式 prompt
 
     def test_parse_retry_emits_trace(self, config, workspace, temp_workspace):
@@ -160,17 +158,14 @@ class TestAgentLoopStopConditions:
         run_dirs = list(RunStore(str(temp_workspace)).runs_dir.iterdir())
         trace_path = run_dirs[0] / "trace.jsonl"
         events = [
-            json.loads(line)
-            for line in trace_path.read_text(encoding="utf-8").strip().splitlines()
+            json.loads(line) for line in trace_path.read_text(encoding="utf-8").strip().splitlines()
         ]
         parse_retries = [e for e in events if e.get("event") == "parse_retry"]
         assert len(parse_retries) == 1
         payload = parse_retries[0]["payload"]
         assert payload["kind"] == "json_in_tool"
         assert payload["attempt"] == 1
-        system_msgs = [
-            h["content"] for h in agent.session["history"] if h["role"] == "system"
-        ]
+        system_msgs = [h["content"] for h in agent.session["history"] if h["role"] == "system"]
         assert any("^" in m for m in system_msgs)
 
     def test_circuit_breaker_events_in_trace(self, config, workspace, temp_workspace):
@@ -205,7 +200,10 @@ class TestAgentLoopStopConditions:
         run_dirs = sorted(store.runs_dir.iterdir(), key=lambda p: p.stat().st_mtime)
         events = [
             json.loads(line)
-            for line in (run_dirs[-1] / "trace.jsonl").read_text(encoding="utf-8").strip().splitlines()
+            for line in (run_dirs[-1] / "trace.jsonl")
+            .read_text(encoding="utf-8")
+            .strip()
+            .splitlines()
         ]
         opened = [e for e in events if e.get("event") == "circuit_opened"]
         assert len(opened) == 1
@@ -218,7 +216,10 @@ class TestAgentLoopStopConditions:
         run_dirs = sorted(store.runs_dir.iterdir(), key=lambda p: p.stat().st_mtime)
         events = [
             json.loads(line)
-            for line in (run_dirs[-1] / "trace.jsonl").read_text(encoding="utf-8").strip().splitlines()
+            for line in (run_dirs[-1] / "trace.jsonl")
+            .read_text(encoding="utf-8")
+            .strip()
+            .splitlines()
         ]
         event_names = [e.get("event") for e in events]
         assert "half_open_probe" in event_names
@@ -243,7 +244,10 @@ class TestAgentLoopStopConditions:
         run_dirs = list(RunStore(str(temp_workspace)).runs_dir.iterdir())
         events = [
             json.loads(line)
-            for line in (run_dirs[0] / "trace.jsonl").read_text(encoding="utf-8").strip().splitlines()
+            for line in (run_dirs[0] / "trace.jsonl")
+            .read_text(encoding="utf-8")
+            .strip()
+            .splitlines()
         ]
         retries = [e for e in events if e.get("event") == "parse_retry"]
         assert len(retries) == 1
@@ -340,8 +344,10 @@ class TestNativeToolsTokenUsage:
         )
         assert answer == "done"
         assert usage["calls"] == 2
-        assert usage["total_tokens"] > 0 if "total_tokens" in usage else (
-            usage["input_tokens"] + usage["output_tokens"] > 0
+        assert (
+            usage["total_tokens"] > 0
+            if "total_tokens" in usage
+            else (usage["input_tokens"] + usage["output_tokens"] > 0)
         )
 
     def test_shared_run_agent_report_includes_api_tokens(self, config, workspace, temp_workspace):
@@ -417,9 +423,7 @@ class TestTtftObservability:
         agent.shared_run_id = "repair-ttft-trace"
         agent.ask("go")
 
-        trace_path = (
-            RunStore(str(temp_workspace)).runs_dir / "repair-ttft-trace" / "trace.jsonl"
-        )
+        trace_path = RunStore(str(temp_workspace)).runs_dir / "repair-ttft-trace" / "trace.jsonl"
         events = [
             json.loads(line)["event"]
             for line in trace_path.read_text(encoding="utf-8").strip().splitlines()
@@ -490,7 +494,8 @@ class TestFinalAnswerValidation:
         config.json_mode = True
         agent = _make_agent(
             ['<final>{"file_path":"app.py","line":42}</final>'],
-            config, workspace,
+            config,
+            workspace,
         )
         answer = agent.ask("find bug")
         assert "file_path" in answer
@@ -501,10 +506,11 @@ class TestFinalAnswerValidation:
         config.json_mode = True
         agent = _make_agent(
             [
-                "<final>not json</final>",           # ← 第 1 次失败
+                "<final>not json</final>",  # ← 第 1 次失败
                 '<final>{"file_path":"app.py"}</final>',  # ← 重试成功
             ],
-            config, workspace,
+            config,
+            workspace,
         )
         answer = agent.ask("find bug")
         # 最终应接受第二次合法输出
@@ -519,7 +525,8 @@ class TestFinalAnswerValidation:
                 "<final>bad2</final>",
                 "<final>bad3</final>",  # 第 3 次 — 重试耗尽
             ],
-            config, workspace,
+            config,
+            workspace,
         )
         answer = agent.ask("find bug")
         # 耗尽后接受最后一次输出
@@ -534,7 +541,8 @@ class TestFinalAnswerValidation:
                 '<final>{"file_path":"app.py"}</final>',  # ← 缺 line
                 '<final>{"file_path":"app.py","line":42}</final>',  # ← 补齐后通过
             ],
-            config, workspace,
+            config,
+            workspace,
         )
         answer = agent.ask("find bug")
         assert "line" in answer
@@ -548,7 +556,8 @@ class TestFinalAnswerValidation:
                 '<final>{"file_path":"app.py","line":"not_a_number"}</final>',
                 '<final>{"file_path":"app.py","line":42}</final>',
             ],
-            config, workspace,
+            config,
+            workspace,
         )
         answer = agent.ask("find bug")
         assert '"line":42' in answer or '"line": 42' in answer
@@ -559,7 +568,8 @@ class TestFinalAnswerValidation:
         # 无 schema → 任意合法 JSON 都通过
         agent = _make_agent(
             ['<final>{"any":"thing","foo":123}</final>'],
-            config, workspace,
+            config,
+            workspace,
         )
         answer = agent.ask("do something")
         assert "any" in answer
@@ -569,10 +579,12 @@ class TestFinalAnswerValidation:
         from agent_runtime.agent_loop import AgentLoop
 
         config.json_mode = True
-        client = FakeModelClient([
-            "<final>bad</final>",
-            '<final>{"ok":true}</final>',
-        ])
+        client = FakeModelClient(
+            [
+                "<final>bad</final>",
+                '<final>{"ok":true}</final>',
+            ]
+        )
         agent = Agent(config=config, model_client=client, workspace=workspace)
         loop = AgentLoop(agent)
 
@@ -591,7 +603,8 @@ class TestFinalAnswerValidation:
         config.final_schema = {"file_path": "str"}
         agent = _make_agent(
             ["<final>this is plain text, not json</final>"],
-            config, workspace,
+            config,
+            workspace,
         )
         answer = agent.ask("explain")
         # 纯文本答案直接通过
@@ -602,7 +615,8 @@ class TestFinalAnswerValidation:
         config.json_mode = True
         agent = _make_agent(
             ['<final>[{"file":"a.py","line":1}]</final>'],
-            config, workspace,
+            config,
+            workspace,
         )
         answer = agent.ask("find bugs")
         assert "a.py" in answer
@@ -614,10 +628,11 @@ class TestFinalAnswerValidation:
         config.json_mode = True
         agent = _make_agent(
             [
-                "<final>bad json</final>",          # 失败 → retry
-                '<final>{"ok":true}</final>',       # 成功
+                "<final>bad json</final>",  # 失败 → retry
+                '<final>{"ok":true}</final>',  # 成功
             ],
-            config, workspace,
+            config,
+            workspace,
         )
         loop = AgentLoop(agent)
         events = []
@@ -654,7 +669,7 @@ class TestCoTStripping:
         """移除第一个结构化标签前的自然语言前缀。"""
         from agent_runtime.agent_loop import AgentLoop
 
-        raw = "I need to read the file first.\n\n<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"app.py\"}}</tool>"
+        raw = 'I need to read the file first.\n\n<tool>{"name":"read_file","args":{"path":"app.py"}}</tool>'
         cleaned = AgentLoop._strip_cot(raw)
         assert "I need to read" not in cleaned
         assert "<tool>" in cleaned
@@ -674,7 +689,7 @@ class TestCoTStripping:
         raw = (
             "<think>reasoning step 1</think>\n"
             "Now I'll search for the error...\n"
-            "<tool>{\"name\":\"search\",\"args\":{\"pattern\":\"error\"}}</tool>"
+            '<tool>{"name":"search","args":{"pattern":"error"}}</tool>'
         )
         cleaned = AgentLoop._strip_cot(raw)
         assert "reasoning" not in cleaned
@@ -694,7 +709,7 @@ class TestCoTStripping:
         """多行 <think> 块正确剥离。"""
         from agent_runtime.agent_loop import AgentLoop
 
-        raw = "<think>\nline 1\nline 2\nline 3\n</think>\n<final>{\"ok\":true}</final>"
+        raw = '<think>\nline 1\nline 2\nline 3\n</think>\n<final>{"ok":true}</final>'
         cleaned = AgentLoop._strip_cot(raw)
         assert "line 1" not in cleaned
         assert "line 2" not in cleaned
@@ -707,7 +722,8 @@ class TestCoTStripping:
                 '<tool>{"name":"read_file","args":{"path":"app.py"}}</tool>',
                 "Now I see the bug. Let me fix it.\n<final>fixed</final>",
             ],
-            config, workspace,
+            config,
+            workspace,
         )
         answer = agent.ask("find and fix bug")
         assert "fixed" in answer
@@ -723,7 +739,8 @@ class TestCoTStripping:
         """无 CoT 的 final answer 完全不变。"""
         agent = _make_agent(
             ["<final>fixed</final>"],
-            config, workspace,
+            config,
+            workspace,
         )
         answer = agent.ask("fix bug")
         assert answer == "fixed"
@@ -839,7 +856,8 @@ class TestLoopDetection:
                 '<tool>{"name":"read_file","args":{"path":"app.py"}}</tool>',
                 "<final>done</final>",
             ],
-            config, workspace,
+            config,
+            workspace,
         )
         loop = AgentLoop(agent)
         answer = loop.run("read app.py three times")
@@ -857,7 +875,8 @@ class TestLoopDetection:
                 '<tool>{"name":"read_file","args":{"path":"c.py"}}</tool>',
                 "<final>done</final>",
             ],
-            config, workspace,
+            config,
+            workspace,
         )
         loop = AgentLoop(agent)
         answer = loop.run("read files")
@@ -879,9 +898,10 @@ class TestNativeContextBuilt:
         """Native 路径 emit context_built 事件且含 sections 键。"""
         from agent_runtime.agent_loop import AgentLoop
 
-        agent = _make_agent(
+        _make_agent(
             ["<final>done</final>"],
-            config, workspace,
+            config,
+            workspace,
         )
         # 使用 NativeFakeClient 走 Native 路径
         from agent_runtime.providers.clients import FakeNativeToolClient
@@ -903,7 +923,9 @@ class TestNativeContextBuilt:
         assert "done" in answer
 
         ctx_events = [e for e in events if e[0] == "context_built"]
-        assert len(ctx_events) >= 1, f"expected context_built event, got events: {[e[0] for e in events]}"
+        assert len(ctx_events) >= 1, (
+            f"expected context_built event, got events: {[e[0] for e in events]}"
+        )
         payload = ctx_events[0][1]
         assert "total_tokens" in payload or "context_sections" in payload
 
@@ -917,9 +939,7 @@ class TestNativeContextBuilt:
         # Native path 每轮调一次 complete()，多给几个输出
         agent = Agent(
             config=config,
-            model_client=FakeNativeToolClient(
-                outputs=["<final>done</final>"] * 5
-            ),
+            model_client=FakeNativeToolClient(outputs=["<final>done</final>"] * 5),
             workspace=workspace,
             cwd=str(workspace.repo_root),
         )
@@ -970,7 +990,8 @@ class TestNativeContextBuilt:
         # === XML 路径 ===
         agent_xml = _make_agent(
             ["<final>xml done</final>"] * 3,
-            cfg, workspace,
+            cfg,
+            workspace,
         )
         for i in range(30):
             agent_xml.record({"role": "user", "content": f"q {i} " + "pad " * 15})
@@ -991,20 +1012,23 @@ class TestNativeContextBuilt:
 class TestStreamingCancel:
     def test_cancel_during_stream_stops_early(self):
         """流式输出中途 cancel → CancelledError → user_cancel stop。"""
-        from agent_runtime.agent_loop import AgentLoop
         from agent_runtime.cancellation import CancellationToken
 
         class MockStreamClient:
             """流式 mock：模拟 chunk 输出并在中途被 cancel。"""
+
             def __init__(self):
                 self.cancelled = False
 
-            def complete_stream(self, prompt, *, max_new_tokens=512, cancel_token=None, on_chunk=None):
+            def complete_stream(
+                self, prompt, *, max_new_tokens=512, cancel_token=None, on_chunk=None
+            ):
                 chunks = ["chunk1", "chunk2", "chunk3", "chunk4"]
                 parts = []
                 for c in chunks:
                     if cancel_token is not None and cancel_token.is_cancelled:
                         from agent_runtime.cancellation import CancelledError
+
                         raise CancelledError(cancel_token.reason)
                     parts.append(c)
                 return "".join(parts)
@@ -1024,8 +1048,10 @@ class TestStreamingCancel:
 
             # 在另一个线程中延迟 cancel
             import threading
+
             def delayed_cancel():
                 import time
+
                 time.sleep(0.05)
                 token.cancel()
 
@@ -1048,7 +1074,8 @@ class TestHardCapContextOverflow:
         config.hard_cap = 100  # 极低硬顶，system+tool+workspace 常规即超
         agent = _make_agent(
             ["<final>should not reach model</final>"],
-            config, workspace,
+            config,
+            workspace,
         )
         loop = AgentLoop(agent)
         answer = loop.run("test hard cap overflow")
@@ -1070,4 +1097,3 @@ class TestHardCapContextOverflow:
         answer = loop.run("test native hard cap overflow")
         assert loop.stop_reason == "context_overflow"
         assert "硬顶" in answer or "超出" in answer or "hard" in answer.lower()
-

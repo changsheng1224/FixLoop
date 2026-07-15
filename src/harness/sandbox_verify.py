@@ -8,10 +8,10 @@ from pathlib import Path
 from src.harness.python_runner import PythonTestRunner
 from src.harness.sandbox_manager import (
     BUILD_TIMEOUT_S,
+    ExecResult,
     Sandbox,
     SandboxManager,
     sandbox_pip_install_command,
-    ExecResult,
 )
 from src.harness.sandbox_results import verification_result_for_pip_failure
 from src.harness.sandbox_tar import SandboxArchiveError

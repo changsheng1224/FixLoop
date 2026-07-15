@@ -3,15 +3,17 @@
 import pytest
 
 from agent_runtime.prefix_stable import PrefixStableError, hash_stable_prefix
-from agent_runtime.prompt_prefix import cache_stable_text
 from agent_runtime.prompt_external import (
-    compose_examples,
     compose_rules,
     default_examples_text,
     default_rules_text,
     load_prompt_assets,
 )
-from agent_runtime.prompt_prefix import build_prompt_prefix, build_repair_agent_prefix
+from agent_runtime.prompt_prefix import (
+    build_prompt_prefix,
+    build_repair_agent_prefix,
+    cache_stable_text,
+)
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.tools import build_tool_registry
 from agent_runtime.workspace import WorkspaceContext

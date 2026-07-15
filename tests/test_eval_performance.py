@@ -5,7 +5,6 @@ from __future__ import annotations
 from src.eval.metrics import _p50, compute_performance_matrix
 from src.eval.models import CaseResult
 
-
 # ---------------------------------------------------------------------------
 # _p50
 # ---------------------------------------------------------------------------
@@ -59,14 +58,26 @@ class TestPerformanceMatrix:
 
     def test_multiple_results_averages(self):
         results = [
-            CaseResult(case_id="a", retry_count=1, agent_timings={
-                "context_tokens": 1000, "cache_hit_rate": 0.5,
-                "total_tool_steps": 5, "ttft_values": [100],
-            }),
-            CaseResult(case_id="b", retry_count=3, agent_timings={
-                "context_tokens": 2000, "cache_hit_rate": 0.8,
-                "total_tool_steps": 10, "ttft_values": [200, 300],
-            }),
+            CaseResult(
+                case_id="a",
+                retry_count=1,
+                agent_timings={
+                    "context_tokens": 1000,
+                    "cache_hit_rate": 0.5,
+                    "total_tool_steps": 5,
+                    "ttft_values": [100],
+                },
+            ),
+            CaseResult(
+                case_id="b",
+                retry_count=3,
+                agent_timings={
+                    "context_tokens": 2000,
+                    "cache_hit_rate": 0.8,
+                    "total_tool_steps": 10,
+                    "ttft_values": [200, 300],
+                },
+            ),
         ]
         p = compute_performance_matrix(results)
         assert p["avg_context_tokens"] == 1500.0

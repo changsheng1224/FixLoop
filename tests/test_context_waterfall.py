@@ -51,9 +51,7 @@ class TestBuildContextWaterfall:
         for agent in ("localizer", "retriever"):
             entries = wf[agent]
             pct_sum = sum(e["pct"] for e in entries)
-            assert 99.0 <= pct_sum <= 101.0, (
-                f"{agent} pct sum={pct_sum}, entries={entries}"
-            )
+            assert 99.0 <= pct_sum <= 101.0, f"{agent} pct sum={pct_sum}, entries={entries}"
 
     def test_totals_aggregated(self):
         reports = {

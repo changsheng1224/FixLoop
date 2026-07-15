@@ -36,7 +36,7 @@ class WorkspaceContext:
     dirty_file_hashes: dict = None  # type: ignore
 
     @classmethod
-    def build(cls, cwd: str = ".") -> "WorkspaceContext":
+    def build(cls, cwd: str = ".") -> WorkspaceContext:
         """从给定目录采集工作区信息。
 
         Args:

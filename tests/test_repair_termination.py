@@ -5,8 +5,8 @@ from src.repair.termination import (
     apply_terminal_status,
     finalize_repair_state,
     introduced_regression,
-    is_terminal,
     is_repair_success,
+    is_terminal,
     regression_detected,
 )
 from src.state import CandidatePatch, RepairState

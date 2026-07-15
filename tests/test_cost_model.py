@@ -7,7 +7,7 @@ class TestEstimateCost:
     def test_deepseek_default(self):
         """DeepSeek v4 pro 默认价格。"""
         report = {
-            "input_tokens": 1_000_000,   # 1M
+            "input_tokens": 1_000_000,  # 1M
             "output_tokens": 0,
             "cache_read_tokens": 0,
         }

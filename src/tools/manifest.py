@@ -57,8 +57,10 @@ def load_tools_manifest(repo_root: str | Path) -> dict[str, set[str]]:
             continue
         if tool_name not in REPAIR_CANONICAL_TOOL_NAMES:
             import sys
+
             print(
-                f"[tools.yaml] ⚠ 未知工具 '{tool_name}'，跳过（已知: {sorted(REPAIR_CANONICAL_TOOL_NAMES)}）",
+                "[tools.yaml] ⚠ 未知工具 "
+                f"'{tool_name}'，跳过（已知: {sorted(REPAIR_CANONICAL_TOOL_NAMES)}）",
                 file=sys.stderr,
             )
             continue

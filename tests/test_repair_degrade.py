@@ -200,8 +200,7 @@ class TestRepairDegradeIntegration:
         tracer = RepairRunTracer(repo)
         trace_path = tracer.store.runs_dir / state.repair_run_id / "trace.jsonl"
         events = [
-            json.loads(line)
-            for line in trace_path.read_text(encoding="utf-8").strip().splitlines()
+            json.loads(line) for line in trace_path.read_text(encoding="utf-8").strip().splitlines()
         ]
         assert any(e.get("event") == "repair_degraded_to_baseline" for e in events)
         assert any(e.get("event") == "baseline_verify_finished" for e in events)

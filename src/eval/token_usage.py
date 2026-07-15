@@ -121,9 +121,7 @@ def diff_client_usage(before: dict, after: dict) -> dict:
 
 def summarize_agent_tool_usage(by_agent: dict) -> dict:
     """从 token_usage_by_agent 提取各 Agent 工具调用次数。"""
-    tool_by_agent = {
-        name: int(info.get("tool_steps", 0) or 0) for name, info in by_agent.items()
-    }
+    tool_by_agent = {name: int(info.get("tool_steps", 0) or 0) for name, info in by_agent.items()}
     return {
         "tool_usage_by_agent": tool_by_agent,
         "total_tool_steps": sum(tool_by_agent.values()),

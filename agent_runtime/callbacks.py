@@ -16,7 +16,6 @@ XML 与 Native 两条路径共用。
 """
 
 import sys
-from typing import Any
 
 # ANSI 颜色码
 _RESET = "\033[0m"
@@ -43,9 +42,7 @@ class AgentCallback:
 
     # ---- 模型调用 ----
 
-    def on_pre_model(
-        self, step: int, prompt_preview: str, *, path: str = ""
-    ) -> None:
+    def on_pre_model(self, step: int, prompt_preview: str, *, path: str = "") -> None:
         """模型调用前。prompt_preview 为 prompt 前 200 字符。"""
 
     def on_post_model(
@@ -55,9 +52,7 @@ class AgentCallback:
 
     # ---- 工具执行 ----
 
-    def on_pre_tool(
-        self, step: int, tool_name: str, tool_args: dict, *, path: str = ""
-    ) -> None:
+    def on_pre_tool(self, step: int, tool_name: str, tool_args: dict, *, path: str = "") -> None:
         """工具执行前（Gateway 权限检查通过后，Executor 闸口前）。"""
 
     def on_post_tool(
@@ -78,9 +73,7 @@ class AgentCallback:
 
     # ---- ReAct 阶段 ----
 
-    def on_react_phase(
-        self, phase: str, step: int, max_steps: int, *, tool: str = ""
-    ) -> None:
+    def on_react_phase(self, phase: str, step: int, max_steps: int, *, tool: str = "") -> None:
         """ReAct 阶段切换。phase ∈ {reasoning, acting, observation, recording}。"""
 
 
@@ -90,6 +83,7 @@ ProgressCallback = AgentCallback  # 旧名可用
 
 
 # ---- Callback 链 ----
+
 
 class CallbackChain(AgentCallback):
     """回调链：按序调用多个 AgentCallback，任一异常 log + 继续。
@@ -128,23 +122,48 @@ class CallbackChain(AgentCallback):
     def on_pre_model(self, step: int, prompt_preview: str, *, path: str = "") -> None:
         self._notify_chain("on_pre_model", step=step, prompt_preview=prompt_preview, path=path)
 
-    def on_post_model(self, step: int, raw_preview: str, elapsed_ms: int, *, path: str = "") -> None:
-        self._notify_chain("on_post_model", step=step, raw_preview=raw_preview, elapsed_ms=elapsed_ms, path=path)
+    def on_post_model(
+        self, step: int, raw_preview: str, elapsed_ms: int, *, path: str = ""
+    ) -> None:
+        self._notify_chain(
+            "on_post_model", step=step, raw_preview=raw_preview, elapsed_ms=elapsed_ms, path=path
+        )
 
     def on_pre_tool(self, step: int, tool_name: str, tool_args: dict, *, path: str = "") -> None:
-        self._notify_chain("on_pre_tool", step=step, tool_name=tool_name, tool_args=tool_args, path=path)
+        self._notify_chain(
+            "on_pre_tool", step=step, tool_name=tool_name, tool_args=tool_args, path=path
+        )
 
-    def on_post_tool(self, step: int, tool_name: str, result_preview: str, elapsed_ms: int, *, path: str = "") -> None:
-        self._notify_chain("on_post_tool", step=step, tool_name=tool_name, result_preview=result_preview, elapsed_ms=elapsed_ms, path=path)
+    def on_post_tool(
+        self, step: int, tool_name: str, result_preview: str, elapsed_ms: int, *, path: str = ""
+    ) -> None:
+        self._notify_chain(
+            "on_post_tool",
+            step=step,
+            tool_name=tool_name,
+            result_preview=result_preview,
+            elapsed_ms=elapsed_ms,
+            path=path,
+        )
 
-    def on_tool_executed(self, step: int, name: str, result_preview: str, elapsed_ms: int, status: str) -> None:
-        self._notify_chain("on_tool_executed", step=step, name=name, result_preview=result_preview, elapsed_ms=elapsed_ms, status=status)
+    def on_tool_executed(
+        self, step: int, name: str, result_preview: str, elapsed_ms: int, status: str
+    ) -> None:
+        self._notify_chain(
+            "on_tool_executed",
+            step=step,
+            name=name,
+            result_preview=result_preview,
+            elapsed_ms=elapsed_ms,
+            status=status,
+        )
 
     def on_react_phase(self, phase: str, step: int, max_steps: int, *, tool: str = "") -> None:
         self._notify_chain("on_react_phase", phase=phase, step=step, max_steps=max_steps, tool=tool)
 
 
 # ---- CLI 终端实现 ----
+
 
 class CLIProgressCallback(AgentCallback):
     """终端友好的进度回调（ANSI 彩色输出到 stderr）。
@@ -163,9 +182,7 @@ class CLIProgressCallback(AgentCallback):
         """记录当前步数。"""
         self._step = step
 
-    def on_react_phase(
-        self, phase: str, step: int, max_steps: int, *, tool: str = ""
-    ) -> None:
+    def on_react_phase(self, phase: str, step: int, max_steps: int, *, tool: str = "") -> None:
         """向 stderr 打印 ReAct 阶段行。"""
         suffix = f" {tool}" if tool else ""
         print(
@@ -184,7 +201,7 @@ class CLIProgressCallback(AgentCallback):
         elapsed = time.time() - self._t0
         self._t0 = time.time()
 
-        preview = result_preview[:80].replace("\n", " ")
+        result_preview[:80].replace("\n", " ")
         if status == "DRY":
             color = _BLUE
         elif status == "FAIL":

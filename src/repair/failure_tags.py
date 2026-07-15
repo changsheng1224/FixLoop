@@ -100,9 +100,7 @@ def classify_failure_tags(state: RepairState) -> list[FailureTag]:
     return []
 
 
-def check_patch_faithfulness(
-    patches: list, state
-) -> tuple[list, list[str]]:
+def check_patch_faithfulness(patches: list, state) -> tuple[list, list[str]]:
     """闸口：过滤掉操作无关文件的幻觉 patch。
 
     Args:

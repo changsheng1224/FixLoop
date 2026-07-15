@@ -175,7 +175,7 @@ class TestRoutingTable:
     def test_large_topic_splits_to_chunked(self, store):
         """大 topic（>32KB）自动拆分为 chunked 存储。"""
         # 写足够多的大条目触发 chunked（每条 ~1000 bytes）
-        entries = [(f"key-decisions", f"decision {i}: " + "y" * 1000) for i in range(60)]
+        entries = [("key-decisions", f"decision {i}: " + "y" * 1000) for i in range(60)]
         store.promote(entries)
         strategy = store._topic_strategy("key-decisions")
         assert strategy == "chunked", (
@@ -189,7 +189,7 @@ class TestRoutingTable:
 
     def test_read_chunked_first_limits_chunks(self, store):
         """_read_chunked_first 只读前 N chunk。"""
-        entries = [(f"key-decisions", f"decision {i}: " + "y" * 800) for i in range(80)]
+        entries = [("key-decisions", f"decision {i}: " + "y" * 800) for i in range(80)]
         store.promote(entries)
         # 全部条目数
         all_count = len(store._read_chunked("key-decisions"))
@@ -208,7 +208,7 @@ class TestRoutingTable:
 
     def test_chunked_retrieval_reads_limited_chunks(self, store):
         """chunked topic retrieval 只读前 2 chunk。"""
-        entries = [(f"dependency-facts", f"dep {i}: pytest==" + "z" * 200) for i in range(80)]
+        entries = [("dependency-facts", f"dep {i}: pytest==" + "z" * 200) for i in range(80)]
         # 在其中加一个可检索条目
         entries[3] = ("dependency-facts", "dep 3: pytest==7.0.0 findme_marker")
         store.promote(entries)
@@ -224,7 +224,7 @@ class TestRoutingTable:
         assert len(inline_entries) == 3
 
         # 再写到超过阈值 → chunked
-        big = [(f"key-decisions", f"big {i}: " + "x" * 800) for i in range(80)]
+        big = [("key-decisions", f"big {i}: " + "x" * 800) for i in range(80)]
         store.promote(big)
         chunked_entries = store._read_topic("key-decisions", strategy="chunked")
         # chunked 应包含原有 + 新条目
@@ -321,7 +321,6 @@ class TestUpsertEntryAuthority:
     def test_high_authority_overrides_low(self):
         from agent_runtime.features.memory.durable import DurableMemoryStore
 
-        entries = ["old entry"]
         # 先以 auto 写入
         result = DurableMemoryStore._upsert_entry([], "old entry", authority="auto")
         # 同 subject、高权威覆盖
@@ -335,9 +334,12 @@ class TestUpsertEntryAuthority:
         """低权威写入同 subject → 互斥版本链（追加 #v2）。"""
         from agent_runtime.features.memory.durable import DurableMemoryStore
 
-        entries = ["important decision\nkind=decision confidence=0.80 source=agent [authority:agent]"]
+        entries = [
+            "important decision\nkind=decision confidence=0.80 source=agent [authority:agent]"
+        ]
         result = DurableMemoryStore._upsert_entry(
-            entries, "important decision\nkind=observation confidence=0.50 source=auto",
+            entries,
+            "important decision\nkind=observation confidence=0.50 source=auto",
             authority="auto",
         )
         # 低权威不可覆盖 → 追加版本
@@ -348,18 +350,14 @@ class TestUpsertEntryAuthority:
         from agent_runtime.features.memory.durable import DurableMemoryStore
 
         entries = ["use ruff format"]
-        result = DurableMemoryStore._upsert_entry(
-            entries, "use ruff format", authority="auto"
-        )
+        result = DurableMemoryStore._upsert_entry(entries, "use ruff format", authority="auto")
         assert len(result) == 1
 
     def test_new_entry_appended(self):
         from agent_runtime.features.memory.durable import DurableMemoryStore
 
         entries = ["existing entry"]
-        result = DurableMemoryStore._upsert_entry(
-            entries, "completely new entry", authority="auto"
-        )
+        result = DurableMemoryStore._upsert_entry(entries, "completely new entry", authority="auto")
         assert len(result) == 2
 
 
@@ -376,7 +374,8 @@ class TestVersionChain:
 
         entries = ["important decision\nsource=agent [authority:agent]"]
         result = DurableMemoryStore._upsert_entry(
-            entries, "important decision\nsource=auto",
+            entries,
+            "important decision\nsource=auto",
             authority="auto",
         )
         assert len(result) == 2
@@ -447,9 +446,7 @@ class TestVersionChain:
         from agent_runtime.features.memory.durable import DurableMemoryStore
 
         entries = ["entry alpha"]
-        result = DurableMemoryStore._upsert_entry(
-            entries, "entry beta", authority="auto"
-        )
+        result = DurableMemoryStore._upsert_entry(entries, "entry beta", authority="auto")
         assert len(result) == 2
         # beta 是新条目，无版本标记
         assert "v2" not in result[1]
@@ -469,7 +466,7 @@ class TestConfidenceDecay:
         old_time = 0  # epoch
         now = 10 * 86400  # 10 days later
         decayed, valid = apply_confidence_decay(1.0, old_time, now=now)
-        expected = round(1.0 * (DECAY_RATE ** 10), 3)
+        expected = round(1.0 * (DECAY_RATE**10), 3)
         assert decayed == expected
         assert valid is True
 
@@ -506,7 +503,6 @@ class TestConfidenceDecay:
         from agent_runtime.features.memory.durable import (
             UserPreference,
             _apply_time_decay,
-            apply_confidence_decay,
         )
 
         pref = UserPreference(key="test", value="v", confidence=0.8, updated_at=0)
@@ -520,8 +516,8 @@ class TestEpisodicDecayInDream:
 
     def test_old_low_confidence_note_filtered(self):
         """旧 + 低置信度 → 被 Dream 过滤。"""
-        from agent_runtime.features.memory.dream import MemoryDreamer
         from agent_runtime.features.memory.core import default_memory_state
+        from agent_runtime.features.memory.dream import MemoryDreamer
 
         state = default_memory_state()
         old = 1000  # very old
@@ -539,8 +535,8 @@ class TestEpisodicDecayInDream:
 
     def test_no_confidence_field_not_decay_filtered(self):
         """无 confidence 字段的笔记不受衰减过滤（仅受 TTL 控制）。"""
-        from agent_runtime.features.memory.dream import MemoryDreamer
         from agent_runtime.features.memory.core import default_memory_state
+        from agent_runtime.features.memory.dream import MemoryDreamer
 
         state = default_memory_state()
         recent = time.time()

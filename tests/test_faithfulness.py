@@ -11,7 +11,6 @@ from src.repair.failure_tags import (
 )
 from src.state import CandidatePatch, RepairState, SuspectLocation
 
-
 # ---------------------------------------------------------------------------
 # _is_wrong_file — 修复后的语义
 # ---------------------------------------------------------------------------

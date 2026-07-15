@@ -57,6 +57,7 @@ class TestBlackboardReadWrite:
         assert bb.read("k") == "v1"
         assert bb.conflicts == []
 
+
 class TestOrchestratorConflictAPI:
     def test_resolve_conflict_prefer_localizer(self):
         from src.blackboard import Blackboard
@@ -79,6 +80,7 @@ class TestOrchestratorConflictAPI:
         bb.write("suspect:calc.py:42", {"confidence": 0.8}, source_agent="localizer")
         assert resolve_blackboard_conflicts(bb) == []
 
+
 class TestSuspectDedupe:
     def test_dedupes_same_file_line(self):
         from src.repair.blackboard_merge import dedupe_suspects
@@ -91,9 +93,11 @@ class TestSuspectDedupe:
         assert len(result) == 2
         assert result[0].confidence == 0.9  # takes higher confidence
 
+
 class TestBlackboardConflictsInReport:
     def test_conflicts_in_snapshot(self):
         from src.blackboard import Blackboard
+
         bb = Blackboard()
         bb.write("suspect:a.py:1", {"c": 0.5}, source_agent="localizer")
         bb.write("suspect:a.py:1", {"c": 0.9}, source_agent="retriever")

@@ -31,8 +31,13 @@ class TestFixLoopErrorCode:
 
 class TestStopReasonMapping:
     def test_known_stop_reasons_mapped(self):
-        for reason in ("context_overflow", "budget_exhausted", "step_timeout",
-                        "circuit_breaker", "api_error"):
+        for reason in (
+            "context_overflow",
+            "budget_exhausted",
+            "step_timeout",
+            "circuit_breaker",
+            "api_error",
+        ):
             code = STOP_REASON_TO_ERROR_CODE.get(reason)
             assert code is not None, f"{reason} should have error code"
 

@@ -42,7 +42,7 @@ def trace_tree_summary(run_dir: str | Path) -> str:
         payload = ev.get("payload", {})
 
         if name == "run_started":
-            lines.append(f"▶ run_started")
+            lines.append("▶ run_started")
         elif name == "context_built":
             sections = payload.get("sections") or payload.get("context_sections") or {}
             total = payload.get("total_tokens", "?")
@@ -55,7 +55,7 @@ def trace_tree_summary(run_dir: str | Path) -> str:
             tier = payload.get("execution_tier", "")
             lines.append(f"  [{step}] 🔧 {tool}" + (f" ({tier})" if tier else ""))
         elif name == "model_request_start":
-            lines.append(f"  🤖 model_request")
+            lines.append("  🤖 model_request")
         elif name == "run_finished":
             reason = payload.get("stop_reason", "?")
             lines.append(f"■ run_finished ({reason})")

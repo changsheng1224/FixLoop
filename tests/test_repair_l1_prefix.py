@@ -2,18 +2,15 @@
 
 from __future__ import annotations
 
-import pytest
-
 from agent_runtime.prompt_prefix import (
-    RepairL1Prefix,
     build_repair_l1_prefix,
-    compose_repair_prefix,
     cache_stable_text,
+    compose_repair_prefix,
 )
 from agent_runtime.providers.clients import FakeModelClient
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.workspace import WorkspaceContext
-from src.agents.factory import create_localizer, create_patcher, create_retriever
+from src.agents.factory import create_localizer, create_patcher
 from src.repair_factory import wire_orchestrator
 from src.tools.composite import build_repair_canonical_tools
 

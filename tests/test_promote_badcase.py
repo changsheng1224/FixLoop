@@ -1,13 +1,11 @@
 """badcase 晋升脚本单测：fixture run → case 骨架生成。"""
 
 import json
-import tempfile
-from pathlib import Path
 
 
 class TestPromoteBadcase:
     def test_generate_skeleton_from_fake_run(self, tmp_path):
-        from scripts.promote_badcase import generate_case_skeleton, next_case_id
+        from scripts.promote_badcase import generate_case_skeleton
 
         # 创建 fake run
         run_dir = tmp_path / "runs" / "fake-001"
@@ -32,6 +30,7 @@ class TestPromoteBadcase:
 
         # 检查 metadata
         import yaml
+
         meta = yaml.safe_load((result / "metadata.yaml").read_text(encoding="utf-8"))
         assert meta["issue_type"] == "type_error"
 

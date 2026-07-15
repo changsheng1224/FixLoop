@@ -159,7 +159,9 @@ def preview_to_metadata(preview: PatchPreview) -> dict:
     }
 
 
-def try_build_patch_preview(path: str, file_text: str, args: dict) -> tuple[dict | None, str | None]:
+def try_build_patch_preview(
+    path: str, file_text: str, args: dict
+) -> tuple[dict | None, str | None]:
     """解析参数并构建 preview metadata；失败返回 (None, error_msg)。"""
     try:
         plan = parse_patch_input(args)

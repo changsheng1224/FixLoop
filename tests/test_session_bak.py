@@ -1,8 +1,6 @@
 """SessionStore .bak 单测：保存→bak + 损坏主文件→回退 bak。"""
 
 import json
-import tempfile
-from pathlib import Path
 
 import pytest
 

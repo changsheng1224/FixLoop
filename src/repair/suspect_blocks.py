@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 from src.state import SuspectLocation
 
@@ -56,8 +56,7 @@ def render_suspects_summary(
     parts = []
     for suspect in suspects[:max_suspects]:
         parts.append(
-            f"- {suspect.file_path}:{suspect.start_line}-{suspect.end_line} "
-            f"({suspect.reason})"
+            f"- {suspect.file_path}:{suspect.start_line}-{suspect.end_line} ({suspect.reason})"
         )
     return "\n".join(parts)
 
@@ -108,7 +107,7 @@ def render_suspects_diff_only(
             if line_no in suspect_set:
                 hunk_lines.append(f"-{line_text}")  # 嫌疑行
             else:
-                hunk_lines.append(f" {line_text}")   # 上下文行
+                hunk_lines.append(f" {line_text}")  # 上下文行
         blocks.append("\n".join(hunk_lines))
 
     return "\n".join(blocks)

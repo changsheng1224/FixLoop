@@ -1,17 +1,19 @@
 """Trace replay 单测：树状摘要 + prompt 提取。"""
 
 import json
-import tempfile
 from pathlib import Path
 
 
 def _write_trace(run_dir: Path):
     events = [
         {"event": "run_started", "payload": {}},
-        {"event": "context_built", "payload": {
-            "sections": {"system": 200, "tools": 150, "request": 100},
-            "total_tokens": 450,
-        }},
+        {
+            "event": "context_built",
+            "payload": {
+                "sections": {"system": 200, "tools": 150, "request": 100},
+                "total_tokens": 450,
+            },
+        },
         {"event": "tool_executed", "payload": {"tool": "read_file", "execution_tier": "host"}},
         {"event": "tool_executed", "payload": {"tool": "grep", "execution_tier": "host"}},
         {"event": "run_finished", "payload": {"stop_reason": "final"}},

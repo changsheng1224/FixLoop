@@ -90,7 +90,9 @@ class TestOrchestrator:
         orch = Orchestrator(None, None, None)
         orch._repo_root = str(temp_workspace)
         plan = RepairPlan(issue_type="import_error", suspect_files=["app.py"])
-        prompt, _ = orch._patcher_prompt([], None, plan=plan, issue="ModuleNotFoundError at app.py:1")
+        prompt, _ = orch._patcher_prompt(
+            [], None, plan=plan, issue="ModuleNotFoundError at app.py:1"
+        )
         assert "test_app.py" in prompt
         assert "utils.helper" in prompt
 
@@ -506,9 +508,7 @@ class TestParseIssueTypeRules:
         assert issue_type == "logic_error"
 
     def test_unknown_fallback(self):
-        issue_type, rule = Orchestrator._classify_issue_type(
-            "help me please"
-        )
+        issue_type, rule = Orchestrator._classify_issue_type("help me please")
         assert issue_type == "unknown"
         assert rule == "none"
 
@@ -532,9 +532,7 @@ class TestParseIssueTypeRules:
         orch = Orchestrator.__new__(Orchestrator)
         orch._repo_root = "."
         orch._light_client = None
-        plan = orch._parse_issue(
-            "FAILED test_app.py::test_add - AssertionError: assert 3 == 5"
-        )
+        plan = orch._parse_issue("FAILED test_app.py::test_add - AssertionError: assert 3 == 5")
         assert plan.issue_type == "test_failure"
         assert plan.intent_parser == "rule:test_failure"
 
@@ -542,9 +540,7 @@ class TestParseIssueTypeRules:
         orch = Orchestrator.__new__(Orchestrator)
         orch._repo_root = "."
         orch._light_client = None
-        plan = orch._parse_issue(
-            "the function returns wrong result for all negative inputs"
-        )
+        plan = orch._parse_issue("the function returns wrong result for all negative inputs")
         assert plan.issue_type == "logic_error"
         assert plan.intent_parser == "rule:logic_error"
 
@@ -676,7 +672,9 @@ class TestBuildFeedback:
         result = VerificationResult(all_passed=False)
         state = RepairState(issue_input="fix")
         state.candidate_patches = [
-            CandidatePatch(file_path="app.py", diff="--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-x = 1\n+x = 2"),
+            CandidatePatch(
+                file_path="app.py", diff="--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-x = 1\n+x = 2"
+            ),
         ]
         feedback = orch._build_feedback(result, state=state)
         assert "上轮改动" in feedback
@@ -757,8 +755,13 @@ class TestRetrieverDegrade:
         orch._repo_root = str(temp_workspace)
         (temp_workspace / "app.py").write_text("def add(a,b): return a+b\n")
         suspects = [
-            SuspectLocation(file_path="app.py", start_line=1, end_line=10,
-                            function_name="add", reason="traceback"),
+            SuspectLocation(
+                file_path="app.py",
+                start_line=1,
+                end_line=10,
+                function_name="add",
+                reason="traceback",
+            ),
         ]
         ctx, timing = orch._rule_retrieve(suspects, "TypeError in add")
         assert ctx is not None
@@ -769,8 +772,13 @@ class TestRetrieverDegrade:
         orch._repo_root = str(temp_workspace)
         (temp_workspace / "app.py").write_text("def process(x): return x\n")
         suspects = [
-            SuspectLocation(file_path="app.py", start_line=1, end_line=10,
-                            function_name="process", reason="stack"),
+            SuspectLocation(
+                file_path="app.py",
+                start_line=1,
+                end_line=10,
+                function_name="process",
+                reason="stack",
+            ),
         ]
         ctx, timing = orch._rule_retrieve(suspects, "error in process")
         assert hasattr(ctx, "related_tests")

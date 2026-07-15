@@ -3,9 +3,9 @@
 import json
 
 from src.repair.output_parsers import (
+    _load_json,
     _repair_trailing_comma,
     _strip_json_comments,
-    _load_json,
 )
 
 
@@ -19,7 +19,7 @@ class TestTrailingCommaRepair:
 
     def test_trailing_comma_in_array(self):
         """数组尾随逗号修复。"""
-        text = '[1, 2, 3,]'
+        text = "[1, 2, 3,]"
         repaired = _repair_trailing_comma(text)
         data = json.loads(repaired)
         assert data == [1, 2, 3]

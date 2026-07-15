@@ -13,7 +13,7 @@ class AstParseArgs:
 
     path: str  # 必填
     start_line: int = 0  # 可选：局部分析起始行
-    end_line: int = 0    # 可选：局部分析结束行
+    end_line: int = 0  # 可选：局部分析结束行
 
 
 _DEFAULT_CONTEXT_LINES = 20
@@ -67,7 +67,8 @@ def ast_parse(context, args: dict) -> str:
         window_start = max(1, start_line - _DEFAULT_CONTEXT_LINES)
         window_end = end_line + _DEFAULT_CONTEXT_LINES
         results = [
-            r for r in results
+            r
+            for r in results
             if r["lineno"] <= window_end and (r["end_lineno"] or r["lineno"]) >= window_start
         ]
 

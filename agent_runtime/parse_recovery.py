@@ -70,9 +70,7 @@ def build_recovery_prompt(
     if last_tool_call and last_tool_call.get("name"):
         name = last_tool_call.get("name", "?")
         args = last_tool_call.get("args", {})
-        args_summary = ", ".join(
-            f"{k}={str(v)[:60]}" for k, v in list(args.items())[:3]
-        )
+        args_summary = ", ".join(f"{k}={str(v)[:60]}" for k, v in list(args.items())[:3])
         lines.append("## ① 上一次成功的工具调用")
         lines.append(f"```\n{name}({args_summary})\n```")
         lines.append("")

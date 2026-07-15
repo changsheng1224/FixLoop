@@ -77,7 +77,7 @@ class SkillContext:
         }
 
     @classmethod
-    def from_dict(cls, data: dict | None) -> "SkillContext":
+    def from_dict(cls, data: dict | None) -> SkillContext:
         raw = data or {}
         return cls(
             matched_skill=raw.get("matched_skill"),
@@ -130,7 +130,7 @@ class SuspectLocation:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "SuspectLocation":
+    def from_dict(cls, data: dict) -> SuspectLocation:
         """从 dict 反序列化。"""
         return cls(
             file_path=data.get("file_path", ""),
@@ -169,7 +169,7 @@ class RepairSubTask:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "RepairSubTask":
+    def from_dict(cls, data: dict) -> RepairSubTask:
         return cls(
             id=data.get("id", ""),
             goal=data.get("goal", ""),
@@ -221,7 +221,7 @@ class RepairPlan:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "RepairPlan":
+    def from_dict(cls, data: dict) -> RepairPlan:
         """从 dict 反序列化。"""
         skill = SkillContext.from_dict(data.get("skill"))
         if "skill" not in data:
@@ -236,10 +236,7 @@ class RepairPlan:
             reasoning=data.get("reasoning", ""),
             prompt_variants=dict(data.get("prompt_variants") or {}),
             intent_parser=data.get("intent_parser", ""),
-            subtasks=[
-                RepairSubTask.from_dict(s)
-                for s in data.get("subtasks", [])
-            ],
+            subtasks=[RepairSubTask.from_dict(s) for s in data.get("subtasks", [])],
             schema_version=data.get("schema_version", "1.0"),
         )
 
@@ -272,7 +269,7 @@ class RetrievedContext:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "RetrievedContext":
+    def from_dict(cls, data: dict) -> RetrievedContext:
         """从 dict 反序列化。"""
         return cls(
             similar_snippets=data.get("similar_snippets", []),
@@ -314,7 +311,7 @@ class CandidatePatch:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "CandidatePatch":
+    def from_dict(cls, data: dict) -> CandidatePatch:
         """从 dict 反序列化。"""
         return cls(
             file_path=data.get("file_path", ""),
@@ -366,7 +363,7 @@ class VerificationResult:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "VerificationResult":
+    def from_dict(cls, data: dict) -> VerificationResult:
         """从 dict 反序列化。"""
         return cls(
             all_passed=data.get("all_passed", False),
@@ -442,7 +439,7 @@ class RepairState:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "RepairState":
+    def from_dict(cls, data: dict) -> RepairState:
         """从 dict 反序列化。"""
         return cls(
             issue_input=data.get("issue_input", ""),
@@ -474,9 +471,7 @@ class RepairState:
             node_timings=data.get("node_timings", {}),
             agent_errors=data.get("agent_errors", {}),
             repair_run_id=data.get("repair_run_id", ""),
-            agent_asks=[
-                AgentAskRef.from_dict(item) for item in data.get("agent_asks", [])
-            ],
+            agent_asks=[AgentAskRef.from_dict(item) for item in data.get("agent_asks", [])],
             blackboard_snapshot=dict(data.get("blackboard_snapshot") or {}),
             degraded_mode=data.get("degraded_mode", False),
             schema_version=data.get("schema_version", "1.0"),

@@ -5,29 +5,27 @@
 使用 tar 流式传输替代 bind mount，避免 Windows bind mount I/O 瓶颈。
 """
 
-import os
 import base64
-import socket
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
+from agent_runtime.cancellation import (
+    BlockingDeadlineError,
+    CancelledError,
+    wait_future,
+)
 from agent_runtime.logging_setup import get_logger
+from src.harness.sandbox_tar import build_sandbox_tar
 
 log = get_logger(__name__)
 
 # 模块级并发上限 Semaphore（env FIXLOOP_MAX_SANDBOXES，默认 4）
 _MAX_SANDBOXES = int(os.getenv("FIXLOOP_MAX_SANDBOXES", "4"))
 _sandbox_semaphore = threading.BoundedSemaphore(_MAX_SANDBOXES)
-
-from agent_runtime.cancellation import (
-    BlockingDeadlineError,
-    CancelledError,
-    wait_future,
-)
-from src.harness.sandbox_tar import build_sandbox_tar
 
 BUILD_TIMEOUT_S = 600
 TEST_TIMEOUT_S = 900
@@ -138,7 +136,7 @@ def _drain_exec_socket(sock) -> None:
     while True:
         try:
             chunk = sock.recv(4096)
-        except (socket.timeout, TimeoutError) as exc:
+        except TimeoutError as exc:
             raise RuntimeError("sandbox upload did not finish before socket timeout") from exc
         except Exception:
             break
@@ -259,11 +257,13 @@ class SandboxManager:
         acquired = _sandbox_semaphore.acquire(timeout=30)
         if not acquired:
             raise RuntimeError(
-                f"FIXLOOP_MAX_SANDBOXES={_MAX_SANDBOXES}: "
-                "无法在 30s 内获取 sandbox 槽位"
+                f"FIXLOOP_MAX_SANDBOXES={_MAX_SANDBOXES}: 无法在 30s 内获取 sandbox 槽位"
             )
-        log.debug("sandbox semaphore acquired (%d/%d)",
-                   _MAX_SANDBOXES - _sandbox_semaphore._value, _MAX_SANDBOXES)
+        log.debug(
+            "sandbox semaphore acquired (%d/%d)",
+            _MAX_SANDBOXES - _sandbox_semaphore._value,
+            _MAX_SANDBOXES,
+        )
 
         container = None
         t0 = time.time()
@@ -360,8 +360,11 @@ class SandboxManager:
         finally:
             if getattr(sandbox, "_semaphore_held", False):
                 _sandbox_semaphore.release()
-                log.debug("sandbox semaphore released (%d/%d)",
-                           _MAX_SANDBOXES - _sandbox_semaphore._value, _MAX_SANDBOXES)
+                log.debug(
+                    "sandbox semaphore released (%d/%d)",
+                    _MAX_SANDBOXES - _sandbox_semaphore._value,
+                    _MAX_SANDBOXES,
+                )
 
 
 class SandboxContext:

@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-import json
 import tempfile
 from pathlib import Path
 
-from src.eval.models import CaseResult, EvalReport
-from src.eval.runner import DEFAULT_CASES_DIR, EvalRunner, build_eval_report
+from src.eval.runner import DEFAULT_CASES_DIR, EvalRunner
 
 
 def _fake_factory(repo_path: str):
     """返回一个不执行 repair 的假 Orchestrator。"""
     from src.eval.fake_runner import FakePatchOrchestrator
+
     return FakePatchOrchestrator(repo_path, cases_dir=DEFAULT_CASES_DIR)
 
 
@@ -98,7 +97,7 @@ class TestResumeBehavior:
             # 只跑第一批 case
             runner.run_all(["case_001", "case_002"], resume=True)
 
-            loaded = runner._load_checkpoint()
+            runner._load_checkpoint()
             # 全部完成后 checkpoint 被清除
             # 但中间过程应正确（我们只验证 run_all 执行无异常）
             assert True  # 无异常即为通过

@@ -1,7 +1,5 @@
 """Provider JSON mode 全角色单测：表驱动 + 降级。"""
 
-import pytest
-
 from src.agents.factory import create_repair_agent
 
 
@@ -9,7 +7,6 @@ class TestJsonModeAllRoles:
     def test_localizer_has_json_mode(self, tmp_path):
         from agent_runtime.providers.clients import FakeModelClient
         from agent_runtime.workspace import WorkspaceContext
-        from pathlib import Path
 
         ws = WorkspaceContext.build(str(tmp_path))
         client = FakeModelClient(["[]"])

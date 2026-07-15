@@ -11,7 +11,8 @@ L0（Tier Guard）：组装前过滤不该进窗的 history / section 内容。
 from __future__ import annotations
 
 from collections import Counter
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from agent_runtime.context_manager import TokenBudget
@@ -231,7 +232,10 @@ def protected_turn_indices(
     current_turn_id: int | None = None,
     tail_protect_tokens: int = TAIL_PROTECT_TOKENS,
 ) -> set[int]:
-    """尾部 turn 保护区：current turn_id + 最近 N 轮 + 尾部 tail_protect（整 turn，跨边界全保护）。"""
+    """尾部 turn 保护区。
+
+    current turn_id + 最近 N 轮 + 尾部 tail_protect，整 turn 跨边界全保护。
+    """
     from agent_runtime.turn_tracking import is_current_turn
 
     protected: set[int] = set()
@@ -335,8 +339,7 @@ def make_collapse_marker(turn: list[dict], turn_index: int) -> dict:
     tool_label = ",".join(dict.fromkeys(tools)) if tools else "none"
     refs = sum(1 for item in turn if item.get("_compact_ref"))
     content = (
-        f"[collapsed turn #{turn_index + 1}: user='{user_msg}' | "
-        f"tools={tool_label} | refs={refs}]"
+        f"[collapsed turn #{turn_index + 1}: user='{user_msg}' | tools={tool_label} | refs={refs}]"
     )
     return {"role": "system", "content": content, "_collapsed": True}
 
@@ -348,7 +351,8 @@ def l0_tier_guard(
     policy: TierPolicy | None = None,
 ) -> list[dict]:
     """L0 Tier Guard：过滤不该进入 context 窗口的 history 投影条目。"""
-    from agent_runtime.tier_policy import TierPolicy as _TierPolicy, l0_filter_history
+    from agent_runtime.tier_policy import TierPolicy as _TierPolicy
+    from agent_runtime.tier_policy import l0_filter_history
 
     pipe = metadata.setdefault("compression_pipeline", {})
     tier = policy if policy is not None else _TierPolicy()
@@ -625,8 +629,8 @@ def l5_auto_compact(
         # 已有摘要前的内容已摘要过 → 跳过；只处理摘要后的新条目
         existing_summary = str(history[existing_summary_idx].get("content", ""))
         existing_summary = existing_summary.replace("[Earlier summary]: ", "").strip()
-        preserved = [dict(item) for item in history[:existing_summary_idx + 1]]
-        new_items = [dict(item) for item in history[existing_summary_idx + 1:]]
+        preserved = [dict(item) for item in history[: existing_summary_idx + 1]]
+        new_items = [dict(item) for item in history[existing_summary_idx + 1 :]]
         pinned = []
         # 钉扎保护：new_items 中的关键条目移到后半段
         pinned_new, unpinned_new = _partition_pinned(new_items)
@@ -635,12 +639,12 @@ def l5_auto_compact(
         recent_history = unpinned_new[mid:] + pinned_new
         # 已摘要的前缀保留在结果前部
         recent_history = preserved + recent_history
-        protected_count = len(pinned_new)
+        len(pinned_new)
         # cache key 含 offset → 不同轮次不同 key
         cache_key = _summary_cache_key(old_history) + f"@offset{existing_summary_idx}"
     else:
         pinned, unpinned = _partition_pinned(history)
-        protected_count = len(pinned)
+        len(pinned)
         mid = max(len(unpinned) // 2, 1)
         old_history = unpinned[:mid]
         recent_history = unpinned[mid:] + pinned  # pinned 数据在最后
@@ -738,7 +742,11 @@ def _build_l5_summary_prompt(
     new_items: list[str] = []
     for item in old_history:
         content = str(item.get("content", ""))
-        if not existing and item.get("role") == "system" and content.startswith("[Earlier summary]"):
+        if (
+            not existing
+            and item.get("role") == "system"
+            and content.startswith("[Earlier summary]")
+        ):
             existing = content.replace("[Earlier summary]: ", "").strip()
             new_items = []
         elif existing:
@@ -862,12 +870,14 @@ def run_compression_pipeline(
             tokens_before = pipe_meta.get(f"{level}_tokens_before", 0)
             tokens_after = pipe_meta.get(f"{level}_tokens_after", 0)
             ratio = round(tokens_after / max(tokens_before, 1), 3) if tokens_before else 0
-            events.append({
-                "level": level.upper(),
-                "stage": stage,
-                "ratio": ratio,
-                "section": "history",
-            })
+            events.append(
+                {
+                    "level": level.upper(),
+                    "stage": stage,
+                    "ratio": ratio,
+                    "section": "history",
+                }
+            )
     if events:
         pipe_meta["compression_events"] = events
 
@@ -876,7 +886,7 @@ def run_compression_pipeline(
 
 def truncate_tool_result_for_agent(agent, tool_name: str, result_text: str) -> str:
     """AgentLoop / ToolExecutor 投影层：对单次 tool 返回应用 L1。"""
-    from agent_runtime.context_manager import TokenBudget, TOTAL_BUDGET
+    from agent_runtime.context_manager import TOTAL_BUDGET, TokenBudget
 
     cfg = getattr(agent, "config", None)
     budget = TokenBudget(

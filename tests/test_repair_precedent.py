@@ -180,4 +180,3 @@ class TestSemanticFilter:
         filtered = store._semantic_filter("type error in app.py", precedents, 0.4)
         # 语义模型不可用时全部保留；可用时无 summary 的被跳过
         assert len(filtered) <= 1
-

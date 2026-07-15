@@ -41,12 +41,13 @@ class ModelOutputParser:
                 tool_keys = ("action", "name", "tool", "function")
                 if isinstance(data, dict) and any(k in data for k in tool_keys):
                     tool_name = (
-                        data.get("action") or data.get("name")
-                        or data.get("tool") or data.get("function")
+                        data.get("action")
+                        or data.get("name")
+                        or data.get("tool")
+                        or data.get("function")
                     )
                     tool_args = (
-                        data.get("arguments") or data.get("args")
-                        or data.get("parameters") or {}
+                        data.get("arguments") or data.get("args") or data.get("parameters") or {}
                     )
                     if isinstance(tool_name, str) and tool_name:
                         return ("tool", {"name": tool_name, "args": tool_args})
@@ -65,7 +66,7 @@ class ModelOutputParser:
         # 模型用 markdown 代码块包裹 JSON
         md_start = re.search(r"```(?:json)?\s*", raw)
         if md_start:
-            content = raw[md_start.end():]
+            content = raw[md_start.end() :]
             md_end = content.rfind("```")
             if md_end >= 0:
                 inner = content[:md_end].strip()
@@ -74,19 +75,25 @@ class ModelOutputParser:
 
         # 尝试匹配 <function_calls> 格式 (DeepSeek native)
         fc_match = re.search(
-            r"<function_calls>\s*(.*?)\s*</function_calls>", raw, re.DOTALL,
+            r"<function_calls>\s*(.*?)\s*</function_calls>",
+            raw,
+            re.DOTALL,
         )
         if fc_match:
             inner = fc_match.group(1)
             invokes = re.findall(
-                r"<invoke\s+name=\"(\w+)\">(.*?)</invoke>", inner, re.DOTALL,
+                r"<invoke\s+name=\"(\w+)\">(.*?)</invoke>",
+                inner,
+                re.DOTALL,
             )
             if invokes:
                 name = invokes[0][0]
                 params_str = invokes[0][1]
                 args = {}
                 for param_m in re.finditer(
-                    r'<parameter\s+name="(\w+)">(.*?)</parameter>', params_str, re.DOTALL,
+                    r'<parameter\s+name="(\w+)">(.*?)</parameter>',
+                    params_str,
+                    re.DOTALL,
                 ):
                     args[param_m.group(1)] = param_m.group(2).strip()
                 return ("tool", {"name": name, "args": args})
@@ -107,7 +114,9 @@ class ModelOutputParser:
 
         # 尝试匹配 XML 属性格式
         tool_xml_match = re.search(
-            r'<tool\s+name="([^"]+)"(.*?)>(.*?)</tool>', raw, re.DOTALL,
+            r'<tool\s+name="([^"]+)"(.*?)>(.*?)</tool>',
+            raw,
+            re.DOTALL,
         )
         if tool_xml_match:
             name = tool_xml_match.group(1)

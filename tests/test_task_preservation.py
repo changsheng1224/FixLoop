@@ -13,7 +13,6 @@ from agent_runtime.runtime import Agent
 from agent_runtime.task_preservation import issue_preserved, reserve_section_budget
 from agent_runtime.workspace import WorkspaceContext
 
-
 ISSUE_MARKER = "UNIQUE_ISSUE_MARKER_XYZ_42"
 
 

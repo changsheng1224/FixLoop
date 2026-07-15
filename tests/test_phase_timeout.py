@@ -37,7 +37,7 @@ class TestPhaseTimeoutIntegration:
             delay_s=2.0,
         )
         ret = FakeModelClient(['<final>{"related_tests":[]}</final>'])
-        pat = FakeModelClient(['<final>[]</final>'])
+        pat = FakeModelClient(["<final>[]</final>"])
         orch = Orchestrator(
             create_localizer(loc, ws),
             create_retriever(ret, ws),

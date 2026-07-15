@@ -64,6 +64,7 @@ class TestPatcherPrompt:
         text = _read("patcher.txt")
         assert "只输出上面的 JSON" in text
 
+
 class TestIntentParserSnapshot:
     def test_intent_parser_in_snapshot(self):
         from src.repair.prompt_router import repair_plan_intent_snapshot
@@ -82,13 +83,16 @@ class TestIntentParserSnapshot:
         snap = repair_plan_intent_snapshot(plan)
         assert snap["intent_parser"] == "rule"
 
+
 class TestSkillConfidence:
     def test_confidence_high_priority_single_candidate(self):
         from src.skills.models import MatchedSkill
 
         m = MatchedSkill(
-            name="python_type_error_fix", language="python",
-            trigger_pattern="TypeError", priority=10,
+            name="python_type_error_fix",
+            language="python",
+            trigger_pattern="TypeError",
+            priority=10,
             candidates_count=1,
         )
         assert m.confidence == 0.1
@@ -98,21 +102,25 @@ class TestSkillConfidence:
         from src.skills.models import MatchedSkill
 
         m = MatchedSkill(
-            name="generic_fix", language="python",
-            trigger_pattern="Error", priority=5,
+            name="generic_fix",
+            language="python",
+            trigger_pattern="Error",
+            priority=5,
             candidates_count=4,
         )
         assert m.confidence == round(0.05 / 4, 2)
 
     def test_confidence_in_intent_snapshot_with_match(self):
         from src.repair.prompt_router import repair_plan_intent_snapshot
-        from src.state import RepairPlan
         from src.skills.models import MatchedSkill
+        from src.state import RepairPlan
 
         plan = RepairPlan(issue_type="type_error", intent_parser="rule")
         m = MatchedSkill(
-            name="python_type_error_fix", language="python",
-            trigger_pattern="TypeError", priority=10,
+            name="python_type_error_fix",
+            language="python",
+            trigger_pattern="TypeError",
+            priority=10,
         )
         m.apply_to_plan(plan)
         snap = repair_plan_intent_snapshot(plan)

@@ -34,10 +34,15 @@ DEFAULT_DRIFT_WARN = 2
 DEFAULT_DRIFT_TERMINATE = 3
 
 # 参与漂移检测的文件操作工具
-_FILE_TOOLS = frozenset({
-    "read_file", "write_file", "patch_file",
-    "ast_parse", "inspect_file",
-})
+_FILE_TOOLS = frozenset(
+    {
+        "read_file",
+        "write_file",
+        "patch_file",
+        "ast_parse",
+        "inspect_file",
+    }
+)
 
 
 def _extract_filenames(text: str) -> set[str]:

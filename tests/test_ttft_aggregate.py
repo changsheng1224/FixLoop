@@ -1,7 +1,6 @@
 """ttft_aggregate 单测。"""
 
 import json
-from pathlib import Path
 
 from src.repair.ttft_aggregate import aggregate_ttft_from_agent_reports, summarize_repair_ttft
 

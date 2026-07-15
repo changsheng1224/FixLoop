@@ -107,7 +107,9 @@ class TiktokenCounter:
                         self.backend = "tiktoken:cl100k_base"
         except Exception as exc:
             backend = f"tiktoken:{encoding_name or model}:approx"
-            log.warning("无法加载 tiktoken tokenizer %s（%s），使用近似计数", encoding_name or model, exc)
+            log.warning(
+                "无法加载 tiktoken tokenizer %s（%s），使用近似计数", encoding_name or model, exc
+            )
             self.encoder = None
             self._fallback = ApproxTokenCounter(backend)
             self.backend = backend

@@ -87,9 +87,7 @@ class SectionFiller:
             if remaining > 0:
                 text = self.budget.fit(text, remaining)
                 tokens = self.budget.count(text)
-                self.metadata["cuts"].append(
-                    f"裁剪 {name} 到 {tokens} tokens（剩余 {remaining}）"
-                )
+                self.metadata["cuts"].append(f"裁剪 {name} 到 {tokens} tokens（剩余 {remaining}）")
             else:
                 self.metadata["cuts"].append(f"丢弃 {name}（task 预留后预算不足）")
                 self.metadata["sections"][name] = 0

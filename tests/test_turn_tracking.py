@@ -20,7 +20,12 @@ def _exploration_turn(turn_id: int, *, lines: int = 50) -> list[dict]:
     body = "\n".join(f"line {turn_id}-{j} ok content here" for j in range(lines))
     return [
         {"role": "user", "content": f"explore {turn_id}", "turn_id": turn_id},
-        {"role": "assistant", "content": "list_files", "tool_name": "list_files", "turn_id": turn_id},
+        {
+            "role": "assistant",
+            "content": "list_files",
+            "tool_name": "list_files",
+            "turn_id": turn_id,
+        },
         {"role": "tool", "tool_name": "list_files", "content": body, "turn_id": turn_id},
         {"role": "assistant", "content": "read_file", "tool_name": "read_file", "turn_id": turn_id},
         {"role": "tool", "tool_name": "read_file", "content": body, "turn_id": turn_id},

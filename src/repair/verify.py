@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Protocol
 
 from agent_runtime.tools import TIER_CONTAINER, TIER_HOST
-
 from src.state import VerificationResult
 
 

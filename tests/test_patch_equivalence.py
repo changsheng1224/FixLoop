@@ -12,17 +12,20 @@ class TestPatchEquivalence:
     def test_none_no_common_files(self):
         from src.eval.patch_utils import patch_equivalence
 
-        assert patch_equivalence(
-            "--- a/calc.py\n+++ b/calc.py\n", "--- a/other.py\n+++ b/other.py\n"
-        ) == "none"
+        assert (
+            patch_equivalence("--- a/calc.py\n+++ b/calc.py\n", "--- a/other.py\n+++ b/other.py\n")
+            == "none"
+        )
 
     def test_partial_overlapping_files(self):
         from src.eval.patch_utils import patch_equivalence
 
-        assert patch_equivalence(
-            "--- a/a.py\n+++ b/a.py\n--- a/b.py\n+++ b/b.py\n",
-            "--- a/a.py\n+++ b/a.py\n"
-        ) == "partial"
+        assert (
+            patch_equivalence(
+                "--- a/a.py\n+++ b/a.py\n--- a/b.py\n+++ b/b.py\n", "--- a/a.py\n+++ b/a.py\n"
+            )
+            == "partial"
+        )
 
     def test_empty_diffs_none(self):
         from src.eval.patch_utils import patch_equivalence

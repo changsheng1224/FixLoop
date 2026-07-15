@@ -9,18 +9,29 @@
 
 import re
 import time
+from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from contextlib import contextmanager
 from pathlib import Path
 
 from agent_runtime.logging_setup import get_logger
+from src.prompts.loader import load_role_prompt
+from src.prompts.patcher_task_builder import assemble_patcher_variables
+from src.prompts.repair_tasks import (
+    build_localizer_variables,
+    build_retriever_template_and_variables,
+    build_verifier_variables,
+    render_repair_task,
+)
+from src.repair.language_detect import detect_repair_language
 from src.repair.output_parsers import (
     parse_retrieved_context,
     parse_suspect_list,
     parse_verification,
 )
 from src.repair.patch_applier import PatchApplier, apply_patch_to_text, parse_patches
+from src.repair.phase_clock import PhaseTimeoutConfig
 from src.repair.pipeline import RepairPipelineMixin
 from src.repair.prompt_router import (
     ROUTED_ISSUE_TYPES,
@@ -29,23 +40,13 @@ from src.repair.prompt_router import (
     fallback_suspect_uses_import_line,
     patcher_variant_for,
 )
-from src.repair.phase_clock import PhaseTimeoutConfig
 from src.repair.repo_snapshot import restore_repo_snapshot, snapshot_repo
 from src.repair.run_context import RepairRunContext
-from src.repair.language_detect import detect_repair_language
 from src.repair.verify import (
     DockerVerifyStrategy,
     PytestVerifyStrategy,
     StaticVerifyStrategy,
     record_verify_timings,
-)
-from src.prompts.loader import load_role_prompt
-from src.prompts.patcher_task_builder import assemble_patcher_variables
-from src.prompts.repair_tasks import (
-    build_localizer_variables,
-    build_retriever_template_and_variables,
-    build_verifier_variables,
-    render_repair_task,
 )
 from src.state import (
     CandidatePatch,
@@ -63,7 +64,6 @@ __all__ = ["Orchestrator", "apply_patch_to_text"]
 DEFAULT_REPAIR_TIMEOUT_S = 180
 
 # issue_type 分类规则链（按序匹配，首次命中即返回）
-from collections import namedtuple
 _IssueTypeRule = namedtuple("_IssueTypeRule", ["name", "pattern", "issue_type"])
 
 # 反馈环结构化 section（V1.4-Bonus8a）
@@ -75,20 +75,24 @@ _MAX_BUILD_LOG_CHARS = 300
 _ISSUE_TYPE_RULES: list[_IssueTypeRule] = [
     # test_failure 必须在 explicit_exception 之前：
     # "FAILED test_app.py::test_add - AssertionError" 应识别为 test_failure 而非 type_error
-    _IssueTypeRule("test_failure",
-                   r"(?i)(FAILED\s+\S*test|AssertionError|assert\s+\S+\s*[=!<>])",
-                   "test_failure"),
+    _IssueTypeRule(
+        "test_failure",
+        r"(?i)(FAILED\s+\S*test|AssertionError|assert\s+\S+\s*[=!<>])",
+        "test_failure",
+    ),
     _IssueTypeRule("explicit_exception", r"\w+(?:Error|Exception|Warning)", None),
     _IssueTypeRule("composite_keyword", r"(?i)composite", "composite"),
     _IssueTypeRule("config_error", r"(?i)pyproject\.toml|\[tool\.", "config_error"),
-    _IssueTypeRule("logic_error",
-                   r"(?i)(wrong\s+(result|output|return|value)|"
-                   r"incorrect\s+(result|output|behavio)|"
-                   r"should\s+(return|be|have)|"
-                   r"expected\s+\S+\s+but|"
-                   r"unexpected\s+(result|behavio)|"
-                   r"\bbug\b.*\b(function|logic|code)\b)",
-                   "logic_error"),
+    _IssueTypeRule(
+        "logic_error",
+        r"(?i)(wrong\s+(result|output|return|value)|"
+        r"incorrect\s+(result|output|behavio)|"
+        r"should\s+(return|be|have)|"
+        r"expected\s+\S+\s+but|"
+        r"unexpected\s+(result|behavio)|"
+        r"\bbug\b.*\b(function|logic|code)\b)",
+        "logic_error",
+    ),
 ]
 
 
@@ -225,14 +229,15 @@ class Orchestrator(RepairPipelineMixin):
                     try:
                         return fut.result(timeout=repair_timeout_s)
                     except FuturesTimeoutError:
-                        from src.repair.termination import RepairTerminalStatus, finalize_repair_state
+                        from src.repair.termination import (
+                            RepairTerminalStatus,
+                            finalize_repair_state,
+                        )
 
                         token.cancel("timeout")
                         self._restore_repo_snapshot(initial_snapshot)
                         state.status = RepairTerminalStatus.TIMEOUT
-                        state.agent_errors["orchestrator"] = (
-                            f"repair timeout ({repair_timeout_s}s)"
-                        )
+                        state.agent_errors["orchestrator"] = f"repair timeout ({repair_timeout_s}s)"
                         state.node_timings["repair_timeout"] = repair_timeout_s
                         log.warning("修复超时 (%ds)", repair_timeout_s)
                         finalize_repair_state(state)
@@ -308,8 +313,13 @@ class Orchestrator(RepairPipelineMixin):
             plan.issue_type = "composite"
             rule_name = "composite_dual"
 
-        if rule_name in ("test_failure", "composite_keyword", "config_error", "logic_error",
-                          "composite_dual"):
+        if rule_name in (
+            "test_failure",
+            "composite_keyword",
+            "config_error",
+            "logic_error",
+            "composite_dual",
+        ):
             plan.intent_parser = f"rule:{rule_name}"
         elif rule_name == "explicit_exception":
             plan.intent_parser = "rule"
@@ -462,9 +472,7 @@ class Orchestrator(RepairPipelineMixin):
 
     def _verification_enabled(self) -> bool:
         return (
-            self.verifier is not None
-            or self.use_pytest_verify
-            or self.allow_static_verify_fallback
+            self.verifier is not None or self.use_pytest_verify or self.allow_static_verify_fallback
         )
 
     def _snapshot_repo(self) -> dict[str, str]:
@@ -828,9 +836,7 @@ class Orchestrator(RepairPipelineMixin):
                     "tokenizer_fallback": budget_meta.get("tokenizer_fallback"),
                     "tokenizer_id": budget_meta.get("tokenizer_id"),
                     "task_template_source": pre_budget_meta.get("task_template_source"),
-                    "task_template_fingerprint": pre_budget_meta.get(
-                        "task_template_fingerprint"
-                    ),
+                    "task_template_fingerprint": pre_budget_meta.get("task_template_fingerprint"),
                     **latency_fields,
                 },
             )
@@ -859,13 +865,16 @@ class Orchestrator(RepairPipelineMixin):
         # faithfulness 闸口：过滤操作无关文件的幻觉 patch
         if state is not None:
             from src.repair.failure_tags import check_patch_faithfulness
+
             patches, rejected = check_patch_faithfulness(patches, state)
             if rejected:
                 state.agent_errors["patcher_hallucinated_file"] = rejected[0]
                 import sys
+
                 print(
                     f"  [patcher] ⚠ faithfulness gate: 拒绝无关文件 patch {rejected}",
-                    file=sys.stderr, flush=True,
+                    file=sys.stderr,
+                    flush=True,
                 )
         return self._patch_applier().apply_patches(patches)
 
@@ -886,16 +895,12 @@ class Orchestrator(RepairPipelineMixin):
                     return run.result
                 if run.error == "sandbox_unavailable" and self.use_pytest_verify:
                     log.info("[verifier] 沙箱不可用，降级到宿主机 pytest（execution_tier=host）")
-                    run = PytestVerifyStrategy().run(
-                        self._repo_root, cancel_token=cancel_token
-                    )
+                    run = PytestVerifyStrategy().run(self._repo_root, cancel_token=cancel_token)
                     record_verify_timings(state, run)
                     return run.result
                 if run.error == "sandbox_unavailable" and self.allow_static_verify_fallback:
                     log.info("[verifier] 沙箱不可用，降级到静态验证（execution_tier=static）")
-                    run = StaticVerifyStrategy().run(
-                        self._repo_root, cancel_token=cancel_token
-                    )
+                    run = StaticVerifyStrategy().run(self._repo_root, cancel_token=cancel_token)
                     record_verify_timings(state, run)
                     return run.result
             record_verify_timings(state, run, log_sandbox=True)
@@ -960,42 +965,57 @@ class Orchestrator(RepairPipelineMixin):
         # 1. regression hint
         if state is not None:
             from src.repair.termination import introduced_regression
+
             if introduced_regression(state):
-                sections.append(_FeedbackSection(
-                    "回滚提示", "上轮补丁引入了回归（原本通过的测试现在失败）。"
-                    "请先还原受影响的无关文件，只修改 suspect 范围内的文件。", 10, 200,
-                ))
+                sections.append(
+                    _FeedbackSection(
+                        "回滚提示",
+                        "上轮补丁引入了回归（原本通过的测试现在失败）。"
+                        "请先还原受影响的无关文件，只修改 suspect 范围内的文件。",
+                        10,
+                        200,
+                    )
+                )
 
         # 2. previous patches
         if state is not None and state.candidate_patches:
             patch_lines: list[str] = []
             for i, p in enumerate(state.candidate_patches[:2], 1):
-                diff = p.diff[: _MAX_PATCH_DIFF_CHARS] if p.diff else "(空)"
+                diff = p.diff[:_MAX_PATCH_DIFF_CHARS] if p.diff else "(空)"
                 patch_lines.append(f"补丁{i} ({p.file_path}):\n{diff}")
             if patch_lines:
-                sections.append(_FeedbackSection(
-                    "上轮改动", "\n\n".join(patch_lines), 20, _MAX_PATCH_DIFF_CHARS * 2,
-                ))
+                sections.append(
+                    _FeedbackSection(
+                        "上轮改动",
+                        "\n\n".join(patch_lines),
+                        20,
+                        _MAX_PATCH_DIFF_CHARS * 2,
+                    )
+                )
 
         # 3. failure logs
         if result.failure_logs:
             logs = "\n".join(
-                f"  - {log[:_MAX_FAILURE_LOG_CHARS]}"
-                for log in result.failure_logs[:5]
+                f"  - {log[:_MAX_FAILURE_LOG_CHARS]}" for log in result.failure_logs[:5]
             )
             sections.append(_FeedbackSection("失败测试", logs, 30, _MAX_FAILURE_LOG_CHARS * 5))
 
         # 4. build log
         if result.build_log:
-            sections.append(_FeedbackSection(
-                "构建日志", result.build_log[:_MAX_BUILD_LOG_CHARS], 25, _MAX_BUILD_LOG_CHARS,
-            ))
+            sections.append(
+                _FeedbackSection(
+                    "构建日志",
+                    result.build_log[:_MAX_BUILD_LOG_CHARS],
+                    25,
+                    _MAX_BUILD_LOG_CHARS,
+                )
+            )
 
         # 按 priority 排序后组装
         sections.sort(key=lambda s: s.priority)
         lines = ["补丁验证失败。"]
         for sec in sections:
-            text = sec.content[:sec.max_len] if sec.content else ""
+            text = sec.content[: sec.max_len] if sec.content else ""
             if text:
                 lines.append(f"\n[{sec.title}]\n{text}")
 
@@ -1189,9 +1209,7 @@ class Orchestrator(RepairPipelineMixin):
         return parse_retrieved_context(answer)
 
     def _verifier_prompt(self, patches: list[CandidatePatch], plan: RepairPlan | None) -> str:
-        variables, render = build_verifier_variables(
-            patches, self._repo_root, plan=plan
-        )
+        variables, render = build_verifier_variables(patches, self._repo_root, plan=plan)
         self._emit_skill_hint_trace("verifier", render)
         text, _ = render_repair_task("verifier", variables)
         return text

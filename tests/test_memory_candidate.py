@@ -3,10 +3,7 @@
 import pytest
 
 from agent_runtime.features.memory.candidate import (
-    ALLOWED_TOPICS,
-    CANDIDATE_KINDS,
     Candidate,
-    CandidateGateResult,
     candidates_from_answer,
     candidates_from_tool,
     extract_from_final_answer,
@@ -18,7 +15,6 @@ from agent_runtime.features.memory.candidate import (
 )
 from agent_runtime.features.memory.durable import DurableMemoryStore
 from agent_runtime.providers.clients import FakeModelClient
-
 
 # ── Candidate 构造与校验 ──
 
@@ -55,14 +51,16 @@ class TestCandidateSchema:
         with pytest.raises(ValueError, match="非法 topic"):
             Candidate(
                 topic="nonexistent-topic",
-                key="k", value="v",
+                key="k",
+                value="v",
             )
 
     def test_illegal_kind_raises(self):
         with pytest.raises(ValueError, match="非法 kind"):
             Candidate(
                 topic="key-decisions",
-                key="k", value="v",
+                key="k",
+                value="v",
                 kind="unknown",
             )
 
@@ -70,7 +68,8 @@ class TestCandidateSchema:
         with pytest.raises(ValueError, match="confidence"):
             Candidate(
                 topic="key-decisions",
-                key="k", value="v",
+                key="k",
+                value="v",
                 confidence=1.5,
             )
 
@@ -89,10 +88,10 @@ class TestCandidateSchema:
 class TestExtractFromStack:
     def test_extracts_error_and_file(self):
         tb = (
-            'Traceback (most recent call last):\n'
+            "Traceback (most recent call last):\n"
             '  File "src/calc.py", line 42, in add\n'
-            '    return a + b\n'
-            'TypeError: unsupported operand type(s) for +'
+            "    return a + b\n"
+            "TypeError: unsupported operand type(s) for +"
         )
         candidates = extract_from_stack(tb)
         assert len(candidates) >= 1
@@ -106,11 +105,11 @@ class TestExtractFromStack:
 
     def test_multiple_files_extracted(self):
         tb = (
-            'Traceback (most recent call last):\n'
+            "Traceback (most recent call last):\n"
             '  File "a.py", line 10, in foo\n'
             '  File "b.py", line 20, in bar\n'
             '  File "c.py", line 30, in baz\n'
-            'TypeError: boom'
+            "TypeError: boom"
         )
         candidates = extract_from_stack(tb)
         errors = [c for c in candidates if c.kind == "error"]
@@ -120,7 +119,8 @@ class TestExtractFromStack:
 class TestExtractFromToolResult:
     def test_error_detection_creates_candidate(self):
         candidates = extract_from_tool_result(
-            "run_shell", {"command": "pytest"},
+            "run_shell",
+            {"command": "pytest"},
             "Error: assert 3 == 5\nFAILED test_add\n",
         )
         assert len(candidates) >= 1
@@ -129,7 +129,8 @@ class TestExtractFromToolResult:
 
     def test_git_blame_creates_dependency_fact(self):
         candidates = extract_from_tool_result(
-            "git_blame", {"path": "src/calc.py"},
+            "git_blame",
+            {"path": "src/calc.py"},
             "abc123 (John 2024-01-01) def add(a,b): return a+b",
         )
         assert len(candidates) >= 1
@@ -163,7 +164,8 @@ class TestExtractFromFinalAnswer:
 class TestHookCandidates:
     def test_candidates_from_tool(self):
         candidates = candidates_from_tool(
-            "run_shell", {"command": "pytest"},
+            "run_shell",
+            {"command": "pytest"},
             "FAILED: test_add - AssertionError",
         )
         assert len(candidates) >= 1
@@ -181,9 +183,7 @@ class TestHookCandidates:
 
 class TestLLMFillCandidate:
     def test_llm_fills_kind_and_confidence(self):
-        client = FakeModelClient([
-            '{"kind": "error", "confidence": 0.95}'
-        ])
+        client = FakeModelClient(['{"kind": "error", "confidence": 0.95}'])
         c = Candidate(
             topic="key-decisions",
             key="test-key",
@@ -209,12 +209,11 @@ class TestLLMFillCandidate:
         assert result.confidence == 0.5
 
     def test_llm_does_not_change_topic(self):
-        client = FakeModelClient([
-            '{"kind": "fact", "confidence": 0.8, "topic": "hacked"}'
-        ])
+        client = FakeModelClient(['{"kind": "fact", "confidence": 0.8, "topic": "hacked"}'])
         c = Candidate(
             topic="project-conventions",
-            key="k", value="v",
+            key="k",
+            value="v",
         )
         result = llm_fill_candidate(c, client)
         # topic 不变（LLM 只填 kind/confidence）
@@ -242,7 +241,9 @@ class TestGateCandidate:
 
     def test_illegal_topic_rejected(self):
         c = Candidate(
-            topic="key-decisions", key="k", value="v",
+            topic="key-decisions",
+            key="k",
+            value="v",
         )
         c.topic = "hacked-topic"  # 绕过构造检查
         gate = gate_candidate(c, [])
@@ -334,9 +335,11 @@ class TestPromoteCandidates:
         assert written == 0
 
     def test_promote_with_llm_fill(self, store):
-        client = FakeModelClient([
-            '{"kind": "error", "confidence": 0.88}',
-        ])
+        client = FakeModelClient(
+            [
+                '{"kind": "error", "confidence": 0.88}',
+            ]
+        )
         candidates = [
             Candidate(
                 topic="key-decisions",
