@@ -384,29 +384,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
             cp = load_repair_checkpoint(self._repo_root, resume_run_id)
             if cp:
-                log.info("[resume] 从 %s 恢复 repair state", resume_run_id)
-                state.retry_count = cp.get("retry_count", 0)
-                state.phase = cp.get("phase", "patch")
-                state.feedback = cp.get("feedback", "")
-                state.blackboard_snapshot = cp.get("blackboard_snapshot", {})
-                state.retrieved_context = (
-                    RetrievedContext.from_dict(cp["retrieved_context"])
-                    if cp.get("retrieved_context")
-                    else None
-                )
-                state.suspect_locations = [
-                    SuspectLocation.from_dict(s) for s in cp.get("suspect_locations", [])
-                ]
-                if cp.get("repair_plan"):
-                    plan_data = cp["repair_plan"]
-                    if isinstance(plan_data, dict):
-                        from src.state import RepairPlan
-
-                        state.repair_plan = RepairPlan.from_dict(plan_data)
-
-                # 跳过 parse/localize，直接进入 patch 循环
-                log.info("[resume] 跳过 parse/localize，retry=%d", state.retry_count)
-                return state
+                return self._repair_from_checkpoint(state, initial_snapshot, cp, resume_run_id)
 
         max_retries = state.max_retries
         issue = state.issue_input
@@ -769,6 +747,144 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         self._attach_token_usage(state)
         self._attach_rejection_stats(state)
         # 保存 L2 checkpoint 供 --resume-repair 续跑
+        if state.repair_run_id:
+            try:
+                from src.repair.checkpoint_load import save_repair_checkpoint
+
+                save_repair_checkpoint(state, self._repo_root)
+            except Exception:
+                pass
+        self._end_repair_trace(state)
+        self._push_repair_metrics(state)
+        log.info("总耗时: %dms, status=%s", total_ms, state.status)
+        return state
+
+    def _repair_from_checkpoint(
+        self,
+        state: RepairState,
+        initial_snapshot: dict,
+        checkpoint: dict,
+        resume_run_id: str,
+    ) -> RepairState:
+        """Resume a repair checkpoint from the patch boundary."""
+        self._restore_state_from_repair_checkpoint(state, checkpoint)
+        t_start = time.time()
+        self._reset_token_tracking()
+        self._begin_repair_trace(state)
+        self._init_repair_blackboard()
+        self._restore_blackboard_snapshot(state.blackboard_snapshot)
+        log.info("[resume] 从 %s 恢复 repair state，跳过 parse/localize", resume_run_id)
+
+        cancelled = False
+        try:
+            while not cancelled and state.retry_count < state.max_retries:
+                if self._abort_repair_if_cancelled(state):
+                    cancelled = True
+                    break
+
+                repo_snapshot = self._snapshot_repo() if self._verification_enabled() else None
+                state.phase = "patch"
+                t0 = time.time()
+                state.candidate_patches, patch_timing = self._run_patcher(state)
+                patch_total_ms = patch_timing.get("total_ms")
+                if patch_total_ms is None:
+                    patch_total_ms = int((time.time() - t0) * 1000)
+                set_phase_ms(
+                    state.node_timings,
+                    "patch",
+                    int(patch_total_ms),
+                    internal={
+                        "model_call_ms": patch_timing.get("model_call_ms", 0),
+                        "parse_apply_ms": patch_timing.get("parse_apply_ms", 0),
+                    },
+                )
+
+                if patch_timing.get("user_cancel") or self._abort_repair_if_cancelled(state):
+                    cancelled = True
+                    break
+
+                if not self._verification_enabled():
+                    if state.candidate_patches:
+                        mark_fixed_skip_verify(state)
+                    break
+
+                if not state.candidate_patches:
+                    state.feedback = "补丁生成失败（模型返回无法解析的 JSON）。请重新生成。"
+                    self._write_feedback_to_blackboard(state.feedback)
+                    state.retry_count += 1
+                    continue
+
+                state.phase = "verify"
+                t0 = time.time()
+                state.verification_result = self._run_verifier(state)
+                verify_ms = int((time.time() - t0) * 1000)
+                self._record_l2_synthetic_ask(
+                    state,
+                    agent_name="verifier",
+                    phase="verify",
+                    attempt=state.retry_count,
+                    elapsed_ms=verify_ms,
+                    stop_reason="verify_done",
+                )
+                set_phase_ms(state.node_timings, "verify", verify_ms)
+
+                if state.verification_result.all_passed:
+                    state.status = RepairTerminalStatus.FIXED
+                    break
+
+                _record_pytest_exit(state, self._repo_root, "post_patch_pytest_code")
+                if repo_snapshot is not None:
+                    self._restore_repo_snapshot(repo_snapshot)
+                else:
+                    self._revert_changes(state)
+                state.feedback = self._build_feedback(state.verification_result, state=state)
+                self._write_feedback_to_blackboard(state.feedback)
+                state.retry_count += 1
+        finally:
+            if cancelled or self._is_repair_cancelled():
+                state.node_timings["user_cancel"] = True
+                self._restore_repo_snapshot(initial_snapshot)
+                self._emit_repair_cancelled(state)
+
+        return self._finalize_repair_run(state, t_start)
+
+    def _restore_state_from_repair_checkpoint(self, state: RepairState, checkpoint: dict) -> None:
+        state.retry_count = checkpoint.get("retry_count", 0)
+        state.phase = checkpoint.get("phase", "patch")
+        state.feedback = checkpoint.get("feedback", "")
+        state.blackboard_snapshot = checkpoint.get("blackboard_snapshot", {})
+        state.retrieved_context = (
+            RetrievedContext.from_dict(checkpoint["retrieved_context"])
+            if checkpoint.get("retrieved_context")
+            else None
+        )
+        state.suspect_locations = [
+            SuspectLocation.from_dict(s) for s in checkpoint.get("suspect_locations", [])
+        ]
+        if checkpoint.get("repair_plan"):
+            plan_data = checkpoint["repair_plan"]
+            if isinstance(plan_data, dict):
+                from src.state import RepairPlan
+
+                state.repair_plan = RepairPlan.from_dict(plan_data)
+
+    def _restore_blackboard_snapshot(self, snapshot: dict | None) -> None:
+        ctx = self._active_repair_ctx()
+        if ctx.blackboard is None:
+            return
+        from src.repair.blackboard_merge import restore_blackboard_from_snapshot
+
+        restore_blackboard_from_snapshot(ctx.blackboard, snapshot)
+
+    def _finalize_repair_run(self, state: RepairState, t_start: float) -> RepairState:
+        finalize_repair_state(state)
+        state.phase = "done" if state.status == "fixed" else "failed"
+        total_ms = int((time.time() - t_start) * 1000)
+        set_repair_total_ms(state.node_timings, total_ms)
+        finalize_phases(state.node_timings)
+        self._save_repair_checkpoint(state)
+        self._attach_token_usage(state)
+        self._attach_rejection_stats(state)
         if state.repair_run_id:
             try:
                 from src.repair.checkpoint_load import save_repair_checkpoint

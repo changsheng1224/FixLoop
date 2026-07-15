@@ -1,5 +1,6 @@
 """Trace replay 单测：树状摘要 + prompt 提取。"""
 
+import gzip
 import json
 from pathlib import Path
 
@@ -51,6 +52,25 @@ class TestTraceTreeSummary:
 
         result = trace_tree_summary(str(tmp_path / "nonexistent"))
         assert "not found" in result
+
+    def test_summary_reads_gzipped_trace(self, tmp_path):
+        from agent_runtime.replay import trace_tree_summary
+
+        run_dir = tmp_path / "gz"
+        run_dir.mkdir()
+        events = [
+            {"event": "run_started", "payload": {}},
+            {"event": "tool_executed", "payload": {"tool": "read_file"}},
+            {"event": "run_finished", "payload": {"stop_reason": "final"}},
+        ]
+        with gzip.open(run_dir / "trace.jsonl.gz", "wt", encoding="utf-8") as f:
+            for ev in events:
+                f.write(json.dumps(ev) + "\n")
+
+        result = trace_tree_summary(run_dir)
+
+        assert "read_file" in result
+        assert "run_finished" in result
 
 
 class TestTraceStepPrompt:

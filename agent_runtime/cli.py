@@ -272,6 +272,7 @@ def _build_model_client(args, config: AgentConfig):
     if args.provider == "fake":
         return create_model_client(provider="fake")
     return create_model_client(
+        provider=args.provider,
         model=config.model,
         base_url=args.base_url,
         api_key=args.api_key,

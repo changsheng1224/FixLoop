@@ -149,3 +149,31 @@ class TestSemanticFallback:
         )
         # 回退到 regex → 不抛异常
         assert result is None or result.name is not None
+
+
+class TestOrchestratorSkillSemanticWiring:
+    def test_orchestrator_uses_semantic_matcher_by_default(self, monkeypatch):
+        """Orchestrator 主路径应使用可自动降级的 semantic matcher。"""
+        from src.orchestrator import Orchestrator
+        from src.skills.models import MatchedSkill
+
+        called = {}
+
+        def fake_semantic(issue, *, language="python", catalog=None, top_k=5):
+            called["issue"] = issue
+            called["language"] = language
+            spec = SkillSpec(
+                name="semantic_skill",
+                language=language,
+                trigger_pattern="TypeError",
+            )
+            return MatchedSkill.from_spec(spec, candidates_count=1)
+
+        monkeypatch.setattr("src.skills.matcher.match_skill_semantic", fake_semantic)
+
+        orch = Orchestrator(None, None, None)
+        result = orch._match_skill("TypeError at calc.py", language="python")
+
+        assert result is not None
+        assert result.name == "semantic_skill"
+        assert called == {"issue": "TypeError at calc.py", "language": "python"}

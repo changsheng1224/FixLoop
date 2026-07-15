@@ -84,6 +84,46 @@ class TestOpenAICompatibleClient:
         finally:
             server.shutdown()
 
+    def test_openai_payload_uses_configured_model_and_temperature(self):
+        client = OpenAICompatibleModelClient(
+            model="gpt-custom",
+            base_url="http://127.0.0.1:1",
+            api_key="sk-test",
+            temperature=0.6,
+        )
+
+        payload = client._build_payload("hello", 123, stream=True)
+
+        assert payload["model"] == "gpt-custom"
+        assert payload["temperature"] == 0.6
+        assert payload["max_output_tokens"] == 123
+        assert payload["stream"] is True
+
+    def test_openai_stream_cancel_raises_cancelled_error(self, monkeypatch):
+        from agent_runtime.cancellation import CancellationToken, CancelledError
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def __iter__(self):
+                return iter([b'data: {"type":"response.output_text.delta","delta":"x"}\n'])
+
+        monkeypatch.setattr("urllib.request.urlopen", lambda *a, **kw: FakeResponse())
+        token = CancellationToken()
+        token.cancel("stop")
+        client = OpenAICompatibleModelClient(
+            model="gpt-custom",
+            base_url="http://127.0.0.1:1",
+            api_key="sk-test",
+        )
+
+        with pytest.raises(CancelledError):
+            client.complete_stream("hello", cancel_token=token)
+
     def test_supports_prompt_cache_false(self):
         client = OpenAICompatibleModelClient(model="x", base_url="http://x", api_key="x")
         assert client.supports_prompt_cache is False

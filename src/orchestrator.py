@@ -462,9 +462,9 @@ class Orchestrator(RepairPipelineMixin):
 
     def _match_skill(self, issue: str, *, language: str = "python"):
         """从 YAML Skill 文件中匹配 Issue 对应的修复策略。"""
-        from src.skills.matcher import match_skill
+        from src.skills.matcher import match_skill_semantic
 
-        return match_skill(issue, language=language)
+        return match_skill_semantic(issue, language=language)
 
     def _classify_error(self, exc_type: str) -> str:
         """兼容旧调用；新代码请用 ``classify_exception``。"""

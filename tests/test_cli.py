@@ -81,6 +81,21 @@ class TestBuildModelClient:
         client = _build_model_client(Args(), AgentConfig(model="deepseek-v4-pro"))
         assert client.api_key == "sk-args-key"
 
+    def test_openai_provider_from_cli(self):
+        from agent_runtime.cli import _build_model_client
+        from agent_runtime.providers.clients import OpenAICompatibleModelClient
+
+        class Args:
+            provider = "openai"
+            api_key = "sk-openai"
+            base_url = "https://openai.test/v1"
+
+        client = _build_model_client(Args(), AgentConfig(provider="openai", model="gpt-test"))
+
+        assert isinstance(client, OpenAICompatibleModelClient)
+        assert client.model == "gpt-test"
+        assert client.base_url == "https://openai.test/v1"
+
 
 class TestBuildLightClient:
     """_build_light_client 测试。"""
