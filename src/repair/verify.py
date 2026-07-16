@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,7 +28,13 @@ class VerifyRun:
 class VerifyStrategy(Protocol):
     """验证后端协议。"""
 
-    def run(self, repo_root: str, test_path: str = "") -> VerifyRun: ...
+    def run(
+        self,
+        repo_root: str,
+        test_path: str = "",
+        *,
+        language: str = "python",
+    ) -> VerifyRun: ...
 
 
 TIER_NONE = "none"
@@ -197,12 +206,23 @@ class PytestVerifyStrategy:
 
 
 class StaticVerifyStrategy:
-    """非执行静态验证：只编译 Python 文件，不运行项目测试。"""
+    """非执行静态验证：按语言做语法/编译检查，不运行项目测试。"""
 
-    def run(self, repo_root: str, test_path: str = "", cancel_token=None) -> VerifyRun:
+    def run(
+        self,
+        repo_root: str,
+        test_path: str = "",
+        cancel_token=None,
+        *,
+        language: str = "python",
+    ) -> VerifyRun:
         del test_path, cancel_token
         root = Path(repo_root)
         t0 = time.time()
+        language = (language or "python").lower()
+        if language != "python":
+            return self._run_external_static_check(root, language, t0)
+
         failures: list[str] = []
         for path in root.rglob("*.py"):
             if any(part in {".git", ".pytest_cache", "__pycache__"} for part in path.parts):
@@ -234,9 +254,190 @@ class StaticVerifyStrategy:
                 trusted_execution=False,
                 warning=STATIC_FALLBACK_WARNING,
                 static_ms=elapsed_ms,
+                language=language,
+                checked_files=sum(1 for _ in root.rglob("*.py")),
             ),
             error=None if ok else "static_verify_failed",
         )
+
+    def _run_external_static_check(
+        self,
+        root: Path,
+        language: str,
+        start: float,
+    ) -> VerifyRun:
+        specs = {
+            "java": ("javac", (".java",), self._java_check_command),
+            "javascript": ("node", (".js", ".mjs", ".cjs"), self._node_check_commands),
+            "typescript": ("tsc", (".ts", ".tsx"), self._tsc_check_command),
+            "go": ("gofmt", (".go",), self._gofmt_check_command),
+            "ruby": ("ruby", (".rb",), self._ruby_check_commands),
+            "php": ("php", (".php",), self._php_check_commands),
+            "rust": ("rustc", (".rs",), self._rustc_check_commands),
+        }
+        spec = specs.get(language)
+        if spec is None:
+            return self._unsupported_static_language(root, language, start, "no checker configured")
+
+        tool, extensions, command_builder = spec
+        executable = shutil.which(tool)
+        if not executable:
+            return self._unsupported_static_language(root, language, start, f"missing {tool}")
+
+        files = self._source_files(root, extensions)
+        if not files:
+            elapsed_ms = int((time.time() - start) * 1000)
+            return VerifyRun(
+                result=VerificationResult(all_passed=True),
+                elapsed_ms=elapsed_ms,
+                internal=_tier_internal(
+                    requested_tier=TIER_STATIC,
+                    actual_tier=TIER_STATIC,
+                    isolation_level=ISOLATION_NON_EXECUTING,
+                    trusted_execution=False,
+                    warning=STATIC_FALLBACK_WARNING,
+                    static_ms=elapsed_ms,
+                    language=language,
+                    checker=tool,
+                    checked_files=0,
+                ),
+            )
+
+        failures: list[str] = []
+        with tempfile.TemporaryDirectory(prefix="fixloop_static_") as out_dir:
+            for cmd in command_builder(root, files, out_dir):
+                proc = subprocess.run(
+                    cmd,
+                    cwd=root,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                if proc.returncode != 0:
+                    output = (proc.stderr or proc.stdout or "").strip()
+                    failures.append(output[:2000] or f"{tool} exited {proc.returncode}")
+
+        elapsed_ms = int((time.time() - start) * 1000)
+        ok = not failures
+        return VerifyRun(
+            result=VerificationResult(
+                all_passed=ok,
+                total_tests=0,
+                passed=0,
+                failed=0 if ok else 1,
+                failure_logs=failures,
+            ),
+            elapsed_ms=elapsed_ms,
+            internal=_tier_internal(
+                requested_tier=TIER_STATIC,
+                actual_tier=TIER_STATIC,
+                isolation_level=ISOLATION_NON_EXECUTING,
+                trusted_execution=False,
+                warning=STATIC_FALLBACK_WARNING,
+                static_ms=elapsed_ms,
+                language=language,
+                checker=tool,
+                checked_files=len(files),
+            ),
+            error=None if ok else "static_verify_failed",
+        )
+
+    def _unsupported_static_language(
+        self,
+        root: Path,
+        language: str,
+        start: float,
+        reason: str,
+    ) -> VerifyRun:
+        elapsed_ms = int((time.time() - start) * 1000)
+        return VerifyRun(
+            result=VerificationResult(
+                all_passed=False,
+                failure_logs=[f"static verifier unsupported for {language}: {reason}"],
+            ),
+            elapsed_ms=elapsed_ms,
+            internal=_tier_internal(
+                requested_tier=TIER_STATIC,
+                actual_tier=TIER_STATIC,
+                isolation_level=ISOLATION_NON_EXECUTING,
+                trusted_execution=False,
+                warning=STATIC_FALLBACK_WARNING,
+                static_ms=elapsed_ms,
+                language=language,
+                unsupported_language=language,
+                root=str(root),
+            ),
+            error="static_verify_unsupported",
+        )
+
+    @staticmethod
+    def _source_files(root: Path, extensions: tuple[str, ...]) -> list[Path]:
+        files: list[Path] = []
+        skip = {".git", ".pytest_cache", "__pycache__", "node_modules", "target", "dist"}
+        for path in root.rglob("*"):
+            if not path.is_file() or path.suffix.lower() not in extensions:
+                continue
+            if any(part in skip for part in path.parts):
+                continue
+            files.append(path)
+        return sorted(files)
+
+    @staticmethod
+    def _rel(root: Path, path: Path) -> str:
+        try:
+            return path.relative_to(root).as_posix()
+        except ValueError:
+            return str(path)
+
+    @classmethod
+    def _java_check_command(cls, root: Path, files: list[Path], out_dir: str) -> list[list[str]]:
+        return [
+            [
+                "javac",
+                "-proc:none",
+                "-d",
+                out_dir,
+                *[cls._rel(root, path) for path in files],
+            ]
+        ]
+
+    @classmethod
+    def _node_check_commands(cls, root: Path, files: list[Path], out_dir: str) -> list[list[str]]:
+        del out_dir
+        return [["node", "--check", cls._rel(root, path)] for path in files]
+
+    @classmethod
+    def _tsc_check_command(cls, root: Path, files: list[Path], out_dir: str) -> list[list[str]]:
+        del root, out_dir
+        return [["tsc", "--noEmit", "--pretty", "false", *[str(path) for path in files]]]
+
+    @classmethod
+    def _gofmt_check_command(cls, root: Path, files: list[Path], out_dir: str) -> list[list[str]]:
+        del out_dir
+        return [["gofmt", "-e", "-l", *[cls._rel(root, path) for path in files]]]
+
+    @classmethod
+    def _ruby_check_commands(cls, root: Path, files: list[Path], out_dir: str) -> list[list[str]]:
+        del out_dir
+        return [["ruby", "-c", cls._rel(root, path)] for path in files]
+
+    @classmethod
+    def _php_check_commands(cls, root: Path, files: list[Path], out_dir: str) -> list[list[str]]:
+        del out_dir
+        return [["php", "-l", cls._rel(root, path)] for path in files]
+
+    @classmethod
+    def _rustc_check_commands(cls, root: Path, files: list[Path], out_dir: str) -> list[list[str]]:
+        return [
+            [
+                "rustc",
+                "--emit=metadata",
+                "-o",
+                str(Path(out_dir) / f"{path.stem}.rmeta"),
+                cls._rel(root, path),
+            ]
+            for path in files
+        ]
 
 
 def record_verify_timings(state, run: VerifyRun, *, log_sandbox: bool = False) -> None:
