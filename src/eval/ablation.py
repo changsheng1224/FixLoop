@@ -89,6 +89,14 @@ def _print_run_result(result: CaseResult) -> None:
         print(f"       error: {result.error[:200]}", file=sys.stderr, flush=True)
 
 
+def _normalize_result_status(result: CaseResult) -> CaseResult:
+    """确保消融报告里不会出现空状态结果。"""
+    status = str(result.status or "").strip()
+    if not status or status == "pending":
+        result.status = "fixed" if result.fixed else "failed"
+    return result
+
+
 class AblationRunner:
     """消融实验运行器。"""
 
@@ -175,6 +183,7 @@ class AblationRunner:
                         )
 
                     result = runner.run_case(case_id)
+                    result = _normalize_result_status(result)
                     result.variant = variant_name
                     result.run_index = run_index
                     all_results.append(result)

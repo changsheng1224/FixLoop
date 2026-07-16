@@ -88,3 +88,27 @@ class TestAblationRunnerFake:
             journal = Path(tmp) / "ablation_runs.jsonl"
             assert journal.is_file()
             assert len(journal.read_text(encoding="utf-8").strip().splitlines()) == 16
+
+    def test_run_normalizes_blank_status_results(self, tmp_path, monkeypatch):
+        from src.eval.runner import EvalRunner
+
+        class BlankStatusRunner(EvalRunner):
+            def run_case(self, case_id: str):
+                return CaseResult(
+                    case_id=case_id,
+                    fixed=False,
+                    status="",
+                    duration_ms=1,
+                    total_tokens=0,
+                )
+
+        monkeypatch.setattr("src.eval.ablation.EvalRunner", BlankStatusRunner)
+        variants = {"full": lambda repo_path: object()}
+        runner = AblationRunner(
+            variants=variants,
+            cases_dir=CASES_DIR,
+            output_dir=tmp_path,
+        )
+        report = runner.run(case_ids=["case_001"], repetitions=1)
+        assert report["runs"][0]["status"] == "failed"
+        assert report["summary_by_variant"]["full"]["status_counts"]["failed"] == 1
