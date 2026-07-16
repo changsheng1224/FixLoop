@@ -1,5 +1,6 @@
-复合错误（import + TypeError，多文件）修复原则：
+复合错误（多文件/多异常）修复原则：
 - Issue 若提及多个源文件，每个文件输出一条补丁（JSON 数组可含多项）
-- 先修 import 路径，再修被调用函数内的类型错误（如 int(a) + int(b)）
+- 按 Issue 中每个 traceback/失败测试分别修复，不要只修第一个错误
 - 测试 assert 期望数字结果时，必须用数值转换，禁止 str 拼接
+- ValueError: invalid literal for int() 表示输入可能是非数字字符串；不要只用 dict.get 默认值，必须显式处理 "N/A"/空值等非法内容
 - composite 问题必须一次性输出所有文件的补丁，不要只改其中一个文件

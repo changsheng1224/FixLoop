@@ -30,6 +30,12 @@ from src.state import CandidatePatch, RepairState, RetrievedContext, SuspectLoca
 
 log = get_logger("repair.pipeline")
 
+LOCALIZER_COMPLETE_ONCE_SYSTEM = """你是代码定位专家。
+你的任务是根据 issue、traceback 和嫌疑文件输出 SuspectList。
+不要调用工具，不要输出 tool call、XML、Markdown 或解释文字。
+只输出合法 JSON 数组；字段包括 file_path, start_line, end_line, function_name, reason, confidence。
+如果无法确定精确行号，使用最可能的文件并将 confidence 降低。"""
+
 
 def _record_pytest_exit(state: RepairState, repo_root: str, key: str) -> None:
     code, _ = run_pytest(Path(repo_root))
@@ -44,6 +50,17 @@ def _is_fake_client(agent) -> bool:
     if client is None:
         return False
     return "Fake" in type(client).__name__
+
+
+def _retriever_degrade_reason(answer: str, ctx: RetrievedContext) -> str:
+    """Classify why LLM retrieval should fall back to rule retrieval."""
+    if not (answer or "").strip():
+        return "empty_response"
+    if "{" not in answer or "}" not in answer:
+        return "invalid_json"
+    if not getattr(ctx, "related_tests", None):
+        return "empty_related_tests"
+    return "unknown"
 
 
 class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
@@ -214,6 +231,58 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     merged.append(p)
         return merged
 
+    def _merge_subtask_suspects(self, suspects_by_subtask: dict, subtasks: list) -> list:
+        """按 subtask 顺序合并定位结果，供主 patch loop 使用。"""
+        merged: list[SuspectLocation] = []
+        seen: set[tuple[str, int, int, str | None]] = set()
+        for st in subtasks:
+            for suspect in suspects_by_subtask.get(st.id, []):
+                if not isinstance(suspect, SuspectLocation):
+                    continue
+                key = (
+                    suspect.file_path,
+                    int(suspect.start_line or 0),
+                    int(suspect.end_line or 0),
+                    suspect.function_name,
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(suspect)
+        return merged
+
+    def _prepare_composite_subtasks(self, state: RepairState) -> bool:
+        """运行 composite 子任务定位，并把结果合并回主 RepairState。
+
+        子任务只负责缩小定位范围；补丁生成、验证、重试仍走主循环。
+        """
+        plan = state.repair_plan
+        if not plan or plan.issue_type != "composite":
+            return False
+
+        subtasks = list(plan.subtasks) if plan.subtasks else []
+        if not subtasks:
+            subtasks = self._generate_subtasks(plan)
+        if not subtasks:
+            return False
+
+        plan.subtasks = subtasks
+        suspects_by_subtask: dict[str, list] = {}
+        for st in subtasks:
+            self._run_subtask_cycle(state, st, suspects_by_subtask)
+
+        merged = self._merge_subtask_suspects(suspects_by_subtask, subtasks)
+        state.suspect_locations = merged
+        if not merged:
+            state.status = RepairTerminalStatus.FAILED
+            if "subtask_no_suspects" not in state.failure_tags:
+                state.failure_tags.append("subtask_no_suspects")
+            log.warning("[composite] %d subtasks -> 0 suspects", len(subtasks))
+            return False
+
+        log.info("[composite] %d subtasks -> %d suspects merged", len(subtasks), len(merged))
+        return True
+
     def _make_phase_clock(self) -> RepairPhaseClock | None:
         config = self._active_repair_ctx().phase_timeout_config
         if config is None or not config.any_enabled():
@@ -255,20 +324,130 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         plan = state.repair_plan
         issue = state.issue_input
         prompt = self._localizer_prompt(plan, issue)
-        answer, loc_timing = self._run_agent(
-            self.localizer,
-            prompt,
-            "localizer",
-            state,
-            l2_phase="localize",
-            l2_attempt=0,
-        )
+        answer, loc_timing = self._run_localizer_complete_once(state, prompt, attempt=0)
         suspects = parse_suspect_list(answer)
         if not suspects:
             suspects = self._fallback_suspects_from_plan(plan, issue)
         empty_ctx = RetrievedContext()
         ret_timing = {"total_ms": 0, "internal": {}}
         return suspects, empty_ctx, loc_timing, ret_timing
+
+    def _run_localizer_complete_once(
+        self,
+        state: RepairState,
+        prompt: str,
+        *,
+        attempt: int,
+    ) -> tuple[str, dict]:
+        """Localizer uses one structured completion; Retriever keeps the ReAct path."""
+        from agent_runtime.log_context import log_context
+
+        if self.localizer is not None and state.repair_plan is not None:
+            self._inject_repair_task_summary(self.localizer, state)
+
+        from agent_runtime.context_manager import fit_repair_user_prompt
+
+        prompt, pre_budget_meta = fit_repair_user_prompt(
+            self.localizer,
+            prompt,
+            LOCALIZER_COMPLETE_ONCE_SYSTEM,
+        )
+
+        t0 = time.time()
+        run_id = getattr(self.localizer, "shared_run_id", None)
+        task_id = self._begin_l2_agent_ask(
+            state,
+            self.localizer,
+            agent_name="localizer",
+            phase="localize",
+            attempt=attempt,
+        )
+        ctx = getattr(self, "_repair_ctx", None)
+        tracer = ctx.repair_tracer if ctx is not None else None
+        if tracer:
+            tracer.emit("localizer", "complete_once_started", {"attempt": attempt})
+            tracer.emit("localizer", "model_request_start", {"step": 1, "attempt": attempt + 1})
+
+        usage_before = {}
+        if self.localizer is not None:
+            from src.eval.token_usage import get_client_session_usage
+
+            usage_before = get_client_session_usage(self.localizer.model_client)
+
+        try:
+            with log_context(run_id=run_id, agent="localizer"):
+                answer = self.localizer.complete_once(
+                    prompt,
+                    system_prompt=LOCALIZER_COMPLETE_ONCE_SYSTEM,
+                )
+        except Exception as e:
+            state.agent_errors["localizer"] = str(e)
+            log.warning("[localizer] complete_once 失败: %s", e)
+            elapsed_ms = int((time.time() - t0) * 1000)
+            if task_id:
+                self._finish_l2_agent_ask(
+                    state,
+                    self.localizer,
+                    agent_name="localizer",
+                    phase="localize",
+                    attempt=attempt,
+                    task_id=task_id,
+                    elapsed_ms=elapsed_ms,
+                    stop_reason="error",
+                )
+            return "", {"total_ms": elapsed_ms, "internal": {"mode": "complete_once"}}
+
+        elapsed_ms = int((time.time() - t0) * 1000)
+        if task_id:
+            self._finish_l2_agent_ask(
+                state,
+                self.localizer,
+                agent_name="localizer",
+                phase="localize",
+                attempt=attempt,
+                task_id=task_id,
+                elapsed_ms=elapsed_ms,
+                stop_reason="complete_once",
+            )
+
+        if tracer and self.localizer is not None:
+            from agent_runtime.model_timing import (
+                build_report_latency_fields,
+                collect_client_timings,
+                emit_model_timing_events,
+            )
+            from src.eval.token_usage import diff_client_usage, get_client_session_usage
+
+            timings = collect_client_timings(self.localizer.model_client)
+            emit_model_timing_events(
+                lambda event, payload: tracer.emit("localizer", event, payload),
+                timings,
+                default_attempt=attempt + 1,
+            )
+            usage_after = get_client_session_usage(self.localizer.model_client)
+            delta = diff_client_usage(usage_before, usage_after)
+            budget_meta = getattr(self.localizer, "_last_budget_meta", {}) or {}
+            tracer.write_agent_token(
+                "localizer",
+                delta,
+                extra={
+                    "tool_steps": 0,
+                    "node_timings": {"model_call_ms": elapsed_ms},
+                    "prompt_budget": getattr(self.localizer.config, "prompt_budget", None),
+                    "budget_cuts": budget_meta.get("cuts", []),
+                    "tokenizer_backend": budget_meta.get("tokenizer_backend"),
+                    "tokenizer_fallback": budget_meta.get("tokenizer_fallback"),
+                    "tokenizer_id": budget_meta.get("tokenizer_id"),
+                    "task_template_source": pre_budget_meta.get("task_template_source"),
+                    "task_template_fingerprint": pre_budget_meta.get(
+                        "task_template_fingerprint"
+                    ),
+                    **build_report_latency_fields(timings),
+                },
+            )
+            tracer.emit("localizer", "complete_once_finished", {"token_usage": delta})
+
+        return answer, {"total_ms": elapsed_ms, "internal": {"mode": "complete_once"}}
 
     def _run_localize_and_retrieve(
         self,
@@ -282,28 +461,11 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
         def run_localizer():
             prompt = self._localizer_prompt(plan, issue)
-            for retry in range(2):
-                answer, timing = self._run_agent(
-                    self.localizer,
-                    prompt,
-                    "localizer",
-                    state,
-                    l2_phase="localize",
-                    l2_attempt=retry,
-                )
-                suspects = parse_suspect_list(answer)
-                if suspects:
-                    return suspects, timing
-                if retry < 1:
-                    log.warning(
-                        "[localizer] parse 失败 (retry %d), raw[:200]=%r",
-                        retry + 1,
-                        answer.strip()[:200],
-                    )
-                    prompt += (
-                        "\n\n【重试】上次输出未包含有效 JSON。请严格按 SuspectList JSON 格式输出。"
-                    )
-            log.warning("[localizer] 2 次重试后仍无有效 suspects")
+            answer, timing = self._run_localizer_complete_once(state, prompt, attempt=0)
+            suspects = parse_suspect_list(answer)
+            if suspects:
+                return suspects, timing
+            log.warning("[localizer] complete_once 未返回有效 suspects")
             return [], timing
 
         fast_retrieve = getattr(self, "_fast_retrieve_enabled", False)
@@ -318,29 +480,34 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
             def run_retriever():
                 prompt = self._retriever_prompt([], plan=plan, issue=issue)
-                for retry in range(2):
-                    try:
-                        answer, timing = self._run_agent(
-                            self.retriever,
-                            prompt,
-                            "retriever",
-                            state,
-                            l2_phase="retrieve",
-                            l2_attempt=retry,
-                        )
-                    except Exception:
-                        # LLM 异常 → 降级到规则检索
-                        log.warning("[retriever] LLM 调用异常，降级到规则检索")
-                        return None, {"total_ms": 0, "internal": {}, "degrade": True}
-                    ctx = parse_retrieved_context(answer)
-                    if ctx.related_tests:
-                        return ctx, timing
-                    if retry < 1:
-                        prompt += (
-                            "\n\n【重试】上次输出未包含有效 JSON。"
-                            "请严格按 RetrievedContext JSON 格式输出。"
-                        )
-                return ctx, timing
+                try:
+                    answer, timing = self._run_agent(
+                        self.retriever,
+                        prompt,
+                        "retriever",
+                        state,
+                        l2_phase="retrieve",
+                        l2_attempt=0,
+                    )
+                except Exception:
+                    # LLM 异常 → 降级到规则检索
+                    log.warning("[retriever] LLM 调用异常，降级到规则检索")
+                    return None, {
+                        "total_ms": 0,
+                        "internal": {},
+                        "degrade": True,
+                        "degrade_reason": "llm_exception",
+                    }
+                ctx = parse_retrieved_context(answer)
+                if ctx.related_tests:
+                    return ctx, timing
+                reason = _retriever_degrade_reason(answer, ctx)
+                log.info("[retriever] LLM 输出无效，准备降级: %s", reason)
+                return None, {
+                    **timing,
+                    "degrade": True,
+                    "degrade_reason": reason,
+                }
 
             with ThreadPoolExecutor(max_workers=2) as pool:
                 fut_loc = pool.submit(run_localizer)
@@ -352,6 +519,10 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             if context is None or not getattr(context, "related_tests", None):
                 log.info("[retriever] 降级: LLM → 规则检索 (grep)")
                 state.node_timings["retrieval_path"] = "llm→degrade"
+                if isinstance(ret_timing, dict):
+                    state.node_timings["retriever_degrade_reason"] = ret_timing.get(
+                        "degrade_reason", "empty_related_tests"
+                    )
                 context, ret_timing = self._rule_retrieve(suspects, issue)
 
         if not suspects:
@@ -421,8 +592,8 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 self._prune_agents_for_issue(state.repair_plan)
                 parse_ms = int((time.time() - t0) * 1000)
                 if state.repair_plan and state.repair_plan.language != "python":
-                    log.warning(
-                        "检测到 language=%s（%s），当前 Verifier 仅支持 Python 修复",
+                    log.info(
+                        "检测到 language=%s（%s），Verifier 将使用语言感知静态验证",
                         state.repair_plan.language,
                         state.repair_plan.language_source,
                     )
@@ -475,73 +646,69 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     if similar:
                         state.node_timings["similar_fixes"] = similar
 
+                localized_from_subtasks = False
+                skip_patch_loop = False
+
                 # ── composite subtasks 路径 ──
                 if state.repair_plan and state.repair_plan.issue_type == "composite":
-                    # 优先使用 Planner 生成的 subtasks，否则规则生成
-                    subtasks = (
-                        list(state.repair_plan.subtasks) if state.repair_plan.subtasks else []
+                    localized_from_subtasks = self._prepare_composite_subtasks(state)
+                    skip_patch_loop = (
+                        not localized_from_subtasks and state.status == RepairTerminalStatus.FAILED
                     )
-                    if not subtasks:
-                        subtasks = self._generate_subtasks(state.repair_plan)
-                    if subtasks:
-                        state.repair_plan.subtasks = subtasks
-                        all_patches: dict[str, list] = {}
-                        for st in subtasks:
-                            self._run_subtask_cycle(state, st, all_patches)
-                        merged = self._merge_subtask_patches(all_patches, subtasks)
-                        state.candidate_patches = merged
-                        if merged:
-                            state.status = "patched"
-                            log.info(
-                                "[composite] %d subtasks -> %d patches merged",
-                                len(subtasks),
-                                len(merged),
-                            )
-                        return state
 
-                log.info("Localizer + Retriever 并行开始...")
-                if phase_clock is not None:
-                    phase_clock.ensure("localize")
-                state.phase = "localize"
-                t0 = time.time()
-                with phase_lock.read():
-                    suspects, context, loc_timing, ret_timing = self._run_localize_and_retrieve(
-                        state
+                if not localized_from_subtasks and not skip_patch_loop:
+                    log.info("Localizer + Retriever 并行开始...")
+                    if phase_clock is not None:
+                        phase_clock.ensure("localize")
+                    state.phase = "localize"
+                    t0 = time.time()
+                    with phase_lock.read():
+                        suspects, context, loc_timing, ret_timing = (
+                            self._run_localize_and_retrieve(state)
+                        )
+                    wall_ms = int((time.time() - t0) * 1000)
+                    if phase_clock is not None:
+                        phase_clock.consume("localize", wall_ms)
+                    set_parallel_wall_ms(state.node_timings, wall_ms)
+                    set_phase_ms(
+                        state.node_timings,
+                        "localize",
+                        loc_timing["total_ms"],
+                        internal=loc_timing["internal"],
                     )
-                wall_ms = int((time.time() - t0) * 1000)
-                if phase_clock is not None:
-                    phase_clock.consume("localize", wall_ms)
-                set_parallel_wall_ms(state.node_timings, wall_ms)
-                set_phase_ms(
-                    state.node_timings,
-                    "localize",
-                    loc_timing["total_ms"],
-                    internal=loc_timing["internal"],
-                )
-                set_phase_ms(
-                    state.node_timings,
-                    "retrieve",
-                    ret_timing["total_ms"],
-                    internal=ret_timing["internal"],
-                )
-                write_stats = self._write_localize_phase_to_blackboard(state, suspects, context)
-                n = write_stats.get("suspects_written", len(suspects))
-                n_tests = len(context.related_tests) if context else 0
-                log.info(
-                    "Localizer+Retriever 完成: 墙钟%dms (L=%dms, R=%dms), %d suspect, %d tests",
-                    wall_ms,
-                    loc_timing["total_ms"],
-                    ret_timing["total_ms"],
-                    n,
-                    n_tests,
-                )
+                    set_phase_ms(
+                        state.node_timings,
+                        "retrieve",
+                        ret_timing["total_ms"],
+                        internal=ret_timing["internal"],
+                    )
+                    write_stats = self._write_localize_phase_to_blackboard(
+                        state, suspects, context
+                    )
+                    n = write_stats.get("suspects_written", len(suspects))
+                    n_tests = len(context.related_tests) if context else 0
+                    log.info(
+                        "Localizer+Retriever 完成: 墙钟%dms (L=%dms, R=%dms), "
+                        "%d suspect, %d tests",
+                        wall_ms,
+                        loc_timing["total_ms"],
+                        ret_timing["total_ms"],
+                        n,
+                        n_tests,
+                    )
+                elif localized_from_subtasks:
+                    self._write_localize_phase_to_blackboard(
+                        state,
+                        state.suspect_locations,
+                        state.retrieved_context,
+                    )
 
                 if self._abort_repair_if_cancelled(state):
                     cancelled = True
-                elif self._verification_enabled():
+                elif not skip_patch_loop and self._verification_enabled():
                     _record_pytest_exit(state, self._repo_root, "baseline_pytest_code")
 
-                while not cancelled and state.retry_count < max_retries:
+                while not skip_patch_loop and not cancelled and state.retry_count < max_retries:
                     if self._abort_repair_if_cancelled(state):
                         cancelled = True
                         break

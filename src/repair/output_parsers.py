@@ -64,7 +64,8 @@ def parse_suspect_list(answer: str) -> list[SuspectLocation]:
     errors: list[str] = []
     if not isinstance(data, list):
         errors.append("输出不是 JSON 数组")
-        return _with_validation_errors([], errors)
+        fallback = _extract_suspects_from_tool_call_text(answer)
+        return _with_validation_errors(fallback, errors)
     result = []
     for i, item in enumerate(data):
         if not isinstance(item, dict):
@@ -78,6 +79,41 @@ def parse_suspect_list(answer: str) -> list[SuspectLocation]:
         except Exception as e:
             errors.append(f"[{i}] {e}")
     return _with_validation_errors(result, errors)
+
+
+def _extract_suspects_from_tool_call_text(answer: str) -> list[SuspectLocation]:
+    """从漂移的 tool-call 文本中恢复路径，但不执行任何工具。"""
+    if not re.search(r"<\s*(function_calls|invoke|tool)\b", answer, re.IGNORECASE):
+        return []
+
+    paths: list[str] = []
+    patterns = (
+        r"<parameter\b[^>]*\bname=[\"']path[\"'][^>]*>(.*?)</parameter>",
+        r"<arg\b[^>]*\bname=[\"']path[\"'][^>]*>(.*?)</arg>",
+        r'"path"\s*:\s*"([^"]+)"',
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, answer, re.IGNORECASE | re.DOTALL):
+            raw = re.sub(r"<[^>]+>", "", match.group(1)).strip()
+            if raw:
+                paths.append(raw)
+
+    suspects: list[SuspectLocation] = []
+    seen: set[str] = set()
+    for path in paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        suspects.append(
+            SuspectLocation(
+                file_path=path,
+                start_line=1,
+                end_line=1,
+                reason="tool_call_fallback",
+                confidence=0.3,
+            )
+        )
+    return suspects
 
 
 _log = logging.getLogger("fixloop.output_parsers")

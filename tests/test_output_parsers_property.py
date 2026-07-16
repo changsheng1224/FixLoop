@@ -89,3 +89,34 @@ class TestBasicFuzzFallback:
             parse_suspect_list(s)
             parse_retrieved_context(s)
             parse_verification(s)
+
+
+class TestSuspectListToolCallFallback:
+    def test_extracts_path_from_xml_tool_call_when_json_is_missing(self):
+        raw = (
+            "<function_calls>"
+            '<invoke name="inspect_file">'
+            '<parameter name="path">calc.py</parameter>'
+            "</invoke>"
+            "</function_calls>"
+        )
+
+        suspects = parse_suspect_list(raw)
+
+        assert len(suspects) == 1
+        assert suspects[0].file_path == "calc.py"
+        assert suspects[0].reason == "tool_call_fallback"
+        assert suspects[0].confidence == 0.3
+
+    def test_extracts_path_from_parameter_with_attributes(self):
+        raw = (
+            "<function_calls>"
+            '<invoke name="read_file">'
+            '<parameter name="path" string="true">pkg/values.py</parameter>'
+            "</invoke>"
+            "</function_calls>"
+        )
+
+        suspects = parse_suspect_list(raw)
+
+        assert [s.file_path for s in suspects] == ["pkg/values.py"]

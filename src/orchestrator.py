@@ -7,6 +7,7 @@
 4. _run_patcher() → 串行执行
 """
 
+import hashlib
 import re
 import time
 from collections import namedtuple
@@ -71,6 +72,7 @@ _FeedbackSection = namedtuple("_FeedbackSection", ["title", "content", "priority
 _MAX_PATCH_DIFF_CHARS = 600
 _MAX_FAILURE_LOG_CHARS = 300
 _MAX_BUILD_LOG_CHARS = 300
+_MAX_FAILURE_TARGET_CHARS = 500
 
 _ISSUE_TYPE_RULES: list[_IssueTypeRule] = [
     # test_failure 必须在 explicit_exception 之前：
@@ -94,6 +96,89 @@ _ISSUE_TYPE_RULES: list[_IssueTypeRule] = [
         "logic_error",
     ),
 ]
+
+
+def _summarize_failure_targets(failure_logs: list[str]) -> str:
+    if not failure_logs:
+        return ""
+    test_ids: list[str] = []
+    files: list[str] = []
+    assertions: list[str] = []
+
+    def add_unique(items: list[str], value: str) -> None:
+        value = value.strip()
+        if value and value not in items:
+            items.append(value)
+
+    for raw in failure_logs[:5]:
+        line = str(raw)
+        for match in re.finditer(r"\b(?:FAILED\s+)?([A-Za-z0-9_./\\-]+\.py::[^\s:]+)", line):
+            add_unique(test_ids, match.group(1).replace("\\", "/"))
+        for match in re.finditer(r'File\s+"([^"]+\.py)"', line):
+            add_unique(files, Path(match.group(1)).name)
+        for match in re.finditer(r"\b([A-Za-z0-9_./\\-]+\.py)\b", line):
+            add_unique(files, Path(match.group(1)).name)
+        if any(key in line for key in ("assert", "AssertionError", "ValueError", "TypeError")):
+            add_unique(assertions, line[:160])
+
+    parts: list[str] = []
+    if test_ids:
+        parts.append("失败用例: " + ", ".join(test_ids[:3]))
+    if files:
+        parts.append("相关文件: " + ", ".join(files[:5]))
+    if assertions:
+        parts.append("关键断言/异常: " + " | ".join(assertions[:2]))
+    return "\n".join(parts)
+
+
+def _repair_constraint_hints(failure_logs: list[str]) -> str:
+    combined = "\n".join(str(log) for log in failure_logs[:5])
+    hints: list[str] = []
+    if re.search(r"invalid literal for int\(\).*['\"]N/A['\"]", combined, re.IGNORECASE):
+        hints.append(
+            "检测到 int() 转换非数字字符串 N/A。不要只写 dict.get/data.get(..., '0') 或 `or 0`，"
+            "因为 'N/A' 是 truthy；必须显式处理非数字字符串，例如先取 raw，"
+            "raw.isdigit() 时 int(raw)，否则按测试期望返回 0。"
+        )
+    if re.search(r"unsupported operand type\(s\).*['\"]int['\"].*['\"]str['\"]", combined):
+        hints.append("检测到 int 与 str 拼接；字符串输出场景应在拼接前对数值结果使用 str(...)。")
+    return "\n".join(hints)
+
+
+def _patch_retry_fingerprint(patch: CandidatePatch) -> str:
+    body = "\n".join(
+        [
+            patch.file_path or "",
+            patch.diff or "",
+            patch.original_lines or "",
+            patch.patched_lines or "",
+        ]
+    )
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
+
+
+def _record_patch_retry_fingerprints(state: RepairState) -> str:
+    raw_counts = state.node_timings.setdefault("patch_retry_fingerprints", {})
+    if not isinstance(raw_counts, dict):
+        raw_counts = {}
+        state.node_timings["patch_retry_fingerprints"] = raw_counts
+
+    repeated_files: list[str] = []
+    for patch in state.candidate_patches:
+        fp = _patch_retry_fingerprint(patch)
+        count = int(raw_counts.get(fp, 0) or 0) + 1
+        raw_counts[fp] = count
+        if count >= 2:
+            repeated_files.append(patch.file_path)
+
+    if not repeated_files:
+        return ""
+    files = ", ".join(sorted(set(repeated_files))[:5])
+    return (
+        f"检测到重复补丁文件: {files}。\n"
+        "不要重复生成上轮相同 diff；请基于失败测试换策略，"
+        "优先修改仍失败断言直接相关的表达式或边界处理。"
+    )
 
 
 class Orchestrator(RepairPipelineMixin):
@@ -881,6 +966,17 @@ class Orchestrator(RepairPipelineMixin):
     def _run_verifier(self, state: RepairState) -> "VerificationResult":
         """Docker 沙箱或本地 pytest 验证（不走 LLM Agent loop）。"""
         cancel_token = self._repair_ctx.cancel_token if self._repair_ctx else None
+        language = "python"
+        if state.repair_plan is not None and state.repair_plan.language:
+            language = state.repair_plan.language
+        if language != "python":
+            run = StaticVerifyStrategy().run(
+                self._repo_root,
+                cancel_token=cancel_token,
+                language=language,
+            )
+            record_verify_timings(state, run)
+            return run.result
         if self.verifier is not None:
             run = DockerVerifyStrategy().run(
                 self._repo_root,
@@ -900,7 +996,11 @@ class Orchestrator(RepairPipelineMixin):
                     return run.result
                 if run.error == "sandbox_unavailable" and self.allow_static_verify_fallback:
                     log.info("[verifier] 沙箱不可用，降级到静态验证（execution_tier=static）")
-                    run = StaticVerifyStrategy().run(self._repo_root, cancel_token=cancel_token)
+                    run = StaticVerifyStrategy().run(
+                        self._repo_root,
+                        cancel_token=cancel_token,
+                        language=language,
+                    )
                     record_verify_timings(state, run)
                     return run.result
             record_verify_timings(state, run, log_sandbox=True)
@@ -910,7 +1010,11 @@ class Orchestrator(RepairPipelineMixin):
             record_verify_timings(state, run)
             return run.result
         if self.allow_static_verify_fallback:
-            run = StaticVerifyStrategy().run(self._repo_root, cancel_token=cancel_token)
+            run = StaticVerifyStrategy().run(
+                self._repo_root,
+                cancel_token=cancel_token,
+                language=language,
+            )
             record_verify_timings(state, run)
             return run.result
         return VerificationResult(all_passed=False, failure_logs=["verifier 未配置"])
@@ -993,6 +1097,28 @@ class Orchestrator(RepairPipelineMixin):
                     )
                 )
 
+            repeat_feedback = _record_patch_retry_fingerprints(state)
+            if repeat_feedback:
+                sections.append(_FeedbackSection("重复补丁", repeat_feedback, 22, 500))
+
+        target_feedback = _summarize_failure_targets(result.failure_logs)
+        if target_feedback:
+            sections.append(
+                _FeedbackSection(
+                    "失败定位",
+                    target_feedback,
+                    24,
+                    _MAX_FAILURE_TARGET_CHARS,
+                )
+            )
+
+        constraint_inputs = list(result.failure_logs)
+        if state is not None and state.issue_input:
+            constraint_inputs.append(state.issue_input)
+        constraint_hints = _repair_constraint_hints(constraint_inputs)
+        if constraint_hints:
+            sections.append(_FeedbackSection("修复约束", constraint_hints, 26, 700))
+
         # 3. failure logs
         if result.failure_logs:
             logs = "\n".join(
@@ -1023,7 +1149,8 @@ class Orchestrator(RepairPipelineMixin):
         if state is not None and state.retry_count > 0:
             lines.append(
                 f"\n[指导]\n已尝试 {state.retry_count + 1} 次修复。"
-                "请根据以上日志调整补丁，使用 patch_file 直接修改文件。"
+                "请根据失败定位调整补丁，不要重复生成上轮相同 diff；"
+                "只修改失败相关文件，并保持上轮已经正确的修复。"
             )
         else:
             lines.append(

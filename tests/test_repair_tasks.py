@@ -29,6 +29,13 @@ class TestLocalizerTaskTemplate:
         text, _ = render_repair_task("localizer", build_localizer_variables(plan)[0])
         assert "stack_parse" in text
 
+    def test_localizer_template_requires_json_without_tool_calls(self):
+        plan = RepairPlan(issue_type="type_error", suspect_files=["calc.py"])
+        text, _ = render_repair_task("localizer", build_localizer_variables(plan)[0])
+        assert "不要调用工具" in text
+        assert "JSON 数组" in text
+        assert "<function_calls>" in text
+
 
 class TestRetrieverTaskTemplate:
     def test_with_suspects(self):
@@ -40,12 +47,14 @@ class TestRetrieverTaskTemplate:
         assert name == "retriever_suspects"
         assert "a.py:1 f" in text
         assert "RetrievedContext JSON" in text
+        assert "不要输出 <final>" in text
 
     def test_fallback(self):
         name, vars_, _ = build_retriever_template_and_variables([])
         text, _ = render_repair_task(name, vars_)
         assert name == "retriever_fallback"
         assert "搜索与该 Issue 相关的代码上下文" in text
+        assert "一次尝试失败后" in text
 
 
 class TestOrchestratorTemplateParity:

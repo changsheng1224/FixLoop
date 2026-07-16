@@ -1,2 +1,3 @@
-请用 stack_parse 解析堆栈，再用 ast_parse 分析文件结构，
+参考 stack_parse 风格从 traceback 中提取文件、行号与函数名；
+如已有嫌疑文件，再结合文件名判断最可能位置。
 最后输出 SuspectList JSON。
