@@ -107,6 +107,26 @@ class TestEvalRunnerFake:
         assert result.fixed is False
         assert "unknown case" in result.error
 
+    def test_run_case_exception_normalizes_failed_status(self, tmp_path):
+        class ExplodingOrchestrator:
+            def repair(self, issue: str):
+                raise IndexError("list index out of range")
+
+        def factory(repo_path: str):
+            return ExplodingOrchestrator()
+
+        runner = EvalRunner(
+            orchestrator_factory=factory,
+            cases_dir=CASES_DIR,
+            output_dir=tmp_path,
+        )
+        result = runner.run_case("case_015")
+        assert result.fixed is False
+        assert result.status == "failed"
+        assert "list index out of range" in result.error
+        assert result.issue_type == "import_error"
+        assert result.duration_ms >= 0
+
     @pytest.mark.parametrize("case_id", [f"case_{i:03d}" for i in range(1, 11)])
     def test_each_case_fixes_with_fake(self, case_id):
         runner = EvalRunner(

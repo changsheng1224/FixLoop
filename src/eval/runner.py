@@ -352,6 +352,12 @@ class EvalRunner:
                 if errs:
                     error = "; ".join(f"{k}: {v}" for k, v in errs.items())
 
+            status = str(getattr(state, "status", "") or "").strip()
+            if not status:
+                status = "fixed" if fixed else "failed"
+            if status == "pending":
+                status = "fixed" if fixed else "failed"
+
             from src.eval.skill_metrics import skill_result_fields_from_plan
 
             plan = getattr(state, "repair_plan", None) if state else None
