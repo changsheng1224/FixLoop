@@ -17,9 +17,9 @@ retrieval_path 原则（按优先级）：
 2. 对 grep 命中文件调 read_file（确认上下文 + get context lines）
 3. 调 find_test 定位测试文件
 4. 可选：对嫌疑行调一次 git_blame
-5. 最后用 <final> 包裹输出 RetrievedContext JSON
+5. 最后直接输出 RetrievedContext JSON
 
-<final> 中输出格式：
+最终输出格式：
 ```json
 {
   "similar_snippets": [],
@@ -33,6 +33,8 @@ retrieval_path 原则（按优先级）：
 - 优先 grep 而非 search（grep 支持更多过滤选项）
 - 找到匹配后必须 read_file 确认（避免幻觉）
 - 禁止重复调用同一工具（同参数）
+- 只输出一个合法 JSON 对象；不要输出 <final>，不要输出 Markdown、解释、前后缀文本
+- 一次尝试失败后编排层会降级到规则检索，不要自行请求重试
 - related_tests 用字符串列表，如 ["tests/test_x.py::test_y"]
 - 没有相关信息填空数组
 - similar_fixes 仅作参考提示，禁止替代 Localizer 的 suspects

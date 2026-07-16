@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
-from collections import defaultdict
+import math
+import re
+from collections import Counter, defaultdict
 from pathlib import Path
 
 from src.eval.models import CaseResult, EvalReport
@@ -21,13 +23,25 @@ def _summary_metrics(results: list[CaseResult]) -> dict:
             "patch_precision": 0.0,
             "avg_duration_ms": 0,
             "avg_duration_s": 0.0,
+            "duration_ms_p50": 0,
+            "duration_ms_p95": 0,
+            "token_p50": 0,
+            "token_p95": 0,
             "regression_count": 0,
             "regression_rate": 0.0,
+            "status_counts": {},
+            "failure_tag_counts": {},
+            "failure_reason_counts": {},
         }
 
     fixed_n = sum(1 for r in results if r.fixed)
     durations = [r.duration_ms for r in results]
     token_totals = [r.total_tokens for r in results if r.total_tokens > 0]
+    status_counts = Counter(_case_status(r) for r in results)
+    failure_tag_counts = Counter(tag for r in results for tag in r.failure_tags)
+    failure_reason_counts = Counter(
+        _failure_reason(r) for r in results if not r.fixed and _failure_reason(r)
+    )
 
     summary = {
         "total": total,
@@ -44,15 +58,25 @@ def _summary_metrics(results: list[CaseResult]) -> dict:
         ),
         "avg_duration_ms": int(sum(durations) / total),
         "avg_duration_s": round(sum(durations) / total / 1000, 2),
+        "duration_ms_p50": _p50(durations),
+        "duration_ms_p95": _percentile(durations, 95),
         "regression_count": sum(1 for r in results if r.introduced_regression),
         "regression_rate": round(
             sum(1 for r in results if r.introduced_regression) / total,
             4,
         ),
+        "status_counts": dict(sorted(status_counts.items())),
+        "failure_tag_counts": dict(sorted(failure_tag_counts.items())),
+        "failure_reason_counts": dict(sorted(failure_reason_counts.items())),
     }
     if token_totals:
         summary["total_tokens"] = sum(token_totals)
         summary["avg_total_tokens"] = round(sum(token_totals) / len(token_totals), 2)
+        summary["token_p50"] = _p50(token_totals)
+        summary["token_p95"] = _percentile(token_totals, 95)
+    else:
+        summary["token_p50"] = 0
+        summary["token_p95"] = 0
 
     # patch equivalence
     eq_full = sum(1 for r in results if r.equivalence == "full")
@@ -102,6 +126,41 @@ def compute_metrics(results: list[CaseResult]) -> EvalReport:
     return report
 
 
+def _case_status(result: CaseResult) -> str:
+    if result.status:
+        return result.status
+    return "fixed" if result.fixed else "failed"
+
+
+def _patch_precision(result: CaseResult) -> float:
+    return round(result.minimal_lines / max(result.actual_lines, 1), 4)
+
+
+def _failure_reason(result: CaseResult) -> str:
+    text = " ".join(
+        [
+            result.error or "",
+            result.status or "",
+            " ".join(result.failure_tags or []),
+        ]
+    ).lower()
+    if not text.strip():
+        return "unknown"
+    if "no patches" in text or "no patch" in text or "parse_fail" in text:
+        return "no_patch"
+    if "timeout" in text:
+        return "timeout"
+    if "sandbox" in text or "docker" in text:
+        return "sandbox"
+    if "regression" in text:
+        return "regression"
+    if "permission" in text or "denied" in text:
+        return "permission"
+    if "exhausted" in text:
+        return "exhausted"
+    return re.sub(r"[^a-z0-9_]+", "_", text.split(":", 1)[0]).strip("_") or "unknown"
+
+
 def compute_performance_matrix(results: list[CaseResult]) -> dict:
     """计算性能矩阵：context_tokens, cache_hit_rate, p50_ttft_ms, tool_steps, repair_retries。
 
@@ -147,6 +206,15 @@ def _p50(values: list[int]) -> int:
     if n % 2 == 0:
         return (s[n // 2 - 1] + s[n // 2]) // 2
     return s[n // 2]
+
+
+def _percentile(values: list[int], percentile: int) -> int:
+    """Nearest-rank percentile for small eval samples."""
+    if not values:
+        return 0
+    s = sorted(values)
+    rank = max(1, math.ceil((percentile / 100) * len(s)))
+    return s[min(rank - 1, len(s) - 1)]
 
 
 def compute_judge_summary(results: list[CaseResult]) -> dict:
@@ -233,6 +301,9 @@ def format_markdown(report: EvalReport) -> str:
                 "avg_retries",
                 "patch_precision",
                 "avg_duration_s",
+                "duration_p50_s",
+                "duration_p95_s",
+                "token_p50",
                 "regression_rate",
             ],
             [
@@ -244,12 +315,54 @@ def format_markdown(report: EvalReport) -> str:
                     str(summary.get("avg_retries", 0)),
                     f"{summary.get('patch_precision', 0):.4f}",
                     str(summary.get("avg_duration_s", 0)),
+                    f"{summary.get('duration_ms_p50', 0) / 1000:.2f}",
+                    f"{summary.get('duration_ms_p95', 0) / 1000:.2f}",
+                    str(summary.get("token_p50", 0)),
                     f"{summary.get('regression_rate', 0):.2%}",
                 ]
             ],
         )
     )
     parts.append("")
+
+    parts.append("## Performance Detail")
+    parts.append(
+        _markdown_table(
+            [
+                "duration_ms_p50",
+                "duration_ms_p95",
+                "token_p50",
+                "token_p95",
+                "avg_total_tokens",
+                "avg_tool_steps",
+                "p50_ttft_ms",
+            ],
+            [
+                [
+                    str(summary.get("duration_ms_p50", 0)),
+                    str(summary.get("duration_ms_p95", 0)),
+                    str(summary.get("token_p50", 0)),
+                    str(summary.get("token_p95", 0)),
+                    str(summary.get("avg_total_tokens", 0)),
+                    str((report.performance or {}).get("avg_tool_steps", 0)),
+                    str((report.performance or {}).get("p50_ttft_ms", 0)),
+                ]
+            ],
+        )
+    )
+    parts.append("")
+
+    failure_rows: list[list[str]] = []
+    for name, count in sorted((summary.get("status_counts") or {}).items()):
+        failure_rows.append(["status", name, str(count)])
+    for name, count in sorted((summary.get("failure_tag_counts") or {}).items()):
+        failure_rows.append(["failure_tag", name, str(count)])
+    for name, count in sorted((summary.get("failure_reason_counts") or {}).items()):
+        failure_rows.append(["failure_reason", name, str(count)])
+    if failure_rows:
+        parts.append("## Failure Breakdown")
+        parts.append(_markdown_table(["kind", "name", "count"], failure_rows))
+        parts.append("")
 
     by_variant = getattr(report, "by_variant", None) or {}
     if by_variant:
@@ -295,8 +408,12 @@ def format_markdown(report: EvalReport) -> str:
                     str(case.retry_count),
                     str(case.actual_lines),
                     str(case.minimal_lines),
+                    f"{_patch_precision(case):.4f}",
                     str(case.duration_ms),
                     str(case.total_tokens or "-"),
+                    _case_status(case),
+                    ",".join(case.failure_tags) if case.failure_tags else "-",
+                    (case.error or "-").replace("\n", " ")[:80],
                 ]
             )
         parts.append(
@@ -308,8 +425,12 @@ def format_markdown(report: EvalReport) -> str:
                     "retries",
                     "actual_lines",
                     "minimal_lines",
+                    "patch_precision",
                     "duration_ms",
                     "tokens",
+                    "status",
+                    "failure_tags",
+                    "error",
                 ],
                 rows,
             )
@@ -367,13 +488,18 @@ def case_result_from_dict(data: dict) -> CaseResult:
         error=str(data.get("error", "")),
         introduced_regression=bool(data.get("introduced_regression", False)),
         status=str(data.get("status", "")),
+        failure_tags=list(data.get("failure_tags") or []),
         variant=str(data.get("variant", "")),
         run_index=int(data.get("run_index", 0)),
         total_tokens=int(data.get("total_tokens", 0) or 0),
         token_usage=dict(data.get("token_usage") or {}),
+        permission_denied_by_tool=dict(data.get("permission_denied_by_tool") or {}),
         expected_skill=data.get("expected_skill"),
         matched_skill=data.get("matched_skill"),
         skill_match=bool(data.get("skill_match", False)),
+        judge_score=int(data.get("judge_score", 0) or 0),
+        judge_reason=str(data.get("judge_reason", "")),
+        equivalence=str(data.get("equivalence", "")),
     )
 
 

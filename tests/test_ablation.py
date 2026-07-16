@@ -27,6 +27,12 @@ class TestBuildAblationReport:
                 fixed=False,
                 retry_count=1,
                 duration_ms=200,
+                status="exhausted",
+                failure_tags=["parse_fail"],
+                error="baseline: no patches in agent output",
+                actual_lines=0,
+                minimal_lines=2,
+                total_tokens=1200,
                 variant="full",
                 run_index=0,
             ),
@@ -42,6 +48,11 @@ class TestBuildAblationReport:
         report = build_ablation_report(results)
         assert report["summary_by_variant"]["full"]["total"] == 2
         assert report["summary_by_variant"]["full"]["fix_rate"] == 0.5
+        assert report["summary_by_variant"]["full"]["status_counts"]["exhausted"] == 1
+        assert report["summary_by_variant"]["full"]["failure_tag_counts"]["parse_fail"] == 1
+        assert report["summary_by_variant"]["full"]["failure_reason_counts"]["no_patch"] == 1
+        assert report["summary_by_variant"]["full"]["duration_ms_p95"] == 200
+        assert report["summary_by_case"]["case_001"]["total"] == 2
         assert report["summary_by_variant"]["single"]["fixed"] == 1
         assert len(report["runs"]) == 3
 

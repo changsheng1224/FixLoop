@@ -1272,7 +1272,10 @@ class AgentLoop:
                 _log_loop(f"  [loop] final ({t_parse}ms parse)\n")
                 final_text = str(payload)
                 ok, err_msg = self._validate_final_answer(final_text)
-                if not ok and self._json_retry_count < self.MAX_JSON_RETRIES:
+                max_json_retries = getattr(
+                    self.agent.config, "max_json_retries", self.MAX_JSON_RETRIES
+                )
+                if not ok and self._json_retry_count < max_json_retries:
                     self._json_retry_count += 1
                     self._emit(
                         "json_retry",

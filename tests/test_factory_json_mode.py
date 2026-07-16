@@ -22,6 +22,26 @@ class TestJsonModeAllRoles:
         agent = create_repair_agent("retriever", client, ws, cwd=str(tmp_path))
         assert agent.config.json_mode is True
 
+    def test_retriever_disables_json_retry(self, tmp_path):
+        """Retriever 输出无效时交给 L2 fallback，不在 AgentLoop 内二次补全。"""
+        from agent_runtime.providers.clients import FakeModelClient
+        from agent_runtime.workspace import WorkspaceContext
+
+        ws = WorkspaceContext.build(str(tmp_path))
+        client = FakeModelClient(["{}"])
+        agent = create_repair_agent("retriever", client, ws, cwd=str(tmp_path))
+        assert agent.config.max_json_retries == 0
+
+    def test_patcher_keeps_default_json_retry(self, tmp_path):
+        """Patcher 仍保留 JSON 格式修复能力。"""
+        from agent_runtime.providers.clients import FakeModelClient
+        from agent_runtime.workspace import WorkspaceContext
+
+        ws = WorkspaceContext.build(str(tmp_path))
+        client = FakeModelClient(["{}"])
+        agent = create_repair_agent("patcher", client, ws, cwd=str(tmp_path))
+        assert agent.config.max_json_retries == 2
+
     def test_patcher_has_json_mode(self, tmp_path):
         from agent_runtime.providers.clients import FakeModelClient
         from agent_runtime.workspace import WorkspaceContext

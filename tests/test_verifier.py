@@ -114,6 +114,47 @@ class TestVerifyStrategyExecutionTier:
         assert run.error == "static_verify_failed"
         assert any("broken.py" in log for log in run.result.failure_logs)
 
+    def test_static_strategy_checks_java_with_javac(self, monkeypatch, tmp_path):
+        import subprocess
+
+        from src.repair.verify import StaticVerifyStrategy
+
+        (tmp_path / "Bar.java").write_text("class Bar { void x( }", encoding="utf-8")
+        monkeypatch.setattr("shutil.which", lambda name: "javac" if name == "javac" else None)
+
+        def fake_run(cmd, cwd, capture_output, text, timeout):
+            assert cmd[:2] == ["javac", "-proc:none"]
+            assert cwd == tmp_path
+            return subprocess.CompletedProcess(
+                cmd,
+                1,
+                stdout="",
+                stderr="Bar.java:1: error: illegal start of expression",
+            )
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+
+        run = StaticVerifyStrategy().run(str(tmp_path), language="java")
+
+        assert run.result.all_passed is False
+        assert run.error == "static_verify_failed"
+        assert run.internal["language"] == "java"
+        assert run.internal["checker"] == "javac"
+        assert any("Bar.java" in log for log in run.result.failure_logs)
+
+    def test_static_strategy_reports_unsupported_language_tool(self, monkeypatch, tmp_path):
+        from src.repair.verify import StaticVerifyStrategy
+
+        (tmp_path / "Bar.java").write_text("class Bar {}\n", encoding="utf-8")
+        monkeypatch.setattr("shutil.which", lambda name: None)
+
+        run = StaticVerifyStrategy().run(str(tmp_path), language="java")
+
+        assert run.result.all_passed is False
+        assert run.error == "static_verify_unsupported"
+        assert run.internal["unsupported_language"] == "java"
+        assert "javac" in run.result.failure_logs[0]
+
 
 class TestVerifierFallbackPolicy:
     def test_docker_unavailable_falls_back_to_host_when_allowed(self, monkeypatch, tmp_path):
@@ -205,3 +246,32 @@ class TestVerifierFallbackPolicy:
 
         assert result.all_passed is True
         assert state.node_timings["phases_internal"]["verify"]["actual_tier"] == "static"
+
+    def test_non_python_plan_uses_language_aware_static_verifier(self, monkeypatch, tmp_path):
+        from src.orchestrator import Orchestrator
+        from src.repair.verify import VerifyRun
+        from src.state import RepairPlan, RepairState, VerificationResult
+
+        seen: dict[str, str] = {}
+
+        def fake_static_run(self, repo_root, test_path="", cancel_token=None, language="python"):
+            seen["language"] = language
+            return VerifyRun(
+                result=VerificationResult(all_passed=True),
+                elapsed_ms=1,
+                internal={"actual_tier": "static", "language": language},
+            )
+
+        monkeypatch.setattr("src.orchestrator.StaticVerifyStrategy.run", fake_static_run)
+        orch = Orchestrator(None, None, None, verifier=object(), use_pytest_verify=True)
+        orch._repo_root = str(tmp_path)
+        state = RepairState(
+            issue_input="java.lang.NullPointerException at Bar.java:10",
+            repair_plan=RepairPlan(language="java", language_source="extension:.java"),
+        )
+
+        result = orch._run_verifier(state)
+
+        assert result.all_passed is True
+        assert seen["language"] == "java"
+        assert state.node_timings["phases_internal"]["verify"]["language"] == "java"

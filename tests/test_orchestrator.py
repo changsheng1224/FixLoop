@@ -140,6 +140,39 @@ class TestOrchestrator:
         assert state.node_timings.get("total_tokens", 0) > 0
         assert "token_usage" in state.node_timings
 
+    def test_localizer_only_uses_complete_once_and_recovers_tool_call_path(
+        self, temp_workspace
+    ):
+        ws = WorkspaceContext.build(str(temp_workspace))
+        loc_client = FakeModelClient(
+            [
+                "<function_calls>"
+                '<invoke name="inspect_file">'
+                '<parameter name="path">calc.py</parameter>'
+                "</invoke>"
+                "</function_calls>",
+            ]
+        )
+        localizer = create_localizer(loc_client, ws)
+
+        def fail_if_agent_loop_is_used(*args, **kwargs):
+            raise AssertionError("localizer should use complete_once in L2 pipeline")
+
+        localizer.ask = fail_if_agent_loop_is_used
+        orch = Orchestrator(localizer, None, None)
+        state = RepairState(
+            issue_input="TypeError at calc.py:42",
+            repair_plan=RepairPlan(issue_type="type_error"),
+        )
+
+        suspects, context, loc_timing, ret_timing = orch._run_localizer_only(state)
+
+        assert [s.file_path for s in suspects] == ["calc.py"]
+        assert context.related_tests == []
+        assert loc_timing["internal"]["mode"] == "complete_once"
+        assert ret_timing["total_ms"] == 0
+        assert len(loc_client.prompts) == 1
+
     def test_repair_unified_trace_and_per_agent_tokens(self, temp_workspace):
         import json
 
@@ -259,15 +292,15 @@ class TestOrchestrator:
         assert report.get("blackboard_schema_version") == 1
         assert report.get("blackboard", {}).get("entries")
 
-    def test_repair_warns_non_python_language(self, temp_workspace, monkeypatch):
+    def test_repair_routes_non_python_language_to_static_verifier(self, temp_workspace, monkeypatch):
         from src.repair import pipeline as pipeline_mod
 
-        warnings: list[str] = []
+        infos: list[str] = []
 
         def capture(msg, *args, **kwargs):
-            warnings.append(msg % args if args else str(msg))
+            infos.append(msg % args if args else str(msg))
 
-        monkeypatch.setattr(pipeline_mod.log, "warning", capture)
+        monkeypatch.setattr(pipeline_mod.log, "info", capture)
 
         (temp_workspace / "Bar.java").write_text("class Bar {}\n", encoding="utf-8")
         ws = WorkspaceContext.build(str(temp_workspace))
@@ -278,7 +311,7 @@ class TestOrchestrator:
         )
         state = orch.repair("java.lang.NullPointerException at Bar.java:10")
         assert state.repair_plan.language == "java"
-        assert any("Verifier 仅支持 Python" in w for w in warnings)
+        assert any("语言感知静态验证" in item for item in infos)
 
     def test_retriever_prompt_from_plan(self):
         orch = Orchestrator(None, None, None)
@@ -363,6 +396,107 @@ class TestApplyPatch:
         result = apply_patch_to_text(text, patch)
         assert result is not None
         assert "from utils.helpers import greet" in result
+
+    def test_apply_diff_uses_matching_lines_from_multifile_diff(self):
+        text = (
+            "import values\n"
+            "def generate_report(name):\n"
+            '    result = values.get_score(name) + " points"\n'
+            "    return result\n"
+        )
+        patch = CandidatePatch(
+            file_path="report.py",
+            diff=(
+                "--- a/report.py\n"
+                "+++ b/report.py\n"
+                "@@ -10,3 +10,3 @@ def generate_report(name):\n"
+                '-    result = values.get_score(name) + " points"\n'
+                '+    result = str(values.get_score(name)) + " points"\n'
+                "--- a/values.py\n"
+                "+++ b/values.py\n"
+                "@@ -2,3 +2,3 @@ def get_score(name):\n"
+                "-    return int(data[name])\n"
+                "+    return int(data.get(name, '0') or 0)\n"
+            ),
+        )
+
+        result = apply_patch_to_text(text, patch)
+
+        assert result is not None
+        assert 'result = str(values.get_score(name)) + " points"' in result
+
+    def test_apply_diff_applies_multiple_separate_hunks(self):
+        text = "a = 1\nkeep = True\nb = 2\n"
+        patch = CandidatePatch(
+            file_path="x.py",
+            diff=(
+                "--- a/x.py\n"
+                "+++ b/x.py\n"
+                "@@ -1,1 +1,1 @@\n"
+                "-a = 1\n"
+                "+a = 10\n"
+                "@@ -3,1 +3,1 @@\n"
+                "-b = 2\n"
+                "+b = 20\n"
+            ),
+        )
+
+        result = apply_patch_to_text(text, patch)
+
+        assert result == "a = 10\nkeep = True\nb = 20\n"
+
+    def test_apply_diff_falls_back_to_unique_return_statement(self):
+        text = (
+            "from values import clamp\n\n"
+            "def normalize_score(score):\n"
+            "    return clamp(score, 0, 100) / 100  # BUG\n"
+        )
+        patch = CandidatePatch(
+            file_path="transform.py",
+            diff="-return score / 100\n+return float(clamp(score, 0, 100))",
+        )
+
+        result = apply_patch_to_text(text, patch)
+
+        assert result is not None
+        assert "return float(clamp(score, 0, 100))" in result
+
+    def test_apply_diff_replaces_unique_return_with_multiline_block(self):
+        text = 'data = {"bob": "N/A"}\ndef get_score(name):\n    return int(data[name])\n'
+        patch = CandidatePatch(
+            file_path="values.py",
+            diff=(
+                "-return int(data.get(name, '0'))\n"
+                "+raw = data.get(name, '0')\n"
+                "+return int(raw) if str(raw).isdigit() else 0"
+            ),
+        )
+
+        result = apply_patch_to_text(text, patch)
+
+        assert result is not None
+        assert "raw = data.get" in result
+        assert "isdigit()" in result
+
+    def test_apply_diff_falls_back_to_unique_assignment_statement(self):
+        text = (
+            "import values\n"
+            "def generate_report(name):\n"
+            '    result = values.get_score(name) + " points"\n'
+            "    return result\n"
+        )
+        patch = CandidatePatch(
+            file_path="report.py",
+            diff=(
+                '-result = get_score(name) + " points"\n'
+                '+result = str(values.get_score(name)) + " points"'
+            ),
+        )
+
+        result = apply_patch_to_text(text, patch)
+
+        assert result is not None
+        assert 'result = str(values.get_score(name)) + " points"' in result
 
     def test_sync_import_symbol_usages(self):
         from src.repair.patch_applier import _sync_import_symbol_usages
@@ -709,6 +843,61 @@ class TestBuildFeedback:
         feedback = orch._build_feedback(result, state=state)
         assert "3 次" in feedback  # retry_count=2 → "已尝试 3 次"
 
+    def test_feedback_extracts_failure_targets_for_retry(self):
+        orch = Orchestrator.__new__(Orchestrator)
+        result = VerificationResult(
+            all_passed=False,
+            failure_logs=[
+                "FAILED test_018.py::test_report_bob - ValueError: invalid literal",
+                'File "values.py", line 3, in get_score',
+                "E assert 'N/A points' == '0 points'",
+            ],
+        )
+        feedback = orch._build_feedback(result, state=RepairState(issue_input="fix"))
+
+        assert "失败定位" in feedback
+        assert "test_018.py::test_report_bob" in feedback
+        assert "values.py" in feedback
+
+    def test_feedback_guides_invalid_literal_value_error(self):
+        orch = Orchestrator.__new__(Orchestrator)
+        result = VerificationResult(
+            all_passed=False,
+            failure_logs=["ValueError: invalid literal for int() with base 10: 'N/A'"],
+        )
+        feedback = orch._build_feedback(result, state=RepairState(issue_input="fix"))
+
+        assert "非数字字符串" in feedback
+        assert "N/A" in feedback
+        assert "dict.get" in feedback
+
+    def test_feedback_uses_issue_for_value_error_constraints(self):
+        orch = Orchestrator.__new__(Orchestrator)
+        result = VerificationResult(all_passed=False, failure_logs=["assert failed"])
+        state = RepairState(
+            issue_input="ValueError: invalid literal for int() with base 10: 'N/A'"
+        )
+        feedback = orch._build_feedback(result, state=state)
+
+        assert "非数字字符串" in feedback
+        assert "raw.isdigit" in feedback
+
+    def test_feedback_warns_on_repeated_patch_fingerprint(self):
+        orch = Orchestrator.__new__(Orchestrator)
+        result = VerificationResult(all_passed=False, failure_logs=["same failure"])
+        state = RepairState(issue_input="fix", retry_count=1)
+        patch = CandidatePatch(
+            file_path="values.py",
+            diff="-return int(data[name])\n+return int(data.get(name, '0') or 0)",
+        )
+        state.candidate_patches = [patch]
+
+        orch._build_feedback(result, state=state)
+        feedback = orch._build_feedback(result, state=state)
+
+        assert "重复补丁" in feedback
+        assert "不要重复生成上轮相同 diff" in feedback
+
     def test_sections_ordered_by_priority(self):
         """Sections 按 priority 排序。"""
         orch = Orchestrator.__new__(Orchestrator)
@@ -749,6 +938,45 @@ class TestBuildFeedback:
 
 
 class TestRetrieverDegrade:
+    def test_invalid_llm_output_degrades_after_one_attempt(self, temp_workspace):
+        """Retriever 输出不可解析时只尝试一次 LLM，然后降级到规则检索。"""
+        (temp_workspace / "app.py").write_text("def add(a, b):\n    return a + b\n")
+        (temp_workspace / "tests").mkdir()
+        (temp_workspace / "tests" / "test_app.py").write_text(
+            "from app import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n",
+            encoding="utf-8",
+        )
+        ws = WorkspaceContext.build(str(temp_workspace))
+        loc_client = FakeModelClient(
+            [
+                '<final>[{"file_path":"app.py","start_line":1,"end_line":2,'
+                '"function_name":"add","reason":"stack","confidence":0.9}]</final>'
+            ]
+        )
+        ret_client = FakeModelClient(
+            [
+                "<final>I found the test but forgot JSON</final>",
+                '<final>{"related_tests":["test_app.py::test_add"]}</final>',
+            ]
+        )
+        orch = Orchestrator(
+            create_localizer(loc_client, ws),
+            create_retriever(ret_client, ws),
+            None,
+        )
+        state = RepairState(
+            issue_input="TypeError at app.py:2 in add",
+            repair_plan=RepairPlan(issue_type="type_error", suspect_files=["app.py"]),
+        )
+
+        suspects, context, _, _ = orch._run_localize_and_retrieve(state)
+
+        assert [s.file_path for s in suspects] == ["app.py"]
+        assert len(ret_client.prompts) == 1
+        assert state.node_timings["retrieval_path"] == "llm→degrade"
+        assert state.node_timings["retriever_degrade_reason"] == "invalid_json"
+        assert any("test_app.py" in test for test in context.related_tests)
+
     def test_rule_retrieve_returns_context(self, temp_workspace):
         """_rule_retrieve 在无 LLM 时也能返回 RetrievedContext。"""
         orch = Orchestrator.__new__(Orchestrator)

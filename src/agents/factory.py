@@ -30,6 +30,7 @@ _AGENT_DEFAULTS: dict[MultiAgentRole, dict] = {
         "max_steps": 4,
         "max_new_tokens": 2048,
         "prompt_budget": _DEFAULT_ALLOCATIONS["retriever"],
+        "max_json_retries": 0,
     },
     "patcher": {
         "max_steps": 6,

@@ -143,3 +143,78 @@ class TestRunSubtaskCycle:
         subtasks = RepairPipelineMixin._generate_subtasks(plan)
         assert len(subtasks) == 3
         assert subtasks[2].depends_on == [subtasks[0].id]
+
+
+class TestCompositeSubtaskPreparation:
+    def test_subtask_suspects_are_merged_back_to_main_state(self):
+        """Composite subtask 定位结果应进入主 state，供统一 patch loop 使用。"""
+        from src.repair.pipeline import RepairPipelineMixin
+        from src.state import RepairState
+
+        class DummyPipeline(RepairPipelineMixin):
+            def _run_subtask_cycle(self, state, subtask, suspects_by_subtask):
+                suspect = SuspectLocation(
+                    file_path=subtask.suspect_files[0],
+                    start_line=1,
+                    end_line=3,
+                    function_name=f"fn_{subtask.id}",
+                )
+                suspects_by_subtask[subtask.id] = [suspect]
+                return [suspect]
+
+        pipeline = DummyPipeline()
+        state = RepairState(issue_input="composite")
+        state.repair_plan = RepairPlan(
+            issue_type="composite",
+            suspect_files=["calc.py", "validator.py"],
+        )
+
+        prepared = pipeline._prepare_composite_subtasks(state)
+
+        assert prepared is True
+        assert [s.file_path for s in state.suspect_locations] == ["calc.py", "validator.py"]
+        assert state.candidate_patches == []
+        assert state.status == "pending"
+
+    def test_duplicate_subtask_suspects_are_deduplicated(self):
+        """同一定位结果被多个 subtask 命中时只保留一份。"""
+        from src.repair.pipeline import RepairPipelineMixin
+        from src.state import RepairState
+
+        duplicate = SuspectLocation(file_path="shared.py", start_line=10, end_line=12)
+
+        class DummyPipeline(RepairPipelineMixin):
+            def _run_subtask_cycle(self, state, subtask, suspects_by_subtask):
+                suspects_by_subtask[subtask.id] = [duplicate]
+                return [duplicate]
+
+        pipeline = DummyPipeline()
+        state = RepairState(issue_input="composite")
+        state.repair_plan = RepairPlan(
+            issue_type="composite",
+            suspect_files=["a.py", "b.py"],
+        )
+
+        assert pipeline._prepare_composite_subtasks(state) is True
+        assert state.suspect_locations == [duplicate]
+
+    def test_composite_without_subtask_suspects_is_failed_not_pending(self):
+        """subtask 全部无定位结果时不能泄漏 pending 终态。"""
+        from src.repair.pipeline import RepairPipelineMixin
+        from src.state import RepairState
+
+        class DummyPipeline(RepairPipelineMixin):
+            def _run_subtask_cycle(self, state, subtask, suspects_by_subtask):
+                suspects_by_subtask[subtask.id] = []
+                return []
+
+        pipeline = DummyPipeline()
+        state = RepairState(issue_input="composite")
+        state.repair_plan = RepairPlan(
+            issue_type="composite",
+            suspect_files=["a.py", "b.py"],
+        )
+
+        assert pipeline._prepare_composite_subtasks(state) is False
+        assert state.status == "failed"
+        assert "subtask_no_suspects" in state.failure_tags

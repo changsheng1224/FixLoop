@@ -27,6 +27,12 @@ class TestRetrieverSystemPrompt:
         prompt = _load_retriever_prompt()
         assert "4" in prompt
 
+    def test_prompt_forbids_wrapped_final_output(self):
+        """Retriever 最终答案必须是裸 RetrievedContext JSON。"""
+        prompt = _load_retriever_prompt()
+        assert "不要输出 <final>" in prompt
+        assert "不要输出 Markdown" in prompt
+
 
 def _load_retriever_prompt() -> str:
     from pathlib import Path

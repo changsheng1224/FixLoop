@@ -73,3 +73,9 @@ class AgentConfig(BaseModel):
             "校验失败 → recovery prompt + 回到 Acting（最多 2 次重试）。"
         ),
     )
+    max_json_retries: int = Field(
+        default=2,
+        ge=0,
+        le=5,
+        description="json_mode final answer 校验失败后的格式修复重试次数。",
+    )

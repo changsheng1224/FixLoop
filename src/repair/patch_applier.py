@@ -19,7 +19,7 @@ def apply_patch_to_text(text: str, patch: CandidatePatch) -> str | None:
             return replaced
 
     if patch.diff:
-        result = _apply_unified_diff(text, patch.diff)
+        result = _apply_unified_diff(text, patch.diff, file_path=patch.file_path)
         if result is not None:
             return result
         return _apply_import_line_fallback(text, patch.diff)
@@ -184,11 +184,154 @@ def _replace_line_by_strip(text: str, old_line: str, new_line: str) -> str | Non
     return None
 
 
-def _apply_unified_diff(text: str, diff: str) -> str | None:
-    """应用简化的 unified diff（-/+ 行）。"""
+def _statement_anchor(line: str) -> str:
+    stripped = _line_match_key(line)
+    if stripped.startswith("return "):
+        return "return "
+    assign = re.match(r"([A-Za-z_][\w.]*\s*=)", stripped)
+    return assign.group(1) if assign else ""
+
+
+def _replace_unique_statement_by_anchor(
+    text: str, old_line: str, new_line: str
+) -> str | None:
+    """old_line 表达式不精确时，按唯一语句锚点保守替换。"""
+    old_anchor = _statement_anchor(old_line)
+    new_anchor = _statement_anchor(new_line)
+    if not old_anchor:
+        return None
+    allow_multiline_return = old_anchor == "return " and "\n" in new_line.strip()
+    if old_anchor != new_anchor and not allow_multiline_return:
+        return None
+
+    lines = text.splitlines(keepends=True)
+    matches: list[int] = []
+    for i, file_line in enumerate(lines):
+        content = file_line.rstrip("\n\r")
+        if content.lstrip().startswith(old_anchor):
+            matches.append(i)
+    if len(matches) != 1:
+        return None
+
+    i = matches[0]
+    content = lines[i].rstrip("\n\r")
+    indent = content[: len(content) - len(content.lstrip())]
+    replacement_lines = []
+    for raw in new_line.strip().split("\n"):
+        replacement = raw.strip()
+        if indent and replacement and not replacement.startswith((" ", "\t")):
+            replacement = indent + replacement
+        replacement_lines.append(replacement)
+    replacement = "\n".join(replacement_lines)
+    ending = lines[i][len(content) :] if lines[i].endswith(("\n", "\r")) else "\n"
+    lines[i] = replacement + ending
+    return "".join(lines)
+
+
+def _normalize_diff_path(path: str) -> str:
+    path = path.strip().strip('"').replace("\\", "/")
+    if path.startswith(("a/", "b/")):
+        path = path[2:]
+    return path
+
+
+def _select_diff_for_file(diff: str, file_path: str) -> str:
+    """若 diff 含多个文件，只保留当前 CandidatePatch 对应的文件段。"""
+    target = _normalize_diff_path(file_path)
+    if not target:
+        return diff
+
+    lines = diff.splitlines()
+    sections: list[tuple[str, str, list[str]]] = []
+    current_old = ""
+    current_new = ""
+    current_lines: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        next_line = lines[i + 1] if i + 1 < len(lines) else ""
+        if line.startswith("--- ") and next_line.startswith("+++ "):
+            if current_lines:
+                sections.append((current_old, current_new, current_lines))
+            current_old = _normalize_diff_path(line[4:])
+            current_new = _normalize_diff_path(next_line[4:])
+            current_lines = [line, next_line]
+            i += 2
+            continue
+        if current_lines:
+            current_lines.append(line)
+        i += 1
+    if current_lines:
+        sections.append((current_old, current_new, current_lines))
+
+    if not sections:
+        return diff
+
+    for old_path, new_path, section_lines in sections:
+        if target in {old_path, new_path}:
+            return "\n".join(section_lines)
+    return diff
+
+
+def _parse_diff_hunks(diff: str) -> list[tuple[list[str], list[str]]]:
+    hunks: list[tuple[list[str], list[str]]] = []
     minus: list[str] = []
     plus: list[str] = []
+
+    def flush() -> None:
+        nonlocal minus, plus
+        if minus or plus:
+            hunks.append((minus, plus))
+        minus = []
+        plus = []
+
     for line in diff.splitlines():
+        if line.startswith(("---", "+++")):
+            continue
+        if line.startswith("@@"):
+            flush()
+            continue
+        if line.startswith("-"):
+            minus.append(line[1:])
+        elif line.startswith("+"):
+            plus.append(line[1:])
+    flush()
+    return hunks
+
+
+def _apply_diff_hunk(text: str, minus: list[str], plus: list[str]) -> str | None:
+    if not minus:
+        return None
+
+    old_block = "\n".join(minus)
+    new_block = "\n".join(plus)
+    if old_block in text:
+        return text.replace(old_block, new_block, 1)
+
+    if len(minus) == 1 and plus:
+        replaced = _replace_line_by_strip(text, minus[0], new_block)
+        if replaced is not None:
+            return replaced
+        return _replace_unique_statement_by_anchor(text, minus[0], new_block)
+
+    if len(minus) == len(plus):
+        current = text
+        for old_line, new_line in zip(minus, plus, strict=True):
+            replaced = _replace_line_by_strip(current, old_line, new_line)
+            if replaced is None:
+                return None
+            current = replaced
+        return current
+
+    return None
+
+
+def _apply_unified_diff(text: str, diff: str, *, file_path: str = "") -> str | None:
+    """应用简化的 unified diff（-/+ 行）。"""
+    selected_diff = _select_diff_for_file(diff, file_path)
+    minus: list[str] = []
+    plus: list[str] = []
+    for line in selected_diff.splitlines():
         if line.startswith("-") and not line.startswith("---"):
             minus.append(line[1:])
         elif line.startswith("+") and not line.startswith("+++"):
@@ -206,6 +349,19 @@ def _apply_unified_diff(text: str, diff: str) -> str | None:
         replaced = _replace_line_by_strip(text, minus[0], plus[0])
         if replaced is not None:
             return replaced
+
+    hunks = _parse_diff_hunks(selected_diff)
+    if len(hunks) > 1:
+        current = text
+        for hunk_minus, hunk_plus in hunks:
+            replaced = _apply_diff_hunk(current, hunk_minus, hunk_plus)
+            if replaced is None:
+                return None
+            current = replaced
+        return current if current != text else None
+
+    if len(hunks) == 1:
+        return _apply_diff_hunk(text, hunks[0][0], hunks[0][1])
 
     return None
 

@@ -30,6 +30,9 @@ def _sample_results() -> list[CaseResult]:
             minimal_lines=1,
             duration_ms=2500,
             introduced_regression=True,
+            status="exhausted",
+            failure_tags=["parse_fail", "timeout"],
+            error="patcher: no patches in agent output",
             variant="full",
         ),
         CaseResult(
@@ -60,6 +63,12 @@ class TestComputeMetrics:
         assert summary["avg_duration_s"] == round((1500 + 2500 + 1200) / 3 / 1000, 2)
         assert summary["regression_rate"] == round(1 / 3, 4)
         assert summary["total_tokens"] == 1800
+        assert summary["duration_ms_p50"] == 1500
+        assert summary["duration_ms_p95"] == 2500
+        assert summary["token_p50"] == 900
+        assert summary["status_counts"] == {"fixed": 2, "exhausted": 1}
+        assert summary["failure_tag_counts"] == {"parse_fail": 1, "timeout": 1}
+        assert summary["failure_reason_counts"] == {"no_patch": 1}
 
     def test_groupings(self):
         report = compute_metrics(_sample_results())
@@ -78,8 +87,12 @@ class TestFormatMarkdown:
         assert "## By Case" in md
         assert "## By Issue Type" in md
         assert "## By Difficulty" in md
+        assert "## Failure Breakdown" in md
+        assert "## Performance Detail" in md
         assert "case_001" in md
         assert "full" in md
+        assert "patch_precision" in md
+        assert "failure_tags" in md
 
 
 class TestLoadAndWriteMarkdown:
