@@ -9,6 +9,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+from src.eval.metrics import _bucket_metrics, _summary_metrics
 from src.eval.models import CaseResult
 from src.eval.runner import DEFAULT_CASES_DIR, EvalRunner
 
@@ -21,32 +22,14 @@ def build_ablation_report(results: list[CaseResult]) -> dict:
 
     summary_by_variant: dict[str, dict] = {}
     for variant, variant_results in sorted(by_variant.items()):
-        total = len(variant_results)
-        fixed = sum(1 for r in variant_results if r.fixed)
-        summary_by_variant[variant] = {
-            "total": total,
-            "fixed": fixed,
-            "fix_rate": round(fixed / total, 4) if total else 0.0,
-            "avg_retries": round(sum(r.retry_count for r in variant_results) / total, 2)
-            if total
-            else 0.0,
-            "avg_duration_ms": round(
-                sum(r.duration_ms for r in variant_results) / total,
-                2,
-            )
-            if total
-            else 0.0,
-            "total_tokens": sum(r.total_tokens for r in variant_results),
-            "avg_total_tokens": round(
-                sum(r.total_tokens for r in variant_results) / total,
-                2,
-            )
-            if total
-            else 0.0,
-        }
+        summary_by_variant[variant] = _summary_metrics(variant_results)
 
     return {
+        "summary": _summary_metrics(results),
         "summary_by_variant": summary_by_variant,
+        "summary_by_case": _bucket_metrics(results, lambda r: r.case_id),
+        "summary_by_issue_type": _bucket_metrics(results, lambda r: r.issue_type),
+        "summary_by_difficulty": _bucket_metrics(results, lambda r: r.difficulty),
         "runs": [r.to_dict() for r in results],
     }
 
