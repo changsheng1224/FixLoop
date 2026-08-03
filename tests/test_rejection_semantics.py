@@ -189,16 +189,19 @@ class TestRepairRejectionAggregation:
     def test_repair_report_aggregates_gateway_denials(self, temp_workspace):
         (temp_workspace / "calc.py").write_text("old\n", encoding="utf-8")
         ws = WorkspaceContext.build(str(temp_workspace))
-        loc_client = FakeNativeToolClient(
+        # Localizer is complete_once (no tools); denials come from Retriever ReAct path.
+        loc_client = FakeModelClient(
             [
-                '<tool>{"name":"write_file","args":{"path":"x.py","content":"y"}}</tool>',
-                '<tool>{"name":"write_file","args":{"path":"x.py","content":"z"}}</tool>',
                 '<final>[{"file_path":"calc.py","start_line":1,"end_line":1,'
                 '"function_name":"","reason":"stack","confidence":0.9}]</final>',
             ]
         )
         ret_client = FakeNativeToolClient(
-            ['<final>{"related_tests":["test_calc.py::test_add"]}</final>']
+            [
+                '<tool>{"name":"write_file","args":{"path":"x.py","content":"y"}}</tool>',
+                '<tool>{"name":"write_file","args":{"path":"x.py","content":"z"}}</tool>',
+                '<final>{"related_tests":["test_calc.py::test_add"]}</final>',
+            ]
         )
         pat_client = FakeModelClient(
             ['<final>[{"file_path":"calc.py","diff":"-old\\n+new","explanation":"fix"}]</final>']
@@ -211,8 +214,8 @@ class TestRepairRejectionAggregation:
         state = orch.repair("TypeError at calc.py:1")
         assert state.repair_run_id
         assert state.node_timings["permission_denied_by_tool"]["write_file"] == 2
-        assert state.node_timings["permission_denied_by_agent"]["localizer"]["write_file"] == 2
-        assert state.agent_errors["localizer"] == "gateway permission_denied: write_file×2"
+        assert state.node_timings["permission_denied_by_agent"]["retriever"]["write_file"] == 2
+        assert state.agent_errors["retriever"] == "gateway permission_denied: write_file×2"
 
         report = json.loads(
             (temp_workspace / ".agent" / "runs" / state.repair_run_id / "report.json").read_text(

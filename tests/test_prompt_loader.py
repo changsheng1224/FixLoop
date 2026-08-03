@@ -69,7 +69,7 @@ class TestLoadLocalizerHints:
 
         text = load_localizer_hints("stack_first")
         assert "stack_parse" in text
-        assert "ast_parse" in text
+        assert "SuspectList" in text or "嫌疑" in text
 
     def test_unknown_key_falls_back_to_stack_first(self):
         from src.prompts.loader import load_localizer_hints
