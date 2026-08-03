@@ -105,7 +105,9 @@ def _fuse(hit: RuleHit, emb: EmbedMatch | None) -> tuple[RuleHit, dict[str, floa
     )
 
 
-def _result_from_graph(graph: IntentGraph, *, raw_signals: dict[str, Any] | None = None) -> IntentResult:
+def _result_from_graph(
+    graph: IntentGraph, *, raw_signals: dict[str, Any] | None = None
+) -> IntentResult:
     graph = validate_graph(graph)
     execs = [n for n in graph.nodes if n.role == "executable"]
     # clarify-only
@@ -230,8 +232,8 @@ class IntentRouter:
             return result
 
         if resolved.outcome == "unresolved":
-            from agent_runtime.intent.clarify import build_clarify_payload
             from agent_runtime.intent.candidates import record_route_candidates
+            from agent_runtime.intent.clarify import build_clarify_payload
 
             empty = _result_from_graph(
                 plan([], channel=ctx.channel, max_executable_nodes=ctx.max_executable_nodes),

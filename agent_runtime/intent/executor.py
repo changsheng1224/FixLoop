@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from agent_runtime.intent.graph import merge_constraints, topological_executable_nodes
 from agent_runtime.intent.models import IntentNode, IntentResult

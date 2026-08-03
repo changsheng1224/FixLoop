@@ -257,7 +257,11 @@ def _plan_repair_channel(
             nodes.append(
                 _node_from_hit(cid, hit, seg, role="constraint", span_start=idx * 10)
             )
-            edges.append(IntentEdge(src=cid, dst="n0", kind="constrains", reason="repair constraint"))
+            edges.append(
+                IntentEdge(
+                    src=cid, dst="n0", kind="constrains", reason="repair constraint"
+                )
+            )
     g = IntentGraph(nodes=nodes, edges=edges, mode=mode, root_ids=["n0"])
     if mode == "hybrid":
         g = merge_constraints(g)

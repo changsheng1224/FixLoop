@@ -33,8 +33,12 @@ _METRIC_HELP: dict[str, str] = {
     "fixloop_cache_hit_rate": "Prompt cache hit rate (0.0–1.0).",
     "fixloop_retry_count": "Current repair retry count.",
     # Intent Router (online)
-    "fixloop_intent_routed_total": "Intent router invocations by channel/mode/primary/action/parser.",
-    "fixloop_intent_misroute_proxy_total": "Online misroute proxies (low_conf/conflict/clarify/llm_override).",
+    "fixloop_intent_routed_total": (
+        "Intent router invocations by channel/mode/primary/action/parser."
+    ),
+    "fixloop_intent_misroute_proxy_total": (
+        "Online misroute proxies (low_conf/conflict/clarify/llm_override)."
+    ),
     "fixloop_intent_clarify_total": "Clarify outcomes by channel and reason.",
     "fixloop_intent_llm_fallback_total": "Graph-level LLM fallback attempts by outcome.",
     "fixloop_intent_confidence": "Last intent confidence by channel/mode.",

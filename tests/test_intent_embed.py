@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import math
-
 from agent_runtime.intent.embed_index import EmbedIndex, load_prototypes
 
 

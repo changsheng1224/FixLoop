@@ -1,10 +1,9 @@
 """Tests for traceback extraction from mixed large user inputs."""
 
-from agent_runtime.intent.router import IntentRouter
 from agent_runtime.intent.models import RouteContext
-from agent_runtime.intent.stack_parse import extract_issue_slots, parse_stack
+from agent_runtime.intent.router import IntentRouter
 from agent_runtime.intent.segmenter import segment
-
+from agent_runtime.intent.stack_parse import extract_issue_slots, parse_stack
 
 _LARGE = '''
 帮我看看：

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 
-from agent_runtime.intent.models import IntentEdge, IntentGraph, IntentNode, PRIMARY_ACTIONS
+from agent_runtime.intent.models import PRIMARY_ACTIONS, IntentEdge, IntentGraph, IntentNode
 
 
 class GraphValidationError(ValueError):
@@ -35,20 +35,20 @@ def _has_cycle(nodes: list[IntentNode], edges: list[IntentEdge]) -> bool:
         if e.src in ids and e.dst in ids:
             adj[e.src].append(e.dst)
 
-    WHITE, GRAY, BLACK = 0, 1, 2
-    color = {nid: WHITE for nid in ids}
+    white, gray, black = 0, 1, 2
+    color = {nid: white for nid in ids}
 
     def dfs(u: str) -> bool:
-        color[u] = GRAY
+        color[u] = gray
         for v in adj[u]:
-            if color[v] == GRAY:
+            if color[v] == gray:
                 return True
-            if color[v] == WHITE and dfs(v):
+            if color[v] == white and dfs(v):
                 return True
-        color[u] = BLACK
+        color[u] = black
         return False
 
-    return any(color[nid] == WHITE and dfs(nid) for nid in ids)
+    return any(color[nid] == white and dfs(nid) for nid in ids)
 
 
 def _exec_count(graph: IntentGraph) -> int:

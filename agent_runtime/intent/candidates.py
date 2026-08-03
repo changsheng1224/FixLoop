@@ -445,7 +445,11 @@ def events_from_llm_candidates(
                 predicted=predicted or "",
                 runners_up=[
                     RunnerUp(
-                        primary=label if label in PRIMARY_ACTIONS else (str(merge) if merge else label),
+                        primary=(
+                            label
+                            if label in PRIMARY_ACTIONS
+                            else (str(merge) if merge else label)
+                        ),
                         confidence=float(d.get("confidence") or 0.0),
                         reason="llm",
                     )
@@ -525,7 +529,11 @@ def discover_from_cases(
     router = IntentRouter()
     all_events: list[CandidateEvent] = []
     for case in cases:
-        proj = DialogueProjection.from_dict(case.dialogue) if case.dialogue else DialogueProjection()
+        proj = (
+            DialogueProjection.from_dict(case.dialogue)
+            if case.dialogue
+            else DialogueProjection()
+        )
         built: list[dict[str, Any]] = []
         for h in case.history:
             prior = router.route(
@@ -590,7 +598,10 @@ def discover_from_cases(
                         proposed_label=f"gap:expect_{exp}",
                         merge_into=str(exp) if exp in PRIMARY_ACTIONS else None,
                         severity="high",
-                        note=f"case={case.id} | stratum={case.stratum} | gold={exp} pred={result.primary}",
+                        note=(
+                            f"case={case.id} | stratum={case.stratum} | "
+                            f"gold={exp} pred={result.primary}"
+                        ),
                     )
                 )
         all_events.extend(evs)

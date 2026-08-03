@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import time
-from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -282,7 +281,9 @@ def evaluate_case(
 
     false_split = bool(exp.get("mode") == "hybrid" and result.graph.mode == "multi")
     false_split = false_split or bool(
-        exp.get("mode") == "single" and result.graph.mode == "multi" and "ask" in (exp_primary or "")
+        exp.get("mode") == "single"
+        and result.graph.mode == "multi"
+        and "ask" in (exp_primary or "")
     )
     # more general: expected single/hybrid but got multi with >1 exec
     if exp_mode in ("single", "hybrid") and result.graph.mode == "multi" and len(pred_exec) > 1:
@@ -347,7 +348,6 @@ def compute_intent_metrics(rows: list[IntentEvalRow]) -> dict[str, Any]:
         return {"summary": {"total": 0}, "per_class": {}, "confusion": {}, "cases": []}
 
     labeled_primary = [r for r in rows if r.expected_primary]
-    n_lp = len(labeled_primary) or 1
     primary_correct = sum(1 for r in labeled_primary if r.primary_ok)
     mode_labeled = [r for r in rows if r.expected_mode]
     action_labeled = [r for r in rows if r.expected_action]
@@ -370,9 +370,21 @@ def compute_intent_metrics(rows: list[IntentEvalRow]) -> dict[str, Any]:
     per_class: dict[str, dict] = {}
     f1s: list[float] = []
     for label in labels:
-        tp = sum(1 for r in labeled_primary if r.expected_primary == label and r.predicted_primary == label)
-        fp = sum(1 for r in labeled_primary if r.predicted_primary == label and r.expected_primary != label)
-        fn = sum(1 for r in labeled_primary if r.expected_primary == label and r.predicted_primary != label)
+        tp = sum(
+            1
+            for r in labeled_primary
+            if r.expected_primary == label and r.predicted_primary == label
+        )
+        fp = sum(
+            1
+            for r in labeled_primary
+            if r.predicted_primary == label and r.expected_primary != label
+        )
+        fn = sum(
+            1
+            for r in labeled_primary
+            if r.expected_primary == label and r.predicted_primary != label
+        )
         stats = _prf(tp, fp, fn)
         per_class[label] = stats
         if stats["support"] > 0:
@@ -384,8 +396,6 @@ def compute_intent_metrics(rows: list[IntentEvalRow]) -> dict[str, Any]:
     micro_f1 = _safe_div(tp_m, len(labeled_primary))
 
     # clarify PR
-    exp_c = [r for r in rows if r.expected_clarify]
-    pred_c = [r for r in rows if r.predicted_clarify]
     tp_c = sum(1 for r in rows if r.expected_clarify and r.predicted_clarify)
     fp_c = sum(1 for r in rows if r.predicted_clarify and not r.expected_clarify)
     fn_c = sum(1 for r in rows if r.expected_clarify and not r.predicted_clarify)
@@ -488,7 +498,10 @@ def compute_intent_metrics(rows: list[IntentEvalRow]) -> dict[str, Any]:
                 if r.primary_ok
                 and r.mode_ok
                 and (r.sequence_ok is not False)
-                and (not r.expected_exec_primaries or r.predicted_exec_primaries == r.expected_exec_primaries)
+                and (
+                    not r.expected_exec_primaries
+                    or r.predicted_exec_primaries == r.expected_exec_primaries
+                )
             ),
             total,
         ),
@@ -498,8 +511,20 @@ def compute_intent_metrics(rows: list[IntentEvalRow]) -> dict[str, Any]:
         ),
         "f1_macro": avg(f1s),
         "f1_micro": micro_f1,
-        "precision_macro": avg([per_class[l]["precision"] for l in labels if per_class[l]["support"] > 0]),
-        "recall_macro": avg([per_class[l]["recall"] for l in labels if per_class[l]["support"] > 0]),
+        "precision_macro": avg(
+            [
+                per_class[lab]["precision"]
+                for lab in labels
+                if per_class[lab]["support"] > 0
+            ]
+        ),
+        "recall_macro": avg(
+            [
+                per_class[lab]["recall"]
+                for lab in labels
+                if per_class[lab]["support"] > 0
+            ]
+        ),
         "false_split_rate": _safe_div(sum(1 for r in rows if r.false_split), total),
         "false_merge_rate": _safe_div(sum(1 for r in rows if r.false_merge), total),
         "clarify_precision": clarify_stats["precision"],

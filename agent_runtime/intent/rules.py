@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from agent_runtime.features.memory.durable import SAVE_INTENT_WORDS, _has_save_intent
+from agent_runtime.features.memory.durable import _has_save_intent
 from agent_runtime.intent.models import PRIMARY_ACTIONS, Channel
 from agent_runtime.intent.stack_parse import extract_issue_slots, has_stack_signal
 

@@ -125,7 +125,9 @@ def clear_projection(session: dict[str, Any]) -> None:
     session.pop(SESSION_KEY, None)
 
 
-def recent_user_texts(history: list[dict[str, Any]] | None, *, limit: int = MAX_HISTORY_SCAN) -> list[str]:
+def recent_user_texts(
+    history: list[dict[str, Any]] | None, *, limit: int = MAX_HISTORY_SCAN
+) -> list[str]:
     """Newest-first user message contents from agent history."""
     if not history:
         return []
