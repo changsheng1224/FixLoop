@@ -1,0 +1,100 @@
+# Action-level intent prototypes for embedding match (granularity A).
+# Each primary has 3–8 short examples. issue_type is NOT a primary.
+
+ask:
+  - "配置里 timeout 该怎么设？"
+  - "How should I structure the Agent config?"
+  - "下一步建议怎么做？"
+  - "REPL 里能否多行输入？"
+
+explain:
+  - "这个函数是干什么的？"
+  - "解释一下 config.py"
+  - "What does AgentLoop do?"
+  - "walk me through this diff"
+  - "这段代码是什么意思？"
+
+remember:
+  - "请记住默认测试工具是 pytest"
+  - "remember to use pytest not unittest"
+  - "记住我们只改 src 目录"
+  - "don't forget the project uses poetry"
+  - "保存这条偏好：prefer type hints"
+
+repair_request:
+  - "帮我修这个 TypeError"
+  - "please fix this failing test"
+  - "修一下 calculator.py 的 bug"
+  - "帮忙修复这个失败"
+  - "fix the crash in checkout"
+
+repair_issue:
+  - "Traceback (most recent call last): TypeError"
+  - "File \"app.py\", line 10, in main"
+  - "ModuleNotFoundError: No module named utils"
+  - "FAILED test_add.py::test_add - AssertionError"
+
+review:
+  - "帮我 review 这段代码"
+  - "代码审查一下有没有问题"
+  - "please review this PR"
+  - "看看有没有明显 bug"
+
+refactor:
+  - "重构一下这个函数"
+  - "把这段抽成公共方法"
+  - "rename UserService to AccountService"
+  - "refactor without changing behavior"
+
+implement:
+  - "实现一个缓存层"
+  - "加个导出 CSV 的功能"
+  - "implement rate limiting middleware"
+  - "新增 webhook 回调支持"
+
+test:
+  - "给 invoice 补单测"
+  - "跑一下相关 pytest"
+  - "add unit tests for pricing"
+  - "提高这个模块的覆盖率"
+
+debug:
+  - "排查一下为什么 total 变成 None"
+  - "帮我定位根因，先别改代码"
+  - "debug why the worker hangs"
+  - "investigate the flaky test"
+
+search:
+  - "搜索哪里调用了 checkout"
+  - "find usages of OrderService"
+  - "locate the discount logic"
+  - "代码里哪里写了 tax"
+
+plan:
+  - "先给我一个修复计划"
+  - "出个实现方案再动手"
+  - "make a plan to migrate the API"
+  - "怎么拆分这个重构任务"
+
+help:
+  - "/help"
+  - "有哪些命令"
+  - "how do I use this REPL"
+  - "帮助"
+
+clarify:
+  - "嗯"
+  - "那个"
+  - "???"
+  - "什么"
+
+cancel:
+  - "/cancel"
+  - "取消"
+  - "stop"
+  - "停下"
+
+out_of_scope:
+  - "写一首诗"
+  - "tell me a joke"
+  - "今天天气怎么样"

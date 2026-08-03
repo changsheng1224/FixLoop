@@ -1,0 +1,101 @@
+# Enterprise coding-agent intents (explain/review/refactor/implement/test/debug/search/plan).
+
+- id: ent_explain
+  channel: repl
+  text: "解释一下 AgentLoop 的执行流程"
+  expect:
+    mode: single
+    primary: explain
+    action: explain_code
+  tags: [explain, enterprise]
+
+- id: ent_review
+  channel: repl
+  text: "帮我 review 这段代码，看看有没有明显问题"
+  expect:
+    mode: single
+    primary: review
+    action: review_code
+  tags: [review, enterprise]
+
+- id: ent_refactor
+  channel: repl
+  text: "重构一下 checkout 函数，抽成更小的方法"
+  expect:
+    mode: single
+    primary: refactor
+    action: run_refactor
+  tags: [refactor, enterprise]
+
+- id: ent_implement
+  channel: repl
+  text: "实现一个简单的 rate limiting middleware"
+  expect:
+    mode: single
+    primary: implement
+    action: run_implement
+  tags: [implement, enterprise]
+
+- id: ent_test
+  channel: repl
+  text: "给 pricing 模块补单测"
+  expect:
+    mode: single
+    primary: test
+    action: run_tests
+  tags: [test, enterprise]
+
+- id: ent_debug
+  channel: repl
+  text: "排查一下为什么 total 变成 None，先别改代码"
+  expect:
+    mode: single
+    primary: debug
+    action: run_debug
+  tags: [debug, enterprise]
+
+- id: ent_search
+  channel: repl
+  text: "搜索哪里调用了 OrderService"
+  expect:
+    mode: single
+    primary: search
+    action: search_codebase
+  tags: [search, enterprise]
+
+- id: ent_plan
+  channel: repl
+  text: "先给我一个修复计划，再动手"
+  expect:
+    mode: single
+    primary: plan
+    action: make_plan
+  tags: [plan, enterprise]
+
+- id: ent_repair_beats_refactor
+  channel: repl
+  text: "帮我修这个 TypeError，顺便重构一下"
+  expect:
+    # A+B+C: repair+refactor in one utterance → conflict clarify (no auto-exec)
+    primary: clarify
+    action: clarify
+    clarify: true
+    clarify_reason: conflict
+  tags: [repair, refactor, enterprise, disambiguation, clarify, conflict]
+
+- id: ent_review_not_repair
+  channel: repl
+  text: "帮我看看有没有问题"
+  expect:
+    primary: review
+    action: review_code
+  tags: [review, enterprise]
+
+- id: ent_multi_plan_then_implement
+  channel: repl
+  text: "先出个实现方案。然后实现一个缓存层"
+  expect:
+    mode: multi
+    action: run_graph
+    exec_primaries: [plan, implement]
+  tags: [multi, plan, implement, enterprise]

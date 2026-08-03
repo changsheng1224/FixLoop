@@ -1,0 +1,607 @@
+# Offline Intent Router gold set (~30). CI uses rules only (no embed model).
+- id: repair_stack_typeerror
+  channel: repair
+  text: |
+    Traceback (most recent call last):
+      File "calculator.py", line 42, in add
+    TypeError: unsupported operand type(s)
+  expect:
+    mode: single
+    primary: repair_issue
+    action: run_repair
+    slots:
+      suspect_files: [calculator.py]
+      issue_type: type_error
+  tags: [repair, stack]
+
+- id: repair_import
+  channel: repair
+  text: |
+    Traceback (most recent call last):
+      File "main.py", line 3, in <module>
+    ModuleNotFoundError: No module named "utils"
+  expect:
+    mode: single
+    primary: repair_issue
+    action: run_repair
+    slots:
+      issue_type: import_error
+  tags: [repair, stack]
+
+- id: repair_multiline_stack
+  channel: repair
+  text: |
+    Traceback (most recent call last):
+      File "a.py", line 1
+      File "b.py", line 2
+    TypeError: x
+  expect:
+    mode: single
+    primary: repair_issue
+    action: run_repair
+  tags: [repair, no_multi_split]
+
+- id: repair_test_failure
+  channel: repair
+  text: "FAILED test_app.py::test_add - AssertionError: assert 3 == 5"
+  expect:
+    mode: single
+    primary: repair_issue
+    action: run_repair
+  tags: [repair]
+
+- id: repair_logic_nl
+  channel: repair
+  text: "the function returns wrong result for all negative inputs"
+  expect:
+    mode: single
+    primary: repair_issue
+    action: run_repair
+  tags: [repair, nl]
+
+- id: hybrid_scope_file
+  channel: repl
+  text: "帮我修这个 TypeError。只用改 foo.py"
+  expect:
+    mode: hybrid
+    primary: repair_request
+    action: run_repair
+    slots:
+      suspect_files: [foo.py]
+  tags: [hybrid, constraint]
+
+- id: hybrid_only_change
+  channel: repl
+  text: "请修复这个 bug。只改 utils.py"
+  expect:
+    mode: hybrid
+    primary: repair_request
+    action: run_repair
+    slots:
+      suspect_files: [utils.py]
+  tags: [hybrid]
+
+- id: multi_remember_repair
+  channel: repl
+  text: "请记住用 pytest。然后帮我修这个失败。"
+  expect:
+    mode: multi
+    primary: remember
+    action: run_graph
+    exec_primaries: [remember, repair_request]
+  tags: [multi, sequence]
+
+- id: multi_remember_repair_en
+  channel: repl
+  text: "remember to use pytest. then please fix this failing test"
+  expect:
+    mode: multi
+    action: run_graph
+    exec_primaries: [remember, repair_request]
+  tags: [multi]
+
+- id: ask_single
+  channel: repl
+  text: "配置里 timeout 该怎么设？"
+  expect:
+    mode: single
+    primary: ask
+    action: ask
+  tags: [ask]
+
+- id: ask_two_merge
+  channel: repl
+  text: "这个函数是干什么的？另外 AgentLoop 呢？"
+  expect:
+    mode: single
+    primary: explain
+    action: explain_code
+  tags: [explain, merge]
+
+- id: ask_explain_file
+  channel: repl
+  text: "解释一下 config.py 的作用"
+  expect:
+    mode: single
+    primary: explain
+    action: explain_code
+  tags: [explain]
+
+- id: remember_zh
+  channel: repl
+  text: "请记住默认测试工具是 pytest"
+  expect:
+    mode: single
+    primary: remember
+    action: promote_memory
+  tags: [remember]
+
+- id: remember_en
+  channel: repl
+  text: "remember the default test runner is pytest"
+  expect:
+    mode: single
+    primary: remember
+    action: promote_memory
+  tags: [remember]
+
+- id: help_slash
+  channel: repl
+  text: "/help"
+  expect:
+    mode: single
+    primary: help
+    action: help
+  tags: [help, slash]
+
+- id: help_words
+  channel: repl
+  text: "有哪些命令"
+  expect:
+    mode: single
+    primary: help
+    action: help
+  tags: [help]
+
+- id: cancel_slash
+  channel: repl
+  text: "/cancel"
+  expect:
+    mode: single
+    primary: cancel
+    action: noop_cancel
+  tags: [cancel, slash]
+
+- id: cancel_words
+  channel: repl
+  text: "取消"
+  expect:
+    mode: single
+    primary: cancel
+    action: noop_cancel
+  tags: [cancel]
+
+- id: repair_request_simple
+  channel: repl
+  text: "帮我修这个 TypeError"
+  expect:
+    mode: single
+    primary: repair_request
+    action: run_repair
+    slots:
+      issue_type: type_error
+  tags: [repair_request]
+
+- id: repair_request_en
+  channel: repl
+  text: "please fix this bug in calculator.py"
+  expect:
+    mode: single
+    primary: repair_request
+    action: run_repair
+    slots:
+      suspect_files: [calculator.py]
+  tags: [repair_request]
+
+- id: clarify_emptyish
+  channel: repl
+  text: "嗯"
+  expect:
+    mode: single
+    primary: clarify
+    action: clarify
+    clarify: true
+  tags: [clarify]
+
+- id: clarify_marks
+  channel: repl
+  text: "???"
+  expect:
+    clarify: true
+    primary: clarify
+  tags: [clarify]
+
+- id: constraint_only_file
+  channel: repl
+  text: "只用改 foo.py"
+  expect:
+    # standalone constraint is weak → clarify (not an executable intent alone)
+    primary: clarify
+    clarify: true
+  tags: [constraint, weak, clarify]
+
+- id: stack_in_repl
+  channel: repl
+  text: |
+    Traceback (most recent call last):
+      File "app.py", line 10, in main
+    TypeError: bad
+  expect:
+    primary: repair_issue
+    action: run_repair
+  tags: [repl, stack]
+
+- id: composite_hint_repair
+  channel: repair
+  text: |
+    ImportError and TypeError both appear
+    File "gateway.py", line 1
+    Candidate source files: gateway.py, backend/tasks.py
+  expect:
+    mode: single
+    primary: repair_issue
+    action: run_repair
+    slots:
+      suspect_files: [gateway.py]
+  tags: [repair, composite]
+
+- id: no_false_multi_ask
+  channel: repl
+  text: "what does this function do? also how about AgentLoop?"
+  expect:
+    mode: single
+    primary: explain
+    action: explain_code
+  tags: [explain, merge, anti_split]
+
+- id: hybrid_language_hint
+  channel: repl
+  text: "帮我修这个错误。只用 Python"
+  expect:
+    mode: hybrid
+    primary: repair_request
+    action: run_repair
+  tags: [hybrid]
+
+- id: remember_then_ask_not_severe_pair_ok
+  channel: repl
+  text: "请记住用 poetry。另外这个函数做什么？"
+  expect:
+    mode: multi
+    exec_primaries: [remember, explain]
+    action: run_graph
+  tags: [multi]
+
+- id: out_of_scope_joke
+  channel: repl
+  text: "写一首诗"
+  expect:
+    # may be ask or out_of_scope depending on rules; soft: not repair
+    primary: ask
+  tags: [oos, soft]
+
+- id: repair_with_file_at
+  channel: repair
+  text: "TypeError: unsupported operand at calculator.py:42"
+  expect:
+    mode: single
+    primary: repair_issue
+    action: run_repair
+    slots:
+      suspect_files: [calculator.py]
+  tags: [repair]
+
+# --- Large mixed inputs: prose + source paste + traceback (stack-first slots) ---
+- id: large_code_plus_stack_repair
+  channel: repair
+  text: |
+    用户贴了一大段无关工具代码，但真正出错在 calculator:
+
+    ```python
+    # helpers/path_utils.py — noise file names in paste
+    def load_config(path="settings.py"):
+        return path
+
+    def walk_repo(root="src/legacy_app.py"):
+        for name in ("a.py", "b.py", "c.py", "noise_module.py"):
+            print(name)
+        return root
+
+    class Dummy:
+        def run(self):
+            return "ok"
+    ```
+
+    Traceback (most recent call last):
+      File "calculator.py", line 42, in add
+        return a + b
+    TypeError: unsupported operand type(s) for +: 'int' and 'str'
+  expect:
+    mode: single
+    primary: repair_issue
+    action: run_repair
+    slots:
+      suspect_files: [calculator.py]
+      issue_type: type_error
+  tags: [repair, large, stack_parse, anti_noise]
+
+- id: large_code_plus_stack_repl
+  channel: repl
+  text: |
+    帮我看看为什么挂了，下面是相关代码：
+
+    ```python
+    # utils/io.py
+    def read_json(path="data.py"):
+        return {}
+
+    def write_json(path="out.py", data=None):
+        return path
+    ```
+
+    Traceback (most recent call last):
+      File "app.py", line 10, in main
+        launch()
+      File "service.py", line 3, in launch
+        connect()
+    ModuleNotFoundError: No module named 'utils'
+  expect:
+    mode: single
+    primary: repair_issue
+    action: run_repair
+    slots:
+      suspect_files: [app.py, service.py]
+      issue_type: import_error
+  tags: [repl, large, stack_parse, anti_noise]
+
+- id: large_code_stack_no_fence_repair
+  channel: repair
+  text: |
+    def unused_helper(x="other.py"):
+        return x
+
+    def more_noise():
+        files = ["alpha.py", "beta.py", "gamma.py"]
+        return files
+
+    Traceback (most recent call last):
+      File "pricing.py", line 18, in apply_discount
+        return price * rate
+    TypeError: can't multiply sequence by non-int
+  expect:
+    mode: single
+    primary: repair_issue
+    action: run_repair
+    slots:
+      suspect_files: [pricing.py]
+      issue_type: type_error
+  tags: [repair, large, stack_parse]
+
+- id: repl_ask_then_large_stack
+  channel: repl
+  text: |
+    这段逻辑我看不懂，先贴代码和报错：
+
+    ```python
+    def score(items="metric.py"):
+        total = 0
+        for i in items:
+            total += i
+        return total
+    ```
+
+    Traceback (most recent call last):
+      File "metrics.py", line 5, in score
+        total += i
+    TypeError: unsupported operand type(s)
+  expect:
+    primary: repair_issue
+    action: run_repair
+    slots:
+      suspect_files: [metrics.py]
+      issue_type: type_error
+  tags: [repl, large, stack_parse]
+
+- id: stack_frames_order
+  channel: repair
+  text: |
+    ```python
+    # noise: gateway.py mentioned only in comments
+    # see also backend/tasks.py
+    ```
+
+    Traceback (most recent call last):
+      File "gateway.py", line 1, in <module>
+        run()
+      File "backend/tasks.py", line 9, in run
+        boom()
+    AttributeError: 'NoneType' object has no attribute 'boom'
+  expect:
+    mode: single
+    primary: repair_issue
+    action: run_repair
+    slots:
+      suspect_files: [gateway.py, backend/tasks.py]
+      issue_type: attribute_error
+  tags: [repair, stack_parse, frames]
+
+# --- A+B+C: same-sentence multi / clarify-only / no-hit ---
+- id: multi_same_sentence_remember_repair
+  channel: repl
+  text: "请记住用 pytest，然后帮我修这个失败"
+  expect:
+    mode: multi
+    action: run_graph
+    exec_primaries: [remember, repair_request]
+  tags: [multi, same_sentence]
+
+- id: multi_same_sentence_repair_then_remember
+  channel: repl
+  text: "帮我修这个 bug 并记住用 pytest"
+  expect:
+    mode: multi
+    action: run_graph
+    exec_primaries: [repair_request, remember]
+  tags: [multi, same_sentence]
+
+- id: clarify_conflict_repair_refactor
+  channel: repl
+  text: "帮我修这个 bug 同时重构一下 utils.py"
+  expect:
+    primary: clarify
+    action: clarify
+    clarify: true
+    clarify_reason: conflict
+  tags: [clarify, conflict]
+
+- id: clarify_low_conf_deixis
+  channel: repl
+  text: "这个"
+  expect:
+    primary: clarify
+    action: clarify
+    clarify: true
+    clarify_reason: unresolved_anaphora
+  tags: [clarify, ambiguous, anaphora]
+
+- id: clarify_vague_fix
+  channel: repl
+  text: "修一下"
+  expect:
+    primary: clarify
+    action: clarify
+    clarify: true
+    clarify_reason: unresolved_anaphora
+  tags: [clarify, ambiguous, anaphora]
+
+- id: clarify_no_hit_short
+  channel: repl
+  text: "嗯嗯"
+  expect:
+    primary: clarify
+    action: clarify
+    clarify: true
+  tags: [clarify, no_hit]
+
+- id: clarify_empty
+  channel: repl
+  text: "   "
+  expect:
+    primary: clarify
+    action: clarify
+    clarify: true
+    clarify_reason: empty
+  tags: [clarify, empty]
+
+# --- Multi-turn / anaphora (history-first) ---
+- id: dialogue_fix_it_after_stack
+  channel: repl
+  history:
+    - |
+      Traceback (most recent call last):
+        File "pricing.py", line 3, in <module>
+          run()
+      TypeError: unsupported operand type(s)
+  text: "修一下"
+  expect:
+    primary: repair_request
+    action: run_repair
+  tags: [dialogue, anaphora, repair]
+
+- id: dialogue_just_that_after_stack
+  channel: repl
+  history:
+    - |
+      Traceback (most recent call last):
+        File "orders.py", line 1
+      AttributeError: NoneType
+  text: "刚才那个"
+  expect:
+    primary: repair_request
+    action: run_repair
+  tags: [dialogue, anaphora]
+
+- id: dialogue_unresolved_deixis
+  channel: repl
+  history: []
+  text: "刚才那个"
+  expect:
+    primary: clarify
+    action: clarify
+    clarify: true
+    clarify_reason: unresolved_anaphora
+  tags: [dialogue, clarify, anaphora]
+
+- id: dialogue_continue_after_explain
+  channel: repl
+  history:
+    - "解释一下 config.py 的作用"
+  text: "继续"
+  expect:
+    primary: explain
+    action: explain_code
+  tags: [dialogue, anaphora, explain]
+
+- id: anaphora_fix_it_with_history
+  channel: repl
+  text: "修一下"
+  history:
+    - |
+      Traceback (most recent call last):
+        File "pricing.py", line 3, in add
+          return a + b
+      TypeError: unsupported operand
+  expect:
+    primary: repair_request
+    action: run_repair
+    anaphora_outcome: resolved
+    slots:
+      suspect_files: [pricing.py]
+      issue_type: type_error
+  tags: [anaphora, multi_turn, repair]
+
+- id: anaphora_that_one_unresolved
+  channel: repl
+  text: "刚才那个"
+  expect:
+    primary: clarify
+    action: clarify
+    clarify: true
+    clarify_reason: unresolved_anaphora
+    anaphora_outcome: unresolved
+  tags: [anaphora, clarify]
+
+- id: anaphora_deixis_with_history
+  channel: repl
+  text: "刚才那个"
+  history:
+    - "解释一下 config.py 的作用"
+  expect:
+    primary: explain
+    action: explain_code
+    anaphora_outcome: resolved
+  tags: [anaphora, multi_turn, explain]
+
+- id: clarify_resume_fix_choice
+  channel: repl
+  text: "修"
+  dialogue:
+    pending_clarify:
+      reason: ambiguous
+      original_text: "utils.py 里那段逻辑有问题"
+      question: "请明确动作"
+  expect:
+    primary: repair_request
+    action: run_repair
+    anaphora_outcome: clarify_resume
+  tags: [anaphora, clarify_resume]

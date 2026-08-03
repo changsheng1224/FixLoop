@@ -318,14 +318,19 @@ def _repl_mode(args) -> int:
         if not user_input.strip():
             continue
 
-        # 内置命令
+        # 内置命令（slash 仍走原 handler；IntentRouter 亦识别 /help /cancel）
         if user_input.startswith("/"):
             result = _handle_command(user_input, agent)
             if result == "exit":
                 return 0
             continue
 
-        # 发送给 Agent
+        # Intent Router → 拓扑串行执行（ask / remember / repair / clarify）
+        handled = _repl_dispatch_intent(agent, user_input, args)
+        if handled:
+            continue
+
+        # 回落：直接 ask
         from agent_runtime.callbacks import CLIProgressCallback
 
         print("", end="", flush=True)
@@ -340,6 +345,238 @@ def _repl_mode(args) -> int:
             print("\n再见！")
             return 0
         print(answer)
+
+
+def _repl_dispatch_intent(agent: Agent, user_input: str, args) -> bool:
+    """Route REPL line via IntentRouter; return True if fully handled."""
+    from agent_runtime.intent.dialogue import (
+        load_projection,
+        save_projection,
+        update_projection,
+    )
+    from agent_runtime.intent.executor import IntentGraphExecutor
+    from agent_runtime.intent.models import IntentNode, RouteContext
+    from agent_runtime.intent.router import IntentRouter
+
+    # Keep agent history continuous on intent-handled turns (ask path records inside ask()).
+    try:
+        agent.record({"role": "user", "content": user_input})
+    except Exception:
+        pass
+
+    history = []
+    try:
+        history = agent.read_history()
+    except Exception:
+        history = list(agent.session.get("history") or [])
+
+    # Exclude the just-recorded utterance from anaphora antecedents
+    hist_for_resolve = history[:-1] if history else []
+    proj = load_projection(agent.session)
+
+    def emit(name: str, payload: dict) -> None:
+        mode = payload.get("mode", "")
+        primary = payload.get("primary", "")
+        conf = payload.get("confidence", 0)
+        ana = payload.get("anaphora") or {}
+        extra = f" anaphora={ana.get('outcome')}" if ana.get("outcome") else ""
+        print(
+            f"意图: mode={mode} primary={primary} conf={conf:.2f}{extra}",
+            file=sys.stderr,
+        )
+
+    result = IntentRouter().route(
+        user_input,
+        RouteContext(
+            channel="repl",
+            emit=emit,
+            history=hist_for_resolve,
+            dialogue=proj,
+            candidate_root=str(agent._cwd),
+        ),
+    )
+
+    # Persist thin projection (pending clarify / slots / referents)
+    try:
+        # Prefer resolved text for projection.last_text when anaphora fired
+        route_text = user_input
+        ana = (result.raw_signals or {}).get("anaphora") or {}
+        if ana.get("resolved_text") and ana.get("outcome") in (
+            "resolved",
+            "clarify_resume",
+        ):
+            route_text = str(ana["resolved_text"])
+        # User proxies → candidate store
+        from agent_runtime.intent.candidates import CandidateStore, collect_user_feedback
+
+        store = CandidateStore(agent._cwd)
+        if ana.get("outcome") == "clarify_resume":
+            store.append(
+                collect_user_feedback(
+                    kind="clarify_choice",
+                    text=user_input,
+                    predicted=result.primary,
+                    chosen=result.primary,
+                    channel="repl",
+                )
+            )
+        elif (
+            proj.pending_clarify
+            and result.action != "clarify"
+            and user_input.strip()
+            and len(user_input.strip()) >= 8
+        ):
+            # User abandoned clarify with a fuller rephrase
+            store.append(
+                collect_user_feedback(
+                    kind="rephrase",
+                    text=user_input,
+                    predicted=str((proj.pending_clarify or {}).get("reason") or "clarify"),
+                    previous_text=str((proj.pending_clarify or {}).get("original_text") or ""),
+                    channel="repl",
+                )
+            )
+        proj = update_projection(
+            proj, result, user_text=route_text, history=hist_for_resolve
+        )
+        save_projection(agent.session, proj)
+    except Exception:
+        pass
+
+    # Enrich emit payload already sent; print anaphora hint for user
+    ana = (result.raw_signals or {}).get("anaphora") or {}
+    if ana.get("outcome") in ("resolved", "clarify_resume"):
+        print(
+            f"（已根据上文理解: {ana.get('resolved_text', '')[:120]}）",
+            file=sys.stderr,
+        )
+
+    if result.action == "clarify" or result.raw_signals.get("allow_execute") is False:
+        q = (
+            (result.slots or {}).get("clarify_question")
+            or (result.raw_signals.get("clarify") or {}).get("question")
+            or "能否再说具体一点？（意图不够明确）"
+        )
+        reason = result.raw_signals.get("clarify_reason") or result.reason or ""
+        if reason:
+            print(f"需要澄清（{reason}）: {q}")
+        else:
+            print(q)
+        return True
+    if result.action == "help":
+        _handle_command("/help", agent)
+        return True
+    if result.action in ("reject", "noop_cancel"):
+        try:
+            from agent_runtime.intent.candidates import CandidateStore, collect_user_feedback
+
+            CandidateStore(agent._cwd).append(
+                collect_user_feedback(
+                    kind="cancel",
+                    text=user_input,
+                    predicted=result.primary,
+                    channel="repl",
+                )
+            )
+        except Exception:
+            pass
+        print("已忽略该请求。" if result.action == "reject" else "已取消。")
+        return True
+
+    # single ask → fall through to existing ask path unless anaphora rewrote
+    # the utterance (then stay here so ask gets resolved text).
+    if result.action == "ask" and result.graph.mode != "multi":
+        if ana.get("outcome") not in ("resolved", "clarify_resume"):
+            try:
+                hist = agent.session.get("history") or []
+                if (
+                    hist
+                    and hist[-1].get("role") == "user"
+                    and hist[-1].get("content") == user_input
+                ):
+                    hist.pop()
+                    agent.session["history"] = hist
+            except Exception:
+                pass
+            return False
+        # rewritten ask: execute via handle_ask below with exec_text
+
+    # For graph execution, use resolved text on nodes when present
+    exec_text = user_input
+    if ana.get("resolved_text") and ana.get("outcome") in ("resolved", "clarify_resume"):
+        exec_text = str(ana["resolved_text"])
+
+    def handle_ask(node: IntentNode):
+        from agent_runtime.callbacks import CLIProgressCallback
+
+        answer = _ask_with_repl_cancel(
+            agent,
+            node.text or exec_text,
+            callback=CLIProgressCallback(),
+            stream=getattr(args, "stream", False),
+        )
+        print(answer)
+        return answer
+
+    def handle_remember(node: IntentNode):
+        from agent_runtime.features.memory.durable import promote_durable_memory
+
+        text = node.text or exec_text
+        ok = promote_durable_memory(text, f"Preference: {text}", root=str(agent._cwd))
+        print("已尝试写入 durable memory。" if ok else "未提取到可保存条目（已记录意图）。")
+        return ok
+
+    def handle_repair(node: IntentNode):
+        print(
+            "检测到修复意图。请使用: python -m src.cli repair --issue \"...\"",
+            file=sys.stderr,
+        )
+        print(f"issue 摘要: {(node.text or exec_text)[:200]}")
+        return "repair_hint"
+
+    def handle_help(node: IntentNode):
+        _handle_command("/help", agent)
+        return "help"
+
+    def handle_clarify(node: IntentNode):
+        print("能否再说具体一点？")
+        return "clarify"
+
+    def handle_stub(kind: str):
+        def _inner(node: IntentNode):
+            print(
+                f"已识别意图: {kind}（{(node.text or exec_text)[:120]}）\n"
+                f"首期为路由 stub：完整 {kind} 流水线将在后续里程碑接通。",
+                file=sys.stderr,
+            )
+            return kind
+
+        return _inner
+
+    executor = IntentGraphExecutor(
+        handlers={
+            "ask": handle_ask,
+            "explain_code": handle_ask,
+            "promote_memory": handle_remember,
+            "run_repair": handle_repair,
+            "help": handle_help,
+            "clarify": handle_clarify,
+            "noop_cancel": lambda _n: print("已取消。"),
+            "reject": lambda _n: print("超出范围。"),
+            "review_code": handle_stub("review"),
+            "run_refactor": handle_stub("refactor"),
+            "run_implement": handle_stub("implement"),
+            "run_tests": handle_stub("test"),
+            "run_debug": handle_stub("debug"),
+            "search_codebase": handle_stub("search"),
+            "make_plan": handle_stub("plan"),
+        }
+    )
+    report = executor.serial(result)
+    if report.aborted:
+        err = report.outcomes[-1].error if report.outcomes else "unknown"
+        print(f"意图执行中断: {err}", file=sys.stderr)
+    return True
 
 
 def _handle_command(cmd: str, agent: Agent) -> str:
@@ -360,6 +597,7 @@ def _handle_command(cmd: str, agent: Agent) -> str:
   /save [name]  保存当前会话
   /load <name>  恢复已保存会话
   /sessions     列出已保存会话
+  /candidates   查看候选意图聚合卡（发现用，不改 taxonomy）
   /replay       trace 回放
   /prompt       查看最近 prompt
   /session  显示当前会话信息
@@ -468,6 +706,21 @@ def _handle_command(cmd: str, agent: Agent) -> str:
                 print(f"  {n}")
         else:
             print("(无已保存会话)")
+    elif name == "/candidates":
+        from agent_runtime.intent.candidates import CandidateStore, aggregate_cards
+
+        events = CandidateStore(agent._cwd).load()
+        cards = aggregate_cards(events, min_count=1)
+        print(f"候选事件 {len(events)} 条 → 聚合卡 {len(cards)} 张")
+        for c in cards[:30]:
+            print(
+                f"  [{c.severity_max}] {c.key}  n={c.count}  "
+                f"closest={c.closest_existing}  sources={c.sources}"
+            )
+            for ex in c.example_texts[:1]:
+                print(f"      e.g. {ex[:100]}")
+        if not cards:
+            print("  （暂无；含糊/冲突/取消路由后会写入 .agent/intent_candidates.jsonl）")
     elif name == "/replay":
         from agent_runtime.replay import trace_tree_summary
         from agent_runtime.run_store import RunStore
@@ -537,6 +790,9 @@ def _handle_command(cmd: str, agent: Agent) -> str:
                 )
     elif name == "/reset":
         agent.session["history"] = []
+        from agent_runtime.intent.dialogue import clear_projection
+
+        clear_projection(agent.session)
         print("对话历史已清空。")
     else:
         print(f"未知命令: {name}，输入 /help 查看可用命令。")

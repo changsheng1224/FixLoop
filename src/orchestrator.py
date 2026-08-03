@@ -36,7 +36,6 @@ from src.repair.phase_clock import PhaseTimeoutConfig
 from src.repair.pipeline import RepairPipelineMixin
 from src.repair.prompt_router import (
     ROUTED_ISSUE_TYPES,
-    apply_prompt_routing,
     classify_exception,
     fallback_suspect_uses_import_line,
     patcher_variant_for,
@@ -376,9 +375,9 @@ class Orchestrator(RepairPipelineMixin):
         )
 
     def _parse_issue(self, issue: str) -> RepairPlan:
-        """正则解析 Issue 文本，提取语言/异常类型/文件名。
+        """经 IntentRouter（repair 通道）折叠后构建 RepairPlan。
 
-        分类优先级（_ISSUE_TYPE_RULES 规则链）：
+        分类优先级（_ISSUE_TYPE_RULES 规则链，由 IssueIntentAdapter 调用）：
         1. explicit_exception → classify_exception 归一化
         2. test_failure → pytest 断言失败
         3. composite_keyword → 多错误组合
@@ -386,73 +385,37 @@ class Orchestrator(RepairPipelineMixin):
         5. logic_error → 无异常名的错误行为描述
         6. unknown → LLM fallback
         """
-        plan = RepairPlan(language="python")
+        from agent_runtime.intent.adapters import IssueIntentAdapter
+        from agent_runtime.intent.models import RouteContext
+        from agent_runtime.intent.router import IntentRouter
 
-        # 规则链分类
-        issue_type, rule_name = self._classify_issue_type(issue)
-        plan.issue_type = issue_type
-        # composite 特殊处理：ImportError+TypeError 组合
-        has_import_err = bool(re.search(r"ModuleNotFoundError|ImportError", issue, re.IGNORECASE))
-        has_type_err = bool(re.search(r"TypeError", issue, re.IGNORECASE))
-        if has_import_err and has_type_err:
-            plan.issue_type = "composite"
-            rule_name = "composite_dual"
+        tracer = None
+        repair_ctx = getattr(self, "_repair_ctx", None)
+        if repair_ctx is not None:
+            tracer = getattr(repair_ctx, "repair_tracer", None)
 
-        if rule_name in (
-            "test_failure",
-            "composite_keyword",
-            "config_error",
-            "logic_error",
-            "composite_dual",
-        ):
-            plan.intent_parser = f"rule:{rule_name}"
-        elif rule_name == "explicit_exception":
-            plan.intent_parser = "rule"
+        def _emit(name: str, payload: dict) -> None:
+            if tracer is not None:
+                tracer.emit("orchestrator", name, payload)
 
-        for file_match in re.finditer(r'File\s+"([^"]+)"', issue):
-            name = file_match.group(1).replace("\\", "/")
-            if name not in plan.suspect_files:
-                plan.suspect_files.append(name)
-
-        candidate_match = re.search(r"Candidate source files:\s*(.+)", issue, re.IGNORECASE)
-        if candidate_match:
-            for raw in candidate_match.group(1).split(","):
-                name = raw.strip().replace("\\", "/")
-                if name and name not in plan.suspect_files:
-                    plan.suspect_files.append(name)
-
-        if not plan.suspect_files:
-            file_match = re.search(r"at (\S+\.py)", issue)
-            if file_match:
-                plan.suspect_files.append(Path(file_match.group(1)).name)
-
-        line_no = self._parse_file_line(issue, plan.suspect_files[0] if plan.suspect_files else "")
-        if line_no and plan.suspect_files:
-            plan.reasoning = f"{plan.suspect_files[0]}:{line_no}"
-        else:
-            plan.reasoning = issue[:200]
-
-        language, source = detect_repair_language(
+        result = IntentRouter().route(
             issue,
-            suspect_files=plan.suspect_files,
+            RouteContext(
+                channel="repair",
+                light_client=getattr(self, "_light_client", None),
+                emit=_emit,
+            ),
+        )
+        self._last_intent_result = result
+
+        adapter = IssueIntentAdapter(
+            classify_issue_type=self._classify_issue_type,
+            parse_file_line=self._parse_file_line,
+            detect_language=detect_repair_language,
+            llm_classify=self._llm_classify_issue,
             repo_root=self._repo_root,
         )
-        plan.language = language
-        plan.language_source = source
-
-        # LLM fallback: 规则无法确定 issue_type 时用 light_client 分类
-        if not plan.issue_type or plan.issue_type == "unknown":
-            llm_type = self._llm_classify_issue(issue)
-            if llm_type:
-                plan.issue_type = llm_type
-                plan.intent_parser = "llm"
-            elif not plan.intent_parser:
-                plan.intent_parser = "rule"
-        elif not plan.intent_parser:
-            plan.intent_parser = "rule"
-        apply_prompt_routing(plan)
-
-        return plan
+        return adapter.to_repair_plan(result, issue)
 
     @staticmethod
     def _classify_issue_type(issue: str) -> tuple[str, str]:

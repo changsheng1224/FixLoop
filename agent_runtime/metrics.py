@@ -32,6 +32,24 @@ _METRIC_HELP: dict[str, str] = {
     "fixloop_token_usage_total": "Total token consumption across all repairs.",
     "fixloop_cache_hit_rate": "Prompt cache hit rate (0.0–1.0).",
     "fixloop_retry_count": "Current repair retry count.",
+    # Intent Router (online)
+    "fixloop_intent_routed_total": (
+        "Intent router invocations by channel/mode/primary/action/parser."
+    ),
+    "fixloop_intent_misroute_proxy_total": (
+        "Online misroute proxies (low_conf/conflict/clarify/llm_override)."
+    ),
+    "fixloop_intent_clarify_total": "Clarify outcomes by channel and reason.",
+    "fixloop_intent_llm_fallback_total": "Graph-level LLM fallback attempts by outcome.",
+    "fixloop_intent_confidence": "Last intent confidence by channel/mode.",
+    "fixloop_intent_confidence_bucket_total": "Intent confidence distribution buckets.",
+    "fixloop_intent_latency_ms": "Last intent route latency in milliseconds.",
+    "fixloop_intent_latency_bucket_total": "Intent route latency distribution buckets.",
+    "fixloop_intent_exec_nodes": "Executable node count of last routed graph.",
+    "fixloop_intent_slot_filled_total": "Slot fill events from routed intents.",
+    "fixloop_intent_embed_skip_total": "Embedding layer skipped.",
+    "fixloop_intent_conflict_total": "Rule vs embed conflicts observed.",
+    "fixloop_intent_action_total": "Downstream action counts.",
 }
 
 _METRIC_TYPE: dict[str, str] = {
@@ -41,6 +59,19 @@ _METRIC_TYPE: dict[str, str] = {
     "fixloop_token_usage_total": "counter",
     "fixloop_cache_hit_rate": "gauge",
     "fixloop_retry_count": "gauge",
+    "fixloop_intent_routed_total": "counter",
+    "fixloop_intent_misroute_proxy_total": "counter",
+    "fixloop_intent_clarify_total": "counter",
+    "fixloop_intent_llm_fallback_total": "counter",
+    "fixloop_intent_confidence": "gauge",
+    "fixloop_intent_confidence_bucket_total": "counter",
+    "fixloop_intent_latency_ms": "gauge",
+    "fixloop_intent_latency_bucket_total": "counter",
+    "fixloop_intent_exec_nodes": "gauge",
+    "fixloop_intent_slot_filled_total": "counter",
+    "fixloop_intent_embed_skip_total": "counter",
+    "fixloop_intent_conflict_total": "counter",
+    "fixloop_intent_action_total": "counter",
 }
 
 

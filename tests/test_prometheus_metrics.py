@@ -161,7 +161,8 @@ class TestGrafanaDashboard:
         assert datasource_var["type"] == "prometheus"
 
         panels = dashboard.get("panels", [])
-        assert len(panels) == 6, f"Expected 6 panels, got {len(panels)}"
+        assert len(panels) >= 6, f"Expected at least 6 panels, got {len(panels)}"
+        assert any("Intent" in (p.get("title") or "") for p in panels)
 
         panel_types = {p["type"] for p in panels}
         assert "stat" in panel_types
@@ -198,5 +199,7 @@ class TestGrafanaDashboard:
             "fixloop_token_usage_total",
             "fixloop_cache_hit_rate",
         }
+        # Intent panels use rate()/sum() wrappers; assert by title in
+        # test_dashboard_json_is_valid rather than naive expr prefix match.
         missing = expected - covered
         assert not missing, f"Metrics without panel coverage: {missing}"

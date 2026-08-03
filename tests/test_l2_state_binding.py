@@ -66,9 +66,15 @@ class TestL2StateBindingIntegration:
         assert report.get("l2_binding_schema_version") == 1
         assert len(report.get("agent_asks", [])) >= 3
 
-        ts_path = run_dir / "task_state.localizer.json"
+        # Localizer uses complete_once (no AgentLoop finalize → no task_state.localizer.json).
+        loc_report = json.loads(
+            (run_dir / "agent_report.localizer.json").read_text(encoding="utf-8")
+        )
+        assert loc_report.get("agent") == "localizer"
+
+        ts_path = run_dir / "task_state.retriever.json"
         assert ts_path.is_file()
         ts_body = json.loads(ts_path.read_text(encoding="utf-8"))
-        assert ts_body.get("l2_agent") == "localizer"
-        assert ts_body.get("l2_phase") == "localize"
+        assert ts_body.get("l2_agent") == "retriever"
+        assert ts_body.get("l2_phase") == "retrieve"
         assert ts_body.get("l2_repair_run_id") == state.repair_run_id
