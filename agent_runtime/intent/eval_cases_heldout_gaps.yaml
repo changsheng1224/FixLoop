@@ -1,0 +1,84 @@
+# Held-out stress / OOD-ish cases. Labels are product-honest.
+# Intentionally NOT overfitted: some may misroute — that is the point for
+# interview / calibration (see weighted + by_stratum reports).
+# Loaded with the main suite; tag: heldout_gap.
+
+- id: gap_metaphor_smell
+  channel: repl
+  stratum: heldout_gap
+  weight: 1.0
+  text: "这块代码味道不对，帮我看看"
+  expect:
+    # Desired: review; current rules may hit clarify/ask — keep honest label
+    primary: review
+  tags: [realistic_user, heldout_gap, review]
+
+- id: gap_typo_xiu
+  channel: repl
+  stratum: heldout_gap
+  weight: 1.0
+  text: "帮我xiu一下这个 TypeError in foo.py"
+  expect:
+    primary: repair_request
+  tags: [realistic_user, heldout_gap, typo]
+
+- id: gap_dont_fix_explain_why
+  channel: repl
+  stratum: heldout_gap
+  weight: 1.1
+  text: "不要改代码，只告诉我为什么会 TypeError"
+  expect:
+    primary: debug
+  tags: [realistic_user, heldout_gap, debug]
+
+- id: gap_same_as_before
+  channel: repl
+  stratum: heldout_gap
+  weight: 1.0
+  history:
+    - "解释一下 config.py"
+  text: "same as before but for auth.py"
+  expect:
+    primary: explain
+  tags: [realistic_user, heldout_gap, anaphora, en]
+
+- id: gap_emoji_fix
+  channel: repl
+  stratum: heldout_gap
+  weight: 0.8
+  text: "🙏 这个报错咋整啊"
+  expect:
+    primary: clarify
+    action: clarify
+    clarify: true
+  tags: [realistic_user, heldout_gap, clarify]
+
+- id: gap_nested_quote_intent
+  channel: repl
+  stratum: heldout_gap
+  weight: 1.0
+  text: '用户说「帮我修」，但其实他只想听解释，别真的改'
+  expect:
+    primary: explain
+  tags: [realistic_user, heldout_gap, trap]
+
+- id: gap_partial_stack_no_file
+  channel: repl
+  stratum: heldout_gap
+  weight: 1.1
+  text: |
+    TypeError: unsupported operand type(s) for +: 'int' and 'str'
+  expect:
+    # bare exception line — prefer repair_issue; may fall to ask
+    primary: repair_issue
+  tags: [realistic_user, heldout_gap, repair]
+
+- id: gap_chinese_only_broken
+  channel: repl
+  stratum: heldout_gap
+  weight: 1.0
+  text: "登录坏了"
+  expect:
+    primary: clarify
+    clarify: true
+  tags: [realistic_user, heldout_gap, clarify]

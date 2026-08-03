@@ -184,6 +184,182 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "id": 10,
+      "title": "Intent Routes (rate)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 11, "w": 12, "h": 7 },
+      "datasource": "${datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "fillOpacity": 10 }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(fixloop_intent_routed_total[1m])) by (channel)",
+          "legendFormat": "{{channel}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Intent Mode Distribution",
+      "type": "piechart",
+      "gridPos": { "x": 12, "y": 11, "w": 6, "h": 7 },
+      "datasource": "${datasource}",
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"] }, "displayLabels": ["percent"] },
+      "targets": [
+        {
+          "expr": "sum by (mode) (fixloop_intent_routed_total)",
+          "legendFormat": "{{mode}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Intent Primary Distribution",
+      "type": "piechart",
+      "gridPos": { "x": 18, "y": 11, "w": 6, "h": 7 },
+      "datasource": "${datasource}",
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"] }, "displayLabels": ["percent"] },
+      "targets": [
+        {
+          "expr": "sum by (primary) (fixloop_intent_routed_total)",
+          "legendFormat": "{{primary}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "Misroute Proxy Rate",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 18, "w": 8, "h": 7 },
+      "datasource": "${datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "ops"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(fixloop_intent_misroute_proxy_total[1m])) by (reason)",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "title": "Clarify Total",
+      "type": "stat",
+      "gridPos": { "x": 8, "y": 18, "w": 4, "h": 7 },
+      "datasource": "${datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "orange", "value": 5 },
+            { "color": "red", "value": 20 }
+          ]}
+        }
+      },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"] }, "textMode": "value" },
+      "targets": [
+        {
+          "expr": "sum by (reason) (fixloop_intent_clarify_total)",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "title": "Intent Confidence (last)",
+      "type": "gauge",
+      "gridPos": { "x": 12, "y": 18, "w": 6, "h": 7 },
+      "datasource": "${datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 1,
+          "unit": "percentunit",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "orange", "value": 0.45 },
+            { "color": "green", "value": 0.6 }
+          ]}
+        }
+      },
+      "targets": [
+        {
+          "expr": "avg(fixloop_intent_confidence)",
+          "legendFormat": "confidence",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "title": "Intent Latency ms (last)",
+      "type": "stat",
+      "gridPos": { "x": 18, "y": 18, "w": 6, "h": 7 },
+      "datasource": "${datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "orange", "value": 20 },
+            { "color": "red", "value": 100 }
+          ]}
+        }
+      },
+      "targets": [
+        {
+          "expr": "avg(fixloop_intent_latency_ms)",
+          "legendFormat": "latency",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "title": "Confidence Buckets",
+      "type": "bargauge",
+      "gridPos": { "x": 0, "y": 25, "w": 12, "h": 6 },
+      "datasource": "${datasource}",
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "palette-classic" } } },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"] }, "orientation": "horizontal", "displayMode": "gradient" },
+      "targets": [
+        {
+          "expr": "sum by (bucket) (fixloop_intent_confidence_bucket_total)",
+          "legendFormat": "{{bucket}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "title": "LLM Fallback",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 25, "w": 12, "h": 6 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum(rate(fixloop_intent_llm_fallback_total[1m])) by (outcome)",
+          "legendFormat": "{{outcome}}",
+          "refId": "A"
+        }
+      ]
     }
   ]
 }

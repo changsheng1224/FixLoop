@@ -1,0 +1,242 @@
+# Realistic deep application stacks (Django / FastAPI / pytest / Celery / Flask).
+# Intent: exercise stack_parse noise filtering (site-packages) + multi-frame app suspects.
+# Loaded automatically alongside eval_cases.yaml.
+
+- id: realistic_django_orm_typeerror
+  channel: repair
+  tags: [repair, realistic, django, deep_stack, site_packages_noise]
+  text: |
+    Production 500 on checkout — full gunicorn worker traceback:
+
+    Traceback (most recent call last):
+      File "/usr/local/lib/python3.11/site-packages/gunicorn/workers/gthread.py", line 280, in handle
+        self.handle_request(req, conn)
+      File "/usr/local/lib/python3.11/site-packages/gunicorn/workers/gthread.py", line 331, in handle_request
+        respiter = self.wsgi(environ, resp.start_response)
+      File "/usr/local/lib/python3.11/site-packages/django/core/handlers/wsgi.py", line 124, in __call__
+        response = self.get_response(request)
+      File "/usr/local/lib/python3.11/site-packages/django/core/handlers/base.py", line 140, in get_response
+        response = self._middleware_chain(request)
+      File "/usr/local/lib/python3.11/site-packages/django/core/handlers/exception.py", line 55, in inner
+        response = get_response(request)
+      File "/usr/local/lib/python3.11/site-packages/django/utils/deprecation.py", line 133, in __call__
+        response = response or self.get_response(request)
+      File "/usr/local/lib/python3.11/site-packages/django/core/handlers/exception.py", line 55, in inner
+        response = get_response(request)
+      File "/usr/local/lib/python3.11/site-packages/django/core/handlers/base.py", line 197, in _get_response
+        response = wrapped_callback(request, *callback_args, **callback_kwargs)
+      File "/usr/local/lib/python3.11/site-packages/django/views/decorators/csrf.py", line 56, in wrapper_view
+        return view_func(*args, **kwargs)
+      File "/usr/local/lib/python3.11/site-packages/rest_framework/viewsets.py", line 125, in view
+        return self.dispatch(request, *args, **kwargs)
+      File "/usr/local/lib/python3.11/site-packages/rest_framework/views.py", line 509, in dispatch
+        response = handler(request, *args, **kwargs)
+      File "/app/backend/orders/api/views.py", line 88, in create
+        order = OrderService().checkout(cart, request.user)
+      File "/app/backend/orders/services/checkout.py", line 142, in checkout
+        total = pricing.compute_total(cart.lines)
+      File "/app/backend/orders/services/pricing.py", line 67, in compute_total
+        return subtotal + tax_amount
+      File "/usr/local/lib/python3.11/site-packages/django/db/models/query.py", line 398, in __iter__
+        self._fetch_all()
+    TypeError: unsupported operand type(s) for +: 'decimal.Decimal' and 'str'
+  expect:
+    mode: single
+    primary: repair_issue
+    action: run_repair
+    slots:
+      suspect_files:
+        - backend/orders/api/views.py
+        - backend/orders/services/checkout.py
+        - backend/orders/services/pricing.py
+      issue_type: type_error
+
+- id: realistic_fastapi_uvicorn_attribute
+  channel: repair
+  tags: [repair, realistic, fastapi, deep_stack]
+  text: |
+    uvicorn error log (staging):
+
+    Traceback (most recent call last):
+      File "/home/deploy/.venv/lib/python3.12/site-packages/uvicorn/protocols/http/httptools_impl.py", line 419, in run_asgi
+        result = await app(  # type: ignore[func-returns-value]
+      File "/home/deploy/.venv/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 84, in __call__
+        return await self.app(scope, receive, send)
+      File "/home/deploy/.venv/lib/python3.12/site-packages/fastapi/applications.py", line 1106, in __call__
+        await super().__call__(scope, receive, send)
+      File "/home/deploy/.venv/lib/python3.12/site-packages/starlette/applications.py", line 122, in __call__
+        await self.middleware_stack(scope, receive, send)
+      File "/home/deploy/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 184, in __call__
+        raise exc
+      File "/home/deploy/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 162, in __call__
+        await self.app(scope, receive, _send)
+      File "/home/deploy/.venv/lib/python3.12/site-packages/starlette/middleware/cors.py", line 91, in __call__
+        await self.simple_response(scope, receive, send, request_headers=headers)
+      File "/home/deploy/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 108, in __call__
+        response = await self.dispatch_func(request, call_next)
+      File "/home/deploy/acme-platform/services/api/app/middleware/auth.py", line 54, in dispatch
+        return await call_next(request)
+      File "/home/deploy/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 84, in call_next
+        raise app_exc
+      File "/home/deploy/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 70, in coro
+        await self.app(scope, receive_or_disconnect, send_no_error)
+      File "/home/deploy/.venv/lib/python3.12/site-packages/starlette/routing.py", line 718, in __call__
+        await self.middleware_stack(scope, receive, send)
+      File "/home/deploy/.venv/lib/python3.12/site-packages/starlette/routing.py", line 738, in app
+        await route.handle(scope, receive, send)
+      File "/home/deploy/.venv/lib/python3.12/site-packages/starlette/routing.py", line 288, in handle
+        await self.app(scope, receive, send)
+      File "/home/deploy/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 109, in app
+        await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+      File "/home/deploy/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 389, in app
+        raw_response = await run_endpoint_function(
+      File "/home/deploy/acme-platform/services/api/app/api/v1/endpoints/users.py", line 121, in get_user_profile
+        dto = await profile_service.build(user_id)
+      File "/home/deploy/acme-platform/services/api/app/services/profile.py", line 77, in build
+        return user.profile.to_dto()
+    AttributeError: 'NoneType' object has no attribute 'to_dto'
+  expect:
+    mode: single
+    primary: repair_issue
+    action: run_repair
+    slots:
+      suspect_files:
+        - /home/deploy/acme-platform/services/api/app/middleware/auth.py
+        - /home/deploy/acme-platform/services/api/app/api/v1/endpoints/users.py
+        - /home/deploy/acme-platform/services/api/app/services/profile.py
+      issue_type: attribute_error
+
+- id: realistic_pytest_ci_failure
+  channel: repair
+  tags: [repair, realistic, pytest, deep_stack, ci]
+  text: |
+    ============================= FAILURES ==============================
+    _____________________ test_invoice_rounding_edge _____________________
+
+    Traceback (most recent call last):
+      File "/opt/hostedtoolcache/Python/3.11.9/x64/lib/python3.11/site-packages/_pytest/runner.py", line 341, in from_call
+        result: TResult | None = func()
+      File "/opt/hostedtoolcache/Python/3.11.9/x64/lib/python3.11/site-packages/_pytest/runner.py", line 242, in <lambda>
+        lambda: runtest_hook(item=item, **kwds),
+      File "/opt/hostedtoolcache/Python/3.11.9/x64/lib/python3.11/site-packages/pluggy/_hooks.py", line 512, in __call__
+        return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+      File "/opt/hostedtoolcache/Python/3.11.9/x64/lib/python3.11/site-packages/pluggy/_manager.py", line 120, in _hookexec
+        return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+      File "/opt/hostedtoolcache/Python/3.11.9/x64/lib/python3.11/site-packages/_pytest/python.py", line 159, in pytest_pyfunc_call
+        result = testfunction(**testargs)
+      File "/home/runner/work/billing-svc/billing-svc/tests/unit/test_invoice.py", line 204, in test_invoice_rounding_edge
+        assert invoice.total == Decimal("10.00")
+      File "/home/runner/work/billing-svc/billing-svc/src/billing/domain/invoice.py", line 118, in total
+        return self.subtotal + self.tax - self.discount
+      File "/home/runner/work/billing-svc/billing-svc/src/billing/domain/money.py", line 45, in __sub__
+        return Money(self.amount - other)
+    TypeError: unsupported operand type(s) for -: 'decimal.Decimal' and 'Money'
+
+    =========================== short test summary info ============================
+    FAILED tests/unit/test_invoice.py::test_invoice_rounding_edge - TypeError
+  expect:
+    mode: single
+    primary: repair_issue
+    action: run_repair
+    slots:
+      suspect_files:
+        - /home/runner/work/billing-svc/billing-svc/tests/unit/test_invoice.py
+        - /home/runner/work/billing-svc/billing-svc/src/billing/domain/invoice.py
+        - /home/runner/work/billing-svc/billing-svc/src/billing/domain/money.py
+      issue_type: type_error
+
+- id: realistic_celery_worker_import
+  channel: repair
+  tags: [repair, realistic, celery, deep_stack, import_error]
+  text: |
+    celery@worker-3 ready — task failure:
+
+    Traceback (most recent call last):
+      File "/var/app/.venv/lib/python3.10/site-packages/celery/app/trace.py", line 451, in trace_task
+        R = retval = fun(*args, **kwargs)
+      File "/var/app/.venv/lib/python3.10/site-packages/celery/app/trace.py", line 734, in __protected_call__
+        return self.run(*args, **kwargs)
+      File "/var/app/.venv/lib/python3.10/site-packages/celery/app/autoretry.py", line 36, in run
+        return task._orig_run(*args, **kwargs)
+      File "/var/app/src/workers/tasks/notifications.py", line 63, in send_digest_email
+        renderer = TemplateRenderer.from_settings()
+      File "/var/app/src/workers/rendering/templates.py", line 29, in from_settings
+        from workers.rendering.mjml_bridge import compile_mjml
+      File "/var/app/src/workers/rendering/mjml_bridge.py", line 8, in <module>
+        import mjml
+    ModuleNotFoundError: No module named 'mjml'
+  expect:
+    mode: single
+    primary: repair_issue
+    action: run_repair
+    slots:
+      suspect_files:
+        - /var/app/src/workers/tasks/notifications.py
+        - /var/app/src/workers/rendering/templates.py
+        - /var/app/src/workers/rendering/mjml_bridge.py
+      issue_type: import_error
+
+- id: realistic_flask_sqlalchemy_repl
+  channel: repl
+  tags: [repl, realistic, flask, deep_stack]
+  text: |
+    线上 Flask 报错，帮忙修一下，完整栈如下（含 site-packages）：
+
+    Traceback (most recent call last):
+      File "/opt/conda/lib/python3.11/site-packages/flask/app.py", line 1484, in full_dispatch_request
+        rv = self.dispatch_request()
+      File "/opt/conda/lib/python3.11/site-packages/flask/app.py", line 1469, in dispatch_request
+        return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)
+      File "/opt/conda/lib/python3.11/site-packages/flask_login/utils.py", line 290, in decorated_view
+        return current_app.ensure_sync(func)(*args, **kwargs)
+      File "/srv/webapp/app/blueprints/admin/routes.py", line 156, in export_users
+        rows = UserQuery(session).export(filters)
+      File "/srv/webapp/app/services/user_query.py", line 91, in export
+        return list(self._apply(filters).all())
+      File "/opt/conda/lib/python3.11/site-packages/sqlalchemy/orm/query.py", line 2699, in all
+        return self._iter().all()
+      File "/opt/conda/lib/python3.11/site-packages/sqlalchemy/engine/result.py", line 1769, in all
+        return self._allrows()
+      File "/srv/webapp/app/services/user_query.py", line 44, in _apply
+        q = q.filter(User.status == filters["status"].upper())
+    AttributeError: 'NoneType' object has no attribute 'upper'
+  expect:
+    mode: single
+    primary: repair_request
+    action: run_repair
+    slots:
+      suspect_files:
+        - /srv/webapp/app/blueprints/admin/routes.py
+        - /srv/webapp/app/services/user_query.py
+      issue_type: attribute_error
+
+- id: realistic_monorepo_chained_import
+  channel: repair
+  tags: [repair, realistic, monorepo, deep_stack]
+  text: |
+    Traceback (most recent call last):
+      File "/workspace/apps/edge-gateway/main.py", line 17, in <module>
+        from edge_gateway.bootstrap import create_app
+      File "/workspace/apps/edge-gateway/edge_gateway/bootstrap.py", line 22, in <module>
+        from edge_gateway.routes import api_router
+      File "/workspace/apps/edge-gateway/edge_gateway/routes/__init__.py", line 5, in <module>
+        from edge_gateway.routes.health import router as health_router
+      File "/workspace/apps/edge-gateway/edge_gateway/routes/health.py", line 9, in <module>
+        from libs.observability.metrics import INFLIGHT
+      File "/workspace/libs/observability/metrics.py", line 14, in <module>
+        from prometheus_client import Counter
+      File "/workspace/.venv/lib/python3.12/site-packages/prometheus_client/__init__.py", line 3, in <module>
+        from . import metrics
+    ImportError: cannot import name 'INFLIGHT' from partially initialized module
+  expect:
+    mode: single
+    primary: repair_issue
+    action: run_repair
+    slots:
+      suspect_files:
+        - /workspace/apps/edge-gateway/main.py
+        - /workspace/apps/edge-gateway/edge_gateway/bootstrap.py
+        - /workspace/apps/edge-gateway/edge_gateway/routes/__init__.py
+        - /workspace/apps/edge-gateway/edge_gateway/routes/health.py
+        - /workspace/libs/observability/metrics.py
+      issue_type: import_error

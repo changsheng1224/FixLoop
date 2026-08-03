@@ -1,0 +1,592 @@
+# Simulated real-user REPL / repair traffic for Intent Router offline eval.
+#
+# Target mix (approximate share of *weighted* traffic):
+#   ask_howto        ~22%   how-to / config / "why" without stack
+#   repair_stack     ~18%   paste traceback / CI failure
+#   repair_nl        ~10%   "it's broken" / soft repair without full stack
+#   vague_clarify    ~12%   deixis, underspecified, should NOT auto-exec
+#   enterprise       ~14%   review/refactor/test/implement/debug/search/plan
+#   explain          ~6%
+#   remember         ~4%
+#   multi_turn       ~8%    anaphora / continue / clarify-resume
+#   hybrid           ~4%    repair + scope constraint
+#   meta             ~2%    help / cancel / oos joke
+#
+# weight: relative traffic mass for weighted_misroute_rate (not uniform).
+# stratum: bucket for by_stratum report.
+# Tags always include `realistic_user`.
+#
+# These cases intentionally include typos, code-switch, noise, and soft gold
+# where clarify is the *correct* product behavior.
+
+# ===== ask_howto (~22%) =====
+- id: ru_ask_timeout_config
+  channel: repl
+  stratum: ask_howto
+  weight: 1.6
+  text: "配置里 timeout 该怎么设比较合理？"
+  expect:
+    primary: ask
+    action: ask
+  tags: [realistic_user, ask]
+
+- id: ru_ask_env_var_typo
+  channel: repl
+  stratum: ask_howto
+  weight: 1.4
+  text: "ENV 变量里 DATABASE_URL 到底写 postgres 还是 postgresql啊"
+  expect:
+    primary: ask
+  tags: [realistic_user, ask, typo_style]
+
+- id: ru_ask_mixed_en
+  channel: repl
+  stratum: ask_howto
+  weight: 1.5
+  text: "how do I enable debug logging in agent_runtime without restarting?"
+  expect:
+    primary: ask
+  tags: [realistic_user, ask, en]
+
+- id: ru_ask_diff_meaning
+  channel: repl
+  stratum: ask_howto
+  weight: 1.3
+  text: "这俩 commit 的区别是啥，我有点懵"
+  expect:
+    primary: ask
+  tags: [realistic_user, ask, informal]
+
+- id: ru_ask_which_api
+  channel: repl
+  stratum: ask_howto
+  weight: 1.4
+  text: "应该用 complete 还是 chat_with_tools？我们 provider 是 openai"
+  expect:
+    primary: ask
+  tags: [realistic_user, ask]
+
+- id: ru_ask_long_ramble
+  channel: repl
+  stratum: ask_howto
+  weight: 1.2
+  text: >
+    我在看 context compression，感觉 history 被裁掉以后模型就不记得
+    之前说的 prefer pytest 了，有没有推荐的做法
+  expect:
+    primary: ask
+  tags: [realistic_user, ask, long]
+
+- id: ru_ask_ci_green_but
+  channel: repl
+  stratum: ask_howto
+  weight: 1.3
+  text: "本地 pytest 过了但 CI 挂，可能是时区问题吗？"
+  expect:
+    primary: ask
+  tags: [realistic_user, ask]
+
+- id: ru_ask_permission
+  channel: repl
+  stratum: ask_howto
+  weight: 1.2
+  text: "approval=ask 的时候用户拒绝写入会怎样"
+  expect:
+    primary: ask
+  tags: [realistic_user, ask]
+
+# ===== explain (~6%) =====
+- id: ru_explain_fn
+  channel: repl
+  stratum: explain
+  weight: 1.2
+  text: "解释一下 IntentRouter.route 在干嘛"
+  expect:
+    primary: explain
+    action: explain_code
+  tags: [realistic_user, explain]
+
+- id: ru_explain_what_does
+  channel: repl
+  stratum: explain
+  weight: 1.1
+  text: "这段 merge_constraints 是干什么的？"
+  expect:
+    primary: explain
+  tags: [realistic_user, explain]
+
+- id: ru_explain_en
+  channel: repl
+  stratum: explain
+  weight: 1.0
+  text: "walk me through how topological_executable_nodes works"
+  expect:
+    primary: explain
+  tags: [realistic_user, explain, en]
+
+# ===== repair_stack (~18%) =====
+- id: ru_repair_paste_short
+  channel: repl
+  stratum: repair_stack
+  weight: 1.7
+  text: |
+    Traceback (most recent call last):
+      File "app/views.py", line 88, in create
+        obj.save()
+    IntegrityError: UNIQUE constraint failed
+  expect:
+    primary: repair_issue
+    action: run_repair
+    slots:
+      suspect_files: [app/views.py]
+  tags: [realistic_user, repair, stack]
+
+- id: ru_repair_pytest_assert
+  channel: repl
+  stratum: repair_stack
+  weight: 1.6
+  text: |
+    ======================== FAILURES ========================
+    _______________________ test_add _______________________
+        assert add(1, 2) == 4
+    E   AssertionError: assert 3 == 4
+    /home/runner/work/repo/tests/test_math.py:12: AssertionError
+  expect:
+    primary: repair_issue
+    action: run_repair
+  tags: [realistic_user, repair, pytest]
+
+- id: ru_repair_with_please_fix
+  channel: repl
+  stratum: repair_stack
+  weight: 1.5
+  text: |
+    帮我修一下这个：
+    Traceback (most recent call last):
+      File "services/billing.py", line 41, in charge
+        total = price * qty
+    TypeError: can't multiply sequence by non-int
+  expect:
+    primary: repair_request
+    action: run_repair
+    slots:
+      suspect_files: [services/billing.py]
+      issue_type: type_error
+  tags: [realistic_user, repair, stack]
+
+- id: ru_repair_keyerror_json
+  channel: repl
+  stratum: repair_stack
+  weight: 1.4
+  text: |
+    Traceback (most recent call last):
+      File "parsers/payload.py", line 19, in parse
+        return data["user"]["id"]
+    KeyError: 'user'
+  expect:
+    primary: repair_issue
+    action: run_repair
+    slots:
+      suspect_files: [parsers/payload.py]
+      issue_type: key_error
+  tags: [realistic_user, repair, stack]
+
+- id: ru_repair_import_ci
+  channel: repl
+  stratum: repair_stack
+  weight: 1.4
+  text: |
+    Traceback (most recent call last):
+      File "src/cli.py", line 5, in <module>
+        from src.orchestrator import Orchestrator
+    ModuleNotFoundError: No module named 'src'
+  expect:
+    primary: repair_issue
+    action: run_repair
+    slots:
+      issue_type: import_error
+  tags: [realistic_user, repair, stack]
+
+- id: ru_repair_noise_header
+  channel: repl
+  stratum: repair_stack
+  weight: 1.3
+  text: |
+    hey can you look at this crash from prod logs pls
+
+    Traceback (most recent call last):
+      File "workers/email.py", line 60, in send
+        client.send(msg)
+    TimeoutError: timed out
+  expect:
+    primary: repair_issue
+    action: run_repair
+    slots:
+      suspect_files: [workers/email.py]
+  tags: [realistic_user, repair, stack, noisy]
+
+# ===== repair_nl (~10%) =====
+- id: ru_repair_soft_bug
+  channel: repl
+  stratum: repair_nl
+  weight: 1.3
+  text: "帮我修这个 bug，登录以后 session 丢了"
+  expect:
+    primary: repair_request
+    action: run_repair
+  tags: [realistic_user, repair, nl]
+
+- id: ru_repair_fix_failing_test
+  channel: repl
+  stratum: repair_nl
+  weight: 1.3
+  text: "please fix this failing test in test_auth.py"
+  expect:
+    primary: repair_request
+    action: run_repair
+  tags: [realistic_user, repair, nl, en]
+
+- id: ru_repair_wrong_result
+  channel: repl
+  stratum: repair_nl
+  weight: 1.1
+  text: "折扣算错了，负数输入返回了正数，帮我修"
+  expect:
+    primary: repair_request
+  tags: [realistic_user, repair, nl]
+
+- id: ru_repair_hangs
+  channel: repl
+  stratum: repair_nl
+  weight: 1.0
+  # Comma splits into symptom(debug) + fix(repair) → multi is honest gold
+  text: "接口有时候会卡住 hang 住，帮我修一下"
+  expect:
+    mode: multi
+    action: run_graph
+    exec_primaries: [debug, repair_request]
+  tags: [realistic_user, repair, nl, multi]
+
+# ===== vague_clarify (~12%) — clarify is correct =====
+- id: ru_vague_this
+  channel: repl
+  stratum: vague_clarify
+  weight: 1.5
+  text: "这个"
+  expect:
+    primary: clarify
+    action: clarify
+    clarify: true
+  tags: [realistic_user, clarify, deixis]
+
+- id: ru_vague_fix_it
+  channel: repl
+  stratum: vague_clarify
+  weight: 1.5
+  text: "修一下"
+  expect:
+    primary: clarify
+    action: clarify
+    clarify: true
+  tags: [realistic_user, clarify]
+
+- id: ru_vague_help_look
+  channel: repl
+  stratum: vague_clarify
+  weight: 1.3
+  text: "帮我看看"
+  expect:
+    primary: clarify
+    action: clarify
+    clarify: true
+  tags: [realistic_user, clarify]
+
+- id: ru_vague_what
+  channel: repl
+  stratum: vague_clarify
+  weight: 1.2
+  text: "啥意思"
+  expect:
+    primary: clarify
+    action: clarify
+    clarify: true
+  tags: [realistic_user, clarify]
+
+- id: ru_vague_hmm
+  channel: repl
+  stratum: vague_clarify
+  weight: 1.0
+  text: "嗯嗯"
+  expect:
+    primary: clarify
+    action: clarify
+    clarify: true
+  tags: [realistic_user, clarify]
+
+- id: ru_conflict_fix_refactor
+  channel: repl
+  stratum: vague_clarify
+  weight: 1.2
+  text: "帮我修这个 bug 同时重构一下 payment.py"
+  expect:
+    primary: clarify
+    action: clarify
+    clarify: true
+    clarify_reason: conflict
+  tags: [realistic_user, clarify, conflict]
+
+- id: ru_vague_that_one_no_ctx
+  channel: repl
+  stratum: vague_clarify
+  weight: 1.4
+  text: "刚才那个"
+  expect:
+    primary: clarify
+    action: clarify
+    clarify: true
+    clarify_reason: unresolved_anaphora
+  tags: [realistic_user, clarify, anaphora]
+
+# ===== enterprise (~14%) =====
+- id: ru_ent_review_pr_tone
+  channel: repl
+  stratum: enterprise
+  weight: 1.2
+  text: "帮我看看有没有明显安全问题，先别改代码"
+  expect:
+    primary: review
+  tags: [realistic_user, review]
+
+- id: ru_ent_refactor_rename
+  channel: repl
+  stratum: enterprise
+  weight: 1.1
+  text: "重构 UserService，把 validate 抽出来，不改变行为"
+  expect:
+    primary: refactor
+  tags: [realistic_user, refactor]
+
+- id: ru_ent_add_tests
+  channel: repl
+  stratum: enterprise
+  weight: 1.2
+  text: "给 billing.charge 补几条单元测试"
+  expect:
+    primary: test
+  tags: [realistic_user, test]
+
+- id: ru_ent_implement_feature
+  channel: repl
+  stratum: enterprise
+  weight: 1.2
+  text: "实现一个简单的 feature flag 开关"
+  expect:
+    primary: implement
+  tags: [realistic_user, implement]
+
+- id: ru_ent_debug_root_cause
+  channel: repl
+  stratum: enterprise
+  weight: 1.1
+  text: "先别改，帮我排查一下为什么 queue 会堆积"
+  expect:
+    primary: debug
+  tags: [realistic_user, debug]
+
+- id: ru_ent_search_usages
+  channel: repl
+  stratum: enterprise
+  weight: 1.0
+  text: "代码里哪里调用了 promote_durable_memory"
+  expect:
+    primary: search
+  tags: [realistic_user, search]
+
+- id: ru_ent_plan_first
+  channel: repl
+  stratum: enterprise
+  weight: 1.0
+  text: "先出个实现方案再动手，怎么拆分 Intent dialogue"
+  expect:
+    primary: plan
+  tags: [realistic_user, plan]
+
+# ===== remember (~4%) =====
+- id: ru_remember_pytest
+  channel: repl
+  stratum: remember
+  weight: 1.0
+  text: "请记住我们默认用 pytest，不要用 unittest"
+  expect:
+    primary: remember
+    action: promote_memory
+  tags: [realistic_user, remember]
+
+- id: ru_remember_en
+  channel: repl
+  stratum: remember
+  weight: 0.9
+  text: "remember to always run ruff before commit"
+  expect:
+    primary: remember
+  tags: [realistic_user, remember, en]
+
+# ===== hybrid (~4%) =====
+- id: ru_hybrid_only_file
+  channel: repl
+  stratum: hybrid
+  weight: 1.1
+  text: "帮我修这个 TypeError。只用改 pricing.py"
+  expect:
+    mode: hybrid
+    primary: repair_request
+    action: run_repair
+    slots:
+      suspect_files: [pricing.py]
+  tags: [realistic_user, hybrid]
+
+- id: ru_hybrid_dont_touch_tests
+  channel: repl
+  stratum: hybrid
+  weight: 1.0
+  text: "请修复这个失败。先别动 tests/"
+  expect:
+    mode: hybrid
+    primary: repair_request
+  tags: [realistic_user, hybrid]
+
+# ===== multi_turn (~8%) =====
+- id: ru_mt_fix_after_stack
+  channel: repl
+  stratum: multi_turn
+  weight: 1.3
+  history:
+    - |
+      Traceback (most recent call last):
+        File "cart.py", line 9, in total
+          return sum(items)
+      TypeError: unsupported
+  text: "修一下"
+  expect:
+    primary: repair_request
+    action: run_repair
+    anaphora_outcome: resolved
+  tags: [realistic_user, multi_turn, anaphora]
+
+- id: ru_mt_continue_explain
+  channel: repl
+  stratum: multi_turn
+  weight: 1.1
+  history:
+    - "解释一下 segmenter 怎么切句"
+  text: "继续"
+  expect:
+    primary: explain
+    anaphora_outcome: resolved
+  tags: [realistic_user, multi_turn, anaphora]
+
+- id: ru_mt_just_that_stack
+  channel: repl
+  stratum: multi_turn
+  weight: 1.2
+  history:
+    - |
+      Traceback (most recent call last):
+        File "auth/session.py", line 2
+      AttributeError: 'NoneType' object has no attribute 'user'
+  text: "刚才那个"
+  expect:
+    primary: repair_request
+    anaphora_outcome: resolved
+  tags: [realistic_user, multi_turn, anaphora]
+
+- id: ru_mt_clarify_resume
+  channel: repl
+  stratum: multi_turn
+  weight: 1.1
+  text: "修"
+  dialogue:
+    pending_clarify:
+      reason: ambiguous
+      original_text: "checkout 折扣那块逻辑不对"
+      question: "请明确动作"
+  expect:
+    primary: repair_request
+    anaphora_outcome: clarify_resume
+  tags: [realistic_user, multi_turn, clarify_resume]
+
+# ===== meta (~2%) =====
+- id: ru_meta_help
+  channel: repl
+  stratum: meta
+  weight: 0.7
+  text: "/help"
+  expect:
+    primary: help
+    action: help
+  tags: [realistic_user, meta]
+
+- id: ru_meta_cancel
+  channel: repl
+  stratum: meta
+  weight: 0.6
+  text: "/cancel"
+  expect:
+    primary: cancel
+  tags: [realistic_user, meta]
+
+- id: ru_meta_poem_oos
+  channel: repl
+  stratum: meta
+  weight: 0.5
+  text: "写一首七言绝句夸一下 pytest"
+  expect:
+    # soft: default_ask is acceptable for OOS; must not become repair
+    primary: ask
+  tags: [realistic_user, meta, oos, soft]
+
+# ===== extra noisy / adversarial-ish =====
+- id: ru_ask_after_almost_repair_words
+  channel: repl
+  stratum: ask_howto
+  weight: 1.2
+  text: "修复计划应该怎么写比较好？先别改代码"
+  expect:
+    primary: plan
+  tags: [realistic_user, plan, trap]
+
+- id: ru_review_not_repair
+  channel: repl
+  stratum: enterprise
+  weight: 1.1
+  text: "帮我看看有没有问题"
+  expect:
+    primary: review
+  tags: [realistic_user, review, trap]
+
+- id: ru_test_not_repair
+  channel: repl
+  stratum: enterprise
+  weight: 1.0
+  text: "跑一下相关 pytest，看看覆盖率"
+  expect:
+    primary: test
+  tags: [realistic_user, test]
+
+- id: ru_repair_channel_pure_stack
+  channel: repair
+  stratum: repair_stack
+  weight: 1.5
+  text: |
+    Traceback (most recent call last):
+      File "gateway.py", line 14, in handle
+        return route(req)
+      File "routes/api.py", line 50, in route
+        raise ValueError("bad")
+    ValueError: bad
+  expect:
+    primary: repair_issue
+    action: run_repair
+    slots:
+      suspect_files: [gateway.py, routes/api.py]
+  tags: [realistic_user, repair, channel_repair]
