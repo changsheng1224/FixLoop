@@ -81,19 +81,21 @@
 
 #### 下午｜FixLoop：Langfuse 与 Prometheus
 
-- [ ] 编写 Canonical Trace 到 Langfuse 的适配层。
-- [ ] 在 Langfuse 中查看模型、Tool、Skill、Context 和状态迁移的完整轨迹。
-- [ ] 暴露任务成功率、阶段延迟、Token、重试和错误率。
-- [ ] Prometheus Label 只使用模型、阶段、Skill、状态和版本等低基数字段。
-- [ ] 禁止将 `run_id、user_id、issue_id` 作为 Label。
-- [ ] 验证 Metrics 与 Trace 数据口径一致。
-- [ ] 验证 Langfuse 或 Prometheus 不可用时不影响主任务。
+> 实现链路说明：`docs/LANGFUSE_PROMETHEUS.md`
+
+- [x] 编写 Canonical Trace 到 Langfuse 的适配层。
+- [x] 在 Langfuse 中查看模型、Tool、Skill、Context 和状态迁移的完整轨迹。
+- [x] 暴露任务成功率、阶段延迟、Token、重试和错误率。
+- [x] Prometheus Label 只使用模型、阶段、Skill、状态和版本等低基数字段。
+- [x] 禁止将 `run_id、user_id、issue_id` 作为 Label。
+- [x] 验证 Metrics 与 Trace 数据口径一致。
+- [x] 验证 Langfuse 或 Prometheus 不可用时不影响主任务。
 
 验收物：
 
-- [ ] 一条可查看的 Langfuse Trace；
-- [ ] Prometheus Metrics Endpoint 和基础 Dashboard；
-- [ ] 高基数保护、Exporter 失败和脱敏测试。
+- [x] 一条可查看的 Langfuse Trace；
+- [x] Prometheus Metrics Endpoint 和基础 Dashboard；
+- [x] 高基数保护、Exporter 失败和脱敏测试。
 
 #### 晚上｜RAG 习题：分级 Skill Router
 
@@ -294,7 +296,7 @@
 - [ ] 补齐 License、贡献指南和 Issue 模板。
 - [ ] 完成 CI、固定依赖和可复现 Docker 环境。
 - [ ] 发布 Benchmark 定义、Manifest 和原始结果。
-- [ ] 提供一条完整示例 Langfuse Trace（若已接入；否则本地 Canonical Trace 示例）。
+- [x] 提供一条完整示例 Langfuse Trace（若已接入；否则本地 Canonical Trace 示例）。
 - [ ] 准备 `v0.1.0` GitHub Release。
 - [ ] 明确“FixLoop 解决什么问题”和“为什么不用普通单 Agent”。
 - [ ] 录制 `Issue → Skill 路由 → 修复 → 测试 → Trace → 结果/Draft PR` 演示。
@@ -334,7 +336,7 @@
 ### FixLoop 实现
 
 - [x] Canonical Trace
-- [ ] Langfuse 与 Prometheus
+- [x] Langfuse 与 Prometheus
 - [x] GitHub MCP 最小闭环
 - [ ] 3 个 Skill、Skill Registry 与 Skill Router
 - [ ] SWE-bench Lite 小规模可复现评测
@@ -364,7 +366,7 @@
 
 ### FixLoop
 
-- [ ] Canonical Trace、Langfuse 和 Prometheus（Canonical Trace 已完成；Langfuse/Prometheus 待功能2）
+- [x] Canonical Trace、Langfuse 和 Prometheus
 - [x] GitHub MCP
 - [ ] 3 个 Skill、Registry 与 Router
 - [ ] 工具安全回归与沙箱演示

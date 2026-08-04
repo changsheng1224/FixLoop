@@ -360,6 +360,34 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "id": 19,
+      "title": "Canonical Trace Events",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 31, "w": 12, "h": 6 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum(rate(fixloop_trace_events_total[1m])) by (event_category)",
+          "legendFormat": "{{event_category}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "title": "Errors by Phase",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 31, "w": 12, "h": 6 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum(rate(fixloop_errors_total[1m])) by (phase)",
+          "legendFormat": "{{phase}}",
+          "refId": "A"
+        }
+      ]
     }
   ]
 }

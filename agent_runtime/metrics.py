@@ -32,6 +32,11 @@ _METRIC_HELP: dict[str, str] = {
     "fixloop_token_usage_total": "Total token consumption across all repairs.",
     "fixloop_cache_hit_rate": "Prompt cache hit rate (0.0–1.0).",
     "fixloop_retry_count": "Current repair retry count.",
+    # Canonical Trace → Prometheus（低基数）
+    "fixloop_trace_events_total": "Canonical Trace events by category and status.",
+    "fixloop_skill_matched_total": "Skill match outcomes by skill and status.",
+    "fixloop_errors_total": "Error/cancel events by phase and status.",
+    "fixloop_model_events_total": "Model lifecycle events by model/phase/status.",
     # Intent Router (online)
     "fixloop_intent_routed_total": (
         "Intent router invocations by channel/mode/primary/action/parser."
@@ -59,6 +64,10 @@ _METRIC_TYPE: dict[str, str] = {
     "fixloop_token_usage_total": "counter",
     "fixloop_cache_hit_rate": "gauge",
     "fixloop_retry_count": "gauge",
+    "fixloop_trace_events_total": "counter",
+    "fixloop_skill_matched_total": "counter",
+    "fixloop_errors_total": "counter",
+    "fixloop_model_events_total": "counter",
     "fixloop_intent_routed_total": "counter",
     "fixloop_intent_misroute_proxy_total": "counter",
     "fixloop_intent_clarify_total": "counter",
@@ -118,6 +127,19 @@ def _label_key(labels: dict[str, str] | None) -> tuple[str, ...]:
     return tuple(f"{k}={v}" for k, v in sorted(labels.items()))
 
 
+def _safe_labels(labels: dict[str, str] | None) -> dict[str, str] | None:
+    """剔除高基数禁止键（run_id/user_id/issue_id 等）。"""
+    try:
+        from agent_runtime.observability.labels import strip_forbidden_labels
+
+        return strip_forbidden_labels(labels)
+    except Exception:
+        if not labels:
+            return labels
+        forbidden = {"run_id", "user_id", "issue_id"}
+        return {k: v for k, v in labels.items() if k not in forbidden} or None
+
+
 class MetricsRegistry:
     """线程安全的 Prometheus 指标注册表。
 
@@ -132,6 +154,7 @@ class MetricsRegistry:
     # ── counter ──
 
     def counter_inc(self, name: str, value: int = 1, labels: dict[str, str] | None = None):
+        labels = _safe_labels(labels)
         with self._lock:
             labeled = self._counters.setdefault(name, {})
             key = _label_key(labels)
@@ -140,12 +163,14 @@ class MetricsRegistry:
     # ── gauge ──
 
     def gauge_set(self, name: str, value: float, labels: dict[str, str] | None = None):
+        labels = _safe_labels(labels)
         with self._lock:
             labeled = self._gauges.setdefault(name, {})
             key = _label_key(labels)
             labeled[key] = float(value)
 
     def gauge_inc(self, name: str, value: float = 1.0, labels: dict[str, str] | None = None):
+        labels = _safe_labels(labels)
         with self._lock:
             labeled = self._gauges.setdefault(name, {})
             key = _label_key(labels)

@@ -1179,11 +1179,13 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         """推送 repair 指标到 Prometheus registry（静默失败）。"""
         try:
             from agent_runtime.metrics import get_registry
+            from agent_runtime.observability.labels import low_cardinality_labels
 
             registry = get_registry()
+            status = state.status or "unknown"
             registry.counter_inc(
                 "fixloop_repair_status",
-                labels={"status": state.status or "unknown"},
+                labels=low_cardinality_labels(status=status),
             )
             registry.gauge_set("fixloop_retry_count", state.retry_count)
             for phase, ms in (state.node_timings.get("phases") or {}).items():
@@ -1191,9 +1193,37 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     registry.gauge_set(
                         "fixloop_repair_phase_ms",
                         float(ms),
-                        labels={"phase": phase.replace("_ms", "")},
+                        labels=low_cardinality_labels(phase=phase.replace("_ms", "")),
                     )
                 except (ValueError, TypeError):
+                    pass
+            # 补齐 Grafana 已引用但此前无生产者的指标（低基数 Label）
+            tu = state.node_timings.get("token_usage") or {}
+            total_tokens = tu.get("total_tokens", state.node_timings.get("total_tokens"))
+            if total_tokens is not None:
+                try:
+                    n = int(total_tokens)
+                    if n > 0:
+                        registry.counter_inc(
+                            "fixloop_token_usage_total",
+                            value=n,
+                            labels=low_cardinality_labels(status=status),
+                        )
+                except (TypeError, ValueError):
+                    pass
+            cache_rate = tu.get("cache_hit_rate")
+            if cache_rate is None:
+                cache_rate = (state.node_timings.get("runtime_metrics") or {}).get(
+                    "cache_hit_rate"
+                )
+            if cache_rate is not None:
+                try:
+                    registry.gauge_set(
+                        "fixloop_cache_hit_rate",
+                        float(cache_rate),
+                        labels=low_cardinality_labels(status=status),
+                    )
+                except (TypeError, ValueError):
                     pass
         except Exception:
             pass
