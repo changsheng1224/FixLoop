@@ -407,9 +407,19 @@ class ToolExecutor:
             "find_test",
             "git_blame",
             "git_diff",
+            "github_list_issues",
+            "github_get_issue",
+            "github_list_issue_comments",
+            "github_get_repo",
+            "github_list_commits",
+            "github_get_commit",
+            "github_list_branches",
+            "github_list_pull_requests",
+            "github_get_pull_request",
+            "github_list_workflow_runs",
         }
     )
-    _ASK_TOOLS = frozenset({"write_file", "patch_file"})
+    _ASK_TOOLS = frozenset({"write_file", "patch_file", "github_create_draft_pr"})
     _DENY_TOOLS = frozenset({"run_shell"})
 
     @classmethod
@@ -454,6 +464,16 @@ class ToolExecutor:
             "find_test",
             "git_blame",
             "git_diff",
+            "github_list_issues",
+            "github_get_issue",
+            "github_list_issue_comments",
+            "github_get_repo",
+            "github_list_commits",
+            "github_get_commit",
+            "github_list_branches",
+            "github_list_pull_requests",
+            "github_get_pull_request",
+            "github_list_workflow_runs",
         }
     )
 
