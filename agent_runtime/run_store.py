@@ -188,6 +188,13 @@ class RunStore:
         line = json.dumps(record, ensure_ascii=False, default=str)
         with open(path, "a", encoding="utf-8") as f:
             f.write(line + "\n")
+        # Prometheus / Langfuse 导出：失败不得影响 JSONL 主路径
+        try:
+            from agent_runtime.observability import after_trace_append
+
+            after_trace_append(record)
+        except Exception:
+            pass
 
     def load_trace_events(self, run_id: str) -> list[dict]:
         """读取 run 的 trace 事件列表（支持 .jsonl.gz）。"""
