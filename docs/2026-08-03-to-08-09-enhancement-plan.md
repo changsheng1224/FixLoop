@@ -42,20 +42,22 @@
 
 #### 下午｜FixLoop：Canonical Trace 设计与主链路接入
 
-- [ ] 盘点现有 Trace、日志、Callback、状态和评测数据。
-- [ ] 定义事件信封：`run_id、trace_id、span_id、parent_span_id、event_type、timestamp、status`。
-- [ ] 定义模型请求、Tool Call、Skill 选择、Context 裁剪与压缩事件。
-- [ ] 定义 Agent/Task 状态迁移、Token、耗时、重试和终止原因事件。
-- [ ] 定义 Artifact、测试结果和错误引用。
-- [ ] 设计 Schema 版本、脱敏、兼容和落库策略。
-- [ ] 接入一条从 Issue 输入到 Verifier 结束的完整主链路。
+> 实现链路说明：`docs/CANONICAL_TRACE.md`；ADR-011
+
+- [x] 盘点现有 Trace、日志、Callback、状态和评测数据。
+- [x] 定义事件信封：`run_id、trace_id、span_id、parent_span_id、event_type、timestamp、status`。
+- [x] 定义模型请求、Tool Call、Skill 选择、Context 裁剪与压缩事件。
+- [x] 定义 Agent/Task 状态迁移、Token、耗时、重试和终止原因事件。
+- [x] 定义 Artifact、测试结果和错误引用。
+- [x] 设计 Schema 版本、脱敏、兼容和落库策略。
+- [x] 接入一条从 Issue 输入到 Verifier 结束的完整主链路。
 
 验收物：
 
-- [ ] Canonical Trace Schema 和 ADR；
-- [ ] 一条完整示例 Trace；
-- [ ] Schema 校验、父子 Span、异常闭合测试；
-- [ ] 可通过 `run_id` 还原执行顺序。
+- [x] Canonical Trace Schema 和 ADR；
+- [x] 一条完整示例 Trace；→ `docs/examples/canonical-trace-sample.jsonl`
+- [x] Schema 校验、父子 Span、异常闭合测试；
+- [x] 可通过 `run_id` 还原执行顺序。
 
 #### 晚上｜RAG 习题：EvalScope
 
@@ -331,7 +333,7 @@
 
 ### FixLoop 实现
 
-- [ ] Canonical Trace
+- [x] Canonical Trace
 - [ ] Langfuse 与 Prometheus
 - [x] GitHub MCP 最小闭环
 - [ ] 3 个 Skill、Skill Registry 与 Skill Router
@@ -362,7 +364,7 @@
 
 ### FixLoop
 
-- [ ] Canonical Trace、Langfuse 和 Prometheus
+- [ ] Canonical Trace、Langfuse 和 Prometheus（Canonical Trace 已完成；Langfuse/Prometheus 待功能2）
 - [x] GitHub MCP
 - [ ] 3 个 Skill、Registry 与 Router
 - [ ] 工具安全回归与沙箱演示

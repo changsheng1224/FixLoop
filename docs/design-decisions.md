@@ -194,6 +194,34 @@ Episodic / Durable 记忆是关键词匹配，Recall 能力有限。替代方案
 
 ---
 
+## ADR-011：Canonical Trace 事件信封
+
+**Status:** Accepted  
+**Date:** 2026-08-05
+
+### Context
+
+ADR-009 已锁定 JSONL 追加，但事件仅为 `{event, created_at, payload?}`，缺少跨 Agent 的 Span 父子关系与统一 status，不利于还原执行树与后续 Langfuse 适配。
+
+### Decision
+
+1. **schema_version=`1`**：在保留 `event`/`created_at` 的前提下，写入  
+   `run_id, trace_id, span_id, parent_span_id, event_type, timestamp, status, seq`。  
+2. **v1：`trace_id == run_id`**（一次 repair 一条 Trace）。  
+3. **Span**：`ContextVar` 栈；`repair_started` 推 root；`agent_ask_started/finished` 推/弹 phase span；普通事件继承当前 span。  
+4. **status**：`ok | error | cancelled | unset`；结束类事件由事件名/payload 推断。  
+5. **唯一增强写入点**：`RunStore.append_trace_event`（失败时降级为旧三字段，不阻塞主任务）。  
+6. **脱敏**：payload 继续走 `redact_artifact`；信封禁止写入 token/密钥。  
+7. **实现**：`agent_runtime/canonical_trace.py`；产品说明 `docs/CANONICAL_TRACE.md`。
+
+### Consequences
+
+**好处：** 可用 `run_id` + `seq`/`timestamp` 还原顺序；可构建父子 Span 树；为功能2（Langfuse）提供稳定契约。  
+**代价：** 每行 JSON 略大；旧 golden 测试若整行精确匹配需放宽。  
+**兼容：** 无新字段的历史 JSONL 仍可按行序回放；校验器对旧行可 `require_canonical=False`。
+
+---
+
 ## ADR-010：PatchApplier 采用文件级回滚
 
 **Status:** Accepted  
@@ -226,5 +254,5 @@ Host 侧 verify 则由 Orchestrator **`_snapshot_repo` / `_restore_repo_snapshot
 | Token 怎么控？ | ADR-003 |
 | 工具怎么防越权？ | ARCHITECTURE §6 + ADR-006 |
 | 评测数据可信吗？ | ADR-007 + README 指标表 |
-| 怎么调试 Agent？ | ADR-009 |
+| 怎么调试 Agent？ | ADR-009 + ADR-011（Canonical Trace） |
 | 补丁失败怎么办？ | ADR-010 + ARCHITECTURE §5.3 |

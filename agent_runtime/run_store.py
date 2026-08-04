@@ -150,21 +150,63 @@ class RunStore:
         """追加一行 JSONL 追踪事件（经脱敏）。"""
         self.append_trace_event(task_state.run_id, event, payload)
 
-    def append_trace_event(self, run_id: str, event: str, payload: dict | None = None):
-        """按 run_id 追加 trace 事件（多 Agent 共享 trace 时使用）。"""
+    def append_trace_event(
+        self,
+        run_id: str,
+        event: str,
+        payload: dict | None = None,
+        *,
+        status: str | None = None,
+    ):
+        """按 run_id 追加 trace 事件（多 Agent 共享 trace 时使用）。
+
+        schema_version=1：写入 Canonical 信封；enrich 失败时降级为旧三字段。
+        """
         from agent_runtime.security import redact_artifact
 
         run_dir = self.start_run_by_id(run_id)
         path = run_dir / "trace.jsonl"
-        record = {
-            "event": event,
-            "created_at": datetime.now(UTC).isoformat(),
-        }
-        if payload:
-            record["payload"] = redact_artifact(payload)
+        created_at = datetime.now(UTC).isoformat()
+        safe_payload = redact_artifact(payload) if payload else None
+        try:
+            from agent_runtime.canonical_trace import enrich_record
+
+            record = enrich_record(
+                run_id=run_id,
+                event=event,
+                created_at=created_at,
+                payload=safe_payload,
+                status=status,
+            )
+        except Exception:
+            record = {
+                "event": event,
+                "created_at": created_at,
+            }
+            if safe_payload:
+                record["payload"] = safe_payload
         line = json.dumps(record, ensure_ascii=False, default=str)
         with open(path, "a", encoding="utf-8") as f:
             f.write(line + "\n")
+
+    def load_trace_events(self, run_id: str) -> list[dict]:
+        """读取 run 的 trace 事件列表（支持 .jsonl.gz）。"""
+        path = self.runs_dir / run_id / "trace.jsonl"
+        events: list[dict] = []
+        for line in read_trace_path(path):
+            if not line.strip():
+                continue
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        return events
+
+    def load_ordered_trace(self, run_id: str) -> list[dict]:
+        """按 timestamp + seq 还原执行顺序。"""
+        from agent_runtime.canonical_trace import order_events
+
+        return order_events(self.load_trace_events(run_id))
 
     def write_task_state_named(self, run_id: str, filename: str, task_state) -> Path:
         """写入命名 task_state 文件（共享 run 下每个 Agent 一份）。"""

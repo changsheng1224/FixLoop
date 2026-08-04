@@ -51,6 +51,9 @@ class L2AskMixin:
         )
         tracer = self._active_repair_ctx().repair_tracer
         if tracer is not None:
+            from agent_runtime.canonical_trace import TraceSpanContext
+
+            TraceSpanContext.push(f"ask:{agent_name}:{phase}")
             tracer.emit(
                 agent_name,
                 "agent_ask_started",
@@ -62,6 +65,7 @@ class L2AskMixin:
                     "l2_attempt": attempt,
                     "started_ms": started_ms,
                 },
+                status="ok",
             )
         return task_id
 
@@ -97,6 +101,13 @@ class L2AskMixin:
         state.agent_asks.append(ref)
         tracer = self._active_repair_ctx().repair_tracer
         if tracer is not None:
+            from agent_runtime.canonical_trace import STATUS_ERROR, STATUS_OK, TraceSpanContext
+
+            ask_status = (
+                STATUS_ERROR
+                if stop_reason in ("error", "failed", "exception", "timeout")
+                else STATUS_OK
+            )
             tracer.emit(
                 agent_name,
                 "agent_ask_finished",
@@ -104,7 +115,11 @@ class L2AskMixin:
                     **ref.to_dict(),
                     "elapsed_ms": elapsed_ms,
                 },
+                status=ask_status,
             )
+            cur = TraceSpanContext.current()
+            if cur is not None and cur.name.startswith("ask:"):
+                TraceSpanContext.pop()
         clear_l2_context(agent)
 
     def _record_l2_synthetic_ask(
@@ -138,6 +153,9 @@ class L2AskMixin:
         )
         tracer = self._active_repair_ctx().repair_tracer
         if tracer is not None:
+            from agent_runtime.canonical_trace import STATUS_ERROR, STATUS_OK, TraceSpanContext
+
+            TraceSpanContext.push(f"ask:{agent_name}:{phase}")
             payload = {
                 "task_id": task_id,
                 "repair_run_id": repair_run_id,
@@ -147,11 +165,20 @@ class L2AskMixin:
                 "started_ms": started_ms,
                 "synthetic": True,
             }
-            tracer.emit(agent_name, "agent_ask_started", payload)
+            tracer.emit(agent_name, "agent_ask_started", payload, status="ok")
+            ask_status = (
+                STATUS_ERROR
+                if stop_reason in ("error", "failed", "exception", "timeout")
+                else STATUS_OK
+            )
             tracer.emit(
                 agent_name,
                 "agent_ask_finished",
                 {**ref.to_dict(), "elapsed_ms": elapsed_ms, "synthetic": True},
+                status=ask_status,
             )
+            cur = TraceSpanContext.current()
+            if cur is not None and cur.name.startswith("ask:"):
+                TraceSpanContext.pop()
         state.agent_asks.append(ref)
         return task_id
