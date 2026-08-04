@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Literal
 
 from agent_runtime.tool_context import ToolContext
@@ -76,4 +77,9 @@ def tool_inspect_file(context, args: dict) -> str:
 def build_repair_agent_tools(ctx: ToolContext, role: RepairAgentRole) -> dict:
     """按修复流水线角色返回 canonical 工具注册表（执行权限由 ToolGateway 控制）。"""
     del role  # 各 phase 同一 schema 集；权限见 src/middleware.py
-    return build_repair_canonical_tools(ctx)
+    tools = build_repair_canonical_tools(ctx)
+    if os.environ.get("FIXLOOP_ENABLE_GITHUB_MCP", "").strip().lower() in ("1", "true", "yes"):
+        from agent_runtime.mcp.registry import build_github_mcp_tools_auto
+
+        tools.update(build_github_mcp_tools_auto())
+    return tools

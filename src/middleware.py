@@ -81,6 +81,18 @@ REPAIR_PERMISSION_TABLE = {
     "read_file": {"*"},
     "list_files": {"*"},
     "run_shell": set(),
+    # GitHub MCP（agent_runtime/mcp）— 工具未注册时无影响
+    "github_list_issues": {"localizer", "retriever", "patcher"},
+    "github_get_issue": {"localizer", "retriever", "patcher"},
+    "github_list_issue_comments": {"localizer", "retriever", "patcher"},
+    "github_get_repo": {"localizer", "retriever", "patcher"},
+    "github_list_commits": {"localizer", "retriever", "patcher"},
+    "github_get_commit": {"localizer", "retriever", "patcher"},
+    "github_list_branches": {"localizer", "retriever", "patcher"},
+    "github_list_pull_requests": {"localizer", "retriever", "patcher"},
+    "github_get_pull_request": {"localizer", "retriever", "patcher"},
+    "github_list_workflow_runs": {"localizer", "retriever", "patcher"},
+    "github_create_draft_pr": {"patcher"},
 }
 
 
