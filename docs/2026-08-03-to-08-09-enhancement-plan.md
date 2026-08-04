@@ -160,23 +160,25 @@
 
 #### 下午｜FixLoop：3 个 Skill、Registry 与 Router
 
-- [ ] 实现 `github_issue_ingestion`：Issue 转结构化 IssueSpec。
-- [ ] 实现 `stacktrace_localization`：从错误栈定位代码。
-- [ ] 实现 `regression_test_selection`：根据 Diff 选择测试并升级验证范围。
-- [ ] 每个 Skill 定义 Description、Positive/Negative Trigger、输入输出 Schema。
-- [ ] 定义允许 Tool、完成证据、Fallback、版本和生命周期。
-- [ ] 完成 Skill Registry。
-- [ ] 实现规则、关键词、Embedding 组合路由，LLM 只作为低 Margin 兜底。
-- [ ] 准备正例、负例、多 Skill 和相似 Skill 混淆 Case。
-- [ ] 将候选分数、选择原因和 Skill 版本写入 Trace。
+> 实现链路说明：`docs/SKILL_ROUTER.md`
+
+- [x] 实现 `github_issue_ingestion`：Issue 转结构化 IssueSpec。
+- [x] 实现 `stacktrace_localization`：从错误栈定位代码。
+- [x] 实现 `regression_test_selection`：根据 Diff 选择测试并升级验证范围。
+- [x] 每个 Skill 定义 Description、Positive/Negative Trigger、输入输出 Schema。
+- [x] 定义允许 Tool、完成证据、Fallback、版本和生命周期。
+- [x] 完成 Skill Registry。
+- [x] 实现规则、关键词、Embedding 组合路由，LLM 只作为低 Margin 兜底。
+- [x] 准备正例、负例、多 Skill 和相似 Skill 混淆 Case。
+- [x] 将候选分数、选择原因和 Skill 版本写入 Trace。
 
 验收物：
 
-- [ ] 3 个可执行 Skill；
-- [ ] Skill Registry 与 Skill Router；
-- [ ] 至少 50 条离线路由评测集；
-- [ ] Top-1、误触发、漏触发、Fallback、低 Margin 和 Skill 切换指标；
-- [ ] 一条完整 Skill 选择 Trace。
+- [x] 3 个可执行 Skill；
+- [x] Skill Registry 与 Skill Router；
+- [x] 至少 50 条离线路由评测集；
+- [x] Top-1、误触发、漏触发、Fallback、低 Margin 和 Skill 切换指标；
+- [x] 一条完整 Skill 选择 Trace。
 
 #### 晚上｜RAG 习题：项目总览与个人边界
 
@@ -338,7 +340,7 @@
 - [x] Canonical Trace
 - [x] Langfuse 与 Prometheus
 - [x] GitHub MCP 最小闭环
-- [ ] 3 个 Skill、Skill Registry 与 Skill Router
+- [x] 3 个 Skill、Skill Registry 与 Skill Router
 - [ ] SWE-bench Lite 小规模可复现评测
 - [ ] 仓库发布化
 - [ ] 工具安全与沙箱执行
@@ -368,7 +370,7 @@
 
 - [x] Canonical Trace、Langfuse 和 Prometheus
 - [x] GitHub MCP
-- [ ] 3 个 Skill、Registry 与 Router
+- [x] 3 个 Skill、Registry 与 Router
 - [ ] 工具安全回归与沙箱演示
 - [ ] SWE-bench Lite 对照和消融报告
 - [ ] 可发布仓库、Release Candidate 和演示视频

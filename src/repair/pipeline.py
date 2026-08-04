@@ -624,6 +624,14 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                         if skill_fallback is not None
                         else {"matched_skill": None},
                     )
+                    # 可执行 Skill Router（与策略 YAML Skill 并存；失败不影响主路径）
+                    try:
+                        from src.skills.router import SkillRouter
+
+                        decision = SkillRouter().route(issue)
+                        tracer.emit("orchestrator", "skill_routed", decision.to_trace_payload())
+                    except Exception:
+                        pass
                 state.node_timings["parse_issue_ms"] = parse_ms
                 state.node_timings["skill_resolve_ms"] = skill_ms
                 log.info("parse_issue: %dms, skill_resolve: %dms", parse_ms, skill_ms)

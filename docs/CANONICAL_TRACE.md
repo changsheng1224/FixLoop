@@ -146,7 +146,7 @@ flowchart TD
 |------|----------|
 | 模型 | `model_request_start`、`model_first_token`、`model_complete` |
 | 工具 | `tool_executed`、`tool_preview`、`tool_order_warning` |
-| Skill | `skill_matched`、`skill_hint_rendered` |
+| Skill | `skill_matched`、`skill_hint_rendered`、`skill_routed`（可执行 Router） |
 | Context | `context_built`、`compression_triggered` |
 | 状态 | `repair_*`、`agent_ask_*`、`run_*`、`span_closed` |
 | Artifact / 验证 | `baseline_verify_finished`、`blackboard_snapshot` |

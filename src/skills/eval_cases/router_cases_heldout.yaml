@@ -1,0 +1,359 @@
+# Held-out / 对抗评测集（诊断用，禁止为刷分改 Router/trigger）
+# 标签 heldout：不计入默认 CI 门槛；用于观察真实误漏路由。
+cases:
+  # --- 同义改写：少用规范 trigger 词 ---
+  - id: ho-para-01
+    text: Pull the ticket from the forge at acme/demo number 42 and turn it into structured fields
+    expect: github_issue_ingestion
+    tags: [heldout, paraphrase]
+  - id: ho-para-02
+    text: The process died inside calc; show me the failing frame without saying the T-word
+    expect: stacktrace_localization
+    tags: [heldout, paraphrase]
+  - id: ho-para-03
+    text: |
+      File "calc.py", line 9, in add
+      boom: unsupported types
+      (please localize)
+    expect: stacktrace_localization
+    tags: [heldout, paraphrase]
+  - id: ho-para-04
+    text: Given these edits to billing.py, which checks should we re-run to catch breakage?
+    expect: regression_test_selection
+    tags: [heldout, paraphrase]
+  - id: ho-para-05
+    text: Hunt through the tree for where RepairOrchestrator lives
+    expect: repo_code_search
+    tags: [heldout, paraphrase]
+  - id: ho-para-06
+    text: Confirm the suite is still red before we touch any code
+    expect: baseline_verify
+    tags: [heldout, paraphrase]
+  - id: ho-para-07
+    text: Land this unified diff on disk and do a quick sanity check
+    expect: patch_apply_check
+    tags: [heldout, paraphrase]
+  - id: ho-para-08
+    text: Open a WIP pull request for review but keep it unmergeable
+    expect: draft_pr_prepare
+    tags: [heldout, paraphrase]
+  - id: ho-para-09
+    text: Materialize the remote bug report https://github.com/org/app/issues/88 as IssueSpec
+    expect: github_issue_ingestion
+    tags: [heldout, paraphrase]
+  - id: ho-para-10
+    text: Re-run only the suites that cover the modules we just touched
+    expect: regression_test_selection
+    tags: [heldout, paraphrase]
+
+  # --- 口语 / 省略 ---
+  - id: ho-col-01
+    text: stack pls, calc exploded
+    expect: stacktrace_localization
+    tags: [heldout, colloquial]
+  - id: ho-col-02
+    text: need the gh ticket structured first
+    expect: github_issue_ingestion
+    tags: [heldout, colloquial]
+  - id: ho-col-03
+    text: which tests after the edit?
+    expect: regression_test_selection
+    tags: [heldout, colloquial]
+  - id: ho-col-04
+    text: where tf is parse_args
+    expect: repo_code_search
+    tags: [heldout, colloquial]
+  - id: ho-col-05
+    text: prove it fails first
+    expect: baseline_verify
+    tags: [heldout, colloquial]
+  - id: ho-col-06
+    text: slap the diff on and smoke it
+    expect: patch_apply_check
+    tags: [heldout, colloquial]
+  - id: ho-col-07
+    text: wip pr when green
+    expect: draft_pr_prepare
+    tags: [heldout, colloquial]
+
+  # --- 假朋友 / 诱饵词（期望 fallback 或指定 skill）---
+  - id: ho-bait-01
+    text: Microsoft Patch Tuesday notes — summarize for the team wiki
+    expect: null
+    tags: [heldout, bait, fallback]
+  - id: ho-bait-02
+    text: He wore an eye patch after surgery; draft an email to HR
+    expect: null
+    tags: [heldout, bait, fallback]
+  - id: ho-bait-03
+    text: "Baseline salary bands for L5 engineers (not a test run)"
+    expect: null
+    tags: [heldout, bait, fallback]
+  - id: ho-bait-04
+    text: Search the web for best restaurants near the office
+    expect: null
+    tags: [heldout, bait, fallback]
+  - id: ho-bait-05
+    text: Issue a refund to customer #15 for the billing glitch
+    expect: null
+    tags: [heldout, bait, fallback]
+  - id: ho-bait-06
+    text: "PR as in public relations crisis playbook, not pull request"
+    expect: null
+    tags: [heldout, bait, fallback]
+
+  # --- 双意图接近等权（标一个主导；允许暴露误路由）---
+  - id: ho-dual-01
+    text: Search the repo for add() and also figure out which tests cover the files we changed
+    expect: regression_test_selection
+    tags: [heldout, dual]
+  - id: ho-dual-02
+    text: Localize this crash then immediately open a reviewable PR draft
+    expect: stacktrace_localization
+    tags: [heldout, dual]
+  - id: ho-dual-03
+    text: |
+      Traceback (most recent call last):
+        File "x.py", line 1, in f
+      TypeError: z
+      Also create a draft PR afterward summarizing the fix
+    expect: stacktrace_localization
+    tags: [heldout, dual]
+  - id: ho-dual-04
+    text: Ingest the GitHub issue and run baseline so we know it reproduces
+    expect: github_issue_ingestion
+    tags: [heldout, dual]
+  - id: ho-dual-05
+    text: Apply the patch first; test selection can wait until after smoke check
+    expect: patch_apply_check
+    tags: [heldout, dual]
+  - id: ho-dual-06
+    text: Before patching prove failure with pytest; later we will select regression tests
+    expect: baseline_verify
+    tags: [heldout, dual]
+
+  # --- 该选却像闲聊 / 弱信号 ---
+  - id: ho-weak-01
+    text: something broke in the python file around line twelve with a type problem
+    expect: stacktrace_localization
+    tags: [heldout, weak]
+  - id: ho-weak-02
+    text: can you fetch that numbered ticket from github for me
+    expect: github_issue_ingestion
+    tags: [heldout, weak]
+  - id: ho-weak-03
+    text: after we change stuff, don't run everything, only related checks
+    expect: regression_test_selection
+    tags: [heldout, weak]
+  - id: ho-weak-04
+    text: dig for the helper that builds the prompt
+    expect: repo_code_search
+    tags: [heldout, weak]
+  - id: ho-weak-05
+    text: make sure current tests already show red prior to edits
+    expect: baseline_verify
+    tags: [heldout, weak]
+  - id: ho-weak-06
+    text: put the change onto the working tree carefully
+    expect: patch_apply_check
+    tags: [heldout, weak]
+  - id: ho-weak-07
+    text: package the fix as an unmergeable review request on github
+    expect: draft_pr_prepare
+    tags: [heldout, weak]
+
+  # --- 中英夹杂 / 噪声更重 ---
+  - id: ho-mix-01
+    text: 先把 github 上的问题单结构化一下 issue 77，别急着提 PR
+    expect: github_issue_ingestion
+    tags: [heldout, mixed]
+  - id: ho-mix-02
+    text: 堆栈在 calc 爆了 TypeError，帮我定位到函数
+    expect: stacktrace_localization
+    tags: [heldout, mixed]
+  - id: ho-mix-03
+    text: 改了三个文件，回归测怎么选比较合适？
+    expect: regression_test_selection
+    tags: [heldout, mixed]
+  - id: ho-mix-04
+    text: 在仓库里搜一下 SkillRouter 定义在哪
+    expect: repo_code_search
+    tags: [heldout, mixed]
+  - id: ho-mix-05
+    text: 修之前先跑一遍基线证明必挂
+    expect: baseline_verify
+    tags: [heldout, mixed]
+  - id: ho-mix-06
+    text: 先把 diff 落到磁盘再做个冒烟
+    expect: patch_apply_check
+    tags: [heldout, mixed]
+  - id: ho-mix-07
+    text: verify 过了就开一个草稿 PR，不要 merge
+    expect: draft_pr_prepare
+    tags: [heldout, mixed]
+
+  # --- 元指令 / 应 fallback ---
+  - id: ho-meta-01
+    text: continue with the next skill in the pipeline
+    expect: null
+    tags: [heldout, meta, fallback]
+  - id: ho-meta-02
+    text: whatever you think is best for this repair stage
+    expect: null
+    tags: [heldout, meta, fallback]
+  - id: ho-meta-03
+    text: explain how skill routing works in FixLoop
+    expect: null
+    tags: [heldout, meta, fallback]
+  - id: ho-meta-04
+    text: list all executable skills you support
+    expect: null
+    tags: [heldout, meta, fallback]
+
+  # --- 切换压力（previous 与弱文本）---
+  - id: ho-sw-01
+    text: now the checks that matter for the touched modules
+    expect: regression_test_selection
+    previous: patch_apply_check
+    tags: [heldout, switch]
+  - id: ho-sw-02
+    text: package it for review without merging
+    expect: draft_pr_prepare
+    previous: regression_test_selection
+    tags: [heldout, switch]
+  - id: ho-sw-03
+    text: prove red first
+    expect: baseline_verify
+    previous: github_issue_ingestion
+    tags: [heldout, switch]
+  - id: ho-sw-04
+    text: dig for HelperX
+    expect: repo_code_search
+    previous: baseline_verify
+    tags: [heldout, switch]
+
+  # --- 更多中文 held-out（弱英文锚点 / 口语，仅诊断，不改 Router）---
+  - id: ho-zh-01
+    text: 把远端那个编号工单拉下来做成结构化字段
+    expect: github_issue_ingestion
+    tags: [heldout, zh, paraphrase]
+  - id: ho-zh-02
+    text: calc 里类型对不上炸了，帮我看是哪一帧
+    expect: stacktrace_localization
+    tags: [heldout, zh, paraphrase]
+  - id: ho-zh-03
+    text: 刚改了计费模块，别全量跑，相关检查挑一下
+    expect: regression_test_selection
+    tags: [heldout, zh, paraphrase]
+  - id: ho-zh-04
+    text: 在代码树里翻翻 RepairOrchestrator 住哪
+    expect: repo_code_search
+    tags: [heldout, zh, paraphrase]
+  - id: ho-zh-05
+    text: 动刀前先确认现网用例还是红的
+    expect: baseline_verify
+    tags: [heldout, zh, paraphrase]
+  - id: ho-zh-06
+    text: 把这份统一 diff 落到工作区并随便冒个烟
+    expect: patch_apply_check
+    tags: [heldout, zh, paraphrase]
+  - id: ho-zh-07
+    text: 修完后开一个不可合并的评审请求
+    expect: draft_pr_prepare
+    tags: [heldout, zh, paraphrase]
+  - id: ho-zh-08
+    text: 先结构化 issue，别急着提评审单
+    expect: github_issue_ingestion
+    tags: [heldout, zh, colloquial]
+  - id: ho-zh-09
+    text: 栈呢？calc 挂了
+    expect: stacktrace_localization
+    tags: [heldout, zh, colloquial]
+  - id: ho-zh-10
+    text: 改完测啥
+    expect: regression_test_selection
+    tags: [heldout, zh, colloquial]
+  - id: ho-zh-11
+    text: parse_args 到底在哪
+    expect: repo_code_search
+    tags: [heldout, zh, colloquial]
+  - id: ho-zh-12
+    text: 先证明会挂
+    expect: baseline_verify
+    tags: [heldout, zh, colloquial]
+  - id: ho-zh-13
+    text: diff 贴上再瞅一眼
+    expect: patch_apply_check
+    tags: [heldout, zh, colloquial]
+  - id: ho-zh-14
+    text: 绿了就开 WIP 评审
+    expect: draft_pr_prepare
+    tags: [heldout, zh, colloquial]
+  - id: ho-zh-15
+    text: 今天补丁日说明文档，整理进 wiki（不是代码补丁）
+    expect: null
+    tags: [heldout, zh, bait, fallback]
+  - id: ho-zh-16
+    text: 他戴着眼罩看病假，给 HR 写封邮件
+    expect: null
+    tags: [heldout, zh, bait, fallback]
+  - id: ho-zh-17
+    text: 给客户 15 号订单退款，不是拉 GitHub 工单
+    expect: null
+    tags: [heldout, zh, bait, fallback]
+  - id: ho-zh-18
+    text: 既要在仓库搜 add，也要决定改动文件该跑哪些检查——以后者为主
+    expect: regression_test_selection
+    tags: [heldout, zh, dual]
+  - id: ho-zh-19
+    text: 先定位崩溃，回头再开评审草稿
+    expect: stacktrace_localization
+    tags: [heldout, zh, dual]
+  - id: ho-zh-20
+    text: 先落补丁做冒烟，选测稍后
+    expect: patch_apply_check
+    tags: [heldout, zh, dual]
+  - id: ho-zh-21
+    text: 继续流水线里的下一步技能吧
+    expect: null
+    tags: [heldout, zh, meta, fallback]
+  - id: ho-zh-22
+    text: 你看着办，选哪个技能都行
+    expect: null
+    tags: [heldout, zh, meta, fallback]
+  - id: ho-zh-23
+    text: 口述一下 FixLoop 的技能路由怎么工作
+    expect: null
+    tags: [heldout, zh, meta, fallback]
+  - id: ho-zh-24
+    text: 接下来做与改动模块相关的检查
+    expect: regression_test_selection
+    previous: patch_apply_check
+    tags: [heldout, zh, switch]
+  - id: ho-zh-25
+    text: 打成不可合并的评审包
+    expect: draft_pr_prepare
+    previous: regression_test_selection
+    tags: [heldout, zh, switch]
+  - id: ho-zh-26
+    text: 先证红
+    expect: baseline_verify
+    previous: github_issue_ingestion
+    tags: [heldout, zh, switch]
+  - id: ho-zh-27
+    text: 翻翻 HelperX
+    expect: repo_code_search
+    previous: baseline_verify
+    tags: [heldout, zh, switch]
+  - id: ho-zh-28
+    text: 十二行附近那个 py 文件类型问题，帮我瞅瞅
+    expect: stacktrace_localization
+    tags: [heldout, zh, weak]
+  - id: ho-zh-29
+    text: 把 github 上那个编号票拉成结构化数据
+    expect: github_issue_ingestion
+    tags: [heldout, zh, weak]
+  - id: ho-zh-30
+    text: 改完别全跑，只跑相关的
+    expect: regression_test_selection
+    tags: [heldout, zh, weak]

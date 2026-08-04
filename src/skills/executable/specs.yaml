@@ -1,0 +1,373 @@
+# 可执行 Skill 规格（Feature 4，7 skills）
+skills:
+  - name: github_issue_ingestion
+    version: "1.0.0"
+    description: "Ingest a GitHub Issue into a structured IssueSpec (title/body/labels/url)."
+    positive_triggers:
+      - "(?i)github\\.com/.+/.+/issues/\\d+"
+      - "(?i)\\bgithub\\s+issue\\b"
+      - "(?i)\\bissue\\s*#\\d+"
+      - "(?i)\\bingest\\b.*\\bissue\\b"
+    negative_triggers:
+      - "(?i)Traceback\\s*\\(most recent call last\\)"
+      - "(?i)\\bselect\\s+(regression\\s+)?tests?\\b"
+      - "(?i)\\bdraft\\s+(pull\\s+)?request\\b|\\bcreate\\s+(a\\s+)?draft\\s+pr\\b|\\bopen\\s+a\\s+draft\\s+pr\\b"
+      - "(?i)\\bapply\\s+(the\\s+)?(patch|diff)\\b"
+    keywords:
+      - github
+      - issue
+      - ingest
+      - labels
+      - assignee
+      - html_url
+    prototypes:
+      - "Fetch GitHub issue #42 and structure title body comments"
+      - "Ingest issue from owner/repo into IssueSpec"
+      - "Parse github.com/acme/demo/issues/7 metadata"
+    input_schema:
+      type: object
+      properties:
+        owner: {type: string}
+        repo: {type: string}
+        number: {type: integer}
+        url: {type: string}
+        text: {type: string}
+      additionalProperties: true
+    output_schema:
+      type: object
+      required: [issue_spec]
+      properties:
+        issue_spec:
+          type: object
+          properties:
+            number: {}
+            title: {type: string}
+            body: {type: string}
+            state: {type: string}
+            html_url: {type: string}
+            labels: {type: array}
+    allowed_tools:
+      - github_get_issue
+      - github_list_issue_comments
+      - github_list_issues
+    completion_evidence:
+      - "issue_spec.title"
+      - "issue_spec.number"
+    fallback: none
+    lifecycle: active
+
+  - name: stacktrace_localization
+    version: "1.0.0"
+    description: "Localize failing code from a Python/Java stack trace."
+    positive_triggers:
+      - "(?i)Traceback\\s*\\(most recent call last\\)"
+      - "(?i)\\bFile\\s+\"[^\"]+\",\\s*line\\s+\\d+"
+      - "(?i)\\b(TypeError|ValueError|AttributeError|KeyError|IndexError|NullPointerException)\\b"
+      - "(?i)\\bat\\s+[\\w.$]+\\([^)]+\\.java:\\d+\\)"
+    negative_triggers:
+      - "(?i)github\\.com/.+/.+/issues/\\d+\\s*$"
+      - "(?i)\\bonly\\s+select\\s+tests\\b"
+      - "(?i)\\bgrep\\s+for\\b|\\bfind\\s+definition\\b|\\bsearch\\s+(the\\s+)?(code|symbol|repo)\\b"
+      - "(?i)\\bdraft\\s+(pull\\s+)?request\\b"
+    keywords:
+      - traceback
+      - stack
+      - exception
+      - localize
+      - frame
+      - TypeError
+      - NullPointerException
+    prototypes:
+      - "TypeError in calc.py line 12 from traceback"
+      - "Parse stack frames and locate failing function"
+      - "Java NullPointerException at Foo.bar(Foo.java:33)"
+    input_schema:
+      type: object
+      properties:
+        traceback: {type: string}
+        text: {type: string}
+      additionalProperties: true
+    output_schema:
+      type: object
+      required: [localization]
+      properties:
+        localization:
+          type: object
+          properties:
+            exception_type: {type: string}
+            exception_message: {type: string}
+            frames: {type: array}
+            top_file: {type: string}
+    allowed_tools:
+      - stack_parse
+      - java_stack_parse
+      - read_file
+    completion_evidence:
+      - "localization.exception_type"
+      - "localization.frames"
+    fallback: none
+    lifecycle: active
+
+  - name: regression_test_selection
+    version: "1.0.0"
+    description: "Select regression tests from a diff / changed files and widen verify scope."
+    positive_triggers:
+      - "(?i)\\bselect\\s+(regression\\s+)?tests?\\b"
+      - "(?i)\\b(changed|modified)\\s+files?\\b"
+      - "(?i)\\bverify\\s+scope\\b"
+      - "(?i)(?:diff\\s+--git|--git\\s+a/).{0,200}\\b(select|regression|tests?)\\b"
+      - "(?i)\\bregression\\s+test\\s+selection\\b"
+    negative_triggers:
+      - "(?i)Traceback\\s*\\(most recent call last\\)"
+      - "(?i)\\bingest\\s+github\\s+issue\\b"
+      - "(?i)\\bbaseline\\s+(test|verify|verification)\\b"
+      - "(?i)\\bapply\\s+(the\\s+)?(patch|diff)\\b"
+      - "(?i)\\bdraft\\s+(pull\\s+)?request\\b|\\bdraft\\s+pr\\b"
+    keywords:
+      - regression
+      - test
+      - pytest
+      - diff
+      - verify
+      - selection
+      - coverage
+    prototypes:
+      - "From this patch diff pick which tests to run"
+      - "Select regression tests for changed calc.py"
+      - "Widen verify scope after patch_file"
+    input_schema:
+      type: object
+      properties:
+        diff: {type: string}
+        file_path: {type: string}
+        function_name: {type: string}
+        text: {type: string}
+      additionalProperties: true
+    output_schema:
+      type: object
+      required: [selection]
+      properties:
+        selection:
+          type: object
+          properties:
+            test_files: {type: array}
+            verify_scope: {type: string}
+            rationale: {type: string}
+    allowed_tools:
+      - find_test
+      - grep
+      - run_tests
+    completion_evidence:
+      - "selection.test_files"
+      - "selection.verify_scope"
+    fallback: none
+    lifecycle: active
+
+  - name: repo_code_search
+    version: "1.0.0"
+    description: "Search the repository for symbols, error strings, or definitions via grep/read."
+    positive_triggers:
+      - "(?i)\\bgrep(?:ping)?\\s+for\\b"
+      - "(?i)\\b(search|find)\\s+(the\\s+)?(code|symbol|repo|definition|class|function)\\b"
+      - "(?i)\\bwhere\\s+is\\s+(the\\s+)?(class|function|method|symbol)\\b"
+      - "(?i)\\bfind\\s+definition\\s+of\\b"
+    negative_triggers:
+      - "(?i)Traceback\\s*\\(most recent call last\\)"
+      - "(?i)\\bingest\\s+github\\s+issue\\b"
+      - "(?i)\\bselect\\s+(regression\\s+)?tests?\\b"
+      - "(?i)\\bdraft\\s+(pull\\s+)?request\\b"
+    keywords:
+      - grep
+      - search
+      - symbol
+      - definition
+      - codebase
+      - locate
+      - ripgrep
+    prototypes:
+      - "grep for ClassName definition in the repo"
+      - "Search code for the error string unsupported operand"
+      - "Find where function parse_config is defined"
+    input_schema:
+      type: object
+      properties:
+        query: {type: string}
+        text: {type: string}
+      additionalProperties: true
+    output_schema:
+      type: object
+      required: [search]
+      properties:
+        search:
+          type: object
+          properties:
+            query: {type: string}
+            hits: {type: array}
+    allowed_tools:
+      - grep
+      - read_file
+      - list_files
+    completion_evidence:
+      - "search.query"
+      - "search.hits"
+    fallback: none
+    lifecycle: active
+
+  - name: baseline_verify
+    version: "1.0.0"
+    description: "Run baseline / pre-fix tests to confirm the issue reproduces before patching."
+    positive_triggers:
+      - "(?i)\\brun\\s+baseline\\b"
+      - "(?i)\\bbaseline\\s+(test|verify|verification)\\b"
+      - "(?i)\\bbefore\\s+(the\\s+)?(fix|patch|repair)\\b.*\\b(test|verify|pytest)\\b"
+      - "(?i)\\bpre[- ]?(fix|patch)\\s+(test|verify)\\b"
+      - "(?i)\\breproduce\\s+(the\\s+)?(failure|bug)\\s+with\\s+tests?\\b"
+    negative_triggers:
+      - "(?i)\\bselect\\s+(regression\\s+)?tests?\\b"
+      - "(?i)\\bapply\\s+(the\\s+)?(patch|diff)\\b"
+      - "(?i)Traceback\\s*\\(most recent call last\\)"
+      - "(?i)\\bdraft\\s+(pull\\s+)?request\\b"
+    keywords:
+      - baseline
+      - pre-fix
+      - reproduce
+      - verify
+      - pytest
+      - failing
+    prototypes:
+      - "Run baseline tests before applying any patch"
+      - "Pre-fix verify that the suite fails as expected"
+      - "Reproduce the bug with pytest baseline"
+    input_schema:
+      type: object
+      properties:
+        test_command: {type: string}
+        text: {type: string}
+      additionalProperties: true
+    output_schema:
+      type: object
+      required: [baseline]
+      properties:
+        baseline:
+          type: object
+          properties:
+            command: {type: string}
+            expect_fail: {type: boolean}
+            status: {type: string}
+    allowed_tools:
+      - run_tests
+      - shell
+    completion_evidence:
+      - "baseline.command"
+      - "baseline.status"
+    fallback: none
+    lifecycle: active
+
+  - name: patch_apply_check
+    version: "1.0.0"
+    description: "Apply a unified diff/patch and run static or smoke checks on the result."
+    positive_triggers:
+      - "(?i)\\bapply\\s+(the\\s+)?(patch|diff)\\b"
+      - "(?i)\\bgit\\s+apply\\b"
+      - "(?i)\\bdry[- ]?run\\s+(the\\s+)?patch\\b"
+      - "(?i)\\bcheck\\s+(the\\s+)?(applied\\s+)?patch\\b"
+      - "(?i)\\bpatch_file\\b|\\bapply_patch\\b"
+    negative_triggers:
+      - "(?i)\\bselect\\s+(regression\\s+)?tests?\\b"
+      - "(?i)\\brun\\s+baseline\\b"
+      - "(?i)\\bdraft\\s+(pull\\s+)?request\\b"
+      - "(?i)\\bingest\\s+github\\s+issue\\b"
+    keywords:
+      - apply
+      - patch
+      - hunk
+      - dry-run
+      - smoke
+      - static
+    prototypes:
+      - "Apply the unified diff and smoke-check the tree"
+      - "git apply the patch then run a quick syntax check"
+      - "Dry-run patch apply and report conflicts"
+    input_schema:
+      type: object
+      properties:
+        diff: {type: string}
+        text: {type: string}
+      additionalProperties: true
+    output_schema:
+      type: object
+      required: [apply]
+      properties:
+        apply:
+          type: object
+          properties:
+            files: {type: array}
+            status: {type: string}
+            checks: {type: array}
+    allowed_tools:
+      - patch_file
+      - read_file
+      - run_tests
+    completion_evidence:
+      - "apply.status"
+      - "apply.files"
+    fallback: none
+    lifecycle: active
+
+  - name: draft_pr_prepare
+    version: "1.0.0"
+    description: "Prepare Draft PR metadata (title/body/base/head) after a successful fix."
+    positive_triggers:
+      - "(?i)\\bdraft\\s+(pull\\s+)?request\\b"
+      - "(?i)\\bdraft\\s+pr\\b"
+      - "(?i)\\bcreate\\s+(a\\s+)?draft\\s+pr\\b"
+      - "(?i)\\bprepare\\s+(a\\s+)?(draft\\s+)?pr\\b"
+      - "(?i)\\bopen\\s+a\\s+draft\\s+pr\\b"
+      - "(?i)github_create_draft_pr"
+    negative_triggers:
+      - "(?i)\\bingest\\s+github\\s+issue\\b"
+      - "(?i)Traceback\\s*\\(most recent call last\\)"
+      - "(?i)\\bselect\\s+(regression\\s+)?tests?\\b"
+      - "(?i)\\bapply\\s+(the\\s+)?(patch|diff)\\b"
+    keywords:
+      - draft
+      - pull
+      - request
+      - pr
+      - title
+      - base
+      - head
+      - branch
+    prototypes:
+      - "Create a draft PR with title and body summarizing the fix"
+      - "Prepare draft pull request metadata for github_create_draft_pr"
+      - "Open a draft PR against master after verify passed"
+    input_schema:
+      type: object
+      properties:
+        title: {type: string}
+        body: {type: string}
+        base: {type: string}
+        head: {type: string}
+        text: {type: string}
+      additionalProperties: true
+    output_schema:
+      type: object
+      required: [draft_pr]
+      properties:
+        draft_pr:
+          type: object
+          properties:
+            title: {type: string}
+            body: {type: string}
+            base: {type: string}
+            head: {type: string}
+            draft: {type: boolean}
+    allowed_tools:
+      - github_create_draft_pr
+      - github_get_repo
+    completion_evidence:
+      - "draft_pr.title"
+      - "draft_pr.draft"
+    fallback: none
+    lifecycle: active

@@ -1,0 +1,368 @@
+# 复杂 / 混淆 / 切换 / 噪声评测（Feature 4 扩展）
+cases:
+  # --- 新 Skill 正例 ---
+  - id: sr-01
+    text: "Please grep for parse_config definition in the repo"
+    expect: repo_code_search
+    tags: [positive, search, hard]
+  - id: sr-02
+    text: Where is the class RepairPlan defined?
+    expect: repo_code_search
+    tags: [positive, search, hard]
+  - id: sr-03
+    text: Search the code for unsupported operand TypeError string
+    expect: repo_code_search
+    tags: [positive, search, hard]
+  - id: sr-04
+    text: Find definition of function stack_parse
+    expect: repo_code_search
+    tags: [positive, search, hard]
+  - id: sr-05
+    text: find the symbol MatchedSkill across the codebase
+    expect: repo_code_search
+    tags: [positive, search, hard]
+
+  - id: bv-01
+    text: Run baseline tests before applying any patch
+    expect: baseline_verify
+    tags: [positive, baseline, hard]
+  - id: bv-02
+    text: Pre-fix verify with pytest that the suite still fails
+    expect: baseline_verify
+    tags: [positive, baseline, hard]
+  - id: bv-03
+    text: Before the fix, reproduce the failure with tests
+    expect: baseline_verify
+    tags: [positive, baseline, hard]
+  - id: bv-04
+    text: baseline verification should confirm the bug reproduces
+    expect: baseline_verify
+    tags: [positive, baseline, hard]
+  - id: bv-05
+    text: Run baseline pytest -q prior to repair
+    expect: baseline_verify
+    tags: [positive, baseline, hard]
+
+  - id: pa-01
+    text: Apply the patch and smoke-check the working tree
+    expect: patch_apply_check
+    tags: [positive, patch, hard]
+  - id: pa-02
+    text: git apply the unified diff then syntax check
+    expect: patch_apply_check
+    tags: [positive, patch, hard]
+  - id: pa-03
+    text: Dry-run the patch and report conflicts
+    expect: patch_apply_check
+    tags: [positive, patch, hard]
+  - id: pa-04
+    text: "check the applied patch after patch_file"
+    expect: patch_apply_check
+    tags: [positive, patch, hard]
+  - id: pa-05
+    text: |
+      Please apply the diff:
+      diff --git a/calc.py b/calc.py
+      --- a/calc.py
+      +++ b/calc.py
+      @@ -1 +1 @@
+      -x
+      +y
+    expect: patch_apply_check
+    tags: [positive, patch, hard]
+
+  - id: dp-01
+    text: Create a draft PR summarizing the fix against master
+    expect: draft_pr_prepare
+    tags: [positive, draft_pr, hard]
+  - id: dp-02
+    text: Prepare draft pull request metadata for github_create_draft_pr
+    expect: draft_pr_prepare
+    tags: [positive, draft_pr, hard]
+  - id: dp-03
+    text: Open a draft PR with title Fix TypeError in calc
+    expect: draft_pr_prepare
+    tags: [positive, draft_pr, hard]
+  - id: dp-04
+    text: "After verify passed, prepare a draft pr (draft=true)"
+    expect: draft_pr_prepare
+    tags: [positive, draft_pr, hard]
+  - id: dp-05
+    text: create draft pr from branch fixloop/repair
+    expect: draft_pr_prepare
+    tags: [positive, draft_pr, hard]
+
+  # --- 相似 Skill 混淆 ---
+  - id: hx-01
+    text: "TypeError mentioned once, but please grep for the symbol add_numbers instead of parsing a traceback"
+    expect: repo_code_search
+    tags: [confusion, hard]
+  - id: hx-02
+    text: "We have a GitHub issue link later, but FIRST create a draft PR for the finished fix"
+    expect: draft_pr_prepare
+    tags: [confusion, hard]
+  - id: hx-03
+    text: |
+      diff --git a/a.py b/a.py
+      --- a/a.py
+      +++ b/a.py
+      Skip test selection for now; apply the patch immediately
+    expect: patch_apply_check
+    tags: [confusion, hard]
+  - id: hx-04
+    text: Select regression tests for changed util.py — baseline already finished earlier
+    expect: regression_test_selection
+    tags: [confusion, hard]
+  - id: hx-05
+    text: Run baseline before the fix; ignore any draft PR talk for now
+    expect: baseline_verify
+    tags: [confusion, hard]
+  - id: hx-06
+    text: |
+      Traceback (most recent call last):
+        File "a.py", line 1, in f
+      TypeError: x
+      (also someone said draft PR but localize the stack first)
+    expect: stacktrace_localization
+    tags: [confusion, hard]
+  - id: hx-07
+    text: Ingest GitHub issue https://github.com/acme/demo/issues/9 — not a draft PR
+    expect: github_issue_ingestion
+    tags: [confusion, hard]
+  - id: hx-08
+    text: Find definition of Localizer — there is no traceback here
+    expect: repo_code_search
+    tags: [confusion, hard]
+
+  # --- 噪声 / 夹杂 ---
+  - id: nz-01
+    text: |
+      FYI standup notes: lunch at noon.
+      Please grep for ToolGateway in src/
+      Also the weather is nice today.
+    expect: repo_code_search
+    tags: [noise, hard]
+  - id: nz-02
+    text: |
+      Random chatter ……
+      Run baseline tests before the patch please
+      cc @alice
+    expect: baseline_verify
+    tags: [noise, hard]
+  - id: nz-03
+    text: |
+      TODO buy milk
+      Apply the patch from the agent output and check it
+      unrelated: cats are cute
+    expect: patch_apply_check
+    tags: [noise, hard]
+  - id: nz-04
+    text: |
+      memo: rotate keys next week
+      create draft pr titled "fix calc TypeError"
+    expect: draft_pr_prepare
+    tags: [noise, hard]
+  - id: nz-05
+    text: |
+      hello team!
+      Select tests for changed files billing.py auth.py
+      thx
+    expect: regression_test_selection
+    tags: [noise, hard]
+
+  # --- 低 margin / 含糊（仍有期望）---
+  - id: lm-01
+    text: verify something about tests and patch readiness in the workflow
+    expect: null
+    tags: [low_margin, fallback, hard]
+  - id: lm-02
+    text: look at the code related to the failure somehow
+    expect: null
+    tags: [low_margin, fallback, hard]
+  - id: lm-03
+    text: handle the github stuff for this task
+    expect: null
+    tags: [low_margin, fallback, hard]
+  - id: lm-04
+    text: "please do the next repair step (unspecified)"
+    expect: null
+    tags: [low_margin, fallback, hard]
+
+  # --- Skill 切换（previous）---
+  - id: sw-01
+    text: Now apply the patch we generated
+    expect: patch_apply_check
+    previous: stacktrace_localization
+    tags: [switch, hard]
+  - id: sw-02
+    text: Next, select regression tests for the changed files
+    expect: regression_test_selection
+    previous: patch_apply_check
+    tags: [switch, hard]
+  - id: sw-03
+    text: Finally open a draft PR against master
+    expect: draft_pr_prepare
+    previous: regression_test_selection
+    tags: [switch, hard]
+  - id: sw-04
+    text: First run baseline tests before the fix
+    expect: baseline_verify
+    previous: github_issue_ingestion
+    tags: [switch, hard]
+  - id: sw-05
+    text: Switch to grepping for the suspect symbol Helper
+    expect: repo_code_search
+    previous: baseline_verify
+    tags: [switch, hard]
+  - id: sw-06
+    text: |
+      Traceback (most recent call last):
+        File "z.py", line 2, in main
+      KeyError: k
+    expect: stacktrace_localization
+    previous: draft_pr_prepare
+    tags: [switch, hard]
+
+  # --- 加强负例 ---
+  - id: hn-01
+    text: Write a blog post about multi-agent systems
+    expect: null
+    tags: [negative, hard]
+  - id: hn-02
+    text: Schedule a meeting with the infra team tomorrow
+    expect: null
+    tags: [negative, hard]
+  - id: hn-03
+    text: Translate this paragraph into French
+    expect: null
+    tags: [negative, hard]
+  - id: hn-04
+    text: "Compute 17*19 for me"
+    expect: null
+    tags: [negative, hard]
+  - id: hn-05
+    text: Recommend a good IDE theme
+    expect: null
+    tags: [negative, hard]
+
+  # --- 多信号但主导明确 ---
+  - id: mx-01
+    text: |
+      Context: yesterday we ingested an issue.
+      Today please run baseline tests before the fix.
+    expect: baseline_verify
+    tags: [multi_signal, hard]
+  - id: mx-02
+    text: After localization is done, grep for the top frame function name FooBar
+    expect: repo_code_search
+    tags: [multi_signal, hard]
+  - id: mx-03
+    text: Tests can wait — apply the patch with patch_file first
+    expect: patch_apply_check
+    tags: [multi_signal, hard]
+  - id: mx-04
+    text: Verification passed; prepare a draft pr now (ignore old issue #12 text)
+    expect: draft_pr_prepare
+    tags: [multi_signal, hard]
+  - id: mx-05
+    text: "Changed files: a.py b.py — select regression tests (baseline already done)"
+    expect: regression_test_selection
+    tags: [multi_signal, hard]
+
+  # --- 中文 / 中英混合（hard：含英文 trigger，避免门槛过拟合刷分）---
+  - id: zh-sr-01
+    text: 请在仓库里 grep for SkillRouter 的定义
+    expect: repo_code_search
+    tags: [positive, search, hard, zh]
+  - id: zh-sr-02
+    text: 帮我 find definition of function parse_issue
+    expect: repo_code_search
+    tags: [positive, search, hard, zh]
+  - id: zh-sr-03
+    text: Where is the class RepairState 定义在哪？
+    expect: repo_code_search
+    tags: [positive, search, hard, zh]
+  - id: zh-bv-01
+    text: 修代码前先 run baseline tests
+    expect: baseline_verify
+    tags: [positive, baseline, hard, zh]
+  - id: zh-bv-02
+    text: 请做 pre-fix verify，确认用例仍然失败
+    expect: baseline_verify
+    tags: [positive, baseline, hard, zh]
+  - id: zh-bv-03
+    text: Before the fix 用 pytest 复现失败
+    expect: baseline_verify
+    tags: [positive, baseline, hard, zh]
+  - id: zh-pa-01
+    text: 先 apply the patch，再做冒烟检查
+    expect: patch_apply_check
+    tags: [positive, patch, hard, zh]
+  - id: zh-pa-02
+    text: 请 git apply 这份 diff 并检查语法
+    expect: patch_apply_check
+    tags: [positive, patch, hard, zh]
+  - id: zh-pa-03
+    text: Dry-run the patch，看有没有冲突
+    expect: patch_apply_check
+    tags: [positive, patch, hard, zh]
+  - id: zh-dp-01
+    text: 验证通过后 create draft pr，不要 merge
+    expect: draft_pr_prepare
+    tags: [positive, draft_pr, hard, zh]
+  - id: zh-dp-02
+    text: 请 prepare a draft pr，标题写修复 TypeError
+    expect: draft_pr_prepare
+    tags: [positive, draft_pr, hard, zh]
+  - id: zh-dp-03
+    text: Open a draft PR 到 master 分支
+    expect: draft_pr_prepare
+    tags: [positive, draft_pr, hard, zh]
+  - id: zh-hx-01
+    text: 先 grep for Localizer，这里没有 Traceback
+    expect: repo_code_search
+    tags: [confusion, hard, zh]
+  - id: zh-hx-02
+    text: 不要 ingest issue，直接 create draft pr
+    expect: draft_pr_prepare
+    tags: [confusion, hard, zh]
+  - id: zh-hx-03
+    text: 跳过选测，马上 apply the patch
+    expect: patch_apply_check
+    tags: [confusion, hard, zh]
+  - id: zh-hx-04
+    text: Select regression tests for changed util.py，基线已经跑过了
+    expect: regression_test_selection
+    tags: [confusion, hard, zh]
+  - id: zh-nz-01
+    text: |
+      开会备注：明天 demo
+      请 run baseline tests before the fix
+      另外记得订会议室
+    expect: baseline_verify
+    tags: [noise, hard, zh]
+  - id: zh-nz-02
+    text: |
+      闲聊：咖啡不错
+      请 create draft pr titled fix calc
+      完
+    expect: draft_pr_prepare
+    tags: [noise, hard, zh]
+  - id: zh-ng-01
+    text: 帮我推荐一部周末看的电影
+    expect: null
+    tags: [negative, hard, zh]
+  - id: zh-ng-02
+    text: 把这段英文翻译成日语
+    expect: null
+    tags: [negative, hard, zh]
+  - id: zh-sw-01
+    text: 接下来 apply the patch
+    expect: patch_apply_check
+    previous: stacktrace_localization
+    tags: [switch, hard, zh]
+  - id: zh-sw-02
+    text: 最后 open a draft PR
+    expect: draft_pr_prepare
+    previous: regression_test_selection
+    tags: [switch, hard, zh]
