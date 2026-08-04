@@ -52,7 +52,12 @@ class RepairRunTracer:
         return self._store
 
     def begin(self, issue: str, **extra: str) -> str:
+        from agent_runtime.canonical_trace import TraceSpanContext, reset_seq
+
         self.run_id = new_run_id()
+        reset_seq(self.run_id)
+        TraceSpanContext.reset()
+        TraceSpanContext.push("repair_root")
         self.store.start_run_by_id(self.run_id)
         payload = {"issue_preview": issue[:300]}
         payload.update({k: v for k, v in extra.items() if v})
@@ -60,6 +65,7 @@ class RepairRunTracer:
             "orchestrator",
             "repair_started",
             payload,
+            status="ok",
         )
         return self.run_id
 
@@ -73,11 +79,61 @@ class RepairRunTracer:
             if agent is not None:
                 agent.shared_run_id = None
 
-    def emit(self, agent_name: str, event: str, payload: dict | None = None) -> None:
+    def emit(
+        self,
+        agent_name: str,
+        event: str,
+        payload: dict | None = None,
+        *,
+        status: str | None = None,
+    ) -> None:
         data = dict(payload or {})
         data.setdefault("agent", agent_name)
         data.setdefault("run_id", self.run_id)
-        self.store.append_trace_event(self.run_id, event, data)
+        self.store.append_trace_event(self.run_id, event, data, status=status)
+
+    def close_dangling_ask_spans(self) -> int:
+        """闭合未正常 pop 的 ask 子 span（保留 root）。返回闭合数量。"""
+        from agent_runtime.canonical_trace import TraceSpanContext
+
+        closed = 0
+        while TraceSpanContext.depth() > 1:
+            frame = TraceSpanContext.current()
+            assert frame is not None
+            self.emit(
+                "orchestrator",
+                "span_closed",
+                {
+                    "span_name": frame.name,
+                    "closed_span_id": frame.span_id,
+                    "reason": "abnormal",
+                },
+                status="error",
+            )
+            TraceSpanContext.pop()
+            closed += 1
+        return closed
+
+    def end_root_span(self) -> None:
+        """结束 root span 并清空 ContextVar。"""
+        from agent_runtime.canonical_trace import TraceSpanContext
+
+        self.close_dangling_ask_spans()
+        if TraceSpanContext.depth() >= 1:
+            frame = TraceSpanContext.current()
+            if frame is not None:
+                self.emit(
+                    "orchestrator",
+                    "span_closed",
+                    {
+                        "span_name": frame.name,
+                        "closed_span_id": frame.span_id,
+                        "reason": "normal",
+                    },
+                    status="ok",
+                )
+            TraceSpanContext.pop()
+        TraceSpanContext.reset()
 
     def write_agent_token(self, agent_name: str, usage: dict, extra: dict | None = None) -> None:
         """写入/累加单个 Agent 的 token 摘要（如 Patcher complete_once）。"""
@@ -195,8 +251,17 @@ class RepairRunTracer:
         obs = build_rejection_observability_payload(rejection_summary)
         if obs:
             finished_payload.update(obs)
+        self.close_dangling_ask_spans()
+        fin_status = "ok"
+        st = str(state.status or "").lower()
+        if st in ("failed", "error"):
+            fin_status = "error"
+        elif st in ("cancelled", "canceled"):
+            fin_status = "cancelled"
         self.emit(
             "orchestrator",
             "repair_finished",
             finished_payload,
+            status=fin_status,
         )
+        self.end_root_span()

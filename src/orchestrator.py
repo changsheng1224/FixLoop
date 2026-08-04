@@ -365,6 +365,7 @@ class Orchestrator(RepairPipelineMixin):
         tracer = ctx.repair_tracer if ctx is not None else None
         if tracer is None:
             return
+        tracer.close_dangling_ask_spans()
         tracer.emit(
             "orchestrator",
             "repair_cancelled",
@@ -372,7 +373,9 @@ class Orchestrator(RepairPipelineMixin):
                 "status": state.status,
                 "repo_restored": True,
             },
+            status="cancelled",
         )
+        tracer.end_root_span()
 
     def _parse_issue(self, issue: str) -> RepairPlan:
         """经 IntentRouter（repair 通道）折叠后构建 RepairPlan。
