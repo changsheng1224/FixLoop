@@ -227,9 +227,12 @@ class ToolExecutor:
             except ValueError as e:
                 return args, self._rejected(3, "invalid_args", f"Error: 参数校验失败: {e}")
 
-        path_reject = self._validate_path_args(args)
+        path_reject = self._validate_path_args(name, args)
         if path_reject is not None:
             return args, path_reject
+        shell_reject = self._validate_shell_args(name, args)
+        if shell_reject is not None:
+            return args, shell_reject
         return args, None
 
     def _check_quota(self, name: str) -> tuple[bool, ToolExecutionResult | None]:
@@ -375,8 +378,8 @@ class ToolExecutor:
                 metadata["shell_env_keys"] = sorted(provider().keys())
         return metadata
 
-    def _validate_path_args(self, args) -> ToolExecutionResult | None:
-        """Gate 3 续：路径参数 resolve，拦截 workspace 逃逸与 symlink。"""
+    def _validate_path_args(self, name: str, args) -> ToolExecutionResult | None:
+        """Gate 3 续：路径 resolve、敏感路径、超大/二进制读拦截。"""
         if isinstance(args, dict):
             raw_path = args.get("path")
         else:
@@ -384,12 +387,77 @@ class ToolExecutor:
         if not raw_path:
             return None
         try:
-            self.agent.tool_context.resolve(str(raw_path))
+            resolved = self.agent.tool_context.resolve(str(raw_path))
         except ValueError as e:
             msg = str(e)
             code = "path_escape" if "逃逸" in msg else "invalid_args"
-            return self._rejected(3, code, f"Error: 路径校验失败: {e}")
+            return self._rejected(
+                3,
+                code,
+                f"Error: 路径校验失败: {e}",
+                sandbox_violation=code == "path_escape",
+            )
+
+        from agent_runtime.sensitive_paths import (
+            check_sensitive_access,
+            sensitive_reject_message,
+        )
+
+        sens = check_sensitive_access(name, raw_path) or check_sensitive_access(
+            name, resolved
+        )
+        if sens:
+            return self._rejected(
+                3,
+                sens,
+                sensitive_reject_message(raw_path),
+                sandbox_violation=True,
+            )
+
+        # read_file：体量与二进制护栏（文件存在时）
+        if name == "read_file" and resolved.is_file():
+            from agent_runtime.io_limits import is_likely_binary, read_max_bytes
+
+            try:
+                size = resolved.stat().st_size
+            except OSError:
+                size = 0
+            limit = read_max_bytes()
+            if size > limit:
+                return self._rejected(
+                    3,
+                    "oversized_read",
+                    f"Error: 文件过大 ({size} bytes > {limit})，拒绝读取: {raw_path}",
+                )
+            if is_likely_binary(resolved):
+                return self._rejected(
+                    3,
+                    "binary_file",
+                    f"Error: 疑似二进制文件，拒绝读取: {raw_path}",
+                )
         return None
+
+    def _validate_shell_args(self, name: str, args) -> ToolExecutionResult | None:
+        """Gate 3 续：宿主机 shell 命令 allowlist（Docker verify 不经此路径）。"""
+        if name != "run_shell":
+            return None
+        if isinstance(args, dict):
+            command = args.get("command", "")
+        else:
+            command = getattr(args, "command", "") or ""
+        if not command:
+            return None
+        from agent_runtime.security import check_shell_command
+
+        allowed, reason = check_shell_command(str(command))
+        if allowed:
+            return None
+        return self._rejected(
+            3,
+            "sandbox_violation",
+            f"Error: Shell 命令被安全策略拒绝 ({reason}): {str(command)[:100]}",
+            sandbox_violation=True,
+        )
 
     # Gate 7 分级审批：auto(读类)/ask(写类)/deny(禁止)
     _APPROVAL_TIER_AUTO = "auto"

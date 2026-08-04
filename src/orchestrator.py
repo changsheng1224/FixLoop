@@ -362,6 +362,7 @@ class Orchestrator(RepairPipelineMixin):
 
     def _emit_repair_cancelled(self, state: RepairState) -> None:
         ctx = self._repair_ctx
+        self._maybe_leave_worktree(cancelled=True)
         tracer = ctx.repair_tracer if ctx is not None else None
         if tracer is None:
             return
@@ -679,9 +680,97 @@ class Orchestrator(RepairPipelineMixin):
         if tokenizer_by_agent:
             state.node_timings["tokenizer_by_agent"] = tokenizer_by_agent
 
+        self._maybe_enter_worktree(state, tracer)
+
+    def _maybe_enter_worktree(self, state: RepairState, tracer) -> None:
+        """可选：FIXLOOP_USE_WORKTREE=1 时创建独立 worktree 并重定向 Agent 工具根。"""
+        from agent_runtime.worktree import WorktreeError, create_worktree, worktree_enabled
+
+        if not worktree_enabled():
+            return
+        ctx = self._repair_ctx
+        if ctx is None:
+            return
+        run_id = state.repair_run_id or "run"
+        try:
+            handle = create_worktree(self._repo_root, run_id)
+        except WorktreeError as e:
+            if tracer is not None:
+                tracer.emit(
+                    "orchestrator",
+                    "sandbox_violation",
+                    {"reason": "worktree_create_failed", "error": str(e)},
+                    status="error",
+                )
+            return
+
+        originals: dict[str, str] = {}
+        for name, agent in (
+            ("localizer", self.localizer),
+            ("retriever", self.retriever),
+            ("patcher", self.patcher),
+            ("verifier", self.verifier),
+        ):
+            if agent is None:
+                continue
+            tc = getattr(agent, "tool_context", None)
+            if tc is not None:
+                originals[name] = str(tc.root)
+                tc.root = str(handle.path)
+            if hasattr(agent, "_cwd"):
+                agent._cwd = str(handle.path)
+        ctx.worktree_handle = handle
+        ctx.worktree_original_roots = originals
+        if tracer is not None:
+            tracer.emit(
+                "orchestrator",
+                "worktree_created",
+                handle.as_dict(),
+                status="ok",
+            )
+
+    def _maybe_leave_worktree(self, *, cancelled: bool = False) -> None:
+        """回收 worktree 并恢复 Agent 工具根。"""
+        from agent_runtime.worktree import remove_worktree
+
+        ctx = self._repair_ctx
+        if ctx is None:
+            return
+        handle = getattr(ctx, "worktree_handle", None)
+        originals = getattr(ctx, "worktree_original_roots", None) or {}
+        for name, agent in (
+            ("localizer", self.localizer),
+            ("retriever", self.retriever),
+            ("patcher", self.patcher),
+            ("verifier", self.verifier),
+        ):
+            if agent is None:
+                continue
+            root = originals.get(name)
+            if root is None:
+                continue
+            tc = getattr(agent, "tool_context", None)
+            if tc is not None:
+                tc.root = root
+            if hasattr(agent, "_cwd"):
+                agent._cwd = root
+        tracer = ctx.repair_tracer
+        if handle is not None:
+            remove_worktree(handle.repo_root, handle.path, force=True)
+            if tracer is not None:
+                tracer.emit(
+                    "orchestrator",
+                    "worktree_removed",
+                    {**handle.as_dict(), "cancelled": cancelled},
+                    status="cancelled" if cancelled else "ok",
+                )
+        ctx.worktree_handle = None
+        ctx.worktree_original_roots = {}
+
     def _end_repair_trace(self, state: RepairState) -> None:
         from agent_runtime.log_context import reset_run_id
 
+        self._maybe_leave_worktree(cancelled=False)
         ctx = self._repair_ctx
         tracer = ctx.repair_tracer if ctx is not None else None
         if tracer is None:

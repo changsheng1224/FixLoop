@@ -188,6 +188,21 @@ def tool_read_file(context, args: dict) -> str:
     if not target.is_file():
         return f"Error: 不是文件: {raw_path}"
 
+    from agent_runtime.io_limits import is_likely_binary, read_max_bytes
+    from agent_runtime.sensitive_paths import is_sensitive_path, sensitive_reject_message
+
+    if is_sensitive_path(raw_path) or is_sensitive_path(target):
+        return sensitive_reject_message(raw_path)
+    try:
+        size = target.stat().st_size
+    except OSError as e:
+        return f"Error: 无法读取文件: {e}"
+    limit = read_max_bytes()
+    if size > limit:
+        return f"Error: 文件过大 ({size} bytes > {limit})，拒绝读取: {raw_path}"
+    if is_likely_binary(target):
+        return f"Error: 疑似二进制文件，拒绝读取: {raw_path}"
+
     try:
         lines = target.read_text(encoding="utf-8").splitlines()
     except UnicodeDecodeError:
@@ -232,6 +247,11 @@ def tool_grep(context, args: dict) -> str:
         target = context.resolve(raw_path)
     except ValueError as e:
         return f"Error: {e}"
+
+    from agent_runtime.sensitive_paths import is_sensitive_path, sensitive_reject_message
+
+    if is_sensitive_path(raw_path) or is_sensitive_path(target):
+        return sensitive_reject_message(raw_path)
 
     if not target.exists():
         return f"Error: 路径不存在: {raw_path}"
@@ -301,6 +321,10 @@ def _grep_python(
         if filepath.is_dir():
             continue
         if any(ign in filepath.parts for ign in IGNORED_PATH_NAMES):
+            continue
+        from agent_runtime.sensitive_paths import is_sensitive_path
+
+        if is_sensitive_path(filepath):
             continue
         if filepath.suffix not in (
             ".py",
@@ -395,6 +419,11 @@ def _format_grep_result(lines: list[str], total: int, max_results: int) -> str:
         result += (
             f"\n... 另有 {total - len(lines)} 条匹配未显示（可缩小 path/glob 或提高 max_results）"
         )
+    from agent_runtime.io_limits import grep_max_bytes, truncate_text
+
+    result, truncated = truncate_text(result, grep_max_bytes(), label="grep")
+    if truncated:
+        result += "\n[oversized_grep]"
     return result
 
 
@@ -414,10 +443,18 @@ def tool_write_file(context, args: dict) -> str:
     content = args.get("content", "")
     append = args.get("append", False)
 
+    from agent_runtime.sensitive_paths import is_sensitive_path, sensitive_reject_message
+
+    if is_sensitive_path(raw_path):
+        return sensitive_reject_message(raw_path)
+
     try:
         target = context.resolve(raw_path)
     except ValueError as e:
         return f"Error: {e}"
+
+    if is_sensitive_path(target):
+        return sensitive_reject_message(raw_path)
 
     from agent_runtime.atomic_io import atomic_write_text
 
@@ -445,10 +482,18 @@ def tool_patch_file(context, args: dict) -> str:
     if not raw_path:
         return "Error: 缺少必填参数 path"
 
+    from agent_runtime.sensitive_paths import is_sensitive_path, sensitive_reject_message
+
+    if is_sensitive_path(raw_path):
+        return sensitive_reject_message(raw_path)
+
     try:
         target = context.resolve(raw_path)
     except ValueError as e:
         return f"Error: {e}"
+
+    if is_sensitive_path(target):
+        return sensitive_reject_message(raw_path)
 
     if not target.exists():
         return f"Error: 文件不存在: {raw_path}"
@@ -615,6 +660,10 @@ def _run_shell_cancellable(command: str, root, env, timeout: int, cancel_token) 
 
 
 def _format_shell_result(returncode: int, stdout: str, stderr: str) -> str:
+    from agent_runtime.io_limits import shell_max_bytes, truncate_text
+
+    stdout, _ = truncate_text(stdout, shell_max_bytes(), label="stdout")
+    stderr, _ = truncate_text(stderr, shell_max_bytes(), label="stderr")
     out = []
     out.append(f"exit_code: {returncode}")
     if stdout.strip():

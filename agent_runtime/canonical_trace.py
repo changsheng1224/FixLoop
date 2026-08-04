@@ -39,6 +39,11 @@ EVENT_CATALOG: dict[str, tuple[str, ...]] = {
         "span_closed",
     ),
     "artifact": ("baseline_verify_finished", "blackboard_snapshot"),
+    "security": (
+        "sandbox_violation",
+        "worktree_created",
+        "worktree_removed",
+    ),
 }
 
 ENVELOPE_REQUIRED = (
