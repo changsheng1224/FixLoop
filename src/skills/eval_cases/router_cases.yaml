@@ -1,0 +1,371 @@
+cases:
+  # --- github_issue_ingestion positives (15) ---
+  - id: gh-01
+    text: Please ingest GitHub issue https://github.com/acme/demo/issues/12
+    expect: github_issue_ingestion
+    tags: [positive, github]
+  - id: gh-02
+    text: "Fetch github issue #42 from acme/demo and structure IssueSpec"
+    expect: github_issue_ingestion
+    tags: [positive, github]
+  - id: gh-03
+    text: Need github issue metadata for owner/repo issue 7
+    expect: github_issue_ingestion
+    tags: [positive, github]
+  - id: gh-04
+    text: Ingest issue from github.com/foo/bar/issues/99 labels and body
+    expect: github_issue_ingestion
+    tags: [positive, github]
+  - id: gh-05
+    text: "Parse GitHub Issue #3 title and comments"
+    expect: github_issue_ingestion
+    tags: [positive, github]
+  - id: gh-06
+    text: Load issue https://github.com/org/proj/issues/1 into structured form
+    expect: github_issue_ingestion
+    tags: [positive, github]
+  - id: gh-07
+    text: "github issue ingestion for acme/calc issue #8"
+    expect: github_issue_ingestion
+    tags: [positive, github]
+  - id: gh-08
+    text: "Pull issue details issue #15 from myrepo on GitHub"
+    expect: github_issue_ingestion
+    tags: [positive, github]
+  - id: gh-09
+    text: Convert GitHub issue URL into IssueSpec fields
+    expect: github_issue_ingestion
+    tags: [positive, github]
+  - id: gh-10
+    text: Get github.com/x/y/issues/22 assignee and state
+    expect: github_issue_ingestion
+    tags: [positive, github]
+  - id: gh-11
+    text: "Structure this GitHub Issue #100 for the repair agent"
+    expect: github_issue_ingestion
+    tags: [positive, github]
+  - id: gh-12
+    text: "Ingest GitHub ticket issue #55"
+    expect: github_issue_ingestion
+    tags: [positive, github]
+  - id: gh-13
+    text: Read github issue body for demo/app issues/4
+    expect: github_issue_ingestion
+    tags: [positive, github]
+  - id: gh-14
+    text: "Issue ingestion: https://github.com/a/b/issues/2"
+    expect: github_issue_ingestion
+    tags: [positive, github]
+  - id: gh-15
+    text: Please ingest the linked GitHub issue before localizing
+    expect: github_issue_ingestion
+    tags: [positive, github]
+
+  # --- stacktrace_localization positives (15) ---
+  - id: st-01
+    text: |
+      Traceback (most recent call last):
+        File "calc.py", line 12, in add
+      TypeError: unsupported operand
+    expect: stacktrace_localization
+    tags: [positive, stack]
+  - id: st-02
+    text: |
+      Traceback (most recent call last):
+        File "src/app.py", line 40, in main
+      ValueError: bad
+    expect: stacktrace_localization
+    tags: [positive, stack]
+  - id: st-03
+    text: 'TypeError: NoneType has no attribute x in File "mod.py", line 3, in foo'
+    expect: stacktrace_localization
+    tags: [positive, stack]
+  - id: st-04
+    text: |
+      File "pkg/util.py", line 9, in helper
+      AttributeError: missing
+    expect: stacktrace_localization
+    tags: [positive, stack]
+  - id: st-05
+    text: NullPointerException at com.acme.Foo.bar(Foo.java:33)
+    expect: stacktrace_localization
+    tags: [positive, stack]
+  - id: st-06
+    text: |
+      Traceback (most recent call last):
+        File "tests/test_x.py", line 2, in test_a
+      KeyError: a
+    expect: stacktrace_localization
+    tags: [positive, stack]
+  - id: st-07
+    text: 'Locate failing frame from this stack: File "a.py", line 1, in <module> IndexError'
+    expect: stacktrace_localization
+    tags: [positive, stack]
+  - id: st-08
+    text: |
+      Traceback (most recent call last):
+        File "lib.py", line 88, in run
+      RuntimeError: boom
+    expect: stacktrace_localization
+    tags: [positive, stack]
+  - id: st-09
+    text: "Java stack: at org.x.Y.z(Y.java:10) NullPointerException"
+    expect: stacktrace_localization
+    tags: [positive, stack]
+  - id: st-10
+    text: 'Please localize from traceback File "svc.py", line 5, in handle TypeError'
+    expect: stacktrace_localization
+    tags: [positive, stack]
+  - id: st-11
+    text: |
+      Traceback (most recent call last):
+        File "w.py", line 1, in <module>
+      ZeroDivisionError: division by zero
+    expect: stacktrace_localization
+    tags: [positive, stack]
+  - id: st-12
+    text: 'stacktrace localization for AttributeError in File "m.py", line 7, in g'
+    expect: stacktrace_localization
+    tags: [positive, stack]
+  - id: st-13
+    text: |
+      File "x.py", line 2, in f
+      TypeError: int + str
+    expect: stacktrace_localization
+    tags: [positive, stack]
+  - id: st-14
+    text: Parse exception stack frames to find top_file from traceback
+    expect: stacktrace_localization
+    tags: [positive, stack]
+  - id: st-15
+    text: |
+      Where did it crash?
+      Traceback (most recent call last):
+        File "z.py", line 4, in main
+      TypeError: x
+    expect: stacktrace_localization
+    tags: [positive, stack]
+
+  # --- regression_test_selection positives (15) ---
+  - id: rg-01
+    text: |
+      diff --git a/calc.py b/calc.py
+      --- a/calc.py
+      +++ b/calc.py
+      @@ -1,3 +1,4 @@
+      +def add(a,b): return a+b
+      Select regression tests
+    expect: regression_test_selection
+    tags: [positive, regression]
+  - id: rg-02
+    text: Select tests for changed files calc.py and util.py
+    expect: regression_test_selection
+    tags: [positive, regression]
+  - id: rg-03
+    text: From this patch diff pick which tests to run — select regression tests
+    expect: regression_test_selection
+    tags: [positive, regression]
+  - id: rg-04
+    text: Widen verify scope after modifying src/parser.py
+    expect: regression_test_selection
+    tags: [positive, regression]
+  - id: rg-05
+    text: |
+      --- a/foo.py
+      +++ b/foo.py
+      @@ -10,0 +11 @@
+      +x=1
+      regression test selection please
+    expect: regression_test_selection
+    tags: [positive, regression]
+  - id: rg-06
+    text: "modified files: auth.py; select regression tests"
+    expect: regression_test_selection
+    tags: [positive, regression]
+  - id: rg-07
+    text: Choose pytest targets / select tests for this diff --git a/a.py b/a.py
+    expect: regression_test_selection
+    tags: [positive, regression]
+  - id: rg-08
+    text: verify scope for changed module billing.py
+    expect: regression_test_selection
+    tags: [positive, regression]
+  - id: rg-09
+    text: Pick test_calc.py after patch on calc.py — select tests
+    expect: regression_test_selection
+    tags: [positive, regression]
+  - id: rg-10
+    text: Diff based test selection for src/core.py — select regression tests
+    expect: regression_test_selection
+    tags: [positive, regression]
+  - id: rg-11
+    text: |
+      diff --git a/x.py b/x.py
+      +++ b/x.py
+      select regression tests for the change
+    expect: regression_test_selection
+    tags: [positive, regression]
+  - id: rg-12
+    text: Which tests cover the changed files in this PR diff? select tests please
+    expect: regression_test_selection
+    tags: [positive, regression]
+  - id: rg-13
+    text: "Upgrade verification after patch: select tests"
+    expect: regression_test_selection
+    tags: [positive, regression]
+  - id: rg-14
+    text: regression test selection for function add in calc.py
+    expect: regression_test_selection
+    tags: [positive, regression]
+  - id: rg-15
+    text: "changed files list: a.py b.py c.py — select tests and widen"
+    expect: regression_test_selection
+    tags: [positive, regression]
+
+  # --- negatives / fallback (8) ---
+  - id: ng-01
+    text: Hello, how do I configure logging?
+    expect: null
+    tags: [negative, fallback]
+  - id: ng-02
+    text: Remember that our API key is rotated weekly
+    expect: null
+    tags: [negative, fallback]
+  - id: ng-03
+    text: Explain what a reducer is in LangGraph
+    expect: null
+    tags: [negative, fallback]
+  - id: ng-04
+    text: Cancel the current repair job
+    expect: null
+    tags: [negative, fallback]
+  - id: ng-05
+    text: What is the weather in Beijing?
+    expect: null
+    tags: [negative, fallback]
+  - id: ng-06
+    text: Please summarize this README only
+    expect: null
+    tags: [negative, fallback]
+  - id: ng-07
+    text: Draft a polite email to the team
+    expect: null
+    tags: [negative, fallback]
+  - id: ng-08
+    text: List all environment variables we use
+    expect: null
+    tags: [negative, fallback]
+
+  # --- confusion / multi-signal (7) ---
+  - id: cf-01
+    text: |
+      Here is a traceback then also mention github later:
+      Traceback (most recent call last):
+        File "a.py", line 1, in f
+      TypeError: x
+    expect: stacktrace_localization
+    tags: [confusion]
+  - id: cf-02
+    text: Ingest GitHub issue https://github.com/acme/demo/issues/9 (ignore any test talk)
+    expect: github_issue_ingestion
+    tags: [confusion]
+  - id: cf-03
+    text: |
+      diff --git a/a.py b/a.py
+      --- a/a.py
+      +++ b/a.py
+      select regression tests; do not parse traceback
+    expect: regression_test_selection
+    tags: [confusion]
+  - id: cf-04
+    text: |
+      Stack first: File "b.py", line 2, in g
+      ValueError: v — not an issue ingest
+    expect: stacktrace_localization
+    tags: [confusion]
+  - id: cf-05
+    text: github.com/acme/demo/issues/3 please ingest before anything else
+    expect: github_issue_ingestion
+    tags: [confusion]
+  - id: cf-06
+    text: Only select tests for changed util.py — no stack
+    expect: regression_test_selection
+    tags: [confusion]
+  - id: cf-07
+    text: 'TypeError from File "c.py", line 8, in h'
+    expect: stacktrace_localization
+    tags: [confusion]
+
+  # --- 中文 / 中英混合（easy：保留英文 trigger，保证门槛可过）---
+  - id: zh-gh-01
+    text: 请 ingest 这个 GitHub issue https://github.com/acme/demo/issues/21
+    expect: github_issue_ingestion
+    tags: [positive, github, zh]
+  - id: zh-gh-02
+    text: "把 GitHub Issue #33 结构化成 IssueSpec"
+    expect: github_issue_ingestion
+    tags: [positive, github, zh]
+  - id: zh-gh-03
+    text: 先拉取 github issue 元数据，再谈修复
+    expect: github_issue_ingestion
+    tags: [positive, github, zh]
+  - id: zh-st-01
+    text: |
+      下面是报错栈，请定位：
+      Traceback (most recent call last):
+        File "calc.py", line 5, in add
+      TypeError: bad
+    expect: stacktrace_localization
+    tags: [positive, stack, zh]
+  - id: zh-st-02
+    text: '定位失败点：File "svc.py", line 8, in handle ValueError: x'
+    expect: stacktrace_localization
+    tags: [positive, stack, zh]
+  - id: zh-st-03
+    text: Java 堆栈 NullPointerException at com.acme.Foo.bar(Foo.java:12)
+    expect: stacktrace_localization
+    tags: [positive, stack, zh]
+  - id: zh-rg-01
+    text: 变更了 calc.py，请 select regression tests
+    expect: regression_test_selection
+    tags: [positive, regression, zh]
+  - id: zh-rg-02
+    text: |
+      diff --git a/util.py b/util.py
+      --- a/util.py
+      +++ b/util.py
+      请选择回归测试 select tests
+    expect: regression_test_selection
+    tags: [positive, regression, zh]
+  - id: zh-rg-03
+    text: 针对 changed files 扩大 verify scope
+    expect: regression_test_selection
+    tags: [positive, regression, zh]
+  - id: zh-ng-01
+    text: 今天天气怎么样，顺便聊聊周末计划
+    expect: null
+    tags: [negative, fallback, zh]
+  - id: zh-ng-02
+    text: 帮我写一封给领导的请假邮件
+    expect: null
+    tags: [negative, fallback, zh]
+  - id: zh-ng-03
+    text: 解释一下什么是向量数据库
+    expect: null
+    tags: [negative, fallback, zh]
+  - id: zh-cf-01
+    text: |
+      先看堆栈，别提 PR：
+      Traceback (most recent call last):
+        File "a.py", line 1, in f
+      TypeError: x
+    expect: stacktrace_localization
+    tags: [confusion, zh]
+  - id: zh-cf-02
+    text: 请 ingest GitHub issue https://github.com/acme/x/issues/5，暂时不要选测试
+    expect: github_issue_ingestion
+    tags: [confusion, zh]
+  - id: zh-cf-03
+    text: 只 select tests for changed files，不要解析 traceback
+    expect: regression_test_selection
+    tags: [confusion, zh]
