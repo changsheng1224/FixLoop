@@ -22,3 +22,5 @@ class RepairRunContext:
     blackboard: Blackboard | None = None
     repair_tracer: Any = field(default=None, repr=False)
     log_run_id_token: Any = field(default=None, repr=False)
+    worktree_handle: Any = field(default=None, repr=False)
+    worktree_original_roots: dict = field(default_factory=dict, repr=False)
