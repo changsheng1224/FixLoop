@@ -27,15 +27,16 @@ _AGENT_DEFAULTS: dict[MultiAgentRole, dict] = {
         "prompt_budget": _DEFAULT_ALLOCATIONS["localizer"],
     },
     "retriever": {
-        "max_steps": 4,
+        "max_steps": 6,
         "max_new_tokens": 2048,
         "prompt_budget": _DEFAULT_ALLOCATIONS["retriever"],
         "max_json_retries": 0,
     },
     "patcher": {
-        "max_steps": 6,
+        "max_steps": 10,
         "max_new_tokens": 4096,
         "prompt_budget": _DEFAULT_ALLOCATIONS["patcher"],
+        "max_json_retries": 0,
     },
     "verifier": {
         "max_steps": 4,
@@ -93,10 +94,20 @@ def create_repair_agent(
         agent_name = role
         light = light_client if role in ("localizer", "retriever") else None
 
-    # 表驱动 JSON mode：四 L2 角色默认启用（provider 不支持时降级文本 + 多级 parse）
-    json_mode_roles = frozenset({"localizer", "retriever", "patcher", "verifier"})
+    # localizer/verifier：散文 JSON；retriever/patcher：工具终态（非 json_mode）
+    json_mode_roles = frozenset({"localizer", "verifier"})
     json_mode = role in json_mode_roles
-    if json_mode:
+    if role == "retriever":
+        system_prompt += (
+            "\n\n【输出格式】探索后必须调用 submit_retrieved_context；"
+            "不要输出裸 JSON / Markdown / <final>。"
+        )
+    elif role == "patcher":
+        system_prompt += (
+            "\n\n【输出格式】优先 read_file / patch_file 修改文件；"
+            "完成后简短说明。仅当无法调用工具时才输出 CandidatePatch JSON 数组。"
+        )
+    elif json_mode:
         system_prompt += "\n\n【输出格式】只输出合法 JSON（不要包裹在 ```json 或 <final> 中）。"
     agent = Agent(
         config=AgentConfig(provider="deepseek", approval=approval, json_mode=json_mode, **defaults),

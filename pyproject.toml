@@ -24,6 +24,10 @@ dev = [
 encrypt = [
     "cryptography>=40.0",
 ]
+swebench = [
+    "datasets>=2.14",
+    "swebench>=3.0",
+]
 
 [build-system]
 requires = ["setuptools>=75.0"]

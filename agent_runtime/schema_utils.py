@@ -49,6 +49,8 @@ def _type_to_str(hint) -> str:
         类型名字符串。
     """
     origin = get_origin(hint)
+    if origin is list:
+        return "array"
     if origin is not None:
         # 处理 Optional[str] → str, Union[int, None] → int
         args = get_args(hint)
@@ -58,7 +60,7 @@ def _type_to_str(hint) -> str:
             return _type_to_str(non_none[0])
         return "str"
     # 基本类型
-    mapping = {str: "str", int: "int", float: "float", bool: "bool"}
+    mapping = {str: "str", int: "int", float: "float", bool: "bool", list: "array"}
     return mapping.get(hint, "str")
 
 

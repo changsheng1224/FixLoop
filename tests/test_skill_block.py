@@ -53,6 +53,10 @@ class TestRenderSkillHintForPlan:
         assert "检索要点:" in render.text
         assert "convert operands" in render.text
         assert "third line trimmed" not in render.text
+        # E3′: ACL 外工具不得出现在工具序
+        assert "stack_parse" not in render.text
+        assert "patch_file" not in render.text
+        assert "search" in render.text
 
     def test_patcher_full_projection(self):
         render = render_skill_hint_for_plan(_sample_plan(), "patcher")

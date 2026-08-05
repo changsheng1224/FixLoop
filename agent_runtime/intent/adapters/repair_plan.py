@@ -98,15 +98,18 @@ class IssueIntentAdapter:
             plan.intent_parser = "rule"
 
         # Prefer stack-region files over noisy whole-text .py harvest
-        stack_slots = extract_issue_slots(issue)
+        stack_slots = extract_issue_slots(issue, repo_root=self._repo_root)
         for name in stack_slots.get("suspect_files") or []:
             name = str(name).replace("\\", "/")
             if name and name not in plan.suspect_files:
                 plan.suspect_files.append(name)
 
+        from agent_runtime.intent.stack_parse import relativize_suspect_path
+
         for file_match in re.finditer(r'File\s+"([^"]+)"', issue):
-            name = file_match.group(1).replace("\\", "/")
-            if name not in plan.suspect_files:
+            raw_name = file_match.group(1).replace("\\", "/")
+            name = relativize_suspect_path(raw_name, repo_root=self._repo_root)
+            if name and name not in plan.suspect_files:
                 plan.suspect_files.append(name)
 
         candidate_match = re.search(
@@ -114,7 +117,8 @@ class IssueIntentAdapter:
         )
         if candidate_match:
             for raw in candidate_match.group(1).split(","):
-                name = raw.strip().replace("\\", "/")
+                raw_name = raw.strip().replace("\\", "/")
+                name = relativize_suspect_path(raw_name, repo_root=self._repo_root)
                 if name and name not in plan.suspect_files:
                     plan.suspect_files.append(name)
 
@@ -125,9 +129,9 @@ class IssueIntentAdapter:
 
         # merge intent slots (already stack-aware from router)
         for name in slots.get("suspect_files") or []:
-            name = str(name).replace("\\", "/")
-            if name and name not in plan.suspect_files:
-                plan.suspect_files.append(name)
+            mapped = relativize_suspect_path(str(name), repo_root=self._repo_root)
+            if mapped and mapped not in plan.suspect_files:
+                plan.suspect_files.append(mapped)
         slot_type = slots.get("issue_type") or stack_slots.get("issue_type")
         if slot_type and (not plan.issue_type or plan.issue_type == "unknown"):
             plan.issue_type = str(slot_type)
@@ -135,7 +139,7 @@ class IssueIntentAdapter:
             plan.language = str(slots["language"])
             plan.language_source = "intent_slot"
 
-        parsed = parse_stack(issue)
+        parsed = parse_stack(issue, repo_root=self._repo_root)
         line_no = None
         if parsed.top_frame:
             line_no = parsed.top_frame.line

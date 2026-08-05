@@ -9,12 +9,64 @@ from pathlib import Path
 from src.state import CandidatePatch
 
 
+def normalize_patch_text_field(value: object) -> str:
+    """将 patch 行字段规范为源码文本（E19）。
+
+    根因：模型常把 ``original_lines``/``patched_lines`` 输出成 JSON list，
+    或把 list 的 ``repr`` 当成字符串 → 导出出现 ``-['...']``，无法对齐源码。
+    """
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        parts: list[str] = []
+        for item in value:
+            if item is None:
+                continue
+            parts.append(str(item).rstrip("\r\n"))
+        return "\n".join(parts)
+    if isinstance(value, (tuple,)):
+        return normalize_patch_text_field(list(value))
+    if not isinstance(value, str):
+        return str(value)
+    text = value
+    stripped = text.strip()
+    if len(stripped) >= 2 and stripped[0] == "[" and stripped[-1] == "]":
+        try:
+            import ast
+
+            lit = ast.literal_eval(stripped)
+            if isinstance(lit, list):
+                return normalize_patch_text_field(lit)
+        except (SyntaxError, ValueError, MemoryError):
+            pass
+    return text
+
+
 def apply_patch_to_text(text: str, patch: CandidatePatch) -> str | None:
     """将 CandidatePatch 应用到文件文本，支持 original_lines 或 unified diff。"""
-    if patch.original_lines and patch.patched_lines:
-        if patch.original_lines in text:
-            return text.replace(patch.original_lines, patch.patched_lines, 1)
-        replaced = _replace_line_by_strip(text, patch.original_lines, patch.patched_lines)
+    from src.repair.precise_apply import apply_candidate_precise
+
+    original = normalize_patch_text_field(patch.original_lines)
+    patched = normalize_patch_text_field(patch.patched_lines)
+    # 写回规范化结果，供 sibling / 导出使用
+    if original != (patch.original_lines or "") or patched != (patch.patched_lines or ""):
+        patch.original_lines = original
+        patch.patched_lines = patched
+
+    # 1) 精确路径（与 patch_file / patch_engine 对齐）
+    precise = apply_candidate_precise(text, patch)
+    if precise is not None:
+        return precise
+
+    if original and patched:
+        # 2) 有限模糊：strip / 多行键 / 折叠空白（精确失败后的兜底）
+        replaced = _replace_all_lines_by_strip(text, original, patched)
+        if replaced is not None:
+            return replaced
+        replaced = _replace_multiline_by_strip_keys(text, original, patched)
+        if replaced is not None:
+            return replaced
+        replaced = _replace_by_collapsed_whitespace(text, original, patched)
         if replaced is not None:
             return replaced
 
@@ -25,6 +77,61 @@ def apply_patch_to_text(text: str, patch: CandidatePatch) -> str | None:
         return _apply_import_line_fallback(text, patch.diff)
 
     return None
+
+
+def describe_hunk_mismatch(text: str, patch: CandidatePatch) -> str:
+    """生成可行动的 apply 失败描述（含源文件近邻行），供下一轮 patcher feedback。"""
+    path = patch.file_path or "?"
+    original = normalize_patch_text_field(patch.original_lines)
+    if not original.strip():
+        if patch.diff:
+            return f"hunk_mismatch:{path}:diff_only_no_match"
+        return f"hunk_mismatch:{path}:empty_original"
+
+    first = next((ln for ln in original.splitlines() if ln.strip()), "")
+    key = _line_match_key(first)
+    collapsed = _collapse_ws(key)
+    anchor = _statement_anchor(first)
+    near: list[str] = []
+    if key:
+        token = collapsed[:48] if collapsed else key[:48]
+        for i, ln in enumerate(text.splitlines(), 1):
+            file_key = _line_match_key(ln)
+            if not file_key:
+                continue
+            collapsed_file = _collapse_ws(file_key)
+            hit = (
+                key == file_key
+                or (token and token in collapsed_file)
+                or (len(key) >= 12 and key[:12] in file_key)
+                or (anchor and file_key.lstrip().startswith(anchor))
+            )
+            if hit:
+                near.append(f"L{i}:{ln.strip()[:140]}")
+                if len(near) >= 3:
+                    break
+
+    preview = first.strip()[:100]
+    if near:
+        return (
+            f"hunk_mismatch:{path}: wanted `{preview}` near=["
+            + " | ".join(near)
+            + "]"
+        )
+    return f"hunk_mismatch:{path}: wanted `{preview}` (no near lines in file)"
+
+
+def sibling_pattern_remains(text_after: str, patch: CandidatePatch) -> bool:
+    """True if the pre-image snippet still occurs after a one-site apply (E7).
+
+    Mechanism-level: same ``original_lines`` string still present — no symbol names.
+    """
+    original = (patch.original_lines or "").strip("\n")
+    if not original or not (patch.patched_lines or "").strip("\n"):
+        return False
+    if original == (patch.patched_lines or "").strip("\n"):
+        return False
+    return original in text_after
 
 
 def _sync_import_symbol_usages(old_text: str, new_text: str, patch: CandidatePatch) -> str:
@@ -163,6 +270,11 @@ def _line_match_key(line: str) -> str:
     return line.split("#", 1)[0].strip()
 
 
+def _collapse_ws(s: str) -> str:
+    """折叠内部空白，容忍 tab/多空格差异。"""
+    return re.sub(r"[ \t]+", " ", s.strip())
+
+
 def _replace_line_by_strip(text: str, old_line: str, new_line: str) -> str | None:
     """按 strip 后的内容匹配单行并替换，保留原缩进。"""
     old_key = _line_match_key(old_line)
@@ -182,6 +294,116 @@ def _replace_line_by_strip(text: str, old_line: str, new_line: str) -> str | Non
         lines[i] = replacement + ending
         return "".join(lines)
     return None
+
+
+def _replace_all_lines_by_strip(text: str, old_line: str, new_line: str) -> str | None:
+    """单行 strip 匹配的全部命中替换（E6a sibling）。"""
+    if "\n" in old_line.strip("\n"):
+        return None
+    current = text
+    changed = False
+    for _ in range(64):
+        nxt = _replace_line_by_strip(current, old_line, new_line)
+        if nxt is None:
+            break
+        changed = True
+        current = nxt
+    return current if changed else None
+
+
+def _replace_multiline_by_strip_keys(
+    text: str, old_block: str, new_block: str
+) -> str | None:
+    """多行块：按每行 strip 键在文件中找连续匹配窗口并替换（容忍缩进/尾空白差）。"""
+    old_lines = [ln.rstrip("\r\n") for ln in old_block.splitlines()]
+    new_lines = [ln.rstrip("\r\n") for ln in new_block.splitlines()]
+    if len(old_lines) < 2:
+        return None
+    old_keys = [_line_match_key(ln) for ln in old_lines]
+    if not all(old_keys):
+        return None
+
+    file_lines = text.splitlines(keepends=True)
+    n = len(old_keys)
+    for start in range(0, len(file_lines) - n + 1):
+        window = [file_lines[start + i].rstrip("\n\r") for i in range(n)]
+        if [_line_match_key(w) for w in window] != old_keys:
+            continue
+        return _rebuild_block_at(file_lines, start, n, window, new_lines)
+    return None
+
+
+def _rebuild_block_at(
+    file_lines: list[str],
+    start: int,
+    n: int,
+    window: list[str],
+    new_lines: list[str],
+) -> str:
+    indent0 = window[0][: len(window[0]) - len(window[0].lstrip())]
+    rebuilt: list[str] = []
+    for j, nl in enumerate(new_lines):
+        ending = (
+            file_lines[start + min(j, n - 1)][
+                len(file_lines[start + min(j, n - 1)].rstrip("\n\r")) :
+            ]
+            if file_lines[start + min(j, n - 1)].endswith(("\n", "\r"))
+            else "\n"
+        )
+        body = nl
+        if j == 0 and indent0 and not body[:1].isspace() and body.strip():
+            if not body.startswith((" ", "\t")):
+                body = indent0 + body.lstrip()
+        rebuilt.append(body + (ending if ending else "\n"))
+    out = file_lines[:start] + rebuilt + file_lines[start + n :]
+    return "".join(out)
+
+
+def _replace_by_collapsed_whitespace(
+    text: str, old_block: str, new_block: str
+) -> str | None:
+    """按折叠空白后的行键匹配并全部替换窗口（E6a′）。"""
+    old_lines = [ln.rstrip("\r\n") for ln in old_block.splitlines()]
+    new_lines = [ln.rstrip("\r\n") for ln in new_block.splitlines()]
+    if not old_lines:
+        return None
+    old_keys = [_collapse_ws(_line_match_key(ln)) for ln in old_lines]
+    if not any(old_keys):
+        return None
+
+    file_lines = text.splitlines(keepends=True)
+    n = len(old_keys)
+    if n > len(file_lines):
+        return None
+
+    matches: list[int] = []
+    for start in range(0, len(file_lines) - n + 1):
+        window = [file_lines[start + i].rstrip("\n\r") for i in range(n)]
+        if [_collapse_ws(_line_match_key(w)) for w in window] != old_keys:
+            continue
+        matches.append(start)
+    if not matches:
+        return None
+
+    # 从后往前替换，避免索引偏移
+    for start in reversed(matches):
+        window = [file_lines[start + i].rstrip("\n\r") for i in range(n)]
+        indent0 = window[0][: len(window[0]) - len(window[0].lstrip())]
+        rebuilt: list[str] = []
+        for j, nl in enumerate(new_lines):
+            ending = (
+                file_lines[start + min(j, n - 1)][
+                    len(file_lines[start + min(j, n - 1)].rstrip("\n\r")) :
+                ]
+                if file_lines[start + min(j, n - 1)].endswith(("\n", "\r"))
+                else "\n"
+            )
+            body = nl
+            if j == 0 and indent0 and body.strip() and not body.startswith((" ", "\t")):
+                body = indent0 + body.lstrip()
+            rebuilt.append(body + (ending if ending else "\n"))
+        file_lines = file_lines[:start] + rebuilt + file_lines[start + n :]
+    return "".join(file_lines)
 
 
 def _statement_anchor(line: str) -> str:
@@ -314,6 +536,13 @@ def _apply_diff_hunk(text: str, minus: list[str], plus: list[str]) -> str | None
             return replaced
         return _replace_unique_statement_by_anchor(text, minus[0], new_block)
 
+    replaced = _replace_multiline_by_strip_keys(text, old_block, new_block)
+    if replaced is not None:
+        return replaced
+    replaced = _replace_by_collapsed_whitespace(text, old_block, new_block)
+    if replaced is not None:
+        return replaced
+
     if len(minus) == len(plus):
         current = text
         for old_line, new_line in zip(minus, plus, strict=True):
@@ -407,50 +636,57 @@ class PatchApplier:
 
     def __init__(self, repo_root: str):
         self.repo_root = repo_root
+        self.last_sibling_warnings: list[str] = []
+        self.last_apply_errors: list[str] = []
 
     def resolve_repo_file(self, file_path: str) -> Path | None:
-        if not file_path:
-            return None
-        path = Path(file_path)
-        root = Path(self.repo_root).resolve()
-        if path.is_absolute():
-            try:
-                path.resolve().relative_to(root)
-            except ValueError:
-                return None
-        else:
-            path = (root / path).resolve()
-        try:
-            path.relative_to(root)
-        except ValueError:
-            return None
-        if not path.is_file():
-            return None
-        return path
+        from src.repair.path_resolve import resolve_repo_file as _resolve
+
+        return _resolve(self.repo_root, file_path)
 
     def apply_patches(self, patches: list[CandidatePatch]) -> list[CandidatePatch]:
+        from src.repair.path_resolve import resolve_repo_relpath
+
         applied: list[CandidatePatch] = []
+        sibling_warnings: list[str] = []
+        apply_errors: list[str] = []
         for p in patches:
+            rel = resolve_repo_relpath(self.repo_root, p.file_path)
             file_path = self.resolve_repo_file(p.file_path)
-            if file_path is None:
+            if file_path is None or rel is None:
+                reason = f"path_not_in_repo:{p.file_path}"
+                apply_errors.append(reason)
                 print(
                     f"  [patcher] ⚠ 拒绝补丁（路径不在 repo 或文件不存在）: {p.file_path!r}",
                     file=sys.stderr,
                     flush=True,
                 )
                 continue
+            if rel != (p.file_path or "").replace("\\", "/").lstrip("./"):
+                p.file_path = rel
             text = file_path.read_text(encoding="utf-8")
             new_text = apply_patch_to_text(text, p)
             if new_text is None:
+                reason = describe_hunk_mismatch(text, p)
+                apply_errors.append(reason)
                 print(
-                    f"  [patcher] ⚠ 无法应用补丁: {p.file_path}",
+                    f"  [patcher] ⚠ 无法应用补丁: {p.file_path} ({reason[:160]})",
                     file=sys.stderr,
                     flush=True,
                 )
                 continue
             new_text = _sync_import_symbol_usages(text, new_text, p)
+            if sibling_pattern_remains(new_text, p):
+                msg = (
+                    f"{p.file_path}: original_lines still present after one-site apply "
+                    "(possible incomplete sibling pattern)"
+                )
+                sibling_warnings.append(msg)
+                print(f"  [patcher] ⚠ {msg}", file=sys.stderr, flush=True)
             file_path.write_text(new_text, encoding="utf-8")
             applied.append(p)
+        self.last_sibling_warnings = sibling_warnings
+        self.last_apply_errors = apply_errors
         return applied
 
 

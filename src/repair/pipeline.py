@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 
 from agent_runtime.logging_setup import get_logger
@@ -30,6 +30,17 @@ from src.state import CandidatePatch, RepairState, RetrievedContext, SuspectLoca
 
 log = get_logger("repair.pipeline")
 
+
+def _split_grep_path_line(line: str) -> tuple[str, str, str] | None:
+    """Parse ``path:lineno:text`` without breaking Windows drive letters (E8)."""
+    import re
+
+    m = re.match(r"^(.+?):(\d+):(.*)$", line)
+    if not m:
+        return None
+    return m.group(1), m.group(2), m.group(3)
+
+
 LOCALIZER_COMPLETE_ONCE_SYSTEM = """你是代码定位专家。
 你的任务是根据 issue、traceback 和嫌疑文件输出 SuspectList。
 不要调用工具，不要输出 tool call、XML、Markdown 或解释文字。
@@ -54,11 +65,17 @@ def _is_fake_client(agent) -> bool:
 
 def _retriever_degrade_reason(answer: str, ctx: RetrievedContext) -> str:
     """Classify why LLM retrieval should fall back to rule retrieval."""
-    if not (answer or "").strip():
-        return "empty_response"
-    if "{" not in answer or "}" not in answer:
-        return "invalid_json"
+    from src.repair.output_parsers import _classify_non_object_retrieve
+
     if not getattr(ctx, "related_tests", None):
+        # Prefer specific incomplete codes when JSON parse failed
+        code = _classify_non_object_retrieve(answer)
+        if code != "non_json_final":
+            return code
+        if not (answer or "").strip():
+            return "empty_response"
+        if "{" not in (answer or "") or "}" not in (answer or ""):
+            return "invalid_json"
         return "empty_related_tests"
     return "unknown"
 
@@ -298,7 +315,18 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         ctx = self._active_repair_ctx()
         if ctx.cancel_token is not None:
             ctx.cancel_token.cancel("timeout")
-        self._restore_repo_snapshot(initial_snapshot)
+        # E14 / P1：超时前尽量从磁盘 salvage 非空 diff，避免回滚成 empty_model_patch
+        keep_patches = bool(state.candidate_patches)
+        if not keep_patches:
+            salvaged = self._salvage_patches_from_disk(state, initial_snapshot)
+            if salvaged:
+                state.candidate_patches = salvaged
+                state.node_timings["phase_timeout_salvaged"] = len(salvaged)
+                keep_patches = True
+        if not keep_patches:
+            self._restore_repo_snapshot(initial_snapshot)
+        else:
+            state.node_timings["phase_timeout_kept_patches"] = True
         state.status = RepairTerminalStatus.TIMEOUT
         state.node_timings["phase_timeout"] = exc.phase
         if ctx.phase_timeout_config is not None:
@@ -313,9 +341,43 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     "phase": exc.phase,
                     "budget_s": exc.budget_s,
                     "consumed_s": exc.consumed_s,
+                    "kept_patches": keep_patches,
                 },
             )
         log.warning("阶段超时: %s", exc)
+
+    def _salvage_patches_from_disk(
+        self,
+        state: RepairState,
+        initial_snapshot: dict,
+    ) -> list:
+        """对比初始快照与当前工作树，回收已落盘但未登记的补丁。"""
+        try:
+            after = self._snapshot_repo()
+        except Exception as e:
+            log.warning("[timeout] salvage snapshot failed: %s", e)
+            return []
+        from src.repair.edit_from_disk import patches_from_snapshot_diff
+        from src.repair.failure_tags import check_patch_faithfulness
+        from src.repair.path_resolve import is_impl_py_path
+
+        patches = patches_from_snapshot_diff(
+            initial_snapshot, after, explanation="timeout_salvage"
+        )
+        if not patches:
+            return []
+        # 优先 faithfulness（含 soft_keep）；否则保留少量实现文件
+        kept, _ = check_patch_faithfulness(
+            patches, state, soft_keep=True, repo_root=str(self._repo_root or "")
+        )
+        if kept:
+            return kept
+        impl = [
+            p
+            for p in patches
+            if p.file_path and is_impl_py_path(p.file_path)
+        ]
+        return impl[:8] or patches[:4]
 
     def _run_localizer_only(
         self,
@@ -323,11 +385,34 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
     ) -> tuple[list[SuspectLocation], RetrievedContext, dict, dict]:
         plan = state.repair_plan
         issue = state.issue_input
+        from src.repair.localize_fastpath import merge_llm_with_rule_first, rule_first_suspects
+
+        related = []
+        if state.retrieved_context is not None:
+            related = list(state.retrieved_context.related_tests or [])
+        fail_nids = list(state.node_timings.get("verify_failed_nodeids") or [])
+        rule_suspects = rule_first_suspects(
+            issue or "",
+            self._repo_root,
+            plan,
+            fallback_from_plan=self._fallback_suspects_from_plan,
+            related_tests=related,
+            fail_nodeids=fail_nids,
+        )
         prompt = self._localizer_prompt(plan, issue)
         answer, loc_timing = self._run_localizer_complete_once(state, prompt, attempt=0)
         suspects = parse_suspect_list(answer)
         if not suspects:
             suspects = self._fallback_suspects_from_plan(plan, issue)
+        suspects = merge_llm_with_rule_first(
+            suspects,
+            rule_suspects,
+            issue=issue or "",
+            repo_root=self._repo_root,
+            plan=plan,
+            related_tests=related,
+            fail_nodeids=fail_nids,
+        )
         empty_ctx = RetrievedContext()
         ret_timing = {"total_ms": 0, "internal": {}}
         return suspects, empty_ctx, loc_timing, ret_timing
@@ -459,6 +544,73 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         plan = state.repair_plan
         issue = state.issue_input
 
+        from src.repair.localize_fastpath import merge_llm_with_rule_first, rule_first_suspects
+        from src.repair.localize_cheap_explore import cheap_explore_suspects
+        from src.repair.localize_memory import remember_confirmed_impls
+        from src.repair.localize_tiers import decide_patch_gate
+        from src.repair.symbol_index import has_grounded_impl_suspect
+
+        related_seed: list[str] = []
+        if state.retrieved_context is not None:
+            related_seed = list(state.retrieved_context.related_tests or [])
+        fail_nids = list(state.node_timings.get("verify_failed_nodeids") or [])
+        test_patch = ""
+        if self._repair_ctx is not None:
+            test_patch = getattr(self._repair_ctx, "verify_test_patch", "") or ""
+        if test_patch:
+            state.node_timings["verify_test_patch"] = test_patch  # for seed helpers
+
+        rule_suspects = rule_first_suspects(
+            issue or "",
+            self._repo_root,
+            plan,
+            fallback_from_plan=self._fallback_suspects_from_plan,
+            related_tests=related_seed,
+            fail_nodeids=fail_nids,
+            test_patch=test_patch,
+            state=state,
+        )
+        if not has_grounded_impl_suspect(rule_suspects, self._repo_root):
+            cheap = cheap_explore_suspects(issue or "", self._repo_root)
+            if cheap:
+                rule_suspects = list(rule_suspects) + list(cheap)
+                state.node_timings["localize_cheap_explore"] = {
+                    "count": len(cheap),
+                    "top": [s.file_path for s in cheap[:3]],
+                }
+                log.info(
+                    "[localize] cheap explore %d hits top=%s",
+                    len(cheap),
+                    [s.file_path for s in cheap[:3]],
+                )
+
+        if rule_suspects:
+            state.suspect_locations = list(rule_suspects)
+            state.node_timings["localize_rule_first"] = {
+                "count": len(rule_suspects),
+                "top": [s.file_path for s in rule_suspects[:3]],
+                "f2p_seeded": any((s.reason or "").startswith("F2P") for s in rule_suspects),
+                "test_patch_seeded": any(
+                    (s.reason or "") == "test_patch覆盖" for s in rule_suspects
+                ),
+            }
+            log.info(
+                "[localize] rule-first %d suspects top=%s",
+                len(rule_suspects),
+                [s.file_path for s in rule_suspects[:3]],
+            )
+
+        from src.repair.adaptive_budget import advise_budget
+
+        grounded = has_grounded_impl_suspect(rule_suspects, self._repo_root)
+        budget_advice = advise_budget(
+            state,
+            rule_suspects=rule_suspects,
+            grounded=grounded,
+            related_tests=related_seed,
+        )
+        state.node_timings["adaptive_budget"] = budget_advice.to_dict()
+
         def run_localizer():
             prompt = self._localizer_prompt(plan, issue)
             answer, timing = self._run_localizer_complete_once(state, prompt, attempt=0)
@@ -468,13 +620,53 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             log.warning("[localizer] complete_once 未返回有效 suspects")
             return [], timing
 
+        # 空锚且已 cheap explore：跳过 LLM，避免再烧 localize 预算
+        skip_llm = budget_advice.skip_llm_localize
+        if (
+            not skip_llm
+            and state.node_timings.get("localize_cheap_explore")
+            and grounded
+        ):
+            skip_llm = True
+            state.node_timings["localize_skip_llm_after_cheap"] = True
+
         fast_retrieve = getattr(self, "_fast_retrieve_enabled", False)
         retrieval_path = "rule" if fast_retrieve else "llm"
         state.node_timings["retrieval_path"] = retrieval_path
 
         if fast_retrieve:
-            suspects, loc_timing = run_localizer()
-            context, ret_timing = self._rule_retrieve(suspects, issue)
+            if skip_llm:
+                suspects, loc_timing = [], {
+                    "total_ms": 0,
+                    "internal": {
+                        "mode": "rule_only",
+                        "skipped_llm": True,
+                        "reason": budget_advice.reason,
+                    },
+                }
+                log.info("[localize] skip LLM enrich (%s)", budget_advice.reason)
+            else:
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    fut_loc = pool.submit(run_localizer)
+                    try:
+                        suspects, loc_timing = fut_loc.result(
+                            timeout=budget_advice.localize_enrich_s
+                        )
+                    except FuturesTimeoutError:
+                        fut_loc.cancel()
+                        suspects, loc_timing = [], {
+                            "total_ms": int(budget_advice.localize_enrich_s * 1000),
+                            "internal": {
+                                "mode": "llm_enrich_timeout",
+                                "timeout_s": budget_advice.localize_enrich_s,
+                            },
+                        }
+                        state.node_timings["localize_llm_enrich_timeout"] = True
+                        log.warning(
+                            "[localize] LLM enrich timeout after %.1fs; keep rule suspects",
+                            budget_advice.localize_enrich_s,
+                        )
+            context, ret_timing = self._rule_retrieve(suspects or rule_suspects, issue)
             state.node_timings["retrieval_path"] = "rule"
         else:
 
@@ -510,20 +702,50 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 }
 
             with ThreadPoolExecutor(max_workers=2) as pool:
-                fut_loc = pool.submit(run_localizer)
                 fut_ret = pool.submit(run_retriever)
-                suspects, loc_timing = fut_loc.result()
+                if skip_llm:
+                    suspects, loc_timing = [], {
+                        "total_ms": 0,
+                        "internal": {
+                            "mode": "rule_only",
+                            "skipped_llm": True,
+                            "reason": budget_advice.reason,
+                        },
+                    }
+                    log.info("[localize] skip LLM enrich (%s)", budget_advice.reason)
+                else:
+                    fut_loc = pool.submit(run_localizer)
+                    try:
+                        suspects, loc_timing = fut_loc.result(
+                            timeout=budget_advice.localize_enrich_s
+                        )
+                    except FuturesTimeoutError:
+                        fut_loc.cancel()
+                        suspects, loc_timing = [], {
+                            "total_ms": int(budget_advice.localize_enrich_s * 1000),
+                            "internal": {
+                                "mode": "llm_enrich_timeout",
+                                "timeout_s": budget_advice.localize_enrich_s,
+                            },
+                        }
+                        state.node_timings["localize_llm_enrich_timeout"] = True
+                        log.warning(
+                            "[localize] LLM enrich timeout after %.1fs; keep rule suspects",
+                            budget_advice.localize_enrich_s,
+                        )
                 context, ret_timing = fut_ret.result()
 
-            # LLM retriever 失败/空结果 → 自动降级到规则检索
+            # LLM retriever 失败/空结果 → 强制工具探索，再必要时规则补全
             if context is None or not getattr(context, "related_tests", None):
-                log.info("[retriever] 降级: LLM → 规则检索 (grep)")
-                state.node_timings["retrieval_path"] = "llm→degrade"
                 if isinstance(ret_timing, dict):
                     state.node_timings["retriever_degrade_reason"] = ret_timing.get(
                         "degrade_reason", "empty_related_tests"
                     )
-                context, ret_timing = self._rule_retrieve(suspects, issue)
+                if not suspects and plan:
+                    suspects = self._fallback_suspects_from_plan(plan, issue)
+                context, ret_timing = self._recover_retrieval(
+                    state, suspects or rule_suspects, issue, plan, prior=context
+                )
 
         if not suspects:
             suspects = self._fallback_suspects_from_plan(plan, issue)
@@ -533,7 +755,177 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     len(suspects),
                 )
 
+        related = []
+        if context is not None:
+            related = list(context.related_tests or [])
+        fail_nids = list(state.node_timings.get("verify_failed_nodeids") or [])
+        before_n = len(suspects or [])
+        suspects = merge_llm_with_rule_first(
+            suspects,
+            rule_suspects,
+            issue=issue or "",
+            repo_root=self._repo_root,
+            plan=plan,
+            related_tests=related,
+            fail_nodeids=fail_nids,
+            max_keep=8,
+        )
+        # 仍无 grounded → 再 cheap explore 一次
+        if not has_grounded_impl_suspect(suspects, self._repo_root):
+            cheap2 = cheap_explore_suspects(issue or "", self._repo_root)
+            if cheap2:
+                suspects = merge_llm_with_rule_first(
+                    cheap2,
+                    suspects,
+                    issue=issue or "",
+                    repo_root=self._repo_root,
+                    plan=plan,
+                    related_tests=related,
+                    fail_nodeids=fail_nids,
+                    max_keep=8,
+                )
+                state.node_timings["localize_cheap_explore_post"] = len(cheap2)
+
+        remember_confirmed_impls(state, suspects, repo_root=str(self._repo_root))
+        state.node_timings["_repo_root_hint"] = str(self._repo_root)
+
+        gate = decide_patch_gate(suspects, self._repo_root)
+        state.node_timings["localize_patch_gate"] = gate.to_dict()
+        if gate.force_short_repair:
+            state.node_timings["force_short_repair"] = True
+
+        semantic_hits = [
+            s.reason
+            for s in suspects
+            if s.reason in ("测试导入", "语义扩展", "issue 符号", "调用方扩展", "测试导入模块", "grep命中", "test_patch覆盖")
+        ]
+        state.node_timings["localize_refined"] = {
+            "before": before_n,
+            "after": len(suspects),
+            "top": [s.file_path for s in suspects[:3]],
+            "rule_first": len(rule_suspects),
+            "semantic_hits": semantic_hits[:8],
+        }
+        log.info(
+            "[localize] refined suspects %d → %d top=%s semantic=%s gate=%s",
+            before_n,
+            len(suspects),
+            [s.file_path for s in suspects[:3]],
+            semantic_hits[:3],
+            gate.reason,
+        )
+
+        from src.repair.explore_evidence import record_explore_quality
+
+        q = record_explore_quality(
+            state, suspects, context, repo_root=str(self._repo_root or "")
+        )
+        if not q["ok"]:
+            log.warning(
+                "[explore] insufficient anchor: suspects=%s tests=%s snippets=%s",
+                q["n_suspects"],
+                q["n_tests"],
+                q["n_snippets"],
+            )
+
         return suspects, context, loc_timing, ret_timing
+
+    def _force_explore_enabled(self) -> bool:
+        import os
+
+        v = (os.environ.get("FIXLOOP_FORCE_EXPLORE") or "1").strip().lower()
+        return v not in ("0", "false", "no", "off")
+
+    def _recover_retrieval(
+        self,
+        state: RepairState,
+        suspects: list,
+        issue: str,
+        plan,
+        *,
+        prior=None,
+    ) -> tuple:
+        """LLM 检索失败后：强制工具探索 → 规则补全 → 合并证据。"""
+        from src.repair.explore_evidence import merge_retrieved_context
+
+        forced = None
+        forced_timing: dict = {}
+        if self._force_explore_enabled() and self.retriever is not None:
+            forced, forced_timing = self._force_tool_explore(
+                state, suspects, issue, plan
+            )
+            if forced is not None and (
+                forced.related_tests or forced.similar_snippets or forced.caller_locations
+            ):
+                state.node_timings["retrieval_path"] = forced_timing.get(
+                    "retrieval_path", "llm→force_explore"
+                )
+                log.info(
+                    "[retriever] force_explore ok: tests=%d snippets=%d",
+                    len(forced.related_tests),
+                    len(forced.similar_snippets),
+                )
+                # 仍用规则补全测试/片段，避免只靠模型
+                rule_ctx, rule_timing = self._rule_retrieve(suspects, issue)
+                merged = merge_retrieved_context(forced, rule_ctx)
+                return merged, {
+                    **forced_timing,
+                    "rule_ms": rule_timing.get("total_ms", 0),
+                    "retrieval_path": state.node_timings["retrieval_path"],
+                }
+
+        log.info("[retriever] 降级: → 规则检索 (grep/find_test/snippets)")
+        rule_ctx, rule_timing = self._rule_retrieve(suspects, issue)
+        merged = merge_retrieved_context(forced or prior, rule_ctx)
+        path = "llm→force_explore→rule" if forced is not None else "llm→degrade"
+        state.node_timings["retrieval_path"] = path
+        return merged, {**rule_timing, "retrieval_path": path}
+
+    def _force_tool_explore(
+        self,
+        state: RepairState,
+        suspects: list,
+        issue: str,
+        plan,
+    ) -> tuple:
+        """以 suspects 为锚再跑一轮 Retriever Agent loop（强制 grep/read/submit）。"""
+        from src.repair.output_parsers import parse_retrieved_context
+
+        prompt = self._retriever_prompt(suspects or [], plan=plan, issue=issue)
+        prompt = (
+            f"{prompt}\n\n"
+            "【强制探索】上一轮检索未提交有效 related_tests。"
+            "必须使用 grep/read_file/find_test 探索仓库，"
+            "然后调用 submit_retrieved_context（related_tests 非空）。"
+            "禁止空提交或只输出散文。"
+        )
+        try:
+            answer, timing = self._run_agent(
+                self.retriever,
+                prompt,
+                "retriever",
+                state,
+                l2_phase="retrieve_force",
+                l2_attempt=0,
+            )
+        except Exception as e:
+            log.warning("[retriever] force_explore 异常: %s", e)
+            return None, {
+                "total_ms": 0,
+                "internal": {},
+                "degrade": True,
+                "degrade_reason": "force_explore_exception",
+                "retrieval_path": "llm→force_explore_fail",
+            }
+        ctx = parse_retrieved_context(answer or "")
+        path = "llm→force_explore"
+        if not ctx.related_tests and not ctx.similar_snippets:
+            path = "llm→force_explore_empty"
+        return ctx, {
+            **timing,
+            "retrieval_path": path,
+            "force_explore": True,
+        }
 
     def _repair_impl(
         self,
@@ -636,11 +1028,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 state.node_timings["skill_resolve_ms"] = skill_ms
                 log.info("parse_issue: %dms, skill_resolve: %dms", parse_ms, skill_ms)
 
-                # matched skill → suggested_tools 约束 Gateway
-                if matched and matched.suggested_tools:
-                    for gw in getattr(self, "_repair_gateways", ()):
-                        for role in ("localizer", "retriever", "patcher"):
-                            gw.restrict_to(role, matched.suggested_tools)
+                # Skill suggested_tools 仅作 prompt 排序提示。
+                # 禁止用跨角色白名单 restrict_to：会 revoke retriever 的
+                # read_file/grep/inspect_file（E3 gateway role_not_allowed）。
 
                 # 读取相似修复先例（repair precedent 读写一体）
                 if state.repair_plan and state.repair_plan.issue_type:
@@ -669,6 +1059,19 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     if phase_clock is not None:
                         phase_clock.ensure("localize")
                     state.phase = "localize"
+                    # 规则优先：LLM 超时前已有可编辑嫌疑
+                    from src.repair.localize_fastpath import seed_rule_first_suspects
+
+                    seed_rule_first_suspects(
+                        state,
+                        self._repo_root,
+                        fallback_from_plan=self._fallback_suspects_from_plan,
+                        test_patch=(
+                            getattr(self._repair_ctx, "verify_test_patch", "") or ""
+                            if self._repair_ctx is not None
+                            else ""
+                        ),
+                    )
                     t0 = time.time()
                     with phase_lock.read():
                         suspects, context, loc_timing, ret_timing = (
@@ -676,7 +1079,23 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                         )
                     wall_ms = int((time.time() - t0) * 1000)
                     if phase_clock is not None:
-                        phase_clock.consume("localize", wall_ms)
+                        try:
+                            phase_clock.consume("localize", wall_ms)
+                        except PhaseTimeoutError as exc:
+                            # 已有 grounded suspects 则 soft overrun，进入 patch
+                            kept = suspects or state.suspect_locations
+                            if kept:
+                                state.node_timings["localize_soft_timeout"] = True
+                                state.node_timings["localize_soft_timeout_s"] = (
+                                    exc.consumed_s
+                                )
+                                log.warning(
+                                    "localize 超预算但仍保留 %d suspects: %s",
+                                    len(kept),
+                                    exc,
+                                )
+                            else:
+                                raise
                     set_parallel_wall_ms(state.node_timings, wall_ms)
                     set_phase_ms(
                         state.node_timings,
@@ -704,6 +1123,71 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                         n,
                         n_tests,
                     )
+                    # 定位上限：符号索引再抬一轮；分层门禁决定是否允许 patch
+                    from src.repair.localize_quality import (
+                        ensure_grounded_suspects,
+                        has_grounded_impl_suspect,
+                    )
+                    from src.repair.localize_tiers import decide_patch_gate
+
+                    related = list(context.related_tests or []) if context else []
+                    fail_nids = list(state.node_timings.get("verify_failed_nodeids") or [])
+                    suspects, boosted = ensure_grounded_suspects(
+                        suspects,
+                        repo_root=self._repo_root,
+                        issue=state.issue_input or "",
+                        plan=state.repair_plan,
+                        related_tests=related,
+                        fail_nodeids=fail_nids,
+                    )
+                    if boosted:
+                        state.suspect_locations = list(suspects)
+                        state.node_timings["localize_index_boost"] = {
+                            "after": len(suspects),
+                            "top": [s.file_path for s in suspects[:3]],
+                        }
+                        self._write_localize_phase_to_blackboard(
+                            state, suspects, context
+                        )
+                        log.info(
+                            "[localize] symbol-index boost → %d grounded suspects",
+                            len(suspects),
+                        )
+                    gate = decide_patch_gate(suspects, self._repo_root)
+                    state.node_timings["localize_patch_gate"] = gate.to_dict()
+                    if gate.force_short_repair:
+                        state.node_timings["force_short_repair"] = True
+                    if not gate.allow:
+                        state.agent_errors["localize_ungrounded"] = (
+                            f"patch gate blocked: {gate.reason}"
+                        )
+                        state.node_timings["patch_blocked_ungrounded"] = True
+                        tip = (
+                            "定位未找到可编辑实现文件：已禁止进入 Patcher。"
+                            "请先用 F2P/test_patch/grep/符号索引找到真实源文件。"
+                        )
+                        state.feedback = (
+                            f"{state.feedback}\n{tip}".strip()
+                            if state.feedback
+                            else tip
+                        )
+                        skip_patch_loop = True
+                        if state.status not in (
+                            RepairTerminalStatus.FIXED,
+                            RepairTerminalStatus.USER_CANCEL,
+                        ):
+                            state.status = RepairTerminalStatus.FAILED
+                        log.warning("[localize] patch blocked: %s", gate.reason)
+                    if state.agent_errors.get("explore_insufficient"):
+                        tip = (
+                            "探索证据不足（无嫌疑文件/相关测试/代码片段）。"
+                            "进入 Patcher 前请先 read_file/grep 定位，勿盲改。"
+                        )
+                        state.feedback = (
+                            f"{state.feedback}\n{tip}".strip()
+                            if state.feedback
+                            else tip
+                        )
                 elif localized_from_subtasks:
                     self._write_localize_phase_to_blackboard(
                         state,
@@ -716,6 +1200,25 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 elif not skip_patch_loop and self._verification_enabled():
                     _record_pytest_exit(state, self._repo_root, "baseline_pytest_code")
 
+                consecutive_env_fails = 0
+                stop_loss = getattr(self, "_stop_loss", None)
+                if stop_loss is None:
+                    from src.repair.stop_loss import StopLossTracker
+
+                    stop_loss = StopLossTracker()
+                    self._stop_loss = stop_loss
+                from src.repair.info_gain import apply_info_gain, load_info_gain_from_state
+                from src.repair.long_horizon import (
+                    apply_horizon_to_state,
+                    load_horizon_from_state,
+                )
+
+                long_horizon = load_horizon_from_state(state)
+                apply_horizon_to_state(state, long_horizon)
+                self._long_horizon = long_horizon
+                info_gain = load_info_gain_from_state(state)
+                apply_info_gain(state, info_gain)
+                self._info_gain = info_gain
                 while not skip_patch_loop and not cancelled and state.retry_count < max_retries:
                     if self._abort_repair_if_cancelled(state):
                         cancelled = True
@@ -772,15 +1275,43 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                         break
 
                     if not state.candidate_patches:
-                        if state.agent_errors.pop("patcher_apply", None):
+                        apply_err = state.agent_errors.get("patcher_apply")
+                        if apply_err:
+                            state.node_timings["patcher_apply_failed"] = True
                             state.feedback = (
                                 "补丁 JSON 解析成功但未能写入文件。"
-                                "original_lines 必须与预读代码完全一致；优先使用 diff 字段。"
+                                f" 原因: {apply_err}。"
+                                "original_lines 必须与预读代码尽量一致（允许缩进/空白差）；"
+                                "对照 near= 中的真实文件行修正 pre-image；"
+                                "优先使用 diff 字段；路径必须是仓库内已存在文件。"
                             )
                         else:
+                            state.agent_errors.pop("patcher_apply", None)
+                            state.node_timings.pop("patcher_apply_failed", None)
                             state.feedback = "补丁生成失败（模型返回无法解析的 JSON）。请重新生成。"
                         self._write_feedback_to_blackboard(state.feedback)
+                        from src.repair.stop_loss import apply_stop_loss
+
+                        sl = stop_loss.record_empty_patch(apply_failed=bool(apply_err))
+                        state.node_timings["stop_loss_snapshot"] = stop_loss.snapshot()
                         state.retry_count += 1
+                        if sl.stop:
+                            from src.repair.long_horizon import apply_horizon_to_state
+
+                            decision = long_horizon.on_stop_signal(sl.reason)
+                            apply_horizon_to_state(state, long_horizon)
+                            if decision.action == "shift" and state.retry_count < max_retries:
+                                stop_loss = self._apply_strategy_shift(
+                                    state, decision, stop_loss=stop_loss
+                                )
+                                self._checkpoint_progress(state)
+                                continue
+                            apply_stop_loss(state, sl)
+                            self._write_feedback_to_blackboard(state.feedback)
+                            self._checkpoint_progress(state)
+                            log.warning("[stop_loss] %s", sl.reason)
+                            break
+                        self._checkpoint_progress(state)
                         continue
 
                     # ── AST 语义等价检查（V1.5-Bonus9）──
@@ -862,10 +1393,43 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                         self._restore_repo_snapshot(repo_snapshot)
                     else:
                         self._revert_changes(state)
+
+                    from src.repair.stop_loss import apply_stop_loss
+                    from src.repair.verify_diagnose import enrich_related_tests_from_diagnosis
+                    from src.repair.verify_diagnose import diagnose_verification
+                    from src.repair.failure_ledger import (
+                        apply_ledger_to_state,
+                        record_verify_into_ledger,
+                        shrink_suspects_for_regression,
+                    )
+                    from src.repair.termination import introduced_regression
+
+                    diag = diagnose_verification(state.verification_result)
+                    enrich_related_tests_from_diagnosis(state, diag)
+                    is_reg = introduced_regression(state)
+                    ledger = record_verify_into_ledger(
+                        state,
+                        result=state.verification_result,
+                        bucket=diag.bucket.value,
+                        is_regression=is_reg,
+                    )
+                    if is_reg:
+                        state.suspect_locations = shrink_suspects_for_regression(
+                            state.suspect_locations, ledger
+                        )
+                        state.node_timings["regression_scope_shrunk"] = True
+                    apply_ledger_to_state(state, ledger)
+
                     state.feedback = self._build_feedback(
                         state.verification_result,
                         state=state,
                     )
+                    if is_reg:
+                        tip = (
+                            "\n[回归缩 scope] 上轮补丁引入回归；已否定相关文件，"
+                            "下一轮优先其它嫌疑，勿继续改回归源文件。"
+                        )
+                        state.feedback = (state.feedback or "") + tip
                     self._write_feedback_to_blackboard(state.feedback)
 
                     # Verify 失败冷却轮：连续相同失败 → 降 temperature + 提示
@@ -878,7 +1442,74 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     cooldown.record_failure(state.verification_result.failure_logs)
                     if cooldown.cooldown_active:
                         state.feedback += f"\n\n{cooldown.cooldown_hint}"
+
+                    # 长程止损：无进展 / 相同补丁 / 相同验证 / env → 早停
+                    gained = info_gain.record(
+                        state.verification_result,
+                        state.candidate_patches,
+                    )
+                    apply_info_gain(state, info_gain)
+                    if (not gained) and info_gain.should_force_shift() and diag.bucket.value != "env":
+                        # 零增益：提前请求长程换策略（等同 no_progress 信号）
+                        from src.repair.long_horizon import apply_horizon_to_state as _ah
+
+                        decision = long_horizon.on_stop_signal("no_progress")
+                        _ah(state, long_horizon)
+                        if decision.action == "shift" and state.retry_count + 1 < max_retries:
+                            state.retry_count += 1
+                            stop_loss = self._apply_strategy_shift(
+                                state, decision, stop_loss=stop_loss
+                            )
+                            tip = (
+                                f"\n[信息增益] 连续 {info_gain.zero_gain_streak} 轮"
+                                "无新失败面/无新文件，强制换策略。"
+                            )
+                            state.feedback = (state.feedback or "") + tip
+                            self._write_feedback_to_blackboard(state.feedback)
+                            self._checkpoint_progress(state)
+                            log.warning(
+                                "[info_gain] force shift after %d zero-gain rounds",
+                                info_gain.zero_gain_streak,
+                            )
+                            info_gain.zero_gain_streak = 0
+                            apply_info_gain(state, info_gain)
+                            continue
+                    sl = stop_loss.record_verify_failure(
+                        state.verification_result,
+                        state.candidate_patches,
+                    )
+                    state.node_timings["stop_loss_snapshot"] = stop_loss.snapshot()
+                    if diag.bucket.value == "env":
+                        consecutive_env_fails += 1
+                    else:
+                        consecutive_env_fails = 0
+                    state.node_timings["consecutive_env_fails"] = consecutive_env_fails
                     state.retry_count += 1
+                    if sl.stop:
+                        from src.repair.long_horizon import apply_horizon_to_state
+
+                        decision = long_horizon.on_stop_signal(sl.reason)
+                        apply_horizon_to_state(state, long_horizon)
+                        if decision.action == "shift" and state.retry_count < max_retries:
+                            stop_loss = self._apply_strategy_shift(
+                                state, decision, stop_loss=stop_loss
+                            )
+                            self._checkpoint_progress(state)
+                            log.warning(
+                                "[long_horizon] recovered from %s via %s",
+                                sl.reason,
+                                decision.phase.value,
+                            )
+                            continue
+                        apply_stop_loss(state, sl)
+                        if sl.reason == "env":
+                            state.node_timings["verify_env_early_stop"] = True
+                            state.agent_errors["verify_env"] = sl.hint
+                        self._write_feedback_to_blackboard(state.feedback)
+                        self._checkpoint_progress(state)
+                        log.warning("[stop_loss] %s", sl.reason)
+                        break
+                    self._checkpoint_progress(state)
 
                 if (
                     not cancelled
@@ -951,6 +1582,19 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         log.info("[resume] 从 %s 恢复 repair state，跳过 parse/localize", resume_run_id)
 
         cancelled = False
+        from src.repair.long_horizon import (
+            apply_horizon_to_state,
+            load_horizon_from_state,
+        )
+        from src.repair.stop_loss import StopLossTracker, apply_stop_loss
+
+        stop_loss = getattr(self, "_stop_loss", None)
+        if stop_loss is None:
+            stop_loss = StopLossTracker()
+            self._stop_loss = stop_loss
+        long_horizon = load_horizon_from_state(state)
+        apply_horizon_to_state(state, long_horizon)
+        self._long_horizon = long_horizon
         try:
             while not cancelled and state.retry_count < state.max_retries:
                 if self._abort_repair_if_cancelled(state):
@@ -986,7 +1630,23 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 if not state.candidate_patches:
                     state.feedback = "补丁生成失败（模型返回无法解析的 JSON）。请重新生成。"
                     self._write_feedback_to_blackboard(state.feedback)
+                    sl = stop_loss.record_empty_patch(apply_failed=False)
+                    state.node_timings["stop_loss_snapshot"] = stop_loss.snapshot()
                     state.retry_count += 1
+                    if sl.stop:
+                        decision = long_horizon.on_stop_signal(sl.reason)
+                        apply_horizon_to_state(state, long_horizon)
+                        if decision.action == "shift" and state.retry_count < state.max_retries:
+                            stop_loss = self._apply_strategy_shift(
+                                state, decision, stop_loss=stop_loss
+                            )
+                            self._checkpoint_progress(state)
+                            continue
+                        apply_stop_loss(state, sl)
+                        self._write_feedback_to_blackboard(state.feedback)
+                        self._checkpoint_progress(state)
+                        break
+                    self._checkpoint_progress(state)
                     continue
 
                 state.phase = "verify"
@@ -1014,7 +1674,69 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     self._revert_changes(state)
                 state.feedback = self._build_feedback(state.verification_result, state=state)
                 self._write_feedback_to_blackboard(state.feedback)
+
+                from src.repair.verify_diagnose import (
+                    diagnose_verification,
+                    enrich_related_tests_from_diagnosis,
+                )
+
+                diag = diagnose_verification(state.verification_result)
+                enrich_related_tests_from_diagnosis(state, diag)
+                from src.repair.failure_ledger import (
+                    apply_ledger_to_state,
+                    build_ledger_prompt_block,
+                    record_verify_into_ledger,
+                    shrink_suspects_for_regression,
+                )
+                from src.repair.termination import introduced_regression
+
+                is_reg = introduced_regression(state)
+                ledger = record_verify_into_ledger(
+                    state,
+                    result=state.verification_result,
+                    bucket=diag.bucket.value,
+                    is_regression=is_reg,
+                )
+                if is_reg:
+                    state.suspect_locations = shrink_suspects_for_regression(
+                        state.suspect_locations, ledger
+                    )
+                    state.node_timings["regression_scope_shrunk"] = True
+                ledger_block = build_ledger_prompt_block(ledger)
+                if ledger_block and ledger_block not in (state.feedback or ""):
+                    state.feedback = (
+                        f"{ledger_block}\n\n{state.feedback}".strip()
+                        if state.feedback
+                        else ledger_block
+                    )
+                apply_ledger_to_state(state, ledger)
+                self._write_feedback_to_blackboard(state.feedback)
+                sl = stop_loss.record_verify_failure(
+                    state.verification_result,
+                    state.candidate_patches,
+                )
+                state.node_timings["stop_loss_snapshot"] = stop_loss.snapshot()
+                state.node_timings["consecutive_env_fails"] = stop_loss.snapshot().get(
+                    "env_streak", 0
+                )
                 state.retry_count += 1
+                if sl.stop:
+                    decision = long_horizon.on_stop_signal(sl.reason)
+                    apply_horizon_to_state(state, long_horizon)
+                    if decision.action == "shift" and state.retry_count < state.max_retries:
+                        stop_loss = self._apply_strategy_shift(
+                            state, decision, stop_loss=stop_loss
+                        )
+                        self._checkpoint_progress(state)
+                        continue
+                    apply_stop_loss(state, sl)
+                    if sl.reason == "env":
+                        state.node_timings["verify_env_early_stop"] = True
+                        state.agent_errors["verify_env"] = sl.hint
+                    self._write_feedback_to_blackboard(state.feedback)
+                    self._checkpoint_progress(state)
+                    break
+                self._checkpoint_progress(state)
         finally:
             if cancelled or self._is_repair_cancelled():
                 state.node_timings["user_cancel"] = True
@@ -1024,10 +1746,24 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         return self._finalize_repair_run(state, t_start)
 
     def _restore_state_from_repair_checkpoint(self, state: RepairState, checkpoint: dict) -> None:
+        """从 checkpoint 恢复长程可续跑字段（含 timings / 策略 / 失败面）。"""
+        from src.state import CandidatePatch, RepairPlan, VerificationResult
+
         state.retry_count = checkpoint.get("retry_count", 0)
+        state.max_retries = checkpoint.get("max_retries", state.max_retries)
         state.phase = checkpoint.get("phase", "patch")
         state.feedback = checkpoint.get("feedback", "")
-        state.blackboard_snapshot = checkpoint.get("blackboard_snapshot", {})
+        status = checkpoint.get("status", state.status) or state.status
+        # 失败终态续跑回 pending；成功保持 fixed 由上层短路
+        if status in ("exhausted", "failed", "timeout", "user_cancel"):
+            state.status = "pending"
+        else:
+            state.status = status
+        state.failure_tags = list(checkpoint.get("failure_tags") or [])
+        state.node_timings = dict(checkpoint.get("node_timings") or {})
+        state.agent_errors = dict(checkpoint.get("agent_errors") or {})
+        state.blackboard_snapshot = checkpoint.get("blackboard_snapshot", {}) or {}
+        state.degraded_mode = bool(checkpoint.get("degraded_mode", False))
         state.retrieved_context = (
             RetrievedContext.from_dict(checkpoint["retrieved_context"])
             if checkpoint.get("retrieved_context")
@@ -1036,12 +1772,161 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         state.suspect_locations = [
             SuspectLocation.from_dict(s) for s in checkpoint.get("suspect_locations", [])
         ]
+        state.candidate_patches = [
+            CandidatePatch.from_dict(p) for p in checkpoint.get("candidate_patches", [])
+        ]
+        if checkpoint.get("verification_result"):
+            try:
+                state.verification_result = VerificationResult.from_dict(
+                    checkpoint["verification_result"]
+                )
+            except Exception:
+                state.verification_result = None
         if checkpoint.get("repair_plan"):
             plan_data = checkpoint["repair_plan"]
             if isinstance(plan_data, dict):
-                from src.state import RepairPlan
-
                 state.repair_plan = RepairPlan.from_dict(plan_data)
+        from src.repair.long_horizon import clear_soft_stop_flags
+
+        clear_soft_stop_flags(state)
+
+    def _checkpoint_progress(self, state: RepairState) -> None:
+        """patch/verify 回合中落盘，支持中断后续跑。"""
+        try:
+            self._save_repair_checkpoint(state)
+        except Exception:
+            pass
+        if state.repair_run_id:
+            try:
+                from src.repair.checkpoint_load import save_repair_checkpoint
+
+                save_repair_checkpoint(state, self._repo_root)
+            except Exception:
+                pass
+
+    def _apply_strategy_shift(self, state: RepairState, decision, *, stop_loss):
+        """执行扩搜/换假设：刷新嫌疑与检索，重置软止损，写入反馈。"""
+        from src.repair.explore_evidence import merge_retrieved_context, record_explore_quality
+        from src.repair.localize_quality import refine_suspects, suspects_from_issue
+        from src.repair.long_horizon import (
+            StrategyPhase,
+            apply_horizon_to_state,
+            clear_soft_stop_flags,
+            load_horizon_from_state,
+            reset_stop_loss_tracker,
+            strategy_feedback,
+        )
+
+        clear_soft_stop_flags(state)
+        new_tracker = reset_stop_loss_tracker(stop_loss)
+        self._stop_loss = new_tracker
+
+        issue = state.issue_input or ""
+        plan = state.repair_plan
+        grounded = suspects_from_issue(issue, self._repo_root)
+        related = list(
+            (state.retrieved_context.related_tests if state.retrieved_context else [])
+            or []
+        )
+        fail_nids = list(state.node_timings.get("verify_failed_nodeids") or [])
+        refine_kw = {
+            "plan": plan,
+            "max_keep": 8,
+            "related_tests": related,
+            "fail_nodeids": fail_nids,
+        }
+        if decision.phase == StrategyPhase.SWITCH_HYPOTHESIS:
+            # 换假设：降权本轮已改文件 + 账本已否定/回归文件
+            from src.repair.failure_ledger import load_ledger_from_state
+
+            burned = {
+                str(getattr(p, "file_path", "") or "").replace("\\", "/")
+                for p in (state.candidate_patches or [])
+                if getattr(p, "file_path", None)
+            }
+            burned |= load_ledger_from_state(state).forbidden_files()
+            prior = [
+                s
+                for s in (state.suspect_locations or [])
+                if str(s.file_path or "").replace("\\", "/") not in burned
+            ]
+            demoted = [
+                s
+                for s in (state.suspect_locations or [])
+                if str(s.file_path or "").replace("\\", "/") in burned
+            ]
+            merged_suspects = refine_suspects(
+                list(grounded) + prior + demoted,
+                issue,
+                self._repo_root,
+                **refine_kw,
+            )
+            state.node_timings["strategy_burned_files"] = sorted(burned)[:8]
+            state.candidate_patches = []
+        else:
+            merged_suspects = refine_suspects(
+                list(state.suspect_locations or []) + list(grounded),
+                issue,
+                self._repo_root,
+                **refine_kw,
+            )
+        state.suspect_locations = merged_suspects
+
+        try:
+            context, ret_timing = self._recover_retrieval(
+                state,
+                state.suspect_locations,
+                issue,
+                plan,
+                prior=state.retrieved_context,
+            )
+            state.retrieved_context = context
+            if isinstance(ret_timing, dict):
+                state.node_timings["strategy_retrieve"] = ret_timing.get(
+                    "retrieval_path", "strategy"
+                )
+        except Exception as exc:
+            log.warning("[long_horizon] strategy retrieve failed: %s", exc)
+            try:
+                rule_ctx, _ = self._rule_retrieve(state.suspect_locations, issue)
+                state.retrieved_context = merge_retrieved_context(
+                    state.retrieved_context, rule_ctx
+                )
+            except Exception:
+                pass
+
+        record_explore_quality(
+            state,
+            state.suspect_locations,
+            state.retrieved_context,
+            repo_root=str(self._repo_root or ""),
+        )
+        try:
+            self._write_localize_phase_to_blackboard(
+                state, state.suspect_locations, state.retrieved_context
+            )
+        except Exception:
+            pass
+
+        tip = strategy_feedback(decision)
+        state.feedback = f"{tip}\n\n{state.feedback}".strip() if state.feedback else tip
+        self._write_feedback_to_blackboard(state.feedback)
+
+        ctrl = load_horizon_from_state(state)
+        ctrl.mark_reconverge()
+        apply_horizon_to_state(state, ctrl)
+        state.phase = "patch"
+        state.node_timings["strategy_last_shift"] = {
+            "phase": decision.phase.value,
+            "reason": decision.reason,
+        }
+        log.info(
+            "[long_horizon] shift → %s (reason=%s) suspects=%d",
+            decision.phase.value,
+            decision.reason,
+            len(state.suspect_locations),
+        )
+        return new_tracker
 
     def _restore_blackboard_snapshot(self, snapshot: dict | None) -> None:
         ctx = self._active_repair_ctx()
@@ -1086,37 +1971,48 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         related_tests: list[str] = []
         similar_snippets: list[dict] = []
 
-        # 从 suspects 提取搜索关键词
-        keywords: set[str] = set()
-        for s in suspects:
-            if getattr(s, "function_name", None):
-                keywords.add(s.function_name)
-            if getattr(s, "class_name", None):
-                keywords.add(s.class_name)
-        # 从 issue 中提取函数名
-        for match in re.finditer(r"def\s+(\w+)|'(\w+)'|\"(\w+)\"", issue):
-            for g in match.groups():
-                if g and len(g) > 2:
-                    keywords.add(g)
+        # E17: 优先采用 issue 内 FAIL_TO_PASS 提示并规范为 pytest target
+        try:
+            from src.benchmark.swebench.convert import (
+                extract_fail_to_pass_hints,
+                normalize_related_test_refs,
+            )
+
+            for hint in normalize_related_test_refs(
+                extract_fail_to_pass_hints(issue), self._repo_root
+            ):
+                if hint and hint not in related_tests:
+                    related_tests.append(hint)
+        except Exception:
+            pass
+
+        # 从 suspects / 栈提取搜索关键词（抑制 issue 引号噪声）
+        from src.repair.localize_quality import retrieve_keywords
+
+        keywords = retrieve_keywords(suspects, issue, max_keywords=8)
 
         ctx = ToolContext(root=self._repo_root)
-        for kw in list(keywords)[:5]:  # 最多 5 个关键词
+        for kw in keywords:  # 已截断
             grep_out = tool_grep(
-                ctx, {"pattern": kw, "path": ".", "glob": "*.py", "max_results": 10}
+                ctx, {"pattern": rf"\b{re.escape(kw)}\b", "path": ".", "glob": "*.py", "max_results": 10}
             )
             if grep_out and not grep_out.startswith("Error") and grep_out != "(无匹配)":
                 for line in grep_out.splitlines():
-                    parts = line.split(":", 2)
-                    if len(parts) >= 3:
-                        similar_snippets.append(
-                            {
-                                "file": parts[0],
-                                "line": parts[1],
-                                "text": parts[2].strip()[:200],
-                            }
-                        )
+                    hit = _split_grep_path_line(line)
+                    if hit is None:
+                        continue
+                    fpath, lineno, text = hit
+                    similar_snippets.append(
+                        {
+                            "file": fpath,
+                            "line": lineno,
+                            "text": text.strip()[:200],
+                        }
+                    )
 
-        # 找对应测试文件
+        # 找对应测试文件 + find_test 工具
+        from src.tools.find_test import find_test_for_function
+
         for s in suspects:
             fname = getattr(s, "file_path", "")
             if fname:
@@ -1125,7 +2021,56 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 if test_dir.is_dir():
                     for tf in test_dir.rglob("*.py"):
                         if test_name in tf.name:
-                            related_tests.append(str(tf.relative_to(Path(self._repo_root))))
+                            rel = str(tf.relative_to(Path(self._repo_root)))
+                            if rel not in related_tests:
+                                related_tests.append(rel)
+            func = getattr(s, "function_name", "") or ""
+            if func and fname:
+                try:
+                    out = find_test_for_function(
+                        ctx, {"function_name": func, "file_path": fname}
+                    )
+                except Exception:
+                    out = ""
+                if out and out.strip().startswith("["):
+                    try:
+                        import json as _json
+
+                        data = _json.loads(out)
+                    except Exception:
+                        data = None
+                    if isinstance(data, list):
+                        for item in data:
+                            if isinstance(item, dict) and item.get("test_file"):
+                                rel = str(item["test_file"]).replace("\\", "/")
+                                if rel not in related_tests:
+                                    related_tests.append(rel)
+
+        # 将嫌疑文件真源片段写入 similar_snippets（供 Patcher 锚定）
+        for s in suspects[:8]:
+            fname = getattr(s, "file_path", "") or ""
+            if not fname:
+                continue
+            path = Path(self._repo_root) / fname
+            if not path.is_file():
+                continue
+            try:
+                lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+            except OSError:
+                continue
+            start_line = max(1, int(getattr(s, "start_line", 1) or 1))
+            end_line = max(start_line, int(getattr(s, "end_line", start_line) or start_line))
+            ctx_start = max(0, start_line - 4)
+            ctx_end = min(len(lines), end_line + 4)
+            text = "\n".join(lines[ctx_start:ctx_end])[:600]
+            if text.strip():
+                similar_snippets.append(
+                    {
+                        "file": fname.replace("\\", "/"),
+                        "line": start_line,
+                        "text": text,
+                    }
+                )
 
         elapsed_ms = int((time.time() - t0) * 1000)
         return (

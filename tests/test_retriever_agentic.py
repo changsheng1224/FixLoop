@@ -23,15 +23,16 @@ class TestRetrieverSystemPrompt:
         assert "确认" in prompt
 
     def test_prompt_has_max_steps_guidance(self):
-        """prompt 含最多 4 次工具调用指引。"""
+        """prompt 含工具步数预算指引。"""
         prompt = _load_retriever_prompt()
-        assert "4" in prompt
+        assert "6" in prompt
+        assert "submit" in prompt.lower()
 
     def test_prompt_forbids_wrapped_final_output(self):
-        """Retriever 最终答案必须是裸 RetrievedContext JSON。"""
+        """Retriever 以 submit_retrieved_context 结束，禁止散文 final。"""
         prompt = _load_retriever_prompt()
-        assert "不要输出 <final>" in prompt
-        assert "不要输出 Markdown" in prompt
+        assert "submit_retrieved_context" in prompt
+        assert "不要再输出散文" in prompt or "勿再输出散文" in prompt or "不要输出散文" in prompt
 
 
 def _load_retriever_prompt() -> str:

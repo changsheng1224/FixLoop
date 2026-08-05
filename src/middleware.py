@@ -77,9 +77,10 @@ REPAIR_PERMISSION_TABLE = {
     "find_test": {"retriever", "patcher"},
     "search": {"*"},
     "grep": {"*"},
-    "inspect_file": {"localizer", "retriever"},
+    "inspect_file": {"localizer", "retriever", "patcher"},
     "read_file": {"*"},
     "list_files": {"*"},
+    "submit_retrieved_context": {"retriever"},
     "run_shell": set(),
     # GitHub MCP（agent_runtime/mcp）— 工具未注册时无影响
     "github_list_issues": {"localizer", "retriever", "patcher"},

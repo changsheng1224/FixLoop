@@ -26,6 +26,7 @@ from agent_runtime.react_phases import ReactPath, ReactPhase
 from agent_runtime.step_clock import StepClock, StepTimeoutError
 from agent_runtime.step_guard import StepContext, StepGuard
 from agent_runtime.stop_reasons import StopReason
+from agent_runtime.terminal_tool import TerminalToolAccepted
 
 # StepGuard stall 检测：仅"可能修改文件"的工具才计入停滞
 _MODIFYING_TOOLS = frozenset({"write_file", "patch_file", "run_shell"})
@@ -42,7 +43,14 @@ def _build_anthropic_tools(tools_registry: dict) -> list[dict]:
     """将内部工具注册表转换为 Anthropic tool_use 格式（仅 schema 字段）。"""
     from agent_runtime.tool_schema import tool_schema_view
 
-    type_map = {"str": "string", "int": "integer", "float": "number", "bool": "boolean"}
+    type_map = {
+        "str": "string",
+        "int": "integer",
+        "float": "number",
+        "bool": "boolean",
+        "array": "array",
+        "list": "array",
+    }
     result = []
     for name, spec in tool_schema_view(tools_registry).items():
         schema = spec.get("schema", {})
@@ -53,8 +61,11 @@ def _build_anthropic_tools(tools_registry: dict) -> list[dict]:
                 ptype, _, default = type_str.partition("=")
             else:
                 ptype, default = type_str, None
-            json_type = type_map.get(ptype, "string")
-            prop = {"type": json_type}
+            if ptype in ("array", "list"):
+                prop: dict = {"type": "array", "items": {"type": "string"}}
+            else:
+                json_type = type_map.get(ptype, "string")
+                prop = {"type": json_type}
             if default is not None:
                 prop["default"] = default
             properties[param] = prop
@@ -393,7 +404,6 @@ class AgentLoop:
                 tool=tool_name,
                 callback=callback,
             )
-        ts.record_tool(tool_name)
         if record_assistant:
             self.agent.record(
                 {
@@ -409,6 +419,12 @@ class AgentLoop:
             result = self.agent.execute_tool(tool_name, tool_args)
         finally:
             self._in_flight_tool = ""
+        # Gateway/权限拒绝不计入 tool_steps，避免无效步耗尽预算（E5）
+        _meta = getattr(result, "metadata", None) or {}
+        if _meta.get("tool_status") != "rejected":
+            ts.record_tool(tool_name)
+        else:
+            ts.last_tool = tool_name
         if (
             msg := self._abort_if_cancelled(ts, phase="post_tool", in_flight=tool_name)
         ) is not None:
@@ -462,6 +478,16 @@ class AgentLoop:
             elapsed_ms=te_ms,
             status=tool_status,
         )
+        # 终态工具：成功后结束 loop，payload 作为 final answer
+        tool_spec = (self.agent.tools or {}).get(tool_name) or {}
+        if (
+            tool_spec.get("terminal")
+            and result.metadata.get("tool_status") == "success"
+            and not str(result_text).startswith("Error")
+        ):
+            from agent_runtime.terminal_tool import TerminalToolAccepted
+
+            raise TerminalToolAccepted(str(result_text), tool_name=tool_name)
         # 死循环检测：Gate 5.5 rejection → 升级为 stop
         error_code = result.metadata.get("tool_error_code", "")
         if error_code == "loop_detected":
@@ -1142,6 +1168,24 @@ class AgentLoop:
             )
         except StepTimeoutError as e:
             return self._finish_step_timeout(ts, e, clock=step_clock)
+        except TerminalToolAccepted as e:
+            elapsed_ms = int((_time.time() - t0) * 1000)
+            self._emit(
+                "terminal_tool_accepted",
+                {"tool": e.tool_name, "payload_chars": len(e.payload)},
+            )
+            self.agent.record({"role": "assistant", "content": e.payload})
+            ts.finish_success(e.payload)
+            _log_loop(f"  [loop] terminal tool {e.tool_name} ({elapsed_ms}ms)\n")
+            return self._complete_run(
+                ts,
+                e.payload,
+                recording={
+                    "step": max(ts.tool_steps, 1),
+                    "path": "native",
+                    "callback": callback,
+                },
+            )
         except CancelledError as e:
             if e.answer:
                 return e.answer
@@ -1330,6 +1374,18 @@ class AgentLoop:
                         path="xml",
                         callback=callback,
                     )
+                except TerminalToolAccepted as e:
+                    self._emit(
+                        "terminal_tool_accepted",
+                        {"tool": e.tool_name, "payload_chars": len(e.payload)},
+                    )
+                    self.agent.record({"role": "assistant", "content": e.payload})
+                    ts.finish_success(e.payload)
+                    return self._complete_run(
+                        ts,
+                        e.payload,
+                        recording={"step": step, "path": "xml", "callback": callback},
+                    )
                 except CancelledError as e:
                     return e.answer
                 if self.stop_reason:
@@ -1403,8 +1459,15 @@ class AgentLoop:
         return working.get("task_summary", "") or ""
 
     def _extract_suspect_files(self) -> set[str]:
-        """从 plan_todos + task_summary + traceback 中提取 suspect 文件名。"""
+        """从 plan_todos + task_summary + traceback 中提取 suspect 文件名。
+
+        E10: 仅保留能映射到 workspace 内的路径作 goal_drift 锚点；
+        仓外 repro（如 temp/save_ps.py）不得作为唯一目标。
+        """
         import re
+        from pathlib import Path
+
+        from agent_runtime.intent.stack_parse import relativize_suspect_path
 
         files: set[str] = set()
         # 1. 从 plan_todos 提取（如 content 含文件名）
@@ -1418,13 +1481,33 @@ class AgentLoop:
         for m in re.findall(r"[\w/\-]+\.py", task):
             files.add(m.split("/")[-1].split("\\")[-1])
 
-        # 3. 从 traceback（在 user request 中）提取
+        # 3. 从 traceback 提取全部 File "..." 帧（非仅首帧）
         user_req = self._task_state.user_request if self._task_state else ""
-        tb_match = re.search(r'File\s+"([^"]+)"', user_req)
-        if tb_match:
-            files.add(tb_match.group(1).split("/")[-1].split("\\")[-1])
+        for raw in re.findall(r'File\s+"([^"]+)"', user_req):
+            files.add(raw.split("/")[-1].split("\\")[-1])
 
-        return files
+        root = None
+        try:
+            root = Path(self.agent.tool_context.root)
+        except (AttributeError, TypeError):
+            root = None
+        if root is None or not root.is_dir():
+            return files
+
+        in_repo: set[str] = set()
+        for raw in re.findall(r'File\s+"([^"]+)"', user_req):
+            mapped = relativize_suspect_path(raw, repo_root=root)
+            if mapped:
+                in_repo.add(Path(mapped).name)
+        for name in list(files):
+            if (root / name).is_file():
+                in_repo.add(name)
+            else:
+                mapped = relativize_suspect_path(name, repo_root=root)
+                if mapped:
+                    in_repo.add(Path(mapped).name)
+        # 空集合 → StepGuard 跳过 drift（避免仓外锚点误杀）
+        return in_repo
 
     MAX_JSON_RETRIES = 2
 

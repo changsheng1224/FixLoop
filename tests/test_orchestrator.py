@@ -903,7 +903,9 @@ class TestBuildFeedback:
         orch = Orchestrator.__new__(Orchestrator)
         result = VerificationResult(
             all_passed=False,
-            failure_logs=["test failed"],
+            total_tests=1,
+            failed=1,
+            failure_logs=["FAILED x.py::test_a - AssertionError"],
             build_log="build error",
         )
         state = RepairState(issue_input="fix")
@@ -915,7 +917,8 @@ class TestBuildFeedback:
         feedback = orch._build_feedback(result, state=state)
         # 回滚提示 (priority=10) 应在 上轮改动 (20) 之前
         assert feedback.index("回滚提示") < feedback.index("上轮改动")
-        # 上轮改动 (20) 应在 失败测试 (30) 之前
+        # 验证分桶 (12) 应在 上轮改动 (20) 之前；上轮改动应在失败日志段之前
+        assert feedback.index("验证分桶") < feedback.index("上轮改动")
         assert feedback.index("上轮改动") < feedback.index("失败测试")
 
     def test_no_state_handled_gracefully(self):

@@ -14,8 +14,9 @@ __all__ = [
     "RepairPhaseClock",
 ]
 
-DEFAULT_LOCALIZE_TIMEOUT_S = 60
-DEFAULT_PATCH_TIMEOUT_S = 90
+DEFAULT_LOCALIZE_TIMEOUT_S = 90
+# SWE / 大仓 patch complete_once 常 >90s；过紧会导致 parse 未完成即 phase timeout（E14）
+DEFAULT_PATCH_TIMEOUT_S = 300
 DEFAULT_VERIFY_TIMEOUT_S = 120
 
 _PHASES = ("localize", "patch", "verify")
@@ -44,10 +45,28 @@ class PhaseTimeoutConfig:
 
     @classmethod
     def with_repair_total_cap(cls, repair_timeout_s: int) -> PhaseTimeoutConfig:
-        """设置全流程硬上限；各阶段预算仍用类默认值（≤0 表示禁用该维度）。"""
+        """设置全流程硬上限，并预留 patch 阶段预算（优先压缩 localize）。"""
         if repair_timeout_s <= 0:
             return cls(0, 0, 0, 0)
-        return cls(repair_total_s=int(repair_timeout_s))
+        total = int(repair_timeout_s)
+        # P1：至少给 patch 留出 floor，避免 localize 吃光后空导出
+        min_patch = min(DEFAULT_PATCH_TIMEOUT_S, max(180, total // 3))
+        verify = min(DEFAULT_VERIFY_TIMEOUT_S, max(60, total // 8))
+        localize = DEFAULT_LOCALIZE_TIMEOUT_S
+        if localize + min_patch + verify > total:
+            localize = max(30, total - min_patch - verify)
+        patch = max(min_patch, min(DEFAULT_PATCH_TIMEOUT_S, max(min_patch, total - localize - verify)))
+        # 若 total 很大，允许 patch 略高于默认（最多 total/2）
+        if total >= 600:
+            patch = max(patch, min(total // 2, 450))
+        if localize + patch + verify > total:
+            patch = max(min_patch, total - localize - verify)
+        return cls(
+            localize_s=int(localize),
+            patch_s=int(max(0, patch)),
+            verify_s=int(verify),
+            repair_total_s=total,
+        )
 
     @classmethod
     def from_repair_timeout(cls, repair_timeout_s: int) -> PhaseTimeoutConfig:

@@ -313,13 +313,15 @@ class CandidatePatch:
     @classmethod
     def from_dict(cls, data: dict) -> CandidatePatch:
         """从 dict 反序列化。"""
+        from src.repair.patch_applier import normalize_patch_text_field
+
         return cls(
-            file_path=data.get("file_path", ""),
-            original_lines=data.get("original_lines", ""),
-            patched_lines=data.get("patched_lines", ""),
-            diff=data.get("diff", ""),
-            explanation=data.get("explanation", ""),
-            schema_version=data.get("schema_version", "1.0"),
+            file_path=str(data.get("file_path", "") or ""),
+            original_lines=normalize_patch_text_field(data.get("original_lines", "")),
+            patched_lines=normalize_patch_text_field(data.get("patched_lines", "")),
+            diff=str(data.get("diff", "") or ""),
+            explanation=str(data.get("explanation", "") or ""),
+            schema_version=str(data.get("schema_version", "1.0") or "1.0"),
         )
 
 

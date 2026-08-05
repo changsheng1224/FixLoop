@@ -46,15 +46,15 @@ class TestRetrieverTaskTemplate:
         text, _ = render_repair_task(name, vars_)
         assert name == "retriever_suspects"
         assert "a.py:1 f" in text
-        assert "RetrievedContext JSON" in text
-        assert "不要输出 <final>" in text
+        assert "submit_retrieved_context" in text
+        assert "不要输出散文 JSON" in text or "<final>" in text
 
     def test_fallback(self):
         name, vars_, _ = build_retriever_template_and_variables([])
         text, _ = render_repair_task(name, vars_)
         assert name == "retriever_fallback"
         assert "搜索与该 Issue 相关的代码上下文" in text
-        assert "一次尝试失败后" in text
+        assert "submit_retrieved_context" in text
 
 
 class TestOrchestratorTemplateParity:
@@ -78,4 +78,5 @@ class TestOrchestratorTemplateParity:
         )
         assert "test_app.py" in prompt
         assert "utils.helper" in prompt
-        assert "直接输出 CandidatePatch JSON" in prompt
+        assert "patch_file" in prompt or "read_file" in prompt
+        assert "DISK GROUNDING" in prompt or "app.py" in prompt

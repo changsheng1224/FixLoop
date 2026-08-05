@@ -8,6 +8,10 @@ from src.blackboard import Blackboard
 from src.prompts.repair_tasks import build_patcher_variables
 from src.repair.blackboard_merge import read_suspects_from_blackboard
 from src.repair.blackboard_subscribe import render_patcher_prefix_blocks
+from src.repair.disk_grounding import (
+    build_disk_grounding_block,
+    collect_grounding_targets,
+)
 from src.repair.prompt_router import collect_patcher_user_hints, is_composite_multi_file
 from src.repair.suspect_blocks import render_suspects_diff_only, render_suspects_with_snippets
 from src.skills.skill_block import SkillBlockRender, render_skill_hint_for_plan
@@ -118,6 +122,15 @@ def assemble_patcher_variables(
                     extra_lines.append(f"  - {fp}")
                     extra_lines.append(snippet)
 
+    disk_grounding_block = ""
+    if read_line_range is not None:
+        plan_files = list(plan.suspect_files) if plan and plan.suspect_files else []
+        targets = collect_grounding_targets(
+            effective_suspects,
+            plan_files=plan_files,
+        )
+        disk_grounding_block = build_disk_grounding_block(targets, read_line_range)
+
     render = (
         render_skill_hint_for_plan(plan, "patcher")
         if plan
@@ -133,5 +146,6 @@ def assemble_patcher_variables(
         suspects_block=suspects_block,
         extra_files_block="\n".join(extra_lines),
         test_blocks=test_text,
+        disk_grounding_block=disk_grounding_block,
     )
     return variables, render, subscribe_meta

@@ -118,12 +118,42 @@ def _extract_suspects_from_tool_call_text(answer: str) -> list[SuspectLocation]:
 
 _log = logging.getLogger("fixloop.output_parsers")
 
+# 预期会触发规则降级的软错误：用 INFO，避免刷「不是 JSON 对象」噪声（E11）
+_SOFT_RETRIEVE_ERRORS = frozenset(
+    {
+        "tool_call_not_final",
+        "empty_response",
+        "agent_incomplete",
+        "non_json_final",
+    }
+)
+
 
 def _with_validation_errors(result, errors: list[str]):
     """记录 schema 校验错误（供 feedback 重试）。"""
     if errors:
-        _log.warning("schema 校验: %s", "; ".join(errors[:3]))
+        msg = "; ".join(errors[:3])
+        if any(e in _SOFT_RETRIEVE_ERRORS for e in errors):
+            _log.info("schema 软校验: %s", msg)
+        else:
+            _log.warning("schema 校验: %s", msg)
     return result
+
+
+def _classify_non_object_retrieve(answer: str) -> str:
+    """区分 tool-call / 中途停机 / 空响应，避免一律报「不是 JSON 对象」。"""
+    text = answer or ""
+    if not text.strip():
+        return "empty_response"
+    if re.search(r"<\s*(function_calls|invoke|tool)\b", text, re.IGNORECASE):
+        return "tool_call_not_final"
+    if re.search(
+        r"<final>|最大工具调用|step[_\s-]?limit|goal[_\s-]?drift|未完成|用户已取消",
+        text,
+        re.IGNORECASE,
+    ):
+        return "agent_incomplete"
+    return "non_json_final"
 
 
 def _normalize_related_tests(raw: list) -> list[str]:
@@ -142,7 +172,7 @@ def parse_retrieved_context(answer: str) -> RetrievedContext:
     data = _load_json(answer)
     errors: list[str] = []
     if not isinstance(data, dict):
-        errors.append("输出不是 JSON 对象")
+        errors.append(_classify_non_object_retrieve(answer))
         return _with_validation_errors(RetrievedContext(), errors)
     if "related_tests" in data:
         data["related_tests"] = _normalize_related_tests(data["related_tests"])

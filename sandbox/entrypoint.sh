@@ -1,11 +1,11 @@
 #!/bin/bash
 set -e
 
-export HOME=/code
-export PYTHONUSERBASE=/code/.local
-mkdir -p /code/.local /tmp
-
-mkdir -p /code
+# Prefer container env (SandboxManager sets HOME/PYTHONUSERBASE under /tmp).
+# Do not clobber with /code/.local — that fought the manager's userbase path.
+export HOME="${HOME:-/tmp/fixloop-home}"
+export PYTHONUSERBASE="${PYTHONUSERBASE:-/tmp/fixloop-userbase}"
+mkdir -p "$HOME" "$PYTHONUSERBASE" /tmp /code
 cd /code
 
 case "$1" in

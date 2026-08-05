@@ -83,7 +83,10 @@ def should_degrade_to_baseline(
     if has_repair_timeout(state):
         return False
     if state.retry_count < state.max_retries:
-        return False
+        from src.repair.stop_loss import has_stop_loss
+
+        if not has_stop_loss(state):
+            return False
     return _had_verify_failure(state)
 
 

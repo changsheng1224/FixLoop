@@ -47,6 +47,16 @@ class TestClassifyFailureTags:
         state = RepairState(issue_input="x", status=RepairTerminalStatus.REGRESSION)
         assert classify_failure_tags(state) == [FailureTag.REGRESSION]
 
+    def test_apply_failed_beats_parse_heuristic(self):
+        state = RepairState(
+            issue_input="x",
+            status=RepairTerminalStatus.EXHAUSTED,
+            retry_count=3,
+            agent_errors={"patcher_apply": "hunk_mismatch:a.py"},
+            node_timings={"patcher_apply_failed": True},
+        )
+        assert classify_failure_tags(state) == [FailureTag.APPLY_FAILED]
+
     def test_parse_fail_via_flag(self):
         state = RepairState(
             issue_input="x",

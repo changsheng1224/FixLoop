@@ -24,3 +24,5 @@ class RepairRunContext:
     log_run_id_token: Any = field(default=None, repr=False)
     worktree_handle: Any = field(default=None, repr=False)
     worktree_original_roots: dict = field(default_factory=dict, repr=False)
+    # SWE-bench 等：verify 前临时应用的官方 test_patch（不进 model 导出）
+    verify_test_patch: str = ""

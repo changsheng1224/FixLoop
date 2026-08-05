@@ -30,6 +30,7 @@ REPAIR_CANONICAL_TOOL_NAMES: tuple[str, ...] = (
     "sandbox_verify",
     "search",
     "stack_parse",
+    "submit_retrieved_context",
     "write_file",
 )
 
@@ -40,6 +41,9 @@ def build_repair_canonical_tools(ctx: ToolContext) -> dict:
     tools = build_tool_registry(ctx)
     tools.update(build_repair_tools(ctx))
     tools.update(build_sandbox_tool_registry(ctx))
+    from src.tools.submit_retrieved_context import build_submit_retrieved_context_tool
+
+    tools["submit_retrieved_context"] = build_submit_retrieved_context_tool()
     # composite 工具（未在子注册表中）
     tools["inspect_file"] = {
         "schema": tools["read_file"]["schema"],

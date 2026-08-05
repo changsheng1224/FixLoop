@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from src.middleware import REPAIR_PERMISSION_TABLE
 from src.state import RepairPlan
 
 SkillHintRole = Literal["localizer", "retriever", "patcher", "verifier"]
@@ -18,6 +19,15 @@ ROLE_LABELS: dict[SkillHintRole, str] = {
     "patcher": "Patcher",
     "verifier": "Verifier",
 }
+
+
+def _tools_allowed_for_role(role: SkillHintRole) -> set[str]:
+    """Tools the role may use per Layer-2 ACL (E3′)."""
+    allowed: set[str] = set()
+    for tool, agents in REPAIR_PERMISSION_TABLE.items():
+        if "*" in agents or role in agents:
+            allowed.add(tool)
+    return allowed
 
 _ROLE_CHAR_LIMITS: dict[SkillHintRole, int] = {
     "localizer": 400,
@@ -83,10 +93,15 @@ def _bullet_section(title: str, items: list[str]) -> list[str]:
     return lines
 
 
-def _tool_chain(plan: RepairPlan) -> str:
-    if plan.skill.suggested_tools:
-        return " → ".join(plan.skill.suggested_tools)
-    return "（无）"
+def _tool_chain(plan: RepairPlan, role: SkillHintRole) -> str:
+    raw = list(plan.skill.suggested_tools or [])
+    if not raw:
+        return "（无）"
+    allowed = _tools_allowed_for_role(role)
+    filtered = [t for t in raw if t in allowed]
+    if not filtered:
+        return "（无）"
+    return " → ".join(filtered)
 
 
 def _resolve_source(plan: RepairPlan | None) -> SkillBlockSource:
@@ -108,13 +123,13 @@ def _build_hit_lines(plan: RepairPlan, role: SkillHintRole) -> list[str]:
     ]
 
     if role == "localizer":
-        lines.append(f"工具序: {_tool_chain(plan)}")
+        lines.append(f"工具序: {_tool_chain(plan, role)}")
         if skill.guidance:
             lines.append(f"定位提示: {skill.guidance[0]}")
         return lines
 
     if role == "retriever":
-        lines.append(f"工具序: {_tool_chain(plan)}")
+        lines.append(f"工具序: {_tool_chain(plan, role)}")
         if skill.guidance:
             lines.append("检索要点:")
             for item in skill.guidance[:2]:
@@ -128,7 +143,7 @@ def _build_hit_lines(plan: RepairPlan, role: SkillHintRole) -> list[str]:
             lines.append(f"避免: {skill.avoid[0]}")
         return lines
 
-    lines.append(f"工具序: {_tool_chain(plan)}")
+    lines.append(f"工具序: {_tool_chain(plan, role)}")
     if skill.example_issue.strip():
         lines.append("参考 issue:")
         lines.append(_indent_block(skill.example_issue))

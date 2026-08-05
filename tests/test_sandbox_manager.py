@@ -85,11 +85,22 @@ class TestSandboxManager:
         assert "/code" in mounts
         assert mounts["/tmp"].startswith("size=")
         assert mounts["/code"].startswith("size=")
+        # nobody(65534) 写入 /code 需要 world-writable tmpfs
+        assert "mode=1777" in mounts["/tmp"]
+        assert "mode=1777" in mounts["/code"]
+
+    def test_tmpfs_env_size_only_still_gets_mode_1777(self, monkeypatch):
+        monkeypatch.setenv("FIXLOOP_SANDBOX_TMPFS_TMP", "size=256m")
+        monkeypatch.setenv("FIXLOOP_SANDBOX_TMPFS_CODE", "size=1g")
+        mounts = sandbox_tmpfs_mounts()
+        assert mounts["/tmp"] == "size=256m,mode=1777"
+        assert mounts["/code"] == "size=1g,mode=1777"
 
     def test_container_run_kwargs_read_only_dual_tmpfs(self):
         kwargs = sandbox_container_run_kwargs("repair-agent/python-repair")
         assert kwargs["read_only"] is True
         assert set(kwargs["tmpfs"]) == {"/tmp", "/code"}
+        assert "mode=1777" in kwargs["tmpfs"]["/code"]
         assert kwargs["network_mode"] == "none"
 
     def test_container_run_kwargs_uses_non_root_without_capabilities(self):
@@ -103,7 +114,28 @@ class TestSandboxManager:
     def test_pip_install_command_uses_user_site(self):
         cmd = sandbox_pip_install_command()
         assert "pip install --user -e /code" in cmd
+        assert "python -m pip" in cmd
         assert "mkdir -p /tmp/fixloop-home /tmp/fixloop-userbase" in cmd
+        assert "exit $ec" in cmd
+        assert "| tail -20" not in cmd
+        assert "PYTHONPATH" in cmd
+
+    def test_execute_wraps_command_in_shell(self):
+        from src.harness.sandbox_manager import sandbox_shell_argv
+
+        mgr = SandboxManager()
+        fake_container = MagicMock()
+        fake_container.exec_run.return_value = (0, b"ok")
+        mgr._docker = MagicMock()
+        mgr._docker.containers.get.return_value = fake_container
+
+        result = mgr.execute(Sandbox(id="sb-1", profile="python"), "echo hi && true", timeout=5)
+
+        assert result.exit_code == 0
+        argv = fake_container.exec_run.call_args[0][0]
+        assert argv == sandbox_shell_argv("echo hi && true")
+        assert argv[0:2] == ["/bin/sh", "-c"]
+        assert "&&" in argv[2]
 
     def test_create_passes_fs_isolation_to_docker(self, tmp_path):
         repo = tmp_path / "proj"
@@ -302,3 +334,4 @@ class TestPythonRunner:
         result = runner.run(FakeSandbox())
         assert not result.all_passed
         assert result.total_tests == 0
+        assert any("verify_config:" in log or "未生成可解析" in log for log in result.failure_logs)

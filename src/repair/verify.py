@@ -146,8 +146,15 @@ class DockerVerifyStrategy:
             return _verify_from_sandbox_result(result, internal, t0)
         except Exception as exc:
             elapsed_ms = int((time.time() - t0) * 1000)
+            from src.harness.sandbox_verify import verification_result_for_sandbox_error
+
+            msg = str(exc)
+            if "sandbox" in msg.lower() or "upload" in msg.lower() or "docker" in msg.lower():
+                result = verification_result_for_sandbox_error(exc)
+            else:
+                result = VerificationResult(all_passed=False, failure_logs=[msg])
             return VerifyRun(
-                result=VerificationResult(all_passed=False, failure_logs=[str(exc)]),
+                result=result,
                 elapsed_ms=elapsed_ms,
                 internal=_tier_internal(
                     requested_tier=TIER_CONTAINER,
