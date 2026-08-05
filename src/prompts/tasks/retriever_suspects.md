@@ -1,6 +1,5 @@
 $skill_hint_block
 $header
 $suspects_list
-请用 find_test 和 search 收集上下文，直接输出 RetrievedContext JSON。
-只输出一个合法 JSON 对象；不要输出 <final>、Markdown、解释或前后缀文本。
-一次尝试失败后编排层会降级到规则检索，不要自行请求重试。
+请用 find_test / grep / search / read_file 收集上下文，最后调用 submit_retrieved_context 提交（related_tests 必填非空）。
+不要输出散文 JSON、`<final>` 或 Markdown；以工具提交结束。

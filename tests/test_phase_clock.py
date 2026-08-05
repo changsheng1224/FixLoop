@@ -52,7 +52,10 @@ class TestRepairPhaseClock:
         assert not cfg.any_enabled()
 
     def test_from_repair_timeout_positive_sets_total(self):
-        cfg = PhaseTimeoutConfig.from_repair_timeout(300)
-        assert cfg.repair_total_s == 300
-        assert cfg.localize_s == 60
+        cfg = PhaseTimeoutConfig.from_repair_timeout(900)
+        assert cfg.repair_total_s == 900
         assert cfg.any_enabled()
+        # P1：预留 patch 预算，不让 localize 默认吃满
+        assert cfg.patch_s >= 180
+        assert cfg.localize_s >= 30
+        assert cfg.patch_s >= cfg.localize_s

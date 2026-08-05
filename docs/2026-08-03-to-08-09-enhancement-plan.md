@@ -243,21 +243,21 @@
 
 #### 下午｜FixLoop：SWE-bench Lite 适配与开发实例
 
-- [ ] 安装并验证官方 Harness。
-- [ ] 准备数据集、Docker 镜像缓存、磁盘和并发资源。
-- [ ] 检查模型 API 配额、超时和成本记录。
-- [ ] 完成数据加载、仓库准备和 Issue 到 FixLoop 输入的转换。
-- [ ] 完成 Agent 执行、Patch 导出和官方 Harness 判分。
-- [ ] 先跑通 5 个开发实例。
-- [ ] 区分环境失败、Agent 失败和评测失败。
-- [ ] 固定 Manifest：Case、模型、Prompt、预算、Tool、代码和 Harness 版本。
+- [x] 安装并验证官方 Harness。
+- [x] 准备数据集、Docker 镜像缓存、磁盘和并发资源。
+- [x] 检查模型 API 配额、超时和成本记录。
+- [x] 完成数据加载、仓库准备和 Issue 到 FixLoop 输入的转换。
+- [x] 完成 Agent 执行、Patch 导出和官方 Harness 判分。
+- [x] 先跑通 5 个开发实例。
+- [x] 区分环境失败、Agent 失败和评测失败。
+- [x] 固定 Manifest：Case、模型、Prompt、预算、Tool、代码和 Harness 版本。
 
 验收物：
 
-- [ ] Benchmark Adapter v1；
-- [ ] 5 个开发实例的 Manifest、Trace、Patch 和 Harness 报告；
-- [ ] 环境、Agent、评测三类失败归因；
-- [ ] 可重复运行的评测命令和说明。
+- [x] Benchmark Adapter v1；
+- [x] 5 个开发实例的 Manifest、Trace、Patch 和 Harness 报告；
+- [x] 环境、Agent、评测三类失败归因；
+- [x] 可重复运行的评测命令和说明。
 
 #### 晚上｜FixLoop：Lite 批跑
 

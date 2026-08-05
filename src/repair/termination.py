@@ -90,7 +90,9 @@ def apply_terminal_status(state: RepairState) -> None:
         state.node_timings["introduced_regression"] = True
         state.status = RepairTerminalStatus.REGRESSION
         return
-    if state.retry_count >= state.max_retries:
+    from src.repair.stop_loss import has_stop_loss
+
+    if has_stop_loss(state) or state.retry_count >= state.max_retries:
         state.status = RepairTerminalStatus.EXHAUSTED
         return
     if state.status in TERMINAL_STATUSES:

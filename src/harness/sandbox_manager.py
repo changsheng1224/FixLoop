@@ -33,8 +33,10 @@ EXEC_TIMEOUT_EXIT_CODE = -1
 EXEC_USER_CANCEL_EXIT_CODE = -2
 
 # 可写面仅 /code + /tmp（read_only rootfs + tmpfs）；大小可通过环境变量调节。
-DEFAULT_TMPFS_TMP = "size=512m"
-DEFAULT_TMPFS_CODE = "size=2g"
+# mode=1777 必需：仅 size=… 时部分 Docker 会挂成 0755 root，nobody 无法 tar 解包到 /code
+# →「sandbox upload did not complete」。
+DEFAULT_TMPFS_TMP = "size=512m,mode=1777"
+DEFAULT_TMPFS_CODE = "size=2g,mode=1777"
 DEFAULT_SANDBOX_USER = "65534:65534"
 SANDBOX_HOME = "/tmp/fixloop-home"
 SANDBOX_PYTHONUSERBASE = "/tmp/fixloop-userbase"
@@ -49,10 +51,25 @@ SANDBOX_TAR_UPLOAD_COMMAND = [
 
 
 def sandbox_tmpfs_mounts() -> dict[str, str]:
-    """read_only 容器下的可写 tmpfs 挂载。"""
+    """read_only 容器下的可写 tmpfs 挂载。
+
+    保证含 ``mode=1777``：部分 Docker 对仅 ``size=…`` 的 tmpfs 挂成 0755，
+    导致非 root 用户无法写入 /code。
+    """
+
+    def _ensure_world_writable(opts: str) -> str:
+        raw = (opts or "").strip()
+        if "mode=" in raw:
+            return raw
+        return f"{raw},mode=1777" if raw else "mode=1777"
+
     return {
-        "/tmp": os.getenv("FIXLOOP_SANDBOX_TMPFS_TMP", DEFAULT_TMPFS_TMP),
-        "/code": os.getenv("FIXLOOP_SANDBOX_TMPFS_CODE", DEFAULT_TMPFS_CODE),
+        "/tmp": _ensure_world_writable(
+            os.getenv("FIXLOOP_SANDBOX_TMPFS_TMP", DEFAULT_TMPFS_TMP)
+        ),
+        "/code": _ensure_world_writable(
+            os.getenv("FIXLOOP_SANDBOX_TMPFS_CODE", DEFAULT_TMPFS_CODE)
+        ),
     }
 
 
@@ -97,11 +114,78 @@ def assert_no_docker_sock(kwargs: dict) -> None:
             raise ValueError(f"docker.sock mount is forbidden: {path}")
 
 
-def sandbox_pip_install_command() -> str:
-    """pip 写入限定在 /tmp userbase（只读 rootfs 下不可写 /usr/local）。"""
+def sandbox_shell_argv(command: str) -> list[str]:
+    """将 shell 字符串交给 ``/bin/sh -c``，避免 docker-py 对含 ``&&``/``|`` 的串做 shlex 拆分。
+
+    根因（E16）：``exec_run("mkdir ... && ... pip install --user ...")`` 会被拆成 argv，
+    BusyBox ``mkdir`` 收到 ``--user`` → ``unrecognized option '--user'``。
+    """
+    return ["/bin/sh", "-c", command]
+
+
+def sandbox_pythonpath_prefix(repo_path: str | Path | None = None) -> str:
+    """为源码布局设置 PYTHONPATH（离线时 pip -e 失败仍可 import 包）。
+
+    始终包含 ``/code``；若仓库存在 ``lib/`` / ``src/``（或未传 repo）再追加对应路径。
+    matplotlib 用 ``lib/``，src-layout 用 ``src/``。
+    """
+    parts = ["/code"]
+    include_lib = True
+    include_src = True
+    if repo_path is not None:
+        root = Path(repo_path)
+        include_lib = (root / "lib").is_dir()
+        include_src = (root / "src").is_dir()
+    if include_lib:
+        parts.append("/code/lib")
+    if include_src:
+        parts.append("/code/src")
+    joined = ":".join(parts)
+    return f'export PYTHONPATH="{joined}${{PYTHONPATH:+:$PYTHONPATH}}"'
+
+
+def _sanitize_pip_package_names(packages: list[str] | None) -> list[str]:
+    """仅保留安全的包名 token，避免注入 shell。"""
+    out: list[str] = []
+    for raw in packages or []:
+        name = str(raw).strip()
+        if name and all(c.isalnum() or c in "_.-+" for c in name):
+            out.append(name)
+        if len(out) >= 24:
+            break
+    return out
+
+
+def sandbox_pip_install_command(
+    *,
+    extra_packages: list[str] | None = None,
+    repo_path: str | Path | None = None,
+) -> str:
+    """pip 写入限定在 /tmp userbase；保留真实 exit code（不用 ``| tail`` 吞掉）。
+
+    根因：``pip ... 2>&1 | tail -20`` 在无 pipefail 时 exit 恒为 0，
+    导致 django/matplotlib 安装失败仍继续 pytest → ModuleNotFoundError。
+    """
+    path_export = sandbox_pythonpath_prefix(repo_path)
+    pkgs = _sanitize_pip_package_names(extra_packages)
+    extra_step = ""
+    if pkgs:
+        quoted = " ".join(pkgs)
+        # 额外依赖尽力安装，不覆盖 -e 的 exit code
+        extra_step = (
+            f'/entrypoint.sh build python -m pip install --user {quoted} '
+            f"> /tmp/pip_extra.txt 2>&1 || true; "
+            f"tail -20 /tmp/pip_extra.txt; "
+        )
     return (
         f"mkdir -p {SANDBOX_HOME} {SANDBOX_PYTHONUSERBASE} && "
-        "/entrypoint.sh build pip install --user -e /code 2>&1 | tail -5"
+        f"{path_export} && "
+        "/entrypoint.sh build python -m pip install --user -e /code "
+        "> /tmp/pip_editable.txt 2>&1; "
+        "ec=$?; "
+        "tail -20 /tmp/pip_editable.txt; "
+        f"{extra_step}"
+        "exit $ec"
     )
 
 
@@ -317,7 +401,8 @@ class SandboxManager:
                 pass
 
         pool = ThreadPoolExecutor(max_workers=1)
-        fut = pool.submit(container.exec_run, command)
+        # 必须走 shell：pip/pytest 命令含 &&、管道与重定向（见 sandbox_shell_argv）。
+        fut = pool.submit(container.exec_run, sandbox_shell_argv(command))
         deadline = time.time() + timeout if timeout > 0 else None
         try:
             try:

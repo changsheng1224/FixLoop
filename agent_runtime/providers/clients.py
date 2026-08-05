@@ -152,7 +152,16 @@ class FakeNativeToolClient(FakeModelClient):
                     from agent_runtime.react_phases import ReactPhase
 
                     phase_hook(ReactPhase.ACTING, step=step, tool=name)
-                result = executor(name, args)
+                try:
+                    result = executor(name, args)
+                except Exception as e:
+                    from agent_runtime.terminal_tool import TerminalToolAccepted
+
+                    if isinstance(e, TerminalToolAccepted):
+                        self.last_call_usage = dict(call_usage)
+                        self.last_call_timings = call_timings
+                        raise
+                    raise
                 if phase_hook is not None:
                     from agent_runtime.react_phases import ReactPhase
 
@@ -364,6 +373,13 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
                     try:
                         result = executor(name, inp)
                     except Exception as e:
+                        from agent_runtime.terminal_tool import TerminalToolAccepted
+
+                        if isinstance(e, TerminalToolAccepted):
+                            self._save_request(full_text, e.payload)
+                            self.last_call_usage = dict(call_usage)
+                            self.last_call_timings = call_timings
+                            raise
                         result = f"Error: {e}"
                     if phase_hook is not None:
                         from agent_runtime.react_phases import ReactPhase

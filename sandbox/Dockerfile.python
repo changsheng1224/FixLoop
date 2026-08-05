@@ -2,7 +2,12 @@ FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y git ripgrep && rm -rf /var/lib/apt/lists/*
 
-RUN pip install pytest pytest-cov pytest-json-report ruff
+# 离线 sandbox（network_mode=none）无法在 verify 时从 PyPI 拉依赖。
+# 预装 SWE-bench Lite 常见 runtime，避免 pip -e 后仍 ModuleNotFoundError。
+# 大包单独一层，便于缓存；新增小依赖另起一层，避免打穿 numpy/pillow。
+RUN pip install pytest pytest-cov pytest-json-report ruff \
+    numpy mpmath packaging pyparsing python-dateutil six pillow
+RUN pip install sqlparse pytz asgiref
 
 RUN mkdir -p /code
 WORKDIR /code

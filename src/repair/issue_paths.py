@@ -5,7 +5,10 @@ from __future__ import annotations
 import re
 
 _PATH_IN_ISSUE_RE = re.compile(
-    r'File\s+"([^"]+)"|at\s+(\S+\.\w+)',
+    r'File\s+"([^"]+)"'
+    r"|at\s+(\S+\.\w+)"
+    r"|((?:[\w.-]+/)+[\w.-]+\.py)(?::(\d+))?"
+    r"|`((?:[\w.-]+/)+[\w.-]+\.py)`",
 )
 
 
@@ -14,14 +17,15 @@ def extract_paths_from_issue(
     *,
     extra: list[str] | None = None,
 ) -> list[str]:
-    """去重保序合并 ``extra`` 与 issue 中的 ``File "..."`` / ``at path``。"""
+    """去重保序合并 ``extra`` 与 issue 中的路径线索。"""
     paths: list[str] = []
     for raw in list(extra or []):
         path = raw.replace("\\", "/")
         if path and path not in paths:
             paths.append(path)
-    for file_match, at_match in _PATH_IN_ISSUE_RE.findall(issue):
-        path = (file_match or at_match).replace("\\", "/")
+    for m in _PATH_IN_ISSUE_RE.finditer(issue or ""):
+        file_q, at_path, rel_path, _line, tick_path = m.groups()
+        path = (file_q or at_path or rel_path or tick_path or "").replace("\\", "/")
         if path and path not in paths:
             paths.append(path)
     return paths

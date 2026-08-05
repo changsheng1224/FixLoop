@@ -507,6 +507,9 @@ class ToolExecutor:
 
     def _get_args_class(self, name: str) -> type | None:
         """根据工具名返回对应的参数 dataclass。"""
+        tool = (self.agent.tools or {}).get(name) or {}
+        if tool.get("args_dataclass") is not None:
+            return tool["args_dataclass"]
         from agent_runtime import tools as tools_module
 
         mapping = {

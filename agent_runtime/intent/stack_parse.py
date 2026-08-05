@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 _TRACEBACK_START = re.compile(
@@ -170,28 +171,82 @@ def _is_noise_frame(path: str) -> bool:
     return False
 
 
-def _prefer_project_files(files: list[str]) -> list[str]:
+def _is_absolute_foreign_path(path: str) -> bool:
+    """True for absolute paths that usually come from another machine/venv paste."""
+    norm = path.replace("\\", "/").strip()
+    if re.match(r"^[A-Za-z]:/", norm):
+        return True
+    if norm.startswith(("/Users/", "/home/", "/private/var/", "/tmp/", "/var/folders/")):
+        return True
+    if norm.startswith("//"):
+        return True
+    return False
+
+
+def relativize_suspect_path(path: str, *, repo_root: str | Path | None = None) -> str | None:
+    """Map stack/Issue paths to project-relative; drop unmappable abs noise (E2).
+
+    Does not hard-code repo names — uses existence under ``repo_root`` or a
+    trailing ``pkg/.../file.py`` suffix heuristic.
+    """
+    if not path or not str(path).strip():
+        return None
+    norm = _norm_file(str(path))
+    if _is_noise_frame(norm):
+        return None
+    for prefix in ("/app/", "/code/", "/workspace/", "/github/workspace/"):
+        if norm.startswith(prefix):
+            norm = norm[len(prefix) :]
+            break
+    root: Path | None = Path(repo_root) if repo_root else None
+    if root is not None:
+        try:
+            # already relative and exists
+            if not _is_absolute_foreign_path(norm) and (root / norm).is_file():
+                return norm.replace("\\", "/")
+            parts = [p for p in norm.replace("\\", "/").split("/") if p and p != ":"]
+            # strip Windows drive letter segment
+            if parts and len(parts[0]) == 1 and norm[1:3] in (":/", ":\\"):
+                parts = parts[1:]
+            elif re.match(r"^[A-Za-z]:", parts[0] if parts else ""):
+                parts = parts[1:]
+            for i in range(len(parts)):
+                cand = "/".join(parts[i:])
+                if cand and (root / cand).is_file():
+                    return cand
+        except OSError:
+            pass
+        # E2′: with repo_root, never keep paths that do not exist in the workspace
+        return None
+    if _is_absolute_foreign_path(norm):
+        # trailing package-like relative: foo/bar/baz.py (no root to verify)
+        m = re.search(r"((?:[\w.-]+/){1,}\w+\.py)$", norm)
+        if m:
+            return m.group(1)
+        return None
+    return norm
+
+
+def _prefer_project_files(
+    files: list[str], *, repo_root: str | Path | None = None
+) -> list[str]:
     """If both absolute site paths and project-relative exist, keep non-noise only.
 
     Also strip leading workspace roots like /app/, /home/.../project/ when helpful
     for stable gold labels — keep path as pasted if already project-relative.
+    Drops foreign absolute paths that cannot be relativized (E2).
     """
     cleaned: list[str] = []
     for f in files:
-        if _is_noise_frame(f):
+        rel = relativize_suspect_path(f, repo_root=repo_root)
+        if not rel:
             continue
-        # normalize /app/foo.py -> foo.py (common container WORKDIR only)
-        norm = f.replace("\\", "/")
-        for prefix in ("/app/", "/code/"):
-            if norm.startswith(prefix):
-                norm = norm[len(prefix) :]
-                break
-        if norm not in cleaned:
-            cleaned.append(norm)
+        if rel not in cleaned:
+            cleaned.append(rel)
     return cleaned
 
 
-def parse_stack(text: str) -> StackParseResult:
+def parse_stack(text: str, *, repo_root: str | Path | None = None) -> StackParseResult:
     """Extract traceback structure; empty result if no stack-like region."""
     raw = text or ""
     region_info = _find_stack_region(raw)
@@ -206,9 +261,15 @@ def parse_stack(text: str) -> StackParseResult:
         if at and exc:
             path = _norm_file(at.group("file"))
             line = int(at.group("line"))
+            mapped = relativize_suspect_path(path, repo_root=repo_root) or path
+            if _is_noise_frame(mapped) or (
+                _is_absolute_foreign_path(path) and mapped == path
+            ):
+                mapped_list = _prefer_project_files([path], repo_root=repo_root)
+                mapped = mapped_list[0] if mapped_list else ""
             result.has_traceback = True
-            result.frames = [StackFrame(file=path, line=line)]
-            result.suspect_files = [path]
+            result.frames = [StackFrame(file=mapped or path, line=line)]
+            result.suspect_files = [mapped] if mapped else []
             if hasattr(exc, "lastindex") and exc.lastindex:  # EXCEPTION_LINE
                 et = exc.group("etype") if "etype" in exc.groupdict() else exc.group(1)
                 result.exception_type = et
@@ -251,13 +312,26 @@ def parse_stack(text: str) -> StackParseResult:
             continue
         if fr.file not in files:
             files.append(fr.file)
-    result.suspect_files = _prefer_project_files(files)
+    result.suspect_files = _prefer_project_files(files, repo_root=repo_root)
+    # rewrite frame paths when relativized
+    mapped = {f: relativize_suspect_path(f, repo_root=repo_root) for f in files}
+    new_frames: list[StackFrame] = []
+    for fr in result.frames:
+        mf = mapped.get(fr.file) or relativize_suspect_path(fr.file, repo_root=repo_root)
+        if mf:
+            new_frames.append(StackFrame(file=mf, line=fr.line, func=fr.func))
+        elif not _is_noise_frame(fr.file) and not _is_absolute_foreign_path(fr.file):
+            new_frames.append(fr)
+    if new_frames:
+        result.frames = new_frames
     return result
 
 
-def extract_issue_slots(text: str) -> dict[str, Any]:
+def extract_issue_slots(
+    text: str, *, repo_root: str | Path | None = None
+) -> dict[str, Any]:
     """Slots for intent routing: stack-first, then safe fallbacks (no fence noise)."""
-    parsed = parse_stack(text)
+    parsed = parse_stack(text, repo_root=repo_root)
     if parsed.has_traceback:
         return parsed.to_slots()
 
@@ -294,7 +368,7 @@ def extract_issue_slots(text: str) -> dict[str, Any]:
                     files.append(name)
 
     if files:
-        slots["suspect_files"] = files
+        slots["suspect_files"] = _prefer_project_files(files, repo_root=repo_root)
 
     m = re.search(
         r"\b(TypeError|ImportError|ModuleNotFoundError|AttributeError|"

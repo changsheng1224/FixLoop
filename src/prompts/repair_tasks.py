@@ -109,6 +109,7 @@ def build_patcher_variables(
     suspects_block: str = "",
     extra_files_block: str = "",
     test_blocks: str = "",
+    disk_grounding_block: str = "",
 ) -> dict[str, str]:
     feedback_block = ""
     if feedback:
@@ -121,6 +122,7 @@ def build_patcher_variables(
         "suspects_block": suspects_block,
         "extra_files_block": extra_files_block,
         "test_blocks": test_blocks,
+        "disk_grounding_block": disk_grounding_block,
     }
 
 
