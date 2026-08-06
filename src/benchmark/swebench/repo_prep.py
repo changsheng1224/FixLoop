@@ -22,12 +22,60 @@ def _git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
     )
 
 
+def _git_text(cwd: Path, *args: str) -> str:
+    proc = _git(cwd, *args, check=False)
+    return (proc.stdout or "").strip()
+
+
 def github_clone_url(repo: str) -> str:
     """``owner/name`` → HTTPS clone URL。"""
     repo = repo.strip().removesuffix(".git")
     if repo.startswith("http://") or repo.startswith("https://") or repo.startswith("git@"):
         return repo
     return f"https://github.com/{repo}.git"
+
+
+def preflight_repo(repo_path: Path | str, *, base_commit: str) -> dict:
+    """校验运行前基线：HEAD、工作树、未跟踪文件、换行配置。"""
+
+    repo = Path(repo_path)
+    report: dict[str, object] = {
+        "ok": False,
+        "repo_path": str(repo.resolve()),
+        "base_commit": base_commit,
+        "head": "",
+        "git_status": "",
+        "line_endings": {},
+        "reasons": [],
+    }
+
+    if not (repo / ".git").exists():
+        report["reasons"] = ["missing_git_dir"]
+        return report
+
+    head = _git_text(repo, "rev-parse", "HEAD")
+    report["head"] = head
+    if not head:
+        report["reasons"] = ["head_unavailable"]
+        return report
+
+    reasons: list[str] = []
+    if head != base_commit:
+        reasons.append("head_mismatch")
+
+    status = _git_text(repo, "status", "--porcelain=v1", "--untracked-files=all")
+    report["git_status"] = status
+    if status:
+        reasons.append("dirty_worktree")
+
+    line_endings = {}
+    for key in ("core.autocrlf", "core.eol", "core.safecrlf", "core.filemode"):
+        line_endings[key] = _git_text(repo, "config", "--get", key)
+    report["line_endings"] = line_endings
+
+    report["ok"] = not reasons
+    report["reasons"] = reasons
+    return report
 
 
 def prepare_repo(

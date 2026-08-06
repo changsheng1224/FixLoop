@@ -370,7 +370,7 @@ class TestSuggestPromotions:
                 **_make_note("use pytest", 1),
                 "kind": "decision",
                 "retrieve_count": 4,
-                "source": "localizer",
+                "source": "patcher",
             },
         ]
         stats, dreamer = run_memory_dream(state)

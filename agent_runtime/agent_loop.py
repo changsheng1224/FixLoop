@@ -10,7 +10,7 @@ from agent_runtime.cancellation import CancelledError, run_with_cancellation
 from agent_runtime.compression_pipeline import truncate_tool_result_for_agent
 from agent_runtime.context_metadata import build_trace_payload
 from agent_runtime.errors import ContextTooLargeError, EmptyModelResponse
-from agent_runtime.loop_limits import NATIVE_MAX_TURNS_MESSAGE, max_parse_attempts
+from agent_runtime.loop_limits import max_parse_attempts
 from agent_runtime.model_timing import (
     ModelCallTiming,
     collect_client_timings,
@@ -26,10 +26,10 @@ from agent_runtime.react_phases import ReactPath, ReactPhase
 from agent_runtime.step_clock import StepClock, StepTimeoutError
 from agent_runtime.step_guard import StepContext, StepGuard
 from agent_runtime.stop_reasons import StopReason
-from agent_runtime.terminal_tool import TerminalToolAccepted
+from agent_runtime.terminal_tool import TerminalToolAcceptedError
 
 # StepGuard stall 检测：仅"可能修改文件"的工具才计入停滞
-_MODIFYING_TOOLS = frozenset({"write_file", "patch_file", "run_shell"})
+_MODIFYING_TOOLS = frozenset({"write_file", "patch_file", "apply_patch", "run_shell"})
 
 
 def _log_loop(msg: str) -> None:
@@ -41,45 +41,15 @@ def _log_loop(msg: str) -> None:
 
 def _build_anthropic_tools(tools_registry: dict) -> list[dict]:
     """将内部工具注册表转换为 Anthropic tool_use 格式（仅 schema 字段）。"""
-    from agent_runtime.tool_schema import tool_schema_view
-
-    type_map = {
-        "str": "string",
-        "int": "integer",
-        "float": "number",
-        "bool": "boolean",
-        "array": "array",
-        "list": "array",
-    }
+    from agent_runtime.tool_schema import schema_to_json, tool_schema_view
     result = []
     for name, spec in tool_schema_view(tools_registry).items():
         schema = spec.get("schema", {})
-        properties = {}
-        required = []
-        for param, type_str in schema.items():
-            if "=" in type_str:
-                ptype, _, default = type_str.partition("=")
-            else:
-                ptype, default = type_str, None
-            if ptype in ("array", "list"):
-                prop: dict = {"type": "array", "items": {"type": "string"}}
-            else:
-                json_type = type_map.get(ptype, "string")
-                prop = {"type": json_type}
-            if default is not None:
-                prop["default"] = default
-            properties[param] = prop
-            if default is None:
-                required.append(param)
         result.append(
             {
                 "name": name,
                 "description": spec.get("description", ""),
-                "input_schema": {
-                    "type": "object",
-                    "properties": properties,
-                    "required": required,
-                },
+                "input_schema": schema_to_json(schema),
             }
         )
     return result
@@ -114,6 +84,23 @@ class AgentLoop:
         self.MAX_EMPTY_RETRIES = 3
         self._last_dream_stats: dict[str, int] = {}
         self._llm_call_count = 0
+        from agent_runtime.repair_run import RunTerminalGuard
+
+        self._terminal_guard = RunTerminalGuard()
+        self._stream_seq = 0
+        from agent_runtime.repair_runtime import ExecutionDeadline, RepairBudget
+
+        self._repair_deadline = ExecutionDeadline(
+            getattr(agent.config, "repair_wall_timeout_s", 0) or 0
+        )
+        agent._repair_deadline = self._repair_deadline
+        self._repair_budget = RepairBudget(
+            max_turns=self.max_steps,
+            max_tool_calls=getattr(agent.config, "max_tool_calls", 0) or 0,
+            max_write_calls=getattr(agent.config, "max_write_calls", 0) or 0,
+            max_verify_calls=getattr(agent.config, "max_verify_calls", 0) or 0,
+            max_recovery_attempts=getattr(agent.config, "max_recovery_attempts", 0) or 0,
+        )
 
     def _accumulate_context_stats(self, meta: dict) -> None:
         """从 context_built metadata 累积 section 统计 + cache hit rate。"""
@@ -165,6 +152,20 @@ class AgentLoop:
                 "dream_routing_entries": dream.get("routing_entries", 0),
                 "dream_total_before": dream.get("total_before", 0),
                 "dream_total_after": dream.get("total_after", 0),
+                "governance": {
+                    key: dream.get(key, 0)
+                    for key in (
+                        "normalized",
+                        "supported",
+                        "verified",
+                        "promoted",
+                        "demoted",
+                        "stale_marked",
+                        "conflicts_detected",
+                        "rejected",
+                        "recall_hits",
+                    )
+                },
             }
         except Exception:
             return {}
@@ -260,6 +261,17 @@ class AgentLoop:
     ) -> str:
         """TaskState 已写入终态后：同步 stop_reason、可选 recording、落盘。"""
         self._sync_stop_reason(ts)
+        from agent_runtime.repair_run import attribute_failure
+
+        memory = self.agent.session.get("memory", {}) or {}
+        working = memory.get("working", {}) or {}
+        repair_context = working.get("repair_context", {}) or {}
+        ts.failure_attribution = attribute_failure(
+            stop_reason=ts.stop_reason,
+            observations=self.agent.session.get("tool_observations", []),
+            changed_files=list(repair_context.get("changed_files", []) or []),
+            evidence_count=len(working.get("evidence_ledger", []) or []),
+        )
         if recording is not None:
             self._notify_react_phase(
                 ReactPhase.RECORDING,
@@ -342,6 +354,24 @@ class AgentLoop:
         if fn is not None:
             fn(**kwargs)
 
+    def _emit_stream_event(
+        self, kind: str, payload: dict, *, phase: str = "", turn: int = 0
+    ) -> None:
+        """Emit replayable runtime stream metadata without exposing raw CoT."""
+        if not self._stream_enabled:
+            return
+        self._stream_seq += 1
+        self._emit(
+            "stream_event",
+            {
+                "stream_seq": self._stream_seq,
+                "kind": kind,
+                "phase": phase,
+                "turn": turn,
+                "replayable": kind not in {"token_delta"},
+            },
+        )
+
     def _notify_react_phase(
         self,
         phase,
@@ -353,6 +383,9 @@ class AgentLoop:
     ) -> None:
         from agent_runtime.react_phases import build_react_phase_payload
 
+        if self._task_state is not None:
+            self._task_state.phase = str(phase)
+            self._task_state.turn = int(step)
         self._emit(
             "react_phase",
             build_react_phase_payload(phase, step=step, path=path, tool=tool),
@@ -388,6 +421,34 @@ class AgentLoop:
         """执行工具、写 trace/history，返回下一轮 user_message。"""
         if (msg := self._abort_if_cancelled(ts, phase="pre_tool", in_flight=tool_name)) is not None:
             raise CancelledError("user", answer=msg)
+        from agent_runtime.tool_budget import infer_tool_budget_group
+
+        group = infer_tool_budget_group(tool_name, (self.agent.tools or {}).get(tool_name))
+        budget_rejected = self._repair_deadline.expired()
+        if budget_rejected:
+            from agent_runtime.tool_executor import ToolExecutionResult
+
+            result = ToolExecutionResult(
+                content="Error: repair 全局执行期限已耗尽",
+                metadata={
+                    "tool_status": "rejected",
+                    "tool_error_code": "deadline_exceeded",
+                    "retryable": False,
+                },
+            )
+        elif not self._repair_budget.allow_tool(group.value):
+            from agent_runtime.tool_executor import ToolExecutionResult
+
+            result = ToolExecutionResult(
+                content=f"Error: 工具组 {group.value} 预算已耗尽",
+                metadata={
+                    "tool_status": "rejected",
+                    "tool_error_code": "budget_exceeded",
+                    "retryable": False,
+                    "budget_group": group.value,
+                },
+            )
+            budget_rejected = True
         self._notify(
             "on_pre_tool",
             callback,
@@ -414,15 +475,17 @@ class AgentLoop:
                 }
             )
         t0 = _time.time()
-        self._in_flight_tool = tool_name
-        try:
-            result = self.agent.execute_tool(tool_name, tool_args)
-        finally:
-            self._in_flight_tool = ""
+        if not budget_rejected:
+            self._in_flight_tool = tool_name
+            try:
+                result = self.agent.execute_tool(tool_name, tool_args)
+            finally:
+                self._in_flight_tool = ""
         # Gateway/权限拒绝不计入 tool_steps，避免无效步耗尽预算（E5）
         _meta = getattr(result, "metadata", None) or {}
         if _meta.get("tool_status") != "rejected":
             ts.record_tool(tool_name)
+            self._repair_budget.record_tool(group.value)
         else:
             ts.last_tool = tool_name
         if (
@@ -431,6 +494,72 @@ class AgentLoop:
             raise CancelledError("user", answer=msg)
         result_text = result.content if hasattr(result, "content") else str(result)
         te_ms = int((_time.time() - t0) * 1000)
+        from agent_runtime.repair_runtime import CanonicalToolCall, observation_from_result
+
+        raw_call = self.agent.session.get("_last_canonical_tool_call", {})
+        canonical_call = CanonicalToolCall.create(
+            tool_name,
+            tool_args,
+            source=raw_call.get("source", "native"),
+            call_id=raw_call.get("call_id", ""),
+        )
+        observation = observation_from_result(canonical_call, result, te_ms)
+        observation_dict = observation.to_dict()
+        observation_dict["source"] = canonical_call.source.value
+        from agent_runtime.context_runtime import ObservationStore
+
+        observation_store = ObservationStore(
+            self.agent.session,
+            root=str(getattr(self.agent, "_cwd", "") or ""),
+        )
+        raw_result = _meta.get("raw_result")
+        if raw_result is not None:
+            import json
+
+            raw_observation = json.dumps(raw_result, ensure_ascii=False, default=str)
+        else:
+            raw_observation = result_text
+        structured_facts = list(_meta.get("structured_facts") or [])
+        structured_facts.append(
+            {
+                "status": observation.status,
+                "error_code": observation.failure_class,
+                "retryable": observation.retryable,
+                "changed_files": observation.changed_files,
+            }
+        )
+        stored = observation_store.put(
+            tool_name,
+            tool_args,
+            raw_observation,
+            summary=result_text[:500],
+            source_version=str(_meta.get("source_version", "") or ""),
+            structured_facts=structured_facts,
+        )
+        observation_dict["observation_id"] = stored.observation_id
+        observation_dict["raw_ref"] = stored.raw_ref
+        _meta["observation_id"] = stored.observation_id
+        if _meta.get("provider") == "mcp":
+            observation_dict["provider"] = "mcp"
+            observation_dict["server"] = _meta.get("mcp_server", "")
+        self.agent.session["_last_tool_observation"] = observation_dict
+        self.agent.session.setdefault("tool_observations", []).append(observation_dict)
+        self.agent.session["tool_observations"] = self.agent.session["tool_observations"][-50:]
+        # 权限拒绝：立即回灌，避免反复试 run_shell/sandbox_test
+        if _meta.get("rejection_reason") == "role_not_allowed" or (
+            _meta.get("tool_status") == "rejected"
+            and tool_name in ("run_shell", "sandbox_test")
+        ):
+            if (
+                getattr(self.agent, "agent_name", None)
+                or getattr(self.agent, "_agent_name", "")
+                or ""
+            ) == "patcher":
+                result_text = (
+                    f"{result_text}\n"
+                    "【停】patcher 无权限调用此工具。请改用：read_file → apply_patch "
+                    "→ quick_test；需要扩锁时用 expand_lock。"
+                )
         self._notify(
             "on_post_tool",
             callback,
@@ -485,9 +614,9 @@ class AgentLoop:
             and result.metadata.get("tool_status") == "success"
             and not str(result_text).startswith("Error")
         ):
-            from agent_runtime.terminal_tool import TerminalToolAccepted
+            from agent_runtime.terminal_tool import TerminalToolAcceptedError
 
-            raise TerminalToolAccepted(str(result_text), tool_name=tool_name)
+            raise TerminalToolAcceptedError(str(result_text), tool_name=tool_name)
         # 死循环检测：Gate 5.5 rejection → 升级为 stop
         error_code = result.metadata.get("tool_error_code", "")
         if error_code == "loop_detected":
@@ -514,12 +643,24 @@ class AgentLoop:
         if tool_success:
             self._advance_todo()
 
-        # StepGuard 步进健康评估（stall + goal drift）— 每步都评估
-        # 读类工具不产生 affected_paths 是正常的，不应计入 stall
+        # StepGuard：仅「改盘」算进展。patcher 的 read/grep 不再伪装成 has_affected，
+        # 否则会空转耗尽 step_limit（R11 django）。
         meta = result.metadata if hasattr(result, "metadata") else {}
         affected = meta.get("affected_paths", []) if isinstance(meta, dict) else []
         self._no_progress_steps = self._step_guard.stall_count
-        guard_has_affected = bool(affected) or tool_name not in _MODIFYING_TOOLS
+        is_patcher = (
+            getattr(self.agent, "agent_name", None)
+            or getattr(self.agent, "_agent_name", "")
+            or ""
+        ) == "patcher"
+        if is_patcher:
+            guard_has_affected = bool(affected) or (
+                tool_name in _MODIFYING_TOOLS
+                and meta.get("tool_status") == "success"
+                and not str(result_text).startswith("Error")
+            )
+        else:
+            guard_has_affected = bool(affected) or tool_name not in _MODIFYING_TOOLS
         verdict = self._step_guard.evaluate(
             StepContext(
                 tool_name=tool_name,
@@ -550,9 +691,21 @@ class AgentLoop:
                         f"\n\n⚠ 进展停滞（连续 {self._step_guard.stall_count} 步无文件变更）。"
                         "请检查当前 todo 列表，考虑重新规划或尝试不同策略。"
                     )
+                    if is_patcher:
+                        hint += (
+                            " 【patcher】下一步必须对实现文件 apply_patch（含 - 上下文）；"
+                            "不要继续纯 read/grep；不要用 run_shell/sandbox_test。"
+                        )
                     result_text = result_text + hint
                     self.agent.record(
-                        {"role": "tool", "content": result_text, "tool_name": tool_name}
+                        {
+                            "role": "tool",
+                            "content": (
+                                f"[{stored.observation_id}] {result_text[:800]}"
+                            ),
+                            "tool_name": tool_name,
+                            "observation_id": stored.observation_id,
+                        }
                     )
                     next_message = f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
                     self._persist_step_checkpoint(
@@ -573,7 +726,14 @@ class AgentLoop:
             else:
                 # warning 级（drift 预警，不终止）
                 self._emit("goal_drift_warning", {"detail": verdict.detail})
-        self.agent.record({"role": "tool", "content": result_text, "tool_name": tool_name})
+        self.agent.record(
+            {
+                "role": "tool",
+                "content": f"[{stored.observation_id}] {result_text[:800]}",
+                "tool_name": tool_name,
+                "observation_id": stored.observation_id,
+            }
+        )
         next_message = f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
         self._persist_step_checkpoint(
             ts,
@@ -631,6 +791,7 @@ class AgentLoop:
         self._last_token_meta = token_meta
         self._accumulate_context_stats(token_meta)
         self._emit("context_built", build_trace_payload(token_meta))
+        self._begin_edit_lock_turn()
         self._notify_react_phase(
             ReactPhase.REASONING,
             step=step,
@@ -666,24 +827,42 @@ class AgentLoop:
         for empty_try in range(self.MAX_EMPTY_RETRIES):
             try:
                 if self._stream_enabled and hasattr(self.agent.model_client, "complete_stream"):
+                    def on_chunk(chunk: str) -> None:
+                        self._emit_stream_event(
+                            "token_delta", {"chars": len(chunk)}, phase="model", turn=step
+                        )
+                        if callback is not None and hasattr(callback, "on_chunk"):
+                            callback.on_chunk(chunk)
+
                     raw = self._invoke_model_call(
                         lambda: self.agent.circuit_breaker.call(
                             self.agent.model_client.complete_stream,
                             prompt_text,
                             max_new_tokens=self.agent.config.max_new_tokens,
-                            on_chunk=getattr(callback, "on_chunk", None) if callback else None,
+                            on_chunk=on_chunk,
                             cancel_token=self._cancel_token,
                         )
                     )
                 else:
-                    raw = self._invoke_model_call(
-                        lambda: self.agent.circuit_breaker.call(
-                            self.agent.model_client.complete,
-                            prompt_text,
-                            max_new_tokens=self.agent.config.max_new_tokens,
-                            prompt_cache_key=cache_key,
+                    try:
+                        raw = self._invoke_model_call(
+                            lambda: self.agent.circuit_breaker.call(
+                                self.agent.model_client.complete,
+                                prompt_text,
+                                max_new_tokens=self.agent.config.max_new_tokens,
+                                prompt_cache_key=cache_key,
+                            )
                         )
-                    )
+                    except TypeError as exc:
+                        if "prompt_cache_key" not in str(exc):
+                            raise
+                        raw = self._invoke_model_call(
+                            lambda: self.agent.circuit_breaker.call(
+                                self.agent.model_client.complete,
+                                prompt_text,
+                                max_new_tokens=self.agent.config.max_new_tokens,
+                            )
+                        )
                 break  # 成功，退出重试循环
             except EmptyModelResponse:
                 self._empty_retries += 1
@@ -900,7 +1079,7 @@ class AgentLoop:
             from agent_runtime.session_store import SessionStore
 
             affected_paths = list(meta.get("affected_paths") or [])
-            if tool_name in ("write_file", "patch_file") and tool_args.get("path"):
+            if tool_name in ("write_file", "patch_file", "apply_patch") and tool_args.get("path"):
                 affected_path = str(tool_args["path"])
                 if affected_path not in affected_paths:
                     affected_paths.append(affected_path)
@@ -963,6 +1142,17 @@ class AgentLoop:
         self._task_state = ts
         self._call_timings = []
         self._retry_count = 0
+        from agent_runtime.repair_runtime import ExecutionDeadline
+
+        self._repair_deadline = ExecutionDeadline(
+            getattr(self.agent.config, "repair_wall_timeout_s", 0) or 0
+        )
+        self.agent._repair_deadline = self._repair_deadline
+        self._repair_budget.turns = 0
+        self._repair_budget.tool_calls = 0
+        self._repair_budget.writes = 0
+        self._repair_budget.verifies = 0
+        self._repair_budget.recoveries = 0
 
         cb = self.agent.circuit_breaker
         cb.add_listener(self._circuit_trace_listener)
@@ -982,7 +1172,7 @@ class AgentLoop:
                     suspect_files=self._extract_suspect_files(),
                 )
 
-                if hasattr(self.agent.model_client, "chat_with_tools"):
+                if hasattr(self.agent.model_client, "complete_turn"):
                     answer = self._run_with_native_tools(user_message, ts, callback)
                 else:
                     answer = self._run_with_text_parsing(user_message, ts, callback)
@@ -1042,7 +1232,7 @@ class AgentLoop:
                     suspect_files=self._extract_suspect_files(),
                 )
                 if checkpoint.get("path") == "native" and hasattr(
-                    self.agent.model_client, "chat_with_tools"
+                    self.agent.model_client, "complete_turn"
                 ):
                     answer = self._run_with_native_tools(user_message, ts, callback)
                 else:
@@ -1053,188 +1243,274 @@ class AgentLoop:
             cb.remove_listener(self._circuit_trace_listener)
 
     def _run_with_native_tools(self, user_message: str, ts, callback=None) -> str:
-        step_timeout_s = self._step_timeout_limit_s()
-        step_clock = StepClock(step_timeout_s)
-        if (msg := self._maybe_step_timeout(ts, step_clock, 1, "native")) is not None:
-            return msg
-
-        try:
-            system_prompt, user_message, budget_meta = self.agent.build_for_native(user_message)
-        except ContextTooLargeError as e:
-            ts.stop_with_reason(
-                StopReason.CONTEXT_OVERFLOW,
-                "stopped",
-                detail=f"actual={e.actual} limit={e.limit}",
-            )
-            return self._complete_run(ts, e.user_message)
-        if hard_limit := self._check_hard_cap(budget_meta):
-            return hard_limit
+        client = self.agent.model_client
         from agent_runtime.message_projection import (
             attach_projection_metadata,
             build_context_prefix,
         )
+        from agent_runtime.model_turn import FinishKind, ModelTurnRequest
 
-        context_prefix = build_context_prefix(self.agent, budget_meta)
-        attach_projection_metadata(budget_meta, self.agent.session, context_prefix=context_prefix)
-        self._last_token_meta = budget_meta
-        self._last_budget_meta = budget_meta
-        self._accumulate_context_stats(budget_meta)
-        self._emit("context_built", build_trace_payload(budget_meta))
         tools_def = _build_anthropic_tools(self.agent.tools)
+        native_tail: list[dict] = []
+        usage_total = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_creation_tokens": 0,
+            "calls": 0,
+        }
+        output_recovery = 0
+        started = _time.time()
 
-        if not system_prompt:
-            from agent_runtime.prompt_prefix import cache_stable_text
-
-            prefix = self.agent._prefix
-            system_prompt = cache_stable_text(
-                getattr(prefix, "stable_system_text", "") or "",
-                getattr(prefix, "stable_tools_text", "") or "",
-            ) or getattr(prefix, "stable_text", "")
-
-        def phase_hook(phase, *, step: int, tool: str | None = None) -> None:
-            nonlocal step_clock
-            if phase == ReactPhase.REASONING:
-                if (msg := self._abort_if_cancelled(ts, phase="native_reasoning")) is not None:
-                    raise CancelledError("user", answer=msg)
-                if step > 1:
-                    step_clock = StepClock(step_timeout_s)
-                step_clock.check(step=step, path="native")
-                if callback is not None:
-                    self._notify(
-                        "on_step_start",
-                        callback,
-                        step=step,
-                        max_steps=self.max_steps,
-                        path="native",
-                    )
-            elif phase == ReactPhase.ACTING:
-                step_clock.check(step=step, path="native")
-            self._notify_react_phase(
-                phase,
-                step=step,
-                path="native",
-                tool=tool,
-                callback=callback,
-            )
-
-        def executor(tool_name: str, tool_input: dict) -> str:
-            step = ts.tool_steps + 1
-            return self._run_tool_step(
-                ts,
-                tool_name,
-                tool_input,
-                step=step,
-                path="native",
-                callback=callback,
-                record_assistant=False,
-                emit_acting=False,
-                emit_observation=False,
-                emit_recording=True,
-            )
-
-        def after_model(step: int) -> None:
-            step_clock.check(step=step, path="native")
-
-        t0 = _time.time()
-        self._emit("model_request_start", {"step": 1, "attempt": 1})
-        self._notify(
-            "on_pre_model",
-            callback,
-            step=1,
-            prompt_preview=user_message[:200],
-            path="native",
-        )
-        try:
-            result = self._invoke_model_call(
-                lambda: self.agent.model_client.chat_with_tools(
-                    system_prompt=system_prompt,
-                    user_message=user_message,
-                    tools=tools_def,
-                    executor=executor,
-                    max_turns=self.max_steps,
-                    phase_hook=phase_hook,
-                    step_boundary_hook=after_model,
-                    cancel_token=self._cancel_token,
+        for turn in range(1, self.max_steps + 1):
+            if self._repair_deadline.expired():
+                ts.stop_with_reason(
+                    StopReason.DEADLINE_EXCEEDED,
+                    "stopped",
+                    detail="repair wall-clock deadline exceeded",
                 )
+                return self._complete_run(
+                    ts,
+                    "<final>已达到 repair 全局执行期限，当前任务停止。</final>",
+                )
+            if not self._repair_budget.allow_turn():
+                ts.stop_step_limit(self.max_steps)
+                return self._complete_run(
+                    ts,
+                    f"<final>已达到最大推理轮数限制({self.max_steps})。</final>",
+                )
+            self._repair_budget.record_turn()
+            if (msg := self._abort_if_cancelled(ts, phase="native_reasoning")) is not None:
+                return msg
+            self._begin_edit_lock_turn()
+            step_clock = StepClock(self._step_timeout_limit_s())
+            if (msg := self._maybe_step_timeout(ts, step_clock, turn, "native")) is not None:
+                return msg
+            self._notify_react_phase(
+                ReactPhase.REASONING, step=turn, path="native", callback=callback
             )
-            if isinstance(result, tuple):
-                answer, call_usage = result
-            else:
-                answer = result
-                call_usage = getattr(self.agent.model_client, "last_call_usage", {}) or {}
-            self._apply_call_usage_meta(call_usage)
+            self._notify(
+                "on_step_start",
+                callback,
+                step=turn,
+                max_steps=self.max_steps,
+                path="native",
+            )
+            try:
+                system_prompt, dynamic_user, budget_meta = self.agent.build_for_native(user_message)
+            except ContextTooLargeError as e:
+                ts.stop_with_reason(
+                    StopReason.CONTEXT_OVERFLOW,
+                    "stopped",
+                    detail=f"actual={e.actual} limit={e.limit}",
+                )
+                return self._complete_run(ts, e.user_message)
+            if hard_limit := self._check_hard_cap(budget_meta):
+                return self._complete_run(ts, hard_limit)
+            context_prefix = build_context_prefix(self.agent, budget_meta)
+            attach_projection_metadata(
+                budget_meta, self.agent.session, context_prefix=context_prefix
+            )
+            self._last_budget_meta = budget_meta
+            self._accumulate_context_stats(budget_meta)
+            self._emit("context_built", build_trace_payload(budget_meta))
+
+            messages = [{"role": "user", "content": dynamic_user}, *native_tail[-6:]]
+            configured_output = int(getattr(self.agent.config, "max_new_tokens", 0) or 4096)
+            max_output = max(512, min(configured_output, 8192))
+            deadline = getattr(step_clock, "_deadline", None)
+            request = ModelTurnRequest(
+                system_prompt=system_prompt,
+                messages=messages,
+                tools=tools_def,
+                max_output_tokens=max_output,
+                deadline=deadline,
+            )
+            self._emit("model_request_start", {"step": turn, "attempt": turn})
+            self._notify(
+                "on_pre_model",
+                callback,
+                step=turn,
+                prompt_preview=dynamic_user[:200],
+                path="native",
+            )
+            call_started = _time.time()
+            try:
+                result = self._invoke_model_call(lambda: client.complete_turn(request))
+                step_clock.check(step=turn, path="native")
+            except StepTimeoutError as e:
+                return self._finish_step_timeout(ts, e, clock=step_clock)
+            except TimeoutError:
+                error = StepTimeoutError(
+                    self._step_timeout_limit_s(), step=turn, path="native"
+                )
+                return self._finish_step_timeout(ts, error, clock=step_clock)
+            except CancelledError as e:
+                if e.answer:
+                    return e.answer
+                return self._finish_user_cancel(ts, phase="model_wait")
+            except Exception as e:
+                if (msg := self._stop_for_api_error(ts, e)) is not None:
+                    return msg
+                ts.stop_with_reason(StopReason.API_ERROR, "failed", detail=f"error: {e}")
+                return self._complete_run(ts, f"<final>API 错误: {e}</final>")
+
+            ts.record_attempt()
+            elapsed_ms = int((_time.time() - call_started) * 1000)
+            for key in usage_total:
+                if key == "calls":
+                    continue
+                usage_total[key] += int(result.usage.get(key, 0) or 0)
+            usage_total["calls"] += 1
+            self._apply_call_usage_meta(usage_total)
             self._record_model_timings(
-                ts, collect_client_timings(self.agent.model_client), default_attempt=1
+                ts, collect_client_timings(client), default_attempt=turn
             )
-        except StepTimeoutError as e:
-            return self._finish_step_timeout(ts, e, clock=step_clock)
-        except TerminalToolAccepted as e:
-            elapsed_ms = int((_time.time() - t0) * 1000)
+            ts.node_timings["model_call_ms"] = int(
+                ts.node_timings.get("model_call_ms", 0) or 0
+            ) + elapsed_ms
+            finish = result.finish
+            ts.node_timings["provider_finish_kind"] = finish.kind.value
+            ts.node_timings["provider_finish_reason"] = finish.raw_reason
             self._emit(
-                "terminal_tool_accepted",
-                {"tool": e.tool_name, "payload_chars": len(e.payload)},
-            )
-            self.agent.record({"role": "assistant", "content": e.payload})
-            ts.finish_success(e.payload)
-            _log_loop(f"  [loop] terminal tool {e.tool_name} ({elapsed_ms}ms)\n")
-            return self._complete_run(
-                ts,
-                e.payload,
-                recording={
-                    "step": max(ts.tool_steps, 1),
-                    "path": "native",
-                    "callback": callback,
+                "provider_finish",
+                {
+                    "step": turn,
+                    "kind": finish.kind.value,
+                    "raw_reason": finish.raw_reason,
+                    "provider": finish.provider,
                 },
             )
-        except CancelledError as e:
-            if e.answer:
-                return e.answer
-            return self._finish_user_cancel(ts, phase="model_wait")
-        except Exception as e:
-            if (msg := self._stop_for_api_error(ts, e)) is not None:
-                return msg
-            ts.stop_with_reason(StopReason.API_ERROR, "failed", detail=f"error: {e}")
-            return self._complete_run(ts, f"<final>API 错误: {e}</final>")
-
-        elapsed_ms = int((_time.time() - t0) * 1000)
-        ts.node_timings["model_call_ms"] = elapsed_ms
-        self._notify(
-            "on_post_model",
-            callback,
-            step=1,
-            raw_preview=answer[:200],
-            elapsed_ms=elapsed_ms,
-            path="native",
-        )
-
-        if answer.strip() == NATIVE_MAX_TURNS_MESSAGE:
-            ts.stop_step_limit(self.max_steps)
-            return self._complete_run(
-                ts,
-                f"<final>已达到最大工具调用步数限制({self.max_steps})，当前任务未完成。</final>",
+            self._notify(
+                "on_post_model",
+                callback,
+                step=turn,
+                raw_preview=result.text[:200],
+                elapsed_ms=elapsed_ms,
+                path="native",
             )
 
-        self.agent.record({"role": "assistant", "content": answer})
-        # final_answer schema 校验（Native 路径：仅校验 + trace，不重试）
-        ok, err_msg = self._validate_final_answer(answer)
-        if not ok:
-            self._emit("json_validation_warning", {"error": err_msg})
-        # 若 StepGuard 已设置 stop_reason（stall/goal_drift），保留之
-        if not self.stop_reason:
-            ts.finish_success(answer)
-        _log_loop(f"  [loop] final ({elapsed_ms}ms total)\n")
+            if finish.kind == FinishKind.TOOL_CALLS and result.tool_calls:
+                assistant_content = result.content or [
+                    {
+                        "type": "tool_use",
+                        "id": call.call_id,
+                        "name": call.name,
+                        "input": call.arguments,
+                    }
+                    for call in result.tool_calls
+                ]
+                tool_results: list[dict] = []
+                try:
+                    for call in result.tool_calls:
+                        self._notify_react_phase(
+                            ReactPhase.ACTING,
+                            step=turn,
+                            path="native",
+                            tool=call.name,
+                            callback=callback,
+                        )
+                        observation = self._run_tool_step(
+                            ts,
+                            call.name,
+                            call.arguments,
+                            step=ts.tool_steps + 1,
+                            path="native",
+                            callback=callback,
+                            record_assistant=True,
+                            emit_acting=False,
+                            emit_observation=True,
+                            emit_recording=True,
+                        )
+                        tool_results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": call.call_id,
+                                "content": observation,
+                            }
+                        )
+                except TerminalToolAcceptedError as e:
+                    self._emit(
+                        "terminal_tool_accepted",
+                        {"tool": e.tool_name, "payload_chars": len(e.payload)},
+                    )
+                    self.agent.record({"role": "assistant", "content": e.payload})
+                    ts.finish_success(e.payload)
+                    return self._complete_run(ts, e.payload)
+                native_tail.extend(
+                    [
+                        {"role": "assistant", "content": assistant_content},
+                        {"role": "user", "content": tool_results},
+                    ]
+                )
+                continue
+
+            if finish.kind in {FinishKind.MAX_OUTPUT_TOKENS, FinishKind.EMPTY_OUTPUT}:
+                if output_recovery < 1:
+                    output_recovery += 1
+                    if result.text:
+                        native_tail.append(
+                            {"role": "assistant", "content": result.content or result.text}
+                        )
+                    native_tail.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Complete the current turn once. Produce a valid tool call or a "
+                                "concise terminal result; do not repeat prior analysis."
+                            ),
+                        }
+                    )
+                    continue
+                ts.stop_with_reason(
+                    StopReason.PARSE_FAIL,
+                    "failed",
+                    detail=f"provider_finish={finish.kind.value}",
+                )
+                return self._complete_run(
+                    ts, f"<final>模型输出无效：{finish.kind.value}</final>"
+                )
+
+            if finish.kind == FinishKind.CONTENT_FILTER:
+                ts.stop_with_reason(
+                    StopReason.API_ERROR,
+                    "failed",
+                    detail=f"content_filter:{finish.raw_reason}",
+                )
+                return self._complete_run(ts, "<final>模型输出被 Provider 安全策略拦截。</final>")
+
+            answer = result.text.strip()
+            self.agent.record({"role": "assistant", "content": answer})
+            ok, err_msg = self._validate_final_answer(answer)
+            if not ok:
+                self._emit("json_validation_warning", {"error": err_msg})
+            if not self.stop_reason:
+                ts.finish_success(answer)
+            _log_loop(f"  [loop] final ({int((_time.time() - started) * 1000)}ms total)\n")
+            return self._complete_run(
+                ts,
+                answer,
+                recording={"step": turn, "path": "native", "callback": callback},
+            )
+
+        ts.stop_step_limit(self.max_steps)
         return self._complete_run(
             ts,
-            answer,
-            recording={
-                "step": max(ts.tool_steps, 1),
-                "path": "native",
-                "callback": callback,
-            },
+            f"<final>已达到最大工具调用步数限制({self.max_steps})，当前任务未完成。</final>",
         )
 
     def _run_with_text_parsing(self, user_message: str, ts, callback=None) -> str:
         while True:
+            if self._repair_deadline.expired():
+                ts.stop_with_reason(
+                    StopReason.DEADLINE_EXCEEDED,
+                    "stopped",
+                    detail="repair wall-clock deadline exceeded",
+                )
+                return self._complete_run(
+                    ts,
+                    "<final>已达到 repair 全局执行期限，当前任务停止。</final>",
+                )
             if (msg := self._abort_if_cancelled(ts, phase="step_start")) is not None:
                 return msg
             if (msg := self._check_xml_loop_limits(ts)) is not None:
@@ -1310,7 +1586,21 @@ class AgentLoop:
             if (msg := self._maybe_step_timeout(ts, step_clock, step, "xml")) is not None:
                 return msg
 
-            kind, payload = self.agent.parse(raw)
+            from agent_runtime.canonical_protocol import parse_model_response
+
+            response = parse_model_response(raw, expected_tools=set(self.agent.tools))
+            if response.response_kind == "final":
+                kind, payload = "final", response.payload.get("text", "")
+            elif response.response_kind == "tool_call":
+                call = response.payload["call"]
+                kind, payload = "tool", {"name": call.name, "args": call.arguments}
+            else:
+                from agent_runtime.parse_recovery import make_parse_retry
+
+                if response.payload.get("error_code") == "invalid_tool_payload":
+                    kind, payload = "tool", response.payload.get("value", {})
+                else:
+                    kind, payload = "retry", make_parse_retry(raw)
 
             if kind == "final":
                 _log_loop(f"  [loop] final ({t_parse}ms parse)\n")
@@ -1365,6 +1655,23 @@ class AgentLoop:
                     return msg
                 tool_name = payload.get("name", "unknown")
                 tool_args = payload.get("args", {})
+                from agent_runtime.repair_runtime import CanonicalToolCall, ToolSource
+
+                canonical_call = CanonicalToolCall.create(
+                    tool_name,
+                    tool_args,
+                    source=ToolSource.TEXT,
+                )
+                self.agent.session["_last_canonical_tool_call"] = {
+                    "call_id": canonical_call.call_id,
+                    "name": canonical_call.name,
+                    "arguments": canonical_call.arguments,
+                    "source": canonical_call.source.value,
+                }
+                self.agent.session["_pending_canonical_tool_call"] = {
+                    "call_id": canonical_call.call_id,
+                    "source": canonical_call.source.value,
+                }
                 try:
                     user_message = self._run_tool_step(
                         ts,
@@ -1374,7 +1681,7 @@ class AgentLoop:
                         path="xml",
                         callback=callback,
                     )
-                except TerminalToolAccepted as e:
+                except TerminalToolAcceptedError as e:
                     self._emit(
                         "terminal_tool_accepted",
                         {"tool": e.tool_name, "payload_chars": len(e.payload)},
@@ -1615,6 +1922,20 @@ class AgentLoop:
             self._store = RunStore(root=self.agent._cwd)
         return self._store
 
+    def _begin_edit_lock_turn(self) -> None:
+        """Phase B：新推理 turn 重置写串行计数。"""
+        try:
+            from src.repair.execution.edit_lock import get_active_edit_lock
+
+            root = getattr(getattr(self.agent, "tool_context", None), "root", None) or getattr(
+                self.agent, "_cwd", None
+            )
+            lock = get_active_edit_lock(root)
+            if lock is not None and hasattr(lock, "begin_turn"):
+                lock.begin_turn()
+        except Exception:
+            pass
+
     def _record_tool_outcome(self, tool_name: str, result, ts) -> None:
         meta = getattr(result, "metadata", None) or {}
         ts.record_tool_rejection(tool_name, meta)
@@ -1635,23 +1956,11 @@ class AgentLoop:
             get_registry().counter_inc("fixloop_tool_steps_total", labels={"tier": tier})
         except Exception:
             pass
-        # Localizer 工具顺序检测：ast_parse 前应先调 stack_parse
-        agent_name = getattr(self.agent, "_agent_name", "") or ""
-        if agent_name == "localizer" and tool_name == "ast_parse":
-            history = self.agent.session.get("history", [])
-            called_tools = {h.get("tool_name") for h in history if h.get("tool_name")}
-            if "stack_parse" not in called_tools:
-                self._emit(
-                    "tool_order_warning",
-                    {
-                        "agent": "localizer",
-                        "tool": "ast_parse",
-                        "expected_before": "stack_parse",
-                    },
-                )
         preview = meta.get("patch_preview")
         if preview:
             self._emit("tool_preview", {"tool": tool_name, **preview})
+        if meta.get("provider") == "mcp":
+            self._emit("mcp_call", tool_trace_payload(tool_name, meta))
         self._emit("tool_executed", tool_trace_payload(tool_name, meta))
 
     def _emit(self, event: str, payload: dict | None = None):

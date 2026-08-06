@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Any, Protocol
 
 from agent_runtime.mcp.client import InProcessTransport, McpClient
 from agent_runtime.mcp.errors import McpError, McpUnavailableError
 from agent_runtime.mcp.github_allowlist import (
-    GITHUB_MCP_READ_TOOLS,
     GITHUB_MCP_WRITE_TOOLS,
     is_github_mcp_tool_allowed,
 )
 from agent_runtime.mcp.mock_server import MockGitHubMcpServer
 from agent_runtime.mcp.schema_map import json_schema_to_fixloop
+from src.tools.spec import ToolSpec, project_tool_specs
 
 
 class _McpClientLike(Protocol):
@@ -37,53 +38,110 @@ def build_mock_github_mcp_client(
     return client, server
 
 
+class McpToolExecution(str):
+    """Canonical result passed from an MCP adapter to ToolExecutor."""
+
+    def __new__(
+        cls,
+        content: str,
+        *,
+        metadata: dict[str, Any] | None = None,
+        structured_facts: list[dict[str, Any]] | None = None,
+        raw: dict[str, Any] | None = None,
+    ) -> McpToolExecution:
+        value = super().__new__(cls, content)
+        value.content = content
+        value.metadata = dict(metadata or {})
+        value.structured_facts = list(structured_facts or [])
+        value.raw = dict(raw or {})
+        return value
+
+
+def build_github_mcp_tool_specs(client: _McpClientLike) -> list[ToolSpec]:
+    """Discover allowed GitHub tools and build canonical ToolSpecs."""
+    specs: list[ToolSpec] = []
+    for remote in client.list_tools():
+        if not is_github_mcp_tool_allowed(remote.name):
+            continue
+        is_write = remote.name in GITHUB_MCP_WRITE_TOOLS
+        specs.append(
+            ToolSpec(
+                name=remote.name,
+                description=remote.description or f"GitHub MCP: {remote.name}",
+                input_schema=json_schema_to_fixloop(remote.properties, remote.required),
+                protocol_schema={
+                    "type": "object",
+                    "properties": dict(remote.properties),
+                    "required": list(remote.required),
+                    "additionalProperties": False,
+                },
+                executor=_make_runner(client, remote.name),
+                roles=frozenset({"patcher"} if is_write else {"*"}),
+                phases=frozenset({"context", "patch", "verify", "verification"}),
+                budget_group="write" if is_write else "read",
+                timeout_s=float(getattr(client, "timeout_s", 30.0) or 30.0),
+                side_effect="external_write" if is_write else "read",
+                replay_policy="never_replay" if is_write else "revalidate",
+                trust_level="external",
+                capabilities=frozenset(
+                    {"github.write", "mcp.tools.call"}
+                    if is_write
+                    else {"github.read", "mcp.tools.call"}
+                ),
+                provider="mcp",
+                server=client.server_name,
+            )
+        )
+    return specs
+
+
 def build_github_mcp_tool_registry(client: _McpClientLike) -> dict[str, dict[str, Any]]:
     """``tools/list`` → 过滤 allowlist → FixLoop tools dict。
 
     每条含 ``schema/risky/execution_tier/description/run``，
     ``run`` 内部 ``tools/call`` 并把结果写成 Observation 字符串。
     """
-    tools: dict[str, dict[str, Any]] = {}
-    for spec in client.list_tools():
-        if not is_github_mcp_tool_allowed(spec.name):
-            continue
-        schema = json_schema_to_fixloop(spec.properties, spec.required)
-        risky = spec.name in GITHUB_MCP_WRITE_TOOLS
-        tools[spec.name] = {
-            "schema": schema,
-            "risky": risky,
-            "execution_tier": "host",
-            "description": spec.description or f"GitHub MCP: {spec.name}",
-            "mcp_server": client.server_name,
-            "mcp_tool": spec.name,
-            "run": _make_runner(client, spec.name),
-        }
+    tools = project_tool_specs(build_github_mcp_tool_specs(client))
+    for name, tool in tools.items():
+        tool["mcp_server"] = client.server_name
+        tool["mcp_tool"] = name
     return tools
 
 
 def _make_runner(client: _McpClientLike, tool_name: str):
-    def run(args: dict) -> str:
+    def run(args: dict) -> McpToolExecution:
+        started = time.monotonic()
         try:
             result = client.call_tool(tool_name, args)
-            return result.observation()
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            status = "error" if result.is_error else "success"
+            return McpToolExecution(
+                content=result.observation(),
+                metadata={
+                    "tool_status": status,
+                    "tool_error_code": "tool_execution_failed" if result.is_error else "",
+                    "retryable": False,
+                    "provider": "mcp",
+                    "mcp_server": client.server_name,
+                    "mcp_tool": tool_name,
+                    "mcp_duration_ms": elapsed_ms,
+                },
+                structured_facts=result.structured_facts(),
+                raw=result.raw,
+            )
         except McpError as exc:
-            return exc.observation()
+            metadata = exc.metadata()
+            metadata.update(
+                {
+                    "provider": "mcp",
+                    "mcp_server": client.server_name,
+                    "mcp_tool": tool_name,
+                    "mcp_duration_ms": int((time.monotonic() - started) * 1000),
+                }
+            )
+            return McpToolExecution(content=exc.observation(), metadata=metadata)
 
     return run
-
-
-def github_mcp_permission_grants() -> dict[str, set[str]]:
-    """返回可并入 ``REPAIR_PERMISSION_TABLE`` 的权限片段。
-
-    读工具：localizer/retriever/patcher；写 draft_pr：仅 patcher（且须 ask）。
-    """
-    table: dict[str, set[str]] = {}
-    readers = {"localizer", "retriever", "patcher"}
-    for name in GITHUB_MCP_READ_TOOLS:
-        table[name] = set(readers)
-    for name in GITHUB_MCP_WRITE_TOOLS:
-        table[name] = {"patcher"}
-    return table
 
 
 def _want_official() -> bool:
@@ -129,5 +187,8 @@ def build_github_mcp_tools_auto() -> dict[str, dict[str, Any]]:
         client, _handle = open_github_mcp_client()
         return build_github_mcp_tool_registry(client)
     except McpUnavailableError:
-        client, _ = build_mock_github_mcp_client()
-        return build_github_mcp_tool_registry(client)
+        fallback = os.environ.get("FIXLOOP_GITHUB_MCP_FALLBACK", "error").strip().lower()
+        if fallback in {"mock", "fake"}:
+            client, _ = build_mock_github_mcp_client()
+            return build_github_mcp_tool_registry(client)
+        raise

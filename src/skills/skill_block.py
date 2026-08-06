@@ -5,17 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from src.middleware import REPAIR_PERMISSION_TABLE
 from src.state import RepairPlan
+from src.tools.spec import default_repair_tool_registry
 
-SkillHintRole = Literal["localizer", "retriever", "patcher", "verifier"]
+SkillHintRole = Literal["patcher", "verifier"]
 SkillBlockSource = Literal["hit", "miss", "none"]
 
 SKILL_BLOCK_HEADER = "[Skill 提示]"
 
 ROLE_LABELS: dict[SkillHintRole, str] = {
-    "localizer": "Localizer",
-    "retriever": "Retriever",
     "patcher": "Patcher",
     "verifier": "Verifier",
 }
@@ -23,30 +21,15 @@ ROLE_LABELS: dict[SkillHintRole, str] = {
 
 def _tools_allowed_for_role(role: SkillHintRole) -> set[str]:
     """Tools the role may use per Layer-2 ACL (E3′)."""
-    allowed: set[str] = set()
-    for tool, agents in REPAIR_PERMISSION_TABLE.items():
-        if "*" in agents or role in agents:
-            allowed.add(tool)
-    return allowed
+    registry = default_repair_tool_registry()
+    return {spec.name for spec in registry.visible_to(role)}
 
 _ROLE_CHAR_LIMITS: dict[SkillHintRole, int] = {
-    "localizer": 400,
-    "retriever": 600,
     "patcher": 1200,
     "verifier": 300,
 }
 
 _ROLE_MISS_DEFAULTS: dict[SkillHintRole, dict[str, object]] = {
-    "localizer": {
-        "summary": "未命中专用 Skill；请先从堆栈与嫌疑文件定位根因，再选择工具。",
-        "guidance": [],
-        "avoid": [],
-    },
-    "retriever": {
-        "summary": "未命中专用 Skill；优先 find_test / read_file 收集断言与实现上下文。",
-        "guidance": [],
-        "avoid": [],
-    },
     "patcher": {
         "summary": "未命中专用 Skill；以测试 assert 期望为准，做最小必要源码改动。",
         "guidance": [
@@ -98,6 +81,8 @@ def _tool_chain(plan: RepairPlan, role: SkillHintRole) -> str:
     if not raw:
         return "（无）"
     allowed = _tools_allowed_for_role(role)
+    # Skill hints are advisory; intersect them with the runtime ACL so a
+    # workspace or remote Skill can never expand a role's capabilities.
     filtered = [t for t in raw if t in allowed]
     if not filtered:
         return "（无）"
@@ -121,20 +106,6 @@ def _build_hit_lines(plan: RepairPlan, role: SkillHintRole) -> list[str]:
         f"角色: {ROLE_LABELS[role]}",
         f"策略: {skill.matched_skill}",
     ]
-
-    if role == "localizer":
-        lines.append(f"工具序: {_tool_chain(plan, role)}")
-        if skill.guidance:
-            lines.append(f"定位提示: {skill.guidance[0]}")
-        return lines
-
-    if role == "retriever":
-        lines.append(f"工具序: {_tool_chain(plan, role)}")
-        if skill.guidance:
-            lines.append("检索要点:")
-            for item in skill.guidance[:2]:
-                lines.append(f"  - {item}")
-        return lines
 
     if role == "verifier":
         if skill.guidance:

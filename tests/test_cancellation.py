@@ -234,7 +234,7 @@ class TestPatcherCompleteOnceCancel:
             "agent_runtime.workspace", fromlist=["WorkspaceContext"]
         ).WorkspaceContext.build(str(temp_workspace))
         pat = create_patcher(SlowClient(["[]"]), ws_ctx)
-        orch = Orchestrator(None, None, pat, use_pytest_verify=False)
+        orch = Orchestrator(pat, use_pytest_verify=False)
         orch._repair_ctx = RepairRunContext(cancel_token=token)
         orch._bind_cancel_token(token)
 
@@ -395,21 +395,13 @@ class TestRepairCancel:
     def test_immediate_cancel_restores_repo(self, temp_workspace):
         from agent_runtime.cancellation import CancellationToken
         from agent_runtime.workspace import WorkspaceContext
-        from src.agents.localizer import create_localizer
         from src.agents.patcher import create_patcher
-        from src.agents.retriever import create_retriever
         from src.orchestrator import Orchestrator
-        from src.repair.termination import RepairTerminalStatus
+        from src.repair.verification.termination import RepairTerminalStatus
 
         ws = WorkspaceContext.build(str(temp_workspace))
-        loc = FakeModelClient(
-            ['<final>[{"file_path":"app.py","start_line":1,"end_line":1,"reason":"x"}]</final>']
-        )
-        ret = FakeModelClient(['<final>{"related_tests":[]}</final>'])
         pat = FakeModelClient(["<final>[]</final>"])
         orch = Orchestrator(
-            create_localizer(loc, ws),
-            create_retriever(ret, ws),
             create_patcher(pat, ws),
             use_pytest_verify=False,
         )

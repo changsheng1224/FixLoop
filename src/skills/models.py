@@ -26,6 +26,10 @@ class SkillSpec(BaseModel):
     guidance: list[str] = Field(default_factory=list)
     avoid: list[str] = Field(default_factory=list)
     example_patch: str = ""
+    source: str = "builtin_verified"
+    trust_level: str = "verified"
+    scope: str = "workspace"
+    version: str = "1"
 
     @field_validator("name")
     @classmethod
@@ -44,6 +48,24 @@ class SkillSpec(BaseModel):
         if cleaned not in ALLOWED_SKILL_LANGUAGES:
             allowed = ", ".join(sorted(ALLOWED_SKILL_LANGUAGES))
             raise ValueError(f"language must be one of: {allowed}")
+        return cleaned
+
+    @field_validator("source")
+    @classmethod
+    def validate_source(cls, value: str) -> str:
+        allowed = {"builtin_verified", "workspace_local", "user_provided", "remote_untrusted"}
+        cleaned = value.strip().lower()
+        if cleaned not in allowed:
+            raise ValueError(f"source must be one of: {', '.join(sorted(allowed))}")
+        return cleaned
+
+    @field_validator("trust_level")
+    @classmethod
+    def validate_trust(cls, value: str) -> str:
+        allowed = {"verified", "trusted", "untrusted"}
+        cleaned = value.strip().lower()
+        if cleaned not in allowed:
+            raise ValueError(f"trust_level must be one of: {', '.join(sorted(allowed))}")
         return cleaned
 
     @field_validator("trigger_pattern")
@@ -102,6 +124,10 @@ class MatchedSkill:
     avoid: list[str] = field(default_factory=list)
     example_patch: str = ""
     candidates_count: int = 1
+    source: str = "builtin_verified"
+    trust_level: str = "verified"
+    scope: str = "workspace"
+    version: str = "1"
 
     @classmethod
     def from_spec(cls, spec: SkillSpec, *, candidates_count: int = 1) -> MatchedSkill:
@@ -116,6 +142,10 @@ class MatchedSkill:
             avoid=list(spec.avoid),
             example_patch=spec.example_patch,
             candidates_count=candidates_count,
+            source=spec.source,
+            trust_level=spec.trust_level,
+            scope=spec.scope,
+            version=spec.version,
         )
 
     def to_trace_payload(self) -> dict:
@@ -126,6 +156,10 @@ class MatchedSkill:
             "suggested_tools": list(self.suggested_tools),
             "candidates_count": self.candidates_count,
             "confidence": self.confidence,
+            "source": self.source,
+            "trust_level": self.trust_level,
+            "scope": self.scope,
+            "version": self.version,
         }
 
     @property

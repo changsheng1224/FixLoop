@@ -9,10 +9,14 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from src.harness.sandbox_manager import sandbox_pythonpath_prefix
+
+if TYPE_CHECKING:
+    from src.state import VerificationResult
 
 __all__ = [
     "VerifyProfile",
@@ -168,7 +172,7 @@ def parse_django_runtests_output(
     *,
     exit_code: int,
     labels: list[str] | None = None,
-) -> "VerificationResult":
+) -> VerificationResult:
     """解析 runtests 文本输出为 VerificationResult。"""
     from src.state import VerificationResult
 
@@ -201,7 +205,10 @@ def parse_django_runtests_output(
         if labels:
             logs.append("labels=" + ",".join(labels[:5]))
     elif not all_passed:
-        logs.append(f"django_runtests: exit={exit_code} ran={ran} failures={failures} errors={errors}")
+        logs.append(
+            f"django_runtests: exit={exit_code} ran={ran} "
+            f"failures={failures} errors={errors}"
+        )
     # 附带 stderr/stdout 尾部
     tail = text.strip()[-1200:]
     if tail:

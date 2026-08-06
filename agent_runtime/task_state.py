@@ -39,6 +39,9 @@ class TaskState:
     l2_agent: str = ""
     l2_phase: str = ""
     l2_attempt: int = 0
+    phase: str = ""
+    turn: int = 0
+    failure_attribution: dict = field(default_factory=dict)
 
     @classmethod
     def create(
@@ -196,6 +199,9 @@ class TaskState:
             "l2_agent": self.l2_agent,
             "l2_phase": self.l2_phase,
             "l2_attempt": self.l2_attempt,
+            "phase": self.phase,
+            "turn": self.turn,
+            "failure_attribution": self.failure_attribution,
         }
 
     @classmethod
@@ -226,4 +232,7 @@ class TaskState:
             l2_agent=data.get("l2_agent", ""),
             l2_phase=data.get("l2_phase", ""),
             l2_attempt=int(data.get("l2_attempt", 0) or 0),
+            phase=data.get("phase", ""),
+            turn=int(data.get("turn", 0) or 0),
+            failure_attribution=dict(data.get("failure_attribution", {}) or {}),
         )

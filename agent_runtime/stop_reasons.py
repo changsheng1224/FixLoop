@@ -29,6 +29,7 @@ class StopReason(StrEnum):
     GOAL_DRIFT = "goal_drift"
     CONTEXT_OVERFLOW = "context_overflow"
     BUDGET_EXHAUSTED = "budget_exhausted"
+    DEADLINE_EXCEEDED = "deadline_exceeded"
 
 
 CANONICAL_STOP_REASONS = frozenset(member.value for member in StopReason)

@@ -9,7 +9,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from src.benchmark.swebench.classify import classify_failure, classify_post_repair, summarize_failures
+from src.benchmark.swebench.classify import (
+    classify_failure,
+    classify_post_repair,
+    summarize_failures,
+)
 from src.benchmark.swebench.convert import instance_to_issue
 from src.benchmark.swebench.dataset import DatasetError, load_instances
 from src.benchmark.swebench.dev_instances import DATASET_NAME, DEV_INSTANCE_IDS
@@ -17,7 +21,7 @@ from src.benchmark.swebench.harness import run_official_harness
 from src.benchmark.swebench.manifest import build_manifest, write_manifest
 from src.benchmark.swebench.patch_export import export_model_patch
 from src.benchmark.swebench.predictions import write_predictions_jsonl
-from src.benchmark.swebench.repo_prep import RepoPrepError, prepare_repo
+from src.benchmark.swebench.repo_prep import RepoPrepError, preflight_repo, prepare_repo
 from src.benchmark.swebench.types import FailureClass, InstanceResult, SweInstance
 
 
@@ -42,6 +46,7 @@ class AdapterConfig:
     harness_backend: str = "auto"  # auto | native | wsl
     wsl_distro: str | None = None
     harness_only_with_patch: bool = True
+    allow_gold_patch_injection: bool = False
 
 
 class SweBenchAdapter:
@@ -59,7 +64,6 @@ class SweBenchAdapter:
         cfg = self.config
         cfg.output_dir.mkdir(parents=True, exist_ok=True)
         cfg.work_root.mkdir(parents=True, exist_ok=True)
-
         manifest = build_manifest(
             instance_ids=cfg.instance_ids,
             model=cfg.model,
@@ -72,6 +76,11 @@ class SweBenchAdapter:
                 "run_harness": cfg.run_harness,
                 "skip_verify": cfg.skip_verify,
                 "allow_unverified_harness": cfg.allow_unverified_harness,
+                "repair_runtime": "patcher_v2",
+                "baseline_policy": "strict_preflight_v1",
+                "gold_patch_visibility": "assisted"
+                if cfg.allow_gold_patch_injection
+                else "strict",
             },
         )
         write_manifest(cfg.output_dir / "manifest.json", manifest)
@@ -92,19 +101,24 @@ class SweBenchAdapter:
             self._write_report(report)
             return report
 
+        from src.repair.progress import progress_emitter_from_env
+
+        progress = progress_emitter_from_env()
         results: list[InstanceResult] = []
         for idx, inst in enumerate(instances, 1):
-            print(
-                f"[swebench] ({idx}/{len(instances)}) start {inst.instance_id}",
-                flush=True,
+            progress.emit(
+                "instance_progress",
+                summary=f"({idx}/{len(instances)}) start {inst.instance_id}",
             )
             results.append(self._run_one(inst))
             r = results[-1]
-            print(
-                f"[swebench] ({idx}/{len(instances)}) done {inst.instance_id} "
-                f"class={r.failure_class} patch_bytes={len(r.model_patch)} "
-                f"ms={r.duration_ms}",
-                flush=True,
+            progress.emit(
+                "instance_progress",
+                summary=(
+                    f"({idx}/{len(instances)}) done {inst.instance_id} "
+                    f"class={r.failure_class} patch_bytes={len(r.model_patch)} "
+                    f"ms={r.duration_ms}"
+                ),
             )
 
         preds_path = write_predictions_jsonl(cfg.output_dir / "predictions.jsonl", results)
@@ -327,6 +341,17 @@ class SweBenchAdapter:
             result.duration_ms = int((time.time() - t0) * 1000)
             return result
 
+        preflight = preflight_repo(repo_path, base_commit=inst.base_commit)
+        result.baseline_preflight = preflight
+        if not preflight.get("ok", False):
+            reasons = preflight.get("reasons") or []
+            detail = ",".join(str(r) for r in reasons) if reasons else "baseline_dirty"
+            result.failure_class = FailureClass.BASELINE_DIRTY
+            result.error = "baseline_dirty"
+            result.failure_detail = detail
+            result.duration_ms = int((time.time() - t0) * 1000)
+            return result
+
         # 快照 original（用于 diff）；Agent 直接改 worktree
         original_snap = cfg.output_dir / "snapshots" / inst.instance_id / "original"
         if original_snap.exists():
@@ -347,11 +372,12 @@ class SweBenchAdapter:
         try:
             orch = self.orchestrator_factory(str(repo_path))
             # 若工厂支持 set_gold（测试辅助）
-            setter = getattr(orch, "set_gold_patch", None)
-            if callable(setter):
-                setter(inst.patch)
-            elif hasattr(orch, "_gold") and inst.patch:
-                orch._gold = inst.patch
+            if cfg.allow_gold_patch_injection and inst.patch:
+                setter = getattr(orch, "set_gold_patch", None)
+                if callable(setter):
+                    setter(inst.patch)
+                elif hasattr(orch, "_gold") and inst.patch:
+                    orch._gold = inst.patch
             issue = instance_to_issue(inst)
             state = orch.repair(
                 issue,

@@ -2,9 +2,10 @@
 
 from src.blackboard import Blackboard
 from src.prompts.patcher_task_builder import assemble_patcher_variables
+from src.prompts.repair_tasks import render_repair_task
 from src.repair.blackboard_merge import (
     write_feedback_to_blackboard,
-    write_localize_phase_to_blackboard,
+    write_seed_context_to_blackboard,
 )
 from src.repair.blackboard_subscribe import (
     PATCHER_PREFIX_SUBSCRIPTIONS,
@@ -18,9 +19,9 @@ class TestSubscribePrefixes:
     def test_subscribe_prefixes_batch_read(self):
         bb = Blackboard()
         bb.write(
-            "suspect:a.py:1", {"file_path": "a.py", "start_line": 1, "end_line": 1}, "localizer"
+            "suspect:a.py:1", {"file_path": "a.py", "start_line": 1, "end_line": 1}, "patcher"
         )
-        bb.write("context:related_tests", ["test_a.py"], "retriever")
+        bb.write("context:related_tests", ["test_a.py"], "verifier")
         result = subscribe_prefixes(bb, ["suspect:", "context:"])
         assert len(result["suspect:"]) == 1
         assert result["context:"]["context:related_tests"] == ["test_a.py"]
@@ -30,7 +31,7 @@ class TestRenderPatcherPrefixBlocks:
     def test_renders_suspects_and_context(self, temp_workspace):
         (temp_workspace / "calc.py").write_text("line41\nline42\nline43\n", encoding="utf-8")
         bb = Blackboard()
-        write_localize_phase_to_blackboard(
+        write_seed_context_to_blackboard(
             bb,
             [SuspectLocation(file_path="calc.py", start_line=2, end_line=2, reason="stack")],
             RetrievedContext(related_tests=["test_calc.py"]),
@@ -73,7 +74,7 @@ class TestAssemblePatcherWithBlackboard:
     def test_uses_prefix_subscription_when_blackboard_present(self, temp_workspace):
         (temp_workspace / "app.py").write_text("bug\n", encoding="utf-8")
         bb = Blackboard()
-        write_localize_phase_to_blackboard(
+        write_seed_context_to_blackboard(
             bb,
             [SuspectLocation(file_path="app.py", start_line=1, end_line=1, reason="err")],
             None,
@@ -93,3 +94,19 @@ class TestAssemblePatcherWithBlackboard:
         assert "app.py:1" in variables["suspects_block"]
         assert meta is not None
         assert "suspect:" in meta["subscribed_prefixes"]
+
+    def test_runtime_contract_block_enters_patcher_template(self):
+        variables, _render, _meta = assemble_patcher_variables(
+            suspects=[],
+            context=None,
+            feedback="",
+            plan=RepairPlan(suspect_files=["app.py"]),
+            issue="TypeError at app.py:1",
+            read_snippet=lambda *_: "",
+            read_test_context=lambda *_: [],
+            fallback_suspects=lambda *_: [],
+            runtime_contract_block="[PATCHER RUNTIME CONTRACT]\n- contract ok",
+        )
+        text, _ = render_repair_task("patcher", variables)
+        assert "[PATCHER RUNTIME CONTRACT]" in text
+        assert "contract ok" in text

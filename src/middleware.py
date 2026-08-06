@@ -10,21 +10,62 @@ from agent_runtime.tool_rejection import build_gateway_rejection_metadata
 class ToolGateway:
     """Agent 工具调用权限网关。"""
 
-    def __init__(self, permission_table: dict[str, set[str]]):
-        self._table = {}
-        for tool, agents in permission_table.items():
-            self._table[tool] = agents if isinstance(agents, set) else set(agents)
-        self._restricted: set[str] = set()
+    def __init__(
+        self,
+        *,
+        policy=None,
+        registry,
+    ):
+        if policy is None:
+            from src.collaboration_governance import CollaborationGovernance
+
+            policy = CollaborationGovernance(registry=registry)
+        self._registry = registry
+        self._policy = policy
+        self._runtime_context: dict[str, dict[str, str]] = {}
+
+    def set_context(
+        self,
+        agent_name: str,
+        *,
+        mode: str = "repair",
+        phase: str = "",
+        evidence: bool = True,
+        read_before_write: bool = True,
+    ) -> None:
+        self._runtime_context[agent_name] = {
+            "mode": mode,
+            "phase": phase,
+            "evidence": evidence,
+            "read_before_write": read_before_write,
+        }
+
+    def bind_tools(self, tools: dict[str, dict]) -> None:
+        """Register runtime-provided tools in the canonical registry."""
+        self._registry.bind_execution_tools(tools)
+        self._policy.refresh_from_registry(self._registry)
+
+    def query_capabilities(
+        self,
+        agent_name: str,
+        *,
+        phase: str = "",
+        mode: str = "repair",
+    ) -> dict:
+        """Return the same governed capability view used by authorization."""
+        return self._registry.capabilities_for(agent_name, phase=phase, mode=mode)
 
     def can_call(self, agent_name: str, tool_name: str) -> bool:
         """检查 agent 是否被授权调用 tool。"""
-        allowed = self._table.get(tool_name)
-        if allowed is None:
-            return False
-        # 受限 agent 不享受通配符
-        if agent_name in self._restricted:
-            return agent_name in allowed
-        return "*" in allowed or agent_name in allowed
+        context = self._runtime_context.get(agent_name, {})
+        return any(
+            spec.name == tool_name
+            for spec in self._registry.visible_to(
+                agent_name,
+                context.get("phase", ""),
+                context.get("mode", "repair"),
+            )
+        )
 
     def dispatch(self, agent_name: str, tool_name: str, execute_fn):
         """有权限则执行 execute_fn，否则返回 permission_denied 工具结果。"""
@@ -33,80 +74,45 @@ class ToolGateway:
                 content=f"Error: 工具 '{tool_name}' 对 '{agent_name}' 不可用。",
                 metadata=build_gateway_rejection_metadata(),
             )
+        if self._policy is not None and agent_name in self._runtime_context:
+            context = self._runtime_context.get(agent_name, {})
+            decision = self._policy.authorize(
+                tool_name,
+                role=agent_name,
+                mode=context.get("mode", "repair"),
+                phase=context.get("phase", ""),
+                evidence=bool(context.get("evidence", False)),
+                read_before_write=bool(context.get("read_before_write", False)),
+            )
+            if not decision.allowed:
+                return ToolExecutionResult(
+                    content=(
+                        f"Error: {tool_name} rejected: {decision.reason}; "
+                        f"alternatives={decision.alternatives}"
+                    ),
+                    metadata=build_gateway_rejection_metadata(
+                        rejection_reason=decision.reason,
+                        policy_reason=decision.reason,
+                        alternatives=decision.alternatives,
+                    ),
+                )
         return execute_fn()
-
-    def grant(self, agent_name: str, tool_name: str):
-        """为 agent 追加 tool 调用权限。"""
-        if tool_name not in self._table:
-            self._table[tool_name] = set()
-        self._table[tool_name].add(agent_name)
-
-    def revoke(self, agent_name: str, tool_name: str):
-        """撤销 agent 对 tool 的调用权限。"""
-        if tool_name in self._table and agent_name in self._table[tool_name]:
-            self._table[tool_name].discard(agent_name)
-
-    def restrict_to(self, agent_name: str, allowed_tools: list[str]) -> None:
-        """将 agent 的工具权限限制在 allowed_tools 白名单内。
-
-        标记 agent 为受限（跳过通配符匹配）；grant 白名单工具；revoke 非白名单工具。
-        """
-        self._restricted.add(agent_name)
-        allowed = set(allowed_tools)
-        for tool_name in list(self._table.keys()):
-            if tool_name in allowed:
-                self._table[tool_name].add(agent_name)
-            else:
-                self._table[tool_name].discard(agent_name)
-        for tool_name in allowed:
-            if tool_name not in self._table:
-                self._table[tool_name] = {agent_name}
-
-
-# ---- 共享权限表 ----
-
-# 未列出的工具默认拒绝（can_call 无通配 fallback）。
-# run_shell 禁止 multi-agent repair 宿主机 shell；baseline 使用 _baseline_gateway。
-REPAIR_PERMISSION_TABLE = {
-    "ast_parse": {"localizer"},
-    "stack_parse": {"localizer"},
-    "write_file": {"patcher"},
-    "patch_file": {"patcher"},
-    "git_blame": {"localizer", "retriever", "patcher"},
-    "git_diff": {"localizer", "retriever", "patcher"},
-    "find_test": {"retriever", "patcher"},
-    "search": {"*"},
-    "grep": {"*"},
-    "inspect_file": {"localizer", "retriever", "patcher"},
-    "read_file": {"*"},
-    "list_files": {"*"},
-    "submit_retrieved_context": {"retriever"},
-    "run_shell": set(),
-    # GitHub MCP（agent_runtime/mcp）— 工具未注册时无影响
-    "github_list_issues": {"localizer", "retriever", "patcher"},
-    "github_get_issue": {"localizer", "retriever", "patcher"},
-    "github_list_issue_comments": {"localizer", "retriever", "patcher"},
-    "github_get_repo": {"localizer", "retriever", "patcher"},
-    "github_list_commits": {"localizer", "retriever", "patcher"},
-    "github_get_commit": {"localizer", "retriever", "patcher"},
-    "github_list_branches": {"localizer", "retriever", "patcher"},
-    "github_list_pull_requests": {"localizer", "retriever", "patcher"},
-    "github_get_pull_request": {"localizer", "retriever", "patcher"},
-    "github_list_workflow_runs": {"localizer", "retriever", "patcher"},
-    "github_create_draft_pr": {"patcher"},
-}
-
 
 def build_repair_gateway(repo_root: str = "") -> ToolGateway:
     """返回 Layer 2 修复流水线默认 ToolGateway。
 
-    若 ``.agent/tools.yaml`` 存在，加载用户自定义权限并与内置合并。
+    若 ``.agent/tools.yaml`` 存在，直接覆盖对应 ToolSpec 的角色集合。
     """
-    table = {tool: set(agents) for tool, agents in REPAIR_PERMISSION_TABLE.items()}
-    if repo_root:
-        from src.tools.manifest import load_tools_manifest, merge_permission_table
+    from src.collaboration_governance import CollaborationGovernance
+    from src.tools.spec import default_repair_tool_registry
 
-        user_table = load_tools_manifest(repo_root)
-        if user_table:
-            table = merge_permission_table(table, user_table)
-    return ToolGateway(table)
+    registry = default_repair_tool_registry()
+    if repo_root:
+        from src.tools.manifest import load_tool_role_overrides
+
+        for name, roles in load_tool_role_overrides(repo_root).items():
+            registry.set_roles(name, roles)
+    return ToolGateway(
+        policy=CollaborationGovernance(registry=registry),
+        registry=registry,
+    )

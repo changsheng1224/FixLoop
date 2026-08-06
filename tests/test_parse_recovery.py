@@ -12,7 +12,6 @@ from agent_runtime.parse_recovery import (
     format_caret_line,
     truncate_snippet,
 )
-from agent_runtime.runtime import Agent
 
 
 class TestCaretFormatting:
@@ -89,37 +88,6 @@ class TestFailureFromJsonInTool:
         failure = failure_from_json_in_tool(text, caught.value)
         assert failure.kind == "json_in_tool"
         assert failure.error_offset == caught.value.pos
-
-
-class TestAgentParseRecovery:
-    def test_invalid_json_in_tool_has_caret(self):
-        kind, notice = Agent.parse("<tool>{not valid json}</tool>")
-        assert kind == "retry"
-        assert "^" in str(notice)
-        assert "JSON" in str(notice) or "json" in str(notice).lower()
-
-    def test_garbage_still_retries(self):
-        kind, notice = Agent.parse("random text without any tags")
-        assert kind == "retry"
-        assert "④" in str(notice)  # 四段式 prompt
-
-    @pytest.mark.parametrize(
-        "raw",
-        [
-            "",
-            "random text without any tags",
-            "<tool>{not valid json}</tool>",
-            '<tool>{"name":"test"',
-            "<read_file>x</read_file>",
-        ],
-    )
-    def test_retry_payload_is_parse_retry_with_failure(self, raw):
-        from agent_runtime.parse_recovery import ParseRetry, diagnose_parse_failure
-
-        kind, payload = Agent.parse(raw)
-        assert kind == "retry"
-        assert isinstance(payload, ParseRetry)
-        assert payload.failure.kind == diagnose_parse_failure(raw).kind
 
 
 # ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.repair.verify_test_patch import (
+from src.repair.verification.verify_test_patch import (
     VerifyTestPatchOverlay,
     extract_targets_from_test_patch,
     iter_test_patch_paths,

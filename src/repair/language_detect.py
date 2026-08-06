@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from src.repair.issue_paths import extract_paths_from_issue
+from src.repair.localization.issue_paths import extract_paths_from_issue
 
 DEFAULT_LANGUAGE = "python"
 

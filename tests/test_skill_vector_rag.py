@@ -171,7 +171,7 @@ class TestOrchestratorSkillSemanticWiring:
 
         monkeypatch.setattr("src.skills.matcher.match_skill_semantic", fake_semantic)
 
-        orch = Orchestrator(None, None, None)
+        orch = Orchestrator(None)
         result = orch._match_skill("TypeError at calc.py", language="python")
 
         assert result is not None

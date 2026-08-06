@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from src.repair.suspect_blocks import (
+from src.repair.localization.suspect_blocks import (
     DIFF_CONTEXT_LINES,
     render_suspects_diff_only,
     render_suspects_summary,

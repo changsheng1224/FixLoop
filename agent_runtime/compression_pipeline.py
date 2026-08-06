@@ -52,6 +52,14 @@ HIGH_VALUE_TOOLS = frozenset({"write_file", "patch_file", "run_shell"})
 PROTECTED_KEYWORDS = ("Error", "Traceback", "Fail", "FAILED", "error:")
 
 
+def is_repair_state_item(item: dict) -> bool:
+    """State records are protected even when they contain no error keyword."""
+    if item.get("repair_state") or item.get("evidence_ref"):
+        return True
+    content = str(item.get("content", ""))
+    return content.startswith("修复状态") or content.startswith("[repair-context]")
+
+
 def truncate_tool_content(
     content: str,
     tool_name: str = "",
@@ -169,6 +177,8 @@ def score_turn(turn: list[dict], *, current_turn_id: int | None = None) -> str:
     if is_current_turn(turn, current_turn_id):
         return "keep"
     if any(item.get("_snip") for item in turn):
+        return "keep"
+    if any(is_repair_state_item(item) for item in turn):
         return "keep"
     combined = "\n".join(str(item.get("content", "")) for item in turn)
     if any(keyword in combined for keyword in PROTECTED_KEYWORDS):
@@ -478,6 +488,8 @@ def l3_microcompact(
         for idx, item in enumerate(working):
             if item.get("role") != "tool":
                 continue
+            if is_repair_state_item(item):
+                continue
             if item.get("_snip") or item.get("_compact_ref"):
                 continue
             turn_idx = flat_index_to_turn(idx, turns)
@@ -709,7 +721,12 @@ def _partition_pinned(history: list[dict]) -> tuple[list[dict], list[dict]]:
         is_first_user = role == "user" and not seen_user
         if role == "user":
             seen_user = True
-        if is_first_user or "Error: Traceback" in content or "[Earlier summary]" in content:
+        if (
+            is_first_user
+            or "Error: Traceback" in content
+            or "[Earlier summary]" in content
+            or is_repair_state_item(item)
+        ):
             pinned.append(dict(item))
         else:
             unpinned.append(dict(item))
@@ -768,8 +785,11 @@ def _build_l5_summary_prompt(
 
     # 全量摘要（无已有摘要）
     prompt_lines = [
-        "Summarize the following conversation in 1-2 sentences.",
-        "Focus on: files read, tools used, errors encountered, decisions made.",
+        "Summarize the following repair conversation as JSON only.",
+        "Schema: {confirmed_facts:[], hypotheses:[], rejected_hypotheses:[], "
+        "files_changed:[], verification:{}, next_action:'', evidence_refs:[]}",
+        "Never turn a hypothesis into a confirmed fact; preserve evidence IDs "
+        "and failed assertions.",
         "",
     ]
     for item in old_history[-L5_PROMPT_TAIL_ENTRIES:]:
@@ -862,6 +882,24 @@ def run_compression_pipeline(
         history_window=window,
     )
 
+    from agent_runtime.repair_context import context_integrity
+
+    memory = (
+        getattr(metadata, "memory", None)
+        if not isinstance(metadata, dict)
+        else metadata.get("_memory_state")
+    )
+    if isinstance(memory, dict):
+        integrity = context_integrity(memory, projected_history=projected)
+        pipe_meta["context_integrity"] = integrity
+        if not integrity.get("ok"):
+            state_text = render_state_fallback(memory)
+            if state_text:
+                projected.insert(
+                    0,
+                    {"role": "system", "content": state_text, "repair_state": True},
+                )
+
     # 收集触发事件进 trace
     events = []
     for level in ("l2", "l3", "l4", "l5"):
@@ -882,6 +920,12 @@ def run_compression_pipeline(
         pipe_meta["compression_events"] = events
 
     return projected
+
+
+def render_state_fallback(memory: dict) -> str:
+    from agent_runtime.repair_context import render_repair_context
+
+    return render_repair_context(memory, max_chars=2400)
 
 
 def truncate_tool_result_for_agent(agent, tool_name: str, result_text: str) -> str:

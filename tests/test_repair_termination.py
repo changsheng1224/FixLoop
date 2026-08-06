@@ -1,6 +1,6 @@
 """Repair 终态 status 解析单测。"""
 
-from src.repair.termination import (
+from src.repair.verification.termination import (
     RepairTerminalStatus,
     apply_terminal_status,
     finalize_repair_state,

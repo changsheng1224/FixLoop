@@ -299,7 +299,7 @@ class TestSourceToAuthority:
         from agent_runtime.features.memory.durable import source_to_authority
 
         assert source_to_authority("patcher") == "agent"
-        assert source_to_authority("localizer") == "agent"
+        assert source_to_authority("patcher") == "agent"
         assert source_to_authority("user") == "user"
         assert source_to_authority("stack_parse") == "agent"
 

@@ -76,8 +76,13 @@ class Candidate:
     kind: CandidateKind = "observation"
     confidence: float = 0.5
     source: str = ""
+    scope: str = "task"
+    evidence_refs: list[str] | None = None
+    repo_fingerprint: str = ""
 
     def __post_init__(self):
+        if self.evidence_refs is None:
+            self.evidence_refs = []
         if self.topic not in ALLOWED_TOPICS:
             raise ValueError(f"非法 topic '{self.topic}'，允许值: {sorted(ALLOWED_TOPICS)}")
         if self.kind not in CANDIDATE_KINDS:
@@ -359,11 +364,36 @@ def promote_candidates(
 ) -> int:
     """将候选条目经门控后写入 durable store。返回成功写入数。"""
     written = 0
+    from agent_runtime.features.memory.governance import MemoryGovernanceService
+
+    governance_state = getattr(store, "_governance_state", None) or {}
+    store._governance_state = governance_state
+    governance = MemoryGovernanceService(
+        governance_state,
+        repo_root=str(store.memory_dir.parent.parent),
+    )
     for c in candidates:
         # 可选 LLM 补充字段
         if light_client is not None and c.confidence == 0.5:
             c = llm_fill_candidate(c, light_client)
 
+        governed = governance.ingest(
+            c,
+            scope=getattr(c, "scope", "task"),
+            repo_fingerprint=getattr(c, "repo_fingerprint", ""),
+        )
+        if getattr(c, "evidence_refs", None):
+            governance.bind_evidence(governed.memory_id, c.evidence_refs)
+        if not getattr(c, "evidence_refs", None) and getattr(c, "source", "") != "user":
+            continue
+        governance.validate(
+            governed.memory_id,
+            passed=True,
+            evidence_refs=getattr(c, "evidence_refs", None),
+        )
+        governance.promote_eligible(user_confirmed=getattr(c, "source", "") == "user")
+        if governance.registry.get(governed.memory_id, {}).get("status") != "durable":
+            continue
         # 读取同 topic 已有条目
         strategy = store._topic_strategy(c.topic)
         existing = store._read_topic(c.topic, strategy=strategy)

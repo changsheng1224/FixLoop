@@ -14,9 +14,10 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING, Iterable
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.state import CandidatePatch, RepairState, VerificationResult
@@ -46,9 +47,10 @@ class StopLossDecision:
     reason: str = ""
     progress: bool = False
     hint: str = ""
+    meta: dict[str, object] = field(default_factory=dict)
 
 
-def patch_fingerprint(patch: "CandidatePatch") -> str:
+def patch_fingerprint(patch: CandidatePatch) -> str:
     def _as_text(value) -> str:
         if value is None:
             return ""
@@ -65,6 +67,21 @@ def patch_fingerprint(patch: "CandidatePatch") -> str:
         ]
     )
     return hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
+
+
+def _no_progress_meta(streak: int) -> dict[str, object]:
+    required = "write_patch_or_expand_context"
+    allowed = ["write_patch", "expand_context", "replan"]
+    if streak >= 3:
+        required = "stop_repeated_reads_and_replan"
+        allowed = ["write_patch", "replan", "terminate"]
+    return {
+        "no_progress_count": streak,
+        "required_next_action": required,
+        "allowed_next_actions": allowed,
+        "forbid_repeated_reads": streak >= 2,
+        "control_signal": "soft_warning" if streak == 2 else "hard_stop",
+    }
 
 
 def _hash_verify_logs(logs: Iterable[str] | None) -> str:
@@ -128,22 +145,29 @@ class StopLossTracker:
                     f"连续 {self._parse_fail_streak} 次未产出可解析补丁。"
                     "停止空转；需先探索再编辑。"
                 ),
+                meta=_no_progress_meta(self._no_progress_streak),
             )
         if self._no_progress_streak >= self.no_progress_threshold:
             return StopLossDecision(
                 stop=True,
                 reason=StopLossReason.NO_PROGRESS,
                 hint="连续多回合无有效补丁进展，触发止损。",
+                meta=_no_progress_meta(self._no_progress_streak),
             )
-        return StopLossDecision(stop=False, progress=False)
+        meta = (
+            _no_progress_meta(self._no_progress_streak)
+            if self._no_progress_streak >= self.no_progress_threshold
+            else {}
+        )
+        return StopLossDecision(stop=False, progress=False, meta=meta)
 
     def record_verify_failure(
         self,
-        result: "VerificationResult",
-        patches: list["CandidatePatch"],
+        result: VerificationResult,
+        patches: list[CandidatePatch],
     ) -> StopLossDecision:
         """有补丁但验证失败：按指纹/失败面判断是否仍有进展。"""
-        from src.repair.verify_diagnose import VerifyBucket, diagnose_verification
+        from src.repair.verification.verify_diagnose import VerifyBucket, diagnose_verification
 
         self._attempts += 1
         self._empty_streak = 0
@@ -197,6 +221,17 @@ class StopLossTracker:
                     "停止继续改业务补丁。"
                 ),
             )
+        if self._no_progress_streak >= 3:
+            return StopLossDecision(
+                stop=True,
+                reason=StopLossReason.NO_PROGRESS,
+                progress=False,
+                hint=(
+                    f"连续 {self._no_progress_streak} 回合无新补丁且验证失败面不变。"
+                    "停止重复读取；请直接写补丁、换假设或扩展检索。"
+                ),
+                meta=_no_progress_meta(self._no_progress_streak),
+            )
         if self._identical_patch_streak >= self.identical_patch_threshold:
             return StopLossDecision(
                 stop=True,
@@ -219,13 +254,14 @@ class StopLossTracker:
             )
         if self._no_progress_streak >= self.no_progress_threshold:
             return StopLossDecision(
-                stop=True,
+                stop=False,
                 reason=StopLossReason.NO_PROGRESS,
                 progress=False,
                 hint=(
-                    f"连续 {self._no_progress_streak} 回合无新补丁且验证失败面不变，"
-                    "长程止损。"
+                    f"连续 {self._no_progress_streak} 回合无新补丁且验证失败面不变。"
+                    "请停止重复读取，改为写补丁或切换假设。"
                 ),
+                meta=_no_progress_meta(self._no_progress_streak),
             )
         return StopLossDecision(stop=False, progress=progress)
 
@@ -242,16 +278,27 @@ class StopLossTracker:
         }
 
 
-def apply_stop_loss(state: "RepairState", decision: StopLossDecision) -> None:
+def apply_stop_loss(state: RepairState, decision: StopLossDecision) -> None:
     """把止损写入 state，供终态 / degrade / tags 使用。"""
+    if decision.reason == StopLossReason.NO_PROGRESS and decision.meta:
+        state.node_timings["no_progress_warning"] = dict(decision.meta)
+        state.node_timings["no_progress_control"] = {
+            "required_next_action": decision.meta.get("required_next_action", ""),
+            "forbid_repeated_reads": bool(decision.meta.get("forbid_repeated_reads")),
+            "allowed_next_actions": list(decision.meta.get("allowed_next_actions") or []),
+        }
     if not decision.stop:
         return
     state.node_timings["stop_loss"] = decision.reason
     state.node_timings["stop_loss_early"] = True
+    if decision.meta:
+        state.node_timings["stop_loss_meta"] = dict(decision.meta)
+        if "no_progress_count" in decision.meta:
+            state.node_timings["no_progress_count"] = decision.meta["no_progress_count"]
     state.agent_errors["stop_loss"] = decision.hint or decision.reason
     extra = f"[止损]\n{decision.hint or decision.reason}"
     state.feedback = f"{state.feedback}\n\n{extra}".strip() if state.feedback else extra
 
 
-def has_stop_loss(state: "RepairState") -> bool:
+def has_stop_loss(state: RepairState) -> bool:
     return bool(state.node_timings.get("stop_loss") or state.node_timings.get("stop_loss_early"))

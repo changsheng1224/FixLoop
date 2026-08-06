@@ -48,34 +48,12 @@ class TestLoadRolePrompt:
         assert "通用修复原则" in text
         assert _read_suffix("default.txt").strip() in text
 
-    def test_non_patcher_role_ignores_issue_type(self):
+    def test_verifier_ignores_issue_type(self):
         from src.prompts.loader import load_role_prompt, load_system_prompt
 
-        assert (
-            load_role_prompt("localizer", "type_error") == load_system_prompt("localizer").strip()
-        )
-
-
-class TestLoadLocalizerHints:
-    def test_import_first_hints(self):
-        from src.prompts.loader import load_localizer_hints
-
-        text = load_localizer_hints("import_first")
-        assert "import 错误" in text
-        assert "stack_parse" in text
-
-    def test_stack_first_default(self):
-        from src.prompts.loader import load_localizer_hints
-
-        text = load_localizer_hints("stack_first")
-        assert "stack_parse" in text
-        assert "SuspectList" in text or "嫌疑" in text
-
-    def test_unknown_key_falls_back_to_stack_first(self):
-        from src.prompts.loader import load_localizer_hints
-
-        text = load_localizer_hints("missing_key")
-        assert "stack_parse" in text
+        assert load_role_prompt("verifier", "type_error") == load_system_prompt(
+            "verifier"
+        ).strip()
 
 
 class TestLoadPatcherUserHints:
@@ -97,7 +75,7 @@ class TestPatcherPromptDedup:
         from src.orchestrator import Orchestrator
         from src.state import RepairPlan, SuspectLocation
 
-        orch = Orchestrator(None, None, None)
+        orch = Orchestrator(None)
         orch._repo_root = str(temp_workspace)
         plan = RepairPlan(issue_type="type_error")
         prompt, _ = orch._patcher_prompt(
@@ -112,7 +90,7 @@ class TestPatcherPromptDedup:
         from src.orchestrator import Orchestrator
         from src.state import RepairPlan
 
-        orch = Orchestrator(None, None, None)
+        orch = Orchestrator(None)
         plan = RepairPlan(issue_type="import_error", suspect_files=["app.py"])
         issue = "ImportError: cannot import name 'foo' from 'bar'"
         prompt, _ = orch._patcher_prompt([], None, plan=plan, issue=issue)

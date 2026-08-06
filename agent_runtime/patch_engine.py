@@ -112,6 +112,8 @@ def apply_plan(text: str, plan: PatchPlan) -> str | None:
         # 无尾换行时 splitlines(keepends=True) 最后一行无换行，与 hunk 对齐
         pass
     updated = _apply_hunks(lines, plan.hunks)
+    if updated is None:
+        return None
     return "".join(updated)
 
 

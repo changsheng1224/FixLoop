@@ -1,10 +1,6 @@
 """Orchestrator：纯 Python 编排器（不调 LLM）。
 
-工作流：
-1. _parse_issue() → 正则提取语言/异常类型/文件名 → RepairPlan
-2. _match_skill() → 匹配 YAML Skill
-3. _run_localize_and_retrieve() → Localizer + Retriever 并行
-4. _run_patcher() → 串行执行
+工作流：Issue 解析与规则种子 → Patcher 工具环 → Critic → Verifier 回灌。
 """
 
 import hashlib
@@ -20,18 +16,14 @@ from agent_runtime.logging_setup import get_logger
 from src.prompts.loader import load_role_prompt
 from src.prompts.patcher_task_builder import assemble_patcher_variables
 from src.prompts.repair_tasks import (
-    build_localizer_variables,
-    build_retriever_template_and_variables,
     build_verifier_variables,
     render_repair_task,
 )
+from src.repair.execution.patch_applier import PatchApplier, apply_patch_to_text
 from src.repair.language_detect import detect_repair_language
 from src.repair.output_parsers import (
-    parse_retrieved_context,
-    parse_suspect_list,
     parse_verification,
 )
-from src.repair.patch_applier import PatchApplier, apply_patch_to_text, parse_patches
 from src.repair.phase_clock import PhaseTimeoutConfig
 from src.repair.pipeline import RepairPipelineMixin
 from src.repair.prompt_router import (
@@ -42,8 +34,9 @@ from src.repair.prompt_router import (
 )
 from src.repair.repo_snapshot import restore_repo_snapshot, snapshot_repo
 from src.repair.run_context import RepairRunContext
-from src.repair.verify import (
+from src.repair.verification.verify import (
     DockerVerifyStrategy,
+    ProfileVerifyStrategy,
     PytestVerifyStrategy,
     StaticVerifyStrategy,
     record_verify_timings,
@@ -188,8 +181,6 @@ class Orchestrator(RepairPipelineMixin):
 
     def __init__(
         self,
-        localizer,
-        retriever,
         patcher,
         verifier=None,
         *,
@@ -198,8 +189,6 @@ class Orchestrator(RepairPipelineMixin):
         allow_static_verify_fallback: bool = False,
         l1_prompt_cache_key: str = "",
     ):
-        self.localizer = localizer
-        self.retriever = retriever
         self.patcher = patcher
         self.verifier = verifier
         self.use_pytest_verify = use_pytest_verify
@@ -210,16 +199,19 @@ class Orchestrator(RepairPipelineMixin):
         self._log_run_id_token = None
         # 修复目标目录：优先 --repo / Agent cwd，而非 git 顶层仓库
         self._repo_root = str(Path.cwd())
-        if localizer is not None:
-            self._repo_root = (
-                localizer._cwd
-                or getattr(localizer.workspace, "cwd", "")
-                or localizer.workspace.repo_root
-                or self._repo_root
+        for agent in (patcher, verifier):
+            if agent is None:
+                continue
+            workspace = getattr(agent, "workspace", None)
+            candidate = (
+                getattr(agent, "_cwd", "")
+                or getattr(workspace, "cwd", "")
+                or getattr(workspace, "repo_root", "")
             )
+            if candidate:
+                self._repo_root = candidate
+                break
         self._repair_gateways = self._collect_repair_gateways(
-            localizer,
-            retriever,
             patcher,
             verifier,
         )
@@ -254,8 +246,6 @@ class Orchestrator(RepairPipelineMixin):
 
     def _resolve_l1_prompt_cache_key(self) -> str:
         return self._resolve_l1_prompt_cache_key_from_agents(
-            self.localizer,
-            self.retriever,
             self.patcher,
             self.verifier,
         )
@@ -267,7 +257,6 @@ class Orchestrator(RepairPipelineMixin):
         repair_timeout_s: int = DEFAULT_REPAIR_TIMEOUT_S,
         phase_timeouts: PhaseTimeoutConfig | None = None,
         cancel_token=None,
-        allow_baseline_degrade: bool = True,
         resume_run_id: str = "",
         verify_test_patch: str = "",
     ) -> RepairState:
@@ -279,7 +268,6 @@ class Orchestrator(RepairPipelineMixin):
             repair_timeout_s: 全流程超时秒数（≤0 表示不限制）。
             phase_timeouts: 分阶段超时；默认由 ``repair_timeout_s`` 推导。
             cancel_token: 可选协作式取消 token（CLI Ctrl+C 注入）。
-            allow_baseline_degrade: 是否在 verify 耗尽后 Single-Agent 最后一搏。
             resume_run_id: L2 续跑 run_id（从 repair_checkpoint.json 恢复，
                 跳过 parse/localize，直接进入 patch 循环）。
             verify_test_patch: 可选；SWE 等官方 test_patch，仅在 verify 时临时应用。
@@ -290,47 +278,127 @@ class Orchestrator(RepairPipelineMixin):
         from agent_runtime.cancellation import CancellationToken
 
         if phase_timeouts is None:
-            phase_timeouts = PhaseTimeoutConfig.with_repair_total_cap(repair_timeout_s)
+            phase_timeouts = PhaseTimeoutConfig.for_patcher_primary(repair_timeout_s)
 
         state = RepairState(
             issue_input=issue,
             max_retries=max_retries,
             repair_run_id=resume_run_id or "",
+            active_roles=[
+                role
+                for role, agent in (("patcher", self.patcher), ("verifier", self.verifier))
+                if agent is not None
+            ],
+            field_owners={
+                "phase": "runtime",
+                "status": "runtime",
+                "changed_files": "patch_runtime",
+                "verification_result": "verifier",
+                "tool_budget": "runtime",
+            },
         )
+        state.intent = {"mode": "repair", "verification_required": True}
+        state.role_lifecycle = {
+            role: {"status": "active", "reason": "initial repair roles"}
+            for role in state.active_roles
+        }
         token = cancel_token or CancellationToken()
         initial_snapshot = self._snapshot_repo()
 
         self._repair_ctx = RepairRunContext(
             phase_timeout_config=phase_timeouts,
-            allow_baseline_degrade=allow_baseline_degrade,
             cancel_token=token,
             verify_test_patch=verify_test_patch or "",
         )
+        self._set_collaboration_context(state)
         try:
             with self._repair_cancel_scope(token):
                 if repair_timeout_s <= 0:
                     return self._repair_impl(state, initial_snapshot=initial_snapshot)
 
-                with ThreadPoolExecutor(max_workers=1) as pool:
-                    fut = pool.submit(self._repair_impl, state, initial_snapshot)
-                    try:
-                        return fut.result(timeout=repair_timeout_s)
-                    except FuturesTimeoutError:
-                        from src.repair.termination import (
-                            RepairTerminalStatus,
-                            finalize_repair_state,
-                        )
+                # Phase C：勿用 with ThreadPoolExecutor（退出时 wait=True 会拖尾）
+                pool = ThreadPoolExecutor(max_workers=1)
+                wall_started = time.monotonic()
+                fut = pool.submit(self._repair_impl, state, initial_snapshot)
+                try:
+                    return fut.result(timeout=repair_timeout_s)
+                except FuturesTimeoutError:
+                    from src.repair.verification.repair_timeout import handle_repair_wall_timeout
 
-                        token.cancel("timeout")
-                        self._restore_repo_snapshot(initial_snapshot)
-                        state.status = RepairTerminalStatus.TIMEOUT
-                        state.agent_errors["orchestrator"] = f"repair timeout ({repair_timeout_s}s)"
-                        state.node_timings["repair_timeout"] = repair_timeout_s
-                        log.warning("修复超时 (%ds)", repair_timeout_s)
-                        finalize_repair_state(state)
-                        return state
+                    handle_repair_wall_timeout(
+                        self,
+                        state,
+                        initial_snapshot=initial_snapshot,
+                        repair_timeout_s=repair_timeout_s,
+                        cancel_token=token,
+                        wall_started=wall_started,
+                    )
+                    return state
+                finally:
+                    pool.shutdown(wait=False, cancel_futures=True)
         finally:
             self._repair_ctx = None
+
+    def _set_collaboration_context(self, state: RepairState) -> None:
+        """Pass current mode/phase to gateways when the runtime owns the state."""
+        # Localizer/Retriever are legacy compatibility agents.  Governance is
+        # intentionally enforced only on the current repair roles.
+        for agent in (self.patcher, self.verifier):
+            gateway = getattr(agent, "_tool_dispatch", None)
+            if gateway is not None and hasattr(gateway, "set_context"):
+                gateway.set_context(
+                    getattr(agent, "_agent_name", "") or "agent",
+                    mode=str(state.intent.get("mode", "repair")),
+                    phase=str(state.phase),
+                    evidence=bool(state.evidence or state.suspect_locations),
+                    read_before_write=bool(
+                        state.node_timings.get("allowed_edit")
+                        or state.suspect_locations
+                    ),
+                )
+
+    def _on_collaboration_phase(self, state: RepairState, phase: str, reason: str = "") -> None:
+        """Synchronize policy context and role set at a runtime phase boundary."""
+        from src.collaboration_governance import CollaborationGovernance, RoleLifecycle
+
+        state.phase = phase
+        if phase == "patch":
+            for role in ("verifier",):
+                if role in state.active_roles:
+                    event = CollaborationGovernance.lifecycle_transition(
+                        state, role, RoleLifecycle.SUSPENDED, reason or "patch in progress"
+                    )
+                    self._emit_collaboration_event(event)
+            role = "patcher"
+            if getattr(self, role, None) is not None:
+                event = CollaborationGovernance.lifecycle_transition(
+                    state, role, RoleLifecycle.REACTIVATED, reason or "patch phase"
+                )
+                self._emit_collaboration_event(event)
+        elif phase == "verify":
+            if getattr(self, "patcher", None) is not None and "patcher" in state.active_roles:
+                event = CollaborationGovernance.lifecycle_transition(
+                    state, "patcher", RoleLifecycle.SUSPENDED, reason or "verification phase"
+                )
+                self._emit_collaboration_event(event)
+            if getattr(self, "verifier", None) is not None:
+                event = CollaborationGovernance.lifecycle_transition(
+                    state, "verifier", RoleLifecycle.REACTIVATED, reason or "verification phase"
+                )
+                self._emit_collaboration_event(event)
+        elif phase in {"done", "failed"}:
+            for role in list(state.role_lifecycle):
+                event = CollaborationGovernance.lifecycle_transition(
+                    state, role, RoleLifecycle.COMPLETED, reason or "repair finalized"
+                )
+                self._emit_collaboration_event(event)
+        self._set_collaboration_context(state)
+
+    def _emit_collaboration_event(self, event: dict) -> None:
+        ctx = getattr(self, "_repair_ctx", None)
+        tracer = getattr(ctx, "repair_tracer", None) if ctx else None
+        if tracer is not None:
+            tracer.emit("orchestrator", "agent_set_changed", event)
 
     @contextmanager
     def _repair_cancel_scope(self, token):
@@ -349,12 +417,12 @@ class Orchestrator(RepairPipelineMixin):
         return self._is_repair_cancelled()
 
     def _bind_cancel_token(self, token) -> None:
-        for agent in (self.localizer, self.retriever, self.patcher):
+        for agent in (self.patcher, self.verifier):
             if agent is not None:
                 agent.cancel_token = token
 
     def _unbind_cancel_token(self) -> None:
-        for agent in (self.localizer, self.retriever, self.patcher):
+        for agent in (self.patcher, self.verifier):
             if agent is not None:
                 agent.cancel_token = None
 
@@ -540,7 +608,7 @@ class Orchestrator(RepairPipelineMixin):
     def _patcher_system_prompt(plan: RepairPlan | None) -> str:
         """Patcher system 文本（base + issue suffix）。
 
-        工具环使用 Agent 构造时的 system；JSON 降级另见 ``_patcher_json_system_prompt``。
+        工具环使用 Agent 构造时的 system prompt。
         """
         return load_role_prompt("patcher", patcher_variant_for(plan))
 
@@ -637,7 +705,7 @@ class Orchestrator(RepairPipelineMixin):
         l1_meta = {}
         if self.l1_prompt_cache_key:
             l1_meta["l1_prompt_cache_key"] = self.l1_prompt_cache_key
-            ref = self.localizer or self.patcher
+            ref = self.patcher or self.verifier
             prefix = getattr(ref, "_prefix", None) if ref is not None else None
             if prefix is not None:
                 if prefix.tool_signature:
@@ -649,8 +717,6 @@ class Orchestrator(RepairPipelineMixin):
             l1_meta["phase_timeout_budgets"] = phase_cfg.budget_dict()
         run_id = tracer.begin(state.issue_input, **l1_meta)
         tracer.bind_agents(
-            self.localizer,
-            self.retriever,
             self.patcher,
             self.verifier,
         )
@@ -661,11 +727,7 @@ class Orchestrator(RepairPipelineMixin):
             self._repair_ctx.log_run_id_token = bind_run_id(run_id)
 
         tokenizer_by_agent: dict[str, dict] = {}
-        for name, agent in (
-            ("localizer", self.localizer),
-            ("retriever", self.retriever),
-            ("patcher", self.patcher),
-        ):
+        for name, agent in (("patcher", self.patcher), ("verifier", self.verifier)):
             if agent is None:
                 continue
             config = getattr(agent, "config", None)
@@ -707,8 +769,6 @@ class Orchestrator(RepairPipelineMixin):
 
         originals: dict[str, str] = {}
         for name, agent in (
-            ("localizer", self.localizer),
-            ("retriever", self.retriever),
             ("patcher", self.patcher),
             ("verifier", self.verifier),
         ):
@@ -740,8 +800,6 @@ class Orchestrator(RepairPipelineMixin):
         handle = getattr(ctx, "worktree_handle", None)
         originals = getattr(ctx, "worktree_original_roots", None) or {}
         for name, agent in (
-            ("localizer", self.localizer),
-            ("retriever", self.retriever),
             ("patcher", self.patcher),
             ("verifier", self.verifier),
         ):
@@ -779,8 +837,6 @@ class Orchestrator(RepairPipelineMixin):
         token_summary = state.node_timings.get("token_usage") or {}
         tracer.finalize(state, token_summary)
         tracer.unbind_agents(
-            self.localizer,
-            self.retriever,
             self.patcher,
             self.verifier,
         )
@@ -795,12 +851,12 @@ class Orchestrator(RepairPipelineMixin):
     def _reset_token_tracking(self) -> None:
         from src.eval.token_usage import reset_clients_session_usage
 
-        reset_clients_session_usage(self.localizer, self.retriever, self.patcher)
+        reset_clients_session_usage(self.patcher, self.verifier)
 
     def _attach_token_usage(self, state: RepairState) -> None:
         from src.eval.token_usage import build_repair_token_usage, resolve_model_clients
 
-        clients = resolve_model_clients(self.localizer, self.retriever, self.patcher)
+        clients = resolve_model_clients(self.patcher, self.verifier)
         if not clients:
             return
         summary = build_repair_token_usage(
@@ -819,7 +875,7 @@ class Orchestrator(RepairPipelineMixin):
             state.node_timings["total_tool_steps"] = summary["total_tool_steps"]
         # 分 Agent latency
         latency_by_agent: dict[str, dict] = {}
-        for agent in (self.localizer, self.retriever, self.patcher):
+        for agent in (self.patcher, self.verifier):
             if agent is None:
                 continue
             client = getattr(agent, "model_client", None)
@@ -848,26 +904,24 @@ class Orchestrator(RepairPipelineMixin):
         )
 
     def _run_patcher(self, state: RepairState) -> tuple[list[CandidatePatch], dict]:
-        """Patcher：默认工具环（read_file / patch_file）；无落盘时降级 JSON complete_once。"""
+        """Run the sole patch path: governed tools mutate disk, Runtime snapshots the diff."""
+        import os
+
         plan = state.repair_plan
         self._merge_blackboard_for_patch(state)
         feedback = state.feedback or ""
         # 失败面：注入断言 + 失败测试原文，驱动定点读改
-        from src.repair.fail_surface import (
+        from src.repair.execution.control import pop_patcher_depth, push_patcher_depth
+        from src.repair.execution.patcher_contract import (
+            classify_patcher_attempt,
+            record_patcher_terminal_status,
+            render_patcher_runtime_contract,
+        )
+        from src.repair.verification.fail_surface import (
             build_fail_surface,
             build_fail_surface_prompt_block,
-        )
-        from src.repair.failure_ledger import (
-            build_ledger_prompt_block,
-            load_ledger_from_state,
-            shrink_suspects_for_regression,
-        )
-        from src.repair.short_repair import (
-            build_workspace_brief,
-            detect_short_repair,
-            filter_suspects_for_short_repair,
-            pop_patcher_depth,
-            push_patcher_depth,
+            build_verify_feedback_payload,
+            render_verify_feedback_block,
         )
 
         surface = build_fail_surface(state, repo_root=self._repo_root)
@@ -878,44 +932,39 @@ class Orchestrator(RepairPipelineMixin):
             state.node_timings["fail_surface_nodeids"] = list(surface.nodeids)
             feedback = f"{fail_block}\n\n{feedback}".strip() if feedback else fail_block
 
-        ledger = load_ledger_from_state(state)
-        ledger_block = build_ledger_prompt_block(ledger)
-        if ledger_block:
-            feedback = f"{ledger_block}\n\n{feedback}".strip() if feedback else ledger_block
-        if ledger.forbidden_files():
-            state.suspect_locations = shrink_suspects_for_regression(
-                state.suspect_locations, ledger
+        structured_feedback = state.node_timings.get("structured_verify_feedback")
+        if not isinstance(structured_feedback, dict) and state.verification_result is not None:
+            payload = build_verify_feedback_payload(
+                state,
+                repo_root=self._repo_root,
+                result=state.verification_result,
             )
+            state.node_timings["structured_verify_feedback"] = payload.to_dict()
+            structured_feedback = payload.to_dict()
+        if isinstance(structured_feedback, dict):
+            feedback_block = render_verify_feedback_block(structured_feedback)
+            if feedback_block and feedback_block not in feedback:
+                feedback = f"{feedback_block}\n\n{feedback}".strip() if feedback else feedback_block
 
-        short = detect_short_repair(state, self._repo_root)
+        allowed = list(state.node_timings.get("allowed_edit") or [])
+        runtime_bits = [
+            "【repair runtime】read → apply_patch"
+            "（*** Begin/End Patch，Update 须含 - 上下文）→ quick_test。",
+            "可 expand_lock；不要用 run_shell/sandbox_test（无权限）。真源=磁盘 diff。",
+        ]
+        if allowed:
+            runtime_bits.append("allowed_edit: " + ", ".join(allowed[:12]))
+        block = "\n".join(runtime_bits)
+        feedback = f"{block}\n\n{feedback}".strip() if feedback else block
+
         suspects_for_prompt = state.suspect_locations
-        depth_token = None
-        from src.repair.adaptive_budget import advise_budget, recommend_patcher_steps
-
-        if short.enabled:
-            state.node_timings["short_repair"] = short.to_dict()
-            brief = build_workspace_brief(short, state, self._repo_root)
-            if brief:
-                feedback = f"{brief}\n\n{feedback}".strip() if feedback else brief
-            suspects_for_prompt = filter_suspects_for_short_repair(
-                state.suspect_locations, short
-            )
-            steps = recommend_patcher_steps(
-                state, base_steps=short.max_steps, short_repair=True
-            )
-            depth_token = push_patcher_depth(self.patcher, steps)
-            state.node_timings["adaptive_patch_steps"] = steps
-            log.info(
-                "[short_repair] enabled reason=%s files=%s steps=%s",
-                short.reason,
-                short.impl_files[:3],
-                steps,
-            )
-        else:
-            advice = advise_budget(state, short_repair=False)
-            state.node_timings["adaptive_budget_patch"] = advice.to_dict()
-            depth_token = push_patcher_depth(self.patcher, advice.patcher_max_steps)
-            state.node_timings["adaptive_patch_steps"] = advice.patcher_max_steps
+        raw_steps = (os.environ.get("FIXLOOP_PATCHER_MAX_STEPS") or "24").strip()
+        try:
+            patch_steps = max(10, int(raw_steps))
+        except ValueError:
+            patch_steps = 24
+        depth_token = push_patcher_depth(self.patcher, patch_steps)
+        state.node_timings["patch_steps"] = patch_steps
 
         prompt, tpl_meta = self._patcher_prompt(
             suspects_for_prompt,
@@ -923,37 +972,49 @@ class Orchestrator(RepairPipelineMixin):
             feedback,
             plan=plan,
             issue=state.issue_input,
+            runtime_contract_block=render_patcher_runtime_contract(state),
         )
 
         try:
-            if self._patcher_edit_mode() == "tools" and self.patcher is not None:
-                applied, meta = self._run_patcher_toolized(state, prompt, tpl_meta)
-                if applied:
-                    if short.enabled:
-                        meta = {**meta, "short_repair": short.reason}
-                    return applied, meta
-                state.node_timings["patcher_edit_fallback"] = "tools→json"
-                log.info("[patcher] toolized 无磁盘改动，降级 JSON complete_once")
-
-            applied, meta = self._run_patcher_json(state, prompt, tpl_meta)
-            if not applied:
-                applied, retry_meta = self._run_patcher_grounded_retry(state, prompt)
-                if applied:
-                    meta = {**(meta or {}), **(retry_meta or {})}
-            if short.enabled:
-                meta = {**meta, "short_repair": short.reason}
+            applied, meta = self._run_patcher_toolized(state, prompt, tpl_meta)
+            status = classify_patcher_attempt(
+                state,
+                applied,
+                apply_failed=bool(state.agent_errors.get("patcher_apply")),
+            )
+            record_patcher_terminal_status(state, status, reason="patcher_turn_complete", meta=meta)
             return applied, meta
         finally:
             pop_patcher_depth(self.patcher, depth_token)
 
-    @staticmethod
-    def _patcher_edit_mode() -> str:
-        import os
+    def _compact_patcher_history(self, state) -> None:
+        """CC 序 compact；thrash 时记停损标志。"""
+        if self.patcher is None:
+            return
+        from src.repair.context_compact import compact_tool_history
 
-        mode = (os.environ.get("FIXLOOP_PATCHER_EDIT_MODE") or "tools").strip().lower()
-        if mode in ("json", "complete_once", "once"):
-            return "json"
-        return "tools"
+        session = getattr(self.patcher, "session", None) or {}
+        hist = list(session.get("history") or [])
+        if not hist:
+            return
+        prior = int(state.node_timings.get("compact_count") or 0)
+        result = compact_tool_history(hist, prior_compacts=prior)
+        session["history"] = result.messages
+        state.node_timings["compact_count"] = result.compact_count
+        if result.dropped_chars:
+            state.node_timings["compact_dropped_chars"] = (
+                int(state.node_timings.get("compact_dropped_chars") or 0)
+                + result.dropped_chars
+            )
+        if result.thrash:
+            n = (
+                int(state.node_timings.get("compact_thrash_count") or 0)
+                + result.compact_thrash_count
+            )
+            state.node_timings["compact_thrash_count"] = n
+            tip = "compact_thrash：上下文压缩后仍爆满，停止空转 compact，请缩小改动面。"
+            state.feedback = f"{state.feedback}\n{tip}".strip() if state.feedback else tip
+            log.warning("[compact] thrash stop-loss")
 
     def _run_patcher_toolized(
         self,
@@ -962,10 +1023,23 @@ class Orchestrator(RepairPipelineMixin):
         tpl_meta: dict,
     ) -> tuple[list[CandidatePatch], dict]:
         """Agent loop：工具改盘 → 快照 diff 成 CandidatePatch（不再二次 apply）。"""
-        from src.repair.edit_from_disk import patches_from_snapshot_diff
+        import os
+
+        from src.repair.execution.edit_from_disk import patches_from_snapshot_diff
         from src.repair.failure_tags import check_patch_faithfulness
 
         t_start = time.time()
+        compact_enabled = (
+            (os.environ.get("FIXLOOP_PATCHER_COMPACT") or "1").strip().lower()
+            not in (
+                "0",
+                "false",
+                "off",
+                "no",
+            )
+        )
+        if compact_enabled:
+            self._compact_patcher_history(state)
         before = self._snapshot_repo()
         answer, agent_timing = self._run_agent(
             self.patcher,
@@ -976,9 +1050,37 @@ class Orchestrator(RepairPipelineMixin):
             l2_attempt=state.retry_count,
         )
         after = self._snapshot_repo()
+        lock = getattr(self, "_edit_lock", None)
+        if lock is not None:
+            state.node_timings["apply_patch_ok_count"] = int(
+                getattr(lock, "apply_patch_ok_count", 0) or 0
+            )
+            state.node_timings["edit_lint_reject_count"] = int(
+                getattr(lock, "edit_lint_reject_count", 0) or 0
+            )
+            state.node_timings["unread_write_reject_count"] = int(
+                getattr(lock, "unread_write_reject_count", 0) or 0
+            )
+            state.node_timings["apply_path_reject_count"] = int(
+                getattr(lock, "apply_path_reject_count", 0) or 0
+            )
+            if hasattr(self, "_progress_emitter"):
+                summary = (
+                    f"apply_ok={lock.apply_patch_ok_count} "
+                    f"lint_rej={lock.edit_lint_reject_count}"
+                )
+                self._progress_emitter().emit("tool_progress", summary=summary)
+                if hasattr(self, "_emit_repair_span"):
+                    self._emit_repair_span(
+                        "apply_patch_span",
+                        {
+                            "summary": summary,
+                            "apply_patch_ok_count": lock.apply_patch_ok_count,
+                        },
+                    )
         patches = patches_from_snapshot_diff(before, after)
         patches, rejected = check_patch_faithfulness(
-            patches, state, soft_keep=True, repo_root=str(self._repo_root or "")
+            patches, state, soft_keep=False, repo_root=str(self._repo_root or "")
         )
         if rejected:
             state.agent_errors["patcher_hallucinated_file"] = rejected[0]
@@ -994,7 +1096,7 @@ class Orchestrator(RepairPipelineMixin):
             after = self._snapshot_repo()
             patches = patches_from_snapshot_diff(before, after)
             patches, _ = check_patch_faithfulness(
-                patches, state, soft_keep=True, repo_root=str(self._repo_root or "")
+                patches, state, soft_keep=False, repo_root=str(self._repo_root or "")
             )
 
         total_ms = int((time.time() - t_start) * 1000)
@@ -1008,8 +1110,7 @@ class Orchestrator(RepairPipelineMixin):
             "task_template_source": (tpl_meta or {}).get("task_template_source"),
         }
         if not patches:
-            # 工具环可能吐了 JSON / unified diff 却没调工具：尝试解析并 apply
-            from src.repair.loose_patch_recover import parse_patches_with_recover
+            from src.repair.execution.loose_patch_recover import parse_patches_with_recover
 
             parsed = parse_patches_with_recover(answer or "")
             if parsed:
@@ -1027,6 +1128,7 @@ class Orchestrator(RepairPipelineMixin):
                 if applied:
                     mode = "tools→loose" if recovered else "tools→json_final"
                     state.node_timings["patcher_edit_mode"] = mode
+                    state.node_timings["patcher_text_salvage"] = True
                     meta["edit_mode"] = mode
                     return applied, meta
             state.node_timings["patcher_edit_mode"] = "tools_empty"
@@ -1037,350 +1139,6 @@ class Orchestrator(RepairPipelineMixin):
         self._last_sibling_warnings = []
         log.info("[patcher] toolized 落盘 %d 个文件", len(patches))
         return patches, meta
-
-    def _run_patcher_json(
-        self, state: RepairState, prompt: str, tpl_meta: dict
-    ) -> tuple[list[CandidatePatch], dict]:
-        """JSON complete_once 路径（工具环失败或 FIXLOOP_PATCHER_EDIT_MODE=json）。"""
-        plan = state.repair_plan
-        issue_type = plan.issue_type if plan else ""
-        patcher_variant = patcher_variant_for(plan)
-        patcher_system = self._patcher_json_system_prompt(plan)
-
-        from agent_runtime.context_manager import fit_repair_user_prompt
-
-        prompt, pre_budget_meta = fit_repair_user_prompt(
-            self.patcher,
-            prompt,
-            patcher_system,
-            template_meta=tpl_meta,
-        )
-
-        t_start = time.time()
-        t_model = time.time()
-        tracer = self._repair_ctx.repair_tracer if self._repair_ctx else None
-        patch_attempt = state.retry_count
-        patch_task_id = self._begin_l2_agent_ask(
-            state,
-            self.patcher,
-            agent_name="patcher",
-            phase="patch",
-            attempt=patch_attempt,
-        )
-
-        def _finish_patch_ask(total_ms: int, stop_reason: str) -> None:
-            if patch_task_id:
-                self._finish_l2_agent_ask(
-                    state,
-                    self.patcher,
-                    agent_name="patcher",
-                    phase="patch",
-                    attempt=patch_attempt,
-                    task_id=patch_task_id,
-                    elapsed_ms=total_ms,
-                    stop_reason=stop_reason,
-                )
-
-        if tracer:
-            tracer.emit(
-                "patcher",
-                "complete_once_started",
-                {
-                    "issue_type": issue_type,
-                    "prompt_variant": patcher_variant,
-                },
-            )
-            tracer.emit("patcher", "model_request_start", {"step": 1, "attempt": 1})
-        usage_before = {}
-        if self.patcher is not None:
-            from src.eval.token_usage import get_client_session_usage
-
-            usage_before = get_client_session_usage(self.patcher.model_client)
-        try:
-            from agent_runtime.cancellation import CancelledError
-
-            raw = self.patcher.complete_once(prompt, system_prompt=patcher_system)
-        except CancelledError:
-            total_ms = int((time.time() - t_start) * 1000)
-            model_call_ms = int((time.time() - t_model) * 1000)
-            _finish_patch_ask(total_ms, "user_cancel")
-            return [], {
-                "model_call_ms": model_call_ms,
-                "parse_apply_ms": max(0, total_ms - model_call_ms),
-                "total_ms": total_ms,
-                "user_cancel": True,
-            }
-        except Exception as e:
-            state.agent_errors["patcher"] = str(e)
-            total_ms = int((time.time() - t_start) * 1000)
-            model_call_ms = int((time.time() - t_model) * 1000)
-            log.warning("[patcher] 模型调用失败: %s", e)
-            _finish_patch_ask(total_ms, "error")
-            return [], {
-                "model_call_ms": model_call_ms,
-                "parse_apply_ms": max(0, total_ms - model_call_ms),
-                "total_ms": total_ms,
-            }
-
-        model_call_ms = int((time.time() - t_model) * 1000)
-        if tracer and self.patcher is not None:
-            from agent_runtime.model_timing import (
-                build_report_latency_fields,
-                collect_client_timings,
-                emit_model_timing_events,
-            )
-            from src.eval.token_usage import diff_client_usage, get_client_session_usage
-
-            timings = collect_client_timings(self.patcher.model_client)
-            emit_model_timing_events(
-                lambda event, payload: tracer.emit("patcher", event, payload),
-                timings,
-                default_attempt=1,
-            )
-            usage_after = get_client_session_usage(self.patcher.model_client)
-            delta = diff_client_usage(usage_before, usage_after)
-            latency_fields = build_report_latency_fields(timings)
-            budget_meta = getattr(self.patcher, "_last_budget_meta", {}) or {}
-            tracer.write_agent_token(
-                "patcher",
-                delta,
-                extra={
-                    "tool_steps": 0,
-                    "node_timings": {"model_call_ms": model_call_ms},
-                    "prompt_budget": getattr(self.patcher.config, "prompt_budget", None),
-                    "budget_cuts": budget_meta.get("cuts", []),
-                    "tokenizer_backend": budget_meta.get("tokenizer_backend"),
-                    "tokenizer_fallback": budget_meta.get("tokenizer_fallback"),
-                    "tokenizer_id": budget_meta.get("tokenizer_id"),
-                    "task_template_source": pre_budget_meta.get("task_template_source"),
-                    "task_template_fingerprint": pre_budget_meta.get(
-                        "task_template_fingerprint"
-                    ),
-                    **latency_fields,
-                },
-            )
-            tracer.emit("patcher", "complete_once_finished", {"token_usage": delta})
-
-        from src.repair.loose_patch_recover import recover_patches_from_text
-
-        patches = self._parse_patches(raw)
-        if not patches:
-            log.debug("[patcher] 0 patches parsed, raw[:300]=%r", raw.strip()[:300])
-            retry_prompt = (
-                prompt
-                + "\n\nYour previous reply was not valid patch JSON. "
-                "Reply with ONLY a JSON array of patch objects "
-                '(keys: file_path, original_lines, patched_lines, and/or diff). '
-                "No markdown fences, no explanation."
-            )
-            try:
-                raw_retry = self.patcher.complete_once(
-                    retry_prompt, system_prompt=patcher_system
-                )
-                patches = self._parse_patches(raw_retry)
-                if patches:
-                    log.info(
-                        "[patcher] parse recovered on schema retry (%d patches)", len(patches)
-                    )
-                else:
-                    patches = recover_patches_from_text(raw_retry) or recover_patches_from_text(
-                        raw
-                    )
-                    if patches:
-                        state.node_timings["patcher_loose_recovered"] = True
-                        log.info(
-                            "[patcher] loose diff recovered (%d patches)", len(patches)
-                        )
-                    else:
-                        state.node_timings["patcher_parse_failed"] = (
-                            state.node_timings.get("patcher_parse_failed", 0) + 1
-                        )
-                        state.agent_errors["patcher_parse"] = "parse_fail"
-            except Exception as e:
-                log.warning("[patcher] parse retry failed: %s", e)
-                patches = recover_patches_from_text(raw)
-                if patches:
-                    state.node_timings["patcher_loose_recovered"] = True
-                else:
-                    state.node_timings["patcher_parse_failed"] = (
-                        state.node_timings.get("patcher_parse_failed", 0) + 1
-                    )
-                    state.agent_errors["patcher_parse"] = "parse_fail"
-
-        applied_patches = self._apply_patches_on_disk(patches, state=state)
-        if patches and not applied_patches:
-            log.warning("[patcher] 补丁解析成功但未写入任何文件")
-            details = getattr(self, "_last_apply_errors", None) or []
-            detail = "; ".join(details[:5]) if details else "apply_failed"
-            state.agent_errors["patcher_apply"] = detail
-            state.node_timings["patcher_apply_failed"] = True
-            applied_patches = self._recover_failed_apply(
-                state,
-                prompt=prompt,
-                patcher_system=patcher_system,
-                apply_detail=detail,
-            )
-            if applied_patches:
-                state.agent_errors.pop("patcher_apply", None)
-                state.node_timings.pop("patcher_apply_failed", None)
-        warnings = getattr(self, "_last_sibling_warnings", None) or []
-        if warnings:
-            state.agent_errors["incomplete_sibling_pattern"] = str(warnings[0])[:300]
-            extra = "\n".join(warnings)
-            state.feedback = f"{state.feedback}\n{extra}".strip() if state.feedback else extra
-
-        total_ms = int((time.time() - t_start) * 1000)
-        state.node_timings["patcher_edit_mode"] = "json"
-        _finish_patch_ask(total_ms, "complete_once")
-        return applied_patches, {
-            "model_call_ms": model_call_ms,
-            "parse_apply_ms": max(0, total_ms - model_call_ms),
-            "total_ms": total_ms,
-            "edit_mode": "json",
-        }
-
-    def _run_patcher_grounded_retry(
-        self, state: RepairState, prompt: str
-    ) -> tuple[list[CandidatePatch], dict]:
-        """tools/JSON/loose 皆空且有 grounded 实现时：预载文件做一次 complete_once。"""
-        if self.patcher is None:
-            return [], {}
-        from src.repair.loose_patch_recover import parse_patches_with_recover
-        from src.repair.short_repair import ShortRepairDecision, build_workspace_brief
-        from src.repair.symbol_index import has_grounded_impl_suspect
-
-        suspects = list(state.suspect_locations or [])
-        if not has_grounded_impl_suspect(suspects, self._repo_root):
-            return [], {}
-
-        impl_files: list[str] = []
-        seen: set[str] = set()
-        for s in suspects:
-            fp = str(s.file_path or "").replace("\\", "/")
-            if not fp or fp in seen:
-                continue
-            base = fp.rsplit("/", 1)[-1]
-            if base.startswith("test_") or "/tests/" in f"/{fp}/":
-                continue
-            if not (Path(self._repo_root) / fp).is_file():
-                continue
-            seen.add(fp)
-            impl_files.append(fp)
-            if len(impl_files) >= 2:
-                break
-        if not impl_files:
-            return [], {}
-
-        decision = ShortRepairDecision(
-            enabled=True,
-            reason="grounded_retry",
-            impl_files=impl_files,
-            test_nodeids=list(state.node_timings.get("verify_failed_nodeids") or [])[:3],
-            max_steps=8,
-        )
-        brief = build_workspace_brief(decision, state, self._repo_root, max_chars=5000)
-        patcher_system = self._patcher_json_system_prompt(state.repair_plan)
-        grounded_prompt = (
-            f"{prompt}\n\n{brief}\n\n"
-            "[GROUNDED RETRY] Previous replies produced no applyable patch. "
-            f"Edit ONLY these files: {', '.join(impl_files)}. "
-            "Reply with ONLY a JSON array of patch objects "
-            "(keys: file_path, original_lines, patched_lines, and/or diff). "
-            "original_lines must match the excerpts above exactly."
-        )
-        t0 = time.time()
-        try:
-            raw = self.patcher.complete_once(grounded_prompt, system_prompt=patcher_system)
-        except Exception as e:
-            log.warning("[patcher] grounded retry failed: %s", e)
-            return [], {"edit_mode": "grounded_retry_error"}
-        patches = parse_patches_with_recover(raw or "")
-        if not patches:
-            return [], {
-                "edit_mode": "grounded_retry_empty",
-                "total_ms": int((time.time() - t0) * 1000),
-            }
-        if any((p.explanation or "") == "loose_diff_recover" for p in patches):
-            state.node_timings["patcher_loose_recovered"] = True
-        applied = self._apply_patches_on_disk(patches, state=state)
-        state.node_timings["patcher_grounded_retry"] = True
-        if applied:
-            state.agent_errors.pop("patcher_parse", None)
-            state.node_timings["patcher_edit_mode"] = "grounded_retry"
-            log.info("[patcher] grounded retry applied %d patches", len(applied))
-        return applied, {
-            "edit_mode": "grounded_retry",
-            "total_ms": int((time.time() - t0) * 1000),
-            "model_call_ms": int((time.time() - t0) * 1000),
-            "parse_apply_ms": 0,
-        }
-
-    def _patcher_json_system_prompt(self, plan: RepairPlan | None) -> str:
-        """JSON 降级路径专用 system（禁止工具幻想，只吐 CandidatePatch）。"""
-        base = self._patcher_system_prompt(plan)
-        return (
-            f"{base}\n\n"
-            "【降级模式】本次请不要调用工具。"
-            "只输出 CandidatePatch JSON 数组"
-            "（keys: file_path, original_lines, patched_lines, and/or diff）。"
-            "original_lines 必须与 DISK GROUNDING 一字不差。"
-        )
-
-    def _recover_failed_apply(
-        self,
-        state: RepairState,
-        *,
-        prompt: str,
-        patcher_system: str,
-        apply_detail: str,
-        max_attempts: int = 2,
-    ) -> list[CandidatePatch]:
-        """Apply 失败短恢复：用 near= / 失败原因回灌，要求精确复制 DISK GROUNDING。"""
-        detail = apply_detail
-        for attempt in range(1, max_attempts + 1):
-            recovery_prompt = (
-                f"{prompt}\n\n"
-                f"[APPLY FAILED — recovery {attempt}/{max_attempts}]\n"
-                f"{detail}\n\n"
-                "Re-emit ONLY a JSON array of patches. "
-                "original_lines must be an EXACT contiguous copy from DISK GROUNDING "
-                "(no line-number prefixes like '42|'). "
-                "Prefer a longer unique old_text; identical sibling sites may share one original_lines."
-            )
-            try:
-                from agent_runtime.cancellation import CancelledError
-
-                raw_retry = self.patcher.complete_once(
-                    recovery_prompt, system_prompt=patcher_system
-                )
-            except CancelledError:
-                raise
-            except Exception as e:
-                log.warning("[patcher] apply recovery %d failed: %s", attempt, e)
-                break
-            patches = self._parse_patches(raw_retry)
-            if not patches:
-                from src.repair.loose_patch_recover import recover_patches_from_text
-
-                patches = recover_patches_from_text(raw_retry or "")
-                if patches:
-                    state.node_timings["patcher_loose_recovered"] = True
-            if not patches:
-                log.warning("[patcher] apply recovery %d: parse empty", attempt)
-                continue
-            applied = self._apply_patches_on_disk(patches, state=state)
-            if applied:
-                log.info(
-                    "[patcher] apply recovered on attempt %d (%d patches)",
-                    attempt,
-                    len(applied),
-                )
-                state.node_timings["patcher_apply_recovered"] = attempt
-                return applied
-            details = getattr(self, "_last_apply_errors", None) or []
-            detail = "; ".join(details[:5]) if details else "apply_failed"
-            state.agent_errors["patcher_apply"] = detail
-        return []
 
     def _apply_patches_on_disk(
         self, patches: list[CandidatePatch], *, state=None
@@ -1411,6 +1169,31 @@ class Orchestrator(RepairPipelineMixin):
                     file=sys.stderr,
                     flush=True,
                 )
+        # Patcher-primary：allowed_edit + 未读不可写
+        lock = getattr(self, "_edit_lock", None)
+        if lock is not None and patches:
+            kept: list[CandidatePatch] = []
+            for p in patches:
+                ok, reason = lock.check_write(p.file_path or "")
+                if ok:
+                    kept.append(p)
+                else:
+                    import sys
+
+                    print(
+                        f"  [edit_lock] reject {p.file_path}: {reason}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    if state is not None:
+                        state.agent_errors["edit_lock"] = reason
+                        state.node_timings["unread_write_reject_count"] = (
+                            lock.unread_write_reject_count
+                        )
+                        state.node_timings["apply_path_reject_count"] = (
+                            lock.apply_path_reject_count
+                        )
+            patches = kept
         applier = self._patch_applier()
         applied = applier.apply_patches(patches)
         self._last_sibling_warnings = list(applier.last_sibling_warnings or [])
@@ -1419,7 +1202,7 @@ class Orchestrator(RepairPipelineMixin):
 
     def _run_verifier(self, state: RepairState) -> "VerificationResult":
         """Docker 沙箱或本地 pytest 验证（不走 LLM Agent loop）。"""
-        from src.repair.verify_test_patch import VerifyTestPatchOverlay
+        from src.repair.verification.verify_test_patch import VerifyTestPatchOverlay
 
         cancel_token = self._repair_ctx.cancel_token if self._repair_ctx else None
         test_patch = ""
@@ -1429,11 +1212,18 @@ class Orchestrator(RepairPipelineMixin):
         if state.repair_plan is not None and state.repair_plan.language:
             language = state.repair_plan.language
         if language != "python":
-            run = StaticVerifyStrategy().run(
+            run = ProfileVerifyStrategy().run(
                 self._repo_root,
+                test_path=self._pick_test_path(state),
                 cancel_token=cancel_token,
                 language=language,
             )
+            if run.error == "verification_environment_failed":
+                run = StaticVerifyStrategy().run(
+                    self._repo_root,
+                    cancel_token=cancel_token,
+                    language=language,
+                )
             record_verify_timings(state, run)
             return run.result
 
@@ -1451,7 +1241,9 @@ class Orchestrator(RepairPipelineMixin):
                 failure_logs=[f"verify_config: test_patch_apply_failed: {exc}"],
             )
 
-    def _run_verifier_python(self, state: RepairState, *, cancel_token=None) -> "VerificationResult":
+    def _run_verifier_python(
+        self, state: RepairState, *, cancel_token=None
+    ) -> "VerificationResult":
         """Python 路径：Docker / host pytest / static（假定 test_patch 已在树上如需要）。"""
         if self.verifier is not None:
             run = DockerVerifyStrategy().run(
@@ -1507,8 +1299,8 @@ class Orchestrator(RepairPipelineMixin):
             normalize_related_test_refs,
             resolve_test_ref_for_pytest,
         )
-        from src.repair.fail_surface import preferred_verify_targets
-        from src.repair.verify_test_patch import extract_targets_from_test_patch
+        from src.repair.verification.fail_surface import preferred_verify_targets
+        from src.repair.verification.verify_test_patch import extract_targets_from_test_patch
 
         candidates: list[str] = []
         # 失败面优先：上一轮 FAILED nodeid
@@ -1622,7 +1414,7 @@ class Orchestrator(RepairPipelineMixin):
 
         # 1. regression hint
         if state is not None:
-            from src.repair.termination import introduced_regression
+            from src.repair.verification.termination import introduced_regression
 
             if introduced_regression(state):
                 sections.append(
@@ -1675,7 +1467,7 @@ class Orchestrator(RepairPipelineMixin):
             if repeat_feedback:
                 sections.append(_FeedbackSection("重复补丁", repeat_feedback, 22, 500))
 
-        from src.repair.verify_diagnose import VerifyBucket, diagnose_verification
+        from src.repair.verification.verify_diagnose import VerifyBucket, diagnose_verification
 
         diagnosis = diagnose_verification(result)
         if state is not None:
@@ -1683,6 +1475,47 @@ class Orchestrator(RepairPipelineMixin):
             state.node_timings["verify_bucket_reason"] = diagnosis.reason
             if diagnosis.failed_nodeids:
                 state.node_timings["verify_failed_nodeids"] = list(diagnosis.failed_nodeids)
+            from src.repair.verification.failure_decision import (
+                apply_failure_decision,
+                decide_verification_failure,
+                render_failure_decision,
+            )
+
+            failure_decision = decide_verification_failure(result, state=state)
+            apply_failure_decision(state, failure_decision)
+            ctx = getattr(self, "_repair_ctx", None)
+            if ctx and ctx.repair_tracer:
+                ctx.repair_tracer.emit(
+                    "orchestrator",
+                    "repair_failure_decision",
+                    failure_decision.to_dict(),
+                    status="error",
+                )
+            sections.append(
+                _FeedbackSection(
+                    "修复决策",
+                    render_failure_decision(failure_decision),
+                    11,
+                    700,
+                )
+            )
+            from src.repair.verification.fail_surface import (
+                apply_verify_feedback_to_state,
+                build_verify_feedback_payload,
+                render_verify_feedback_block,
+            )
+
+            verify_payload = build_verify_feedback_payload(
+                state,
+                repo_root=getattr(self, "_repo_root", "") or "",
+                result=result,
+            )
+            apply_verify_feedback_to_state(state, verify_payload)
+            structured_block = render_verify_feedback_block(verify_payload)
+            if structured_block:
+                sections.append(
+                    _FeedbackSection("结构化反馈", structured_block, 13, 1800)
+                )
 
         sections.append(
             _FeedbackSection(
@@ -1704,7 +1537,7 @@ class Orchestrator(RepairPipelineMixin):
 
         # 失败面：断言 + 测试原文摘要（供下一轮 toolized patcher）
         if state is not None:
-            from src.repair.fail_surface import (
+            from src.repair.verification.fail_surface import (
                 build_fail_surface,
                 build_fail_surface_prompt_block,
             )
@@ -1816,25 +1649,6 @@ class Orchestrator(RepairPipelineMixin):
             return
         tracer.emit(agent, "skill_hint_rendered", skill_hint_rendered_trace(render))
 
-    def _localizer_prompt(self, plan: RepairPlan, issue: str = "") -> str:
-        variables, render = build_localizer_variables(plan, issue)
-        self._emit_skill_hint_trace("localizer", render)
-        text, _ = render_repair_task("localizer", variables)
-        return text
-
-    def _retriever_prompt(
-        self,
-        suspects: list[SuspectLocation],
-        plan: RepairPlan | None = None,
-        issue: str = "",
-    ) -> str:
-        template_name, variables, render = build_retriever_template_and_variables(
-            suspects, plan, issue
-        )
-        self._emit_skill_hint_trace("retriever", render)
-        text, _ = render_repair_task(template_name, variables)
-        return text
-
     def _patcher_prompt(
         self,
         suspects: list[SuspectLocation],
@@ -1842,13 +1656,26 @@ class Orchestrator(RepairPipelineMixin):
         feedback: str = "",
         plan: RepairPlan | None = None,
         issue: str = "",
+        runtime_contract_block: str = "",
     ) -> tuple[str, dict]:
         ctx = self._repair_ctx
         blackboard = ctx.blackboard if ctx is not None else None
+        evidence_block = ""
+        if self.patcher is not None:
+            try:
+                from agent_runtime.features.memory import render_evidence_ledger
+
+                memory = self.patcher.session.get("memory", {}) if getattr(
+                    self.patcher, "session", None
+                ) else {}
+                evidence_block = render_evidence_ledger(memory)
+            except Exception:
+                evidence_block = ""
         variables, render, subscribe_meta = assemble_patcher_variables(
             suspects=suspects,
             context=context,
             feedback=feedback,
+            evidence_block=evidence_block,
             plan=plan,
             issue=issue,
             read_snippet=self._read_code_snippet,
@@ -1857,6 +1684,7 @@ class Orchestrator(RepairPipelineMixin):
             blackboard=blackboard,
             diff_only=True,
             read_line_range=self._read_line_range,
+            runtime_contract_block=runtime_contract_block,
         )
         tracer = ctx.repair_tracer if ctx is not None else None
         if subscribe_meta and tracer is not None:
@@ -1976,12 +1804,6 @@ class Orchestrator(RepairPipelineMixin):
 
     # ---- 解析 Agent 输出 ----
 
-    def _parse_suspect_list(self, answer: str) -> list[SuspectLocation]:
-        return parse_suspect_list(answer)
-
-    def _parse_retrieved_context(self, answer: str) -> RetrievedContext:
-        return parse_retrieved_context(answer)
-
     def _verifier_prompt(self, patches: list[CandidatePatch], plan: RepairPlan | None) -> str:
         variables, render = build_verifier_variables(patches, self._repo_root, plan=plan)
         self._emit_skill_hint_trace("verifier", render)
@@ -1990,6 +1812,3 @@ class Orchestrator(RepairPipelineMixin):
 
     def _parse_verification(self, answer: str) -> "VerificationResult":
         return parse_verification(answer)
-
-    def _parse_patches(self, answer: str) -> list[CandidatePatch]:
-        return parse_patches(answer)

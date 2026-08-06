@@ -9,7 +9,6 @@ from src.prompts.loader import load_patcher_user_hint
 from src.state import RepairPlan
 
 _DEFAULT_PATCHER_VARIANT = "default"
-_DEFAULT_LOCALIZER_HINTS = "stack_first"
 
 EXCEPTION_TO_ISSUE_TYPE: dict[str, str] = {
     "TypeError": "type_error",
@@ -21,17 +20,17 @@ EXCEPTION_TO_ISSUE_TYPE: dict[str, str] = {
     "SyntaxError": "syntax_error",
 }
 
-_ISSUE_TYPE_ROUTES: dict[str, dict[str, str]] = {
-    "type_error": {"patcher": "type_error", "localizer": "stack_first"},
-    "import_error": {"patcher": "import_error", "localizer": "import_first"},
-    "attribute_error": {"patcher": "attribute_error", "localizer": "stack_first"},
-    "logic_error": {"patcher": "logic_error", "localizer": "stack_first"},
-    "config_error": {"patcher": "config_error", "localizer": "stack_first"},
-    "composite": {"patcher": "composite", "localizer": "stack_first"},
-    "test_failure": {"patcher": "default", "localizer": "stack_first"},
-    "value_error": {"patcher": "type_error", "localizer": "stack_first"},
-    "syntax_error": {"patcher": "default", "localizer": "stack_first"},
-    "unknown": {"patcher": "default", "localizer": "stack_first"},
+_ISSUE_TYPE_ROUTES: dict[str, str] = {
+    "type_error": "type_error",
+    "import_error": "import_error",
+    "attribute_error": "attribute_error",
+    "logic_error": "logic_error",
+    "config_error": "config_error",
+    "composite": "composite",
+    "test_failure": "default",
+    "value_error": "type_error",
+    "syntax_error": "default",
+    "unknown": "default",
 }
 
 ROUTED_ISSUE_TYPES = frozenset(_ISSUE_TYPE_ROUTES)
@@ -51,14 +50,10 @@ class PromptRouting:
 
     source_issue_type: str
     patcher_variant: str
-    localizer_hints_key: str
 
     @property
     def prompt_variants(self) -> dict[str, str]:
-        return {
-            "patcher": self.patcher_variant,
-            "localizer": self.localizer_hints_key,
-        }
+        return {"patcher": self.patcher_variant}
 
     def to_trace_payload(self) -> dict:
         return {
@@ -70,17 +65,10 @@ class PromptRouting:
 def resolve_prompt_routing(plan: RepairPlan | None) -> PromptRouting:
     """按 RepairPlan.issue_type 解析各 Agent 的 prompt 变体。"""
     issue_type = (plan.issue_type if plan else "").strip().lower()
-    route = _ISSUE_TYPE_ROUTES.get(
-        issue_type,
-        {
-            "patcher": _DEFAULT_PATCHER_VARIANT,
-            "localizer": _DEFAULT_LOCALIZER_HINTS,
-        },
-    )
+    variant = _ISSUE_TYPE_ROUTES.get(issue_type, _DEFAULT_PATCHER_VARIANT)
     return PromptRouting(
         source_issue_type=plan.issue_type if plan else "",
-        patcher_variant=route["patcher"],
-        localizer_hints_key=route["localizer"],
+        patcher_variant=variant,
     )
 
 
@@ -95,10 +83,6 @@ def patcher_variant_for(plan: RepairPlan | None) -> str:
     if not plan:
         return _DEFAULT_PATCHER_VARIANT
     return plan.prompt_variants.get("patcher", _DEFAULT_PATCHER_VARIANT)
-
-
-def localizer_hints_key_for(plan: RepairPlan) -> str:
-    return plan.prompt_variants.get("localizer", _DEFAULT_LOCALIZER_HINTS)
 
 
 def repair_plan_intent_snapshot(plan: RepairPlan) -> dict:
@@ -120,11 +104,8 @@ def repair_plan_intent_snapshot(plan: RepairPlan) -> dict:
 
 
 def fallback_suspect_uses_import_line(issue_type: str) -> bool:
-    """Localizer 降级定位是否优先 import 行。"""
-    return (
-        resolve_prompt_routing(RepairPlan(issue_type=issue_type)).localizer_hints_key
-        == "import_first"
-    )
+    """Whether the rule seed should prioritize an import statement."""
+    return issue_type.strip().lower() == "import_error"
 
 
 def is_composite_multi_file(plan: RepairPlan | None) -> bool:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-class TerminalToolAccepted(Exception):
+class TerminalToolAcceptedError(Exception):
     """工具带 ``terminal=True`` 且执行成功时由 AgentLoop 抛出，供 native/XML 路径短路。"""
 
     def __init__(self, payload: str, *, tool_name: str = ""):

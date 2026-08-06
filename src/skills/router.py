@@ -302,6 +302,6 @@ class SkillRouter:
 
 
 def route_executable_skill(text: str, **kwargs: Any) -> RouteDecision:
-    return SkillRouter(**{k: v for k, v in kwargs.items() if k in ("registry", "embed_fn", "llm_pick_fn")}).route(
-        text
-    )
+    allowed = {"registry", "embed_fn", "llm_pick_fn"}
+    router_kwargs = {key: value for key, value in kwargs.items() if key in allowed}
+    return SkillRouter(**router_kwargs).route(text)

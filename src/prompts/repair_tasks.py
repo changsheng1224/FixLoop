@@ -5,8 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from agent_runtime.template_render import render_template, template_metadata
-from src.prompts.loader import load_localizer_hints
-from src.repair.prompt_router import apply_prompt_routing, localizer_hints_key_for
 from src.skills.skill_block import SkillBlockRender, SkillHintRole, render_skill_hint_for_plan
 
 _TASKS_DIR = Path(__file__).parent / "tasks"
@@ -36,73 +34,11 @@ def _resolve_skill_render(
     return render_skill_hint_for_plan(plan, role)
 
 
-def build_localizer_variables(
-    plan,
-    issue: str = "",
-    *,
-    skill_render: SkillBlockRender | None = None,
-) -> tuple[dict[str, str], SkillBlockRender]:
-    if not plan.prompt_variants:
-        apply_prompt_routing(plan)
-    issue_text = issue or plan.reasoning
-    suspect_line = ""
-    if plan.suspect_files:
-        suspect_line = f"嫌疑文件: {', '.join(plan.suspect_files)}"
-    hints = load_localizer_hints(localizer_hints_key_for(plan))
-    render = _resolve_skill_render(plan, "localizer", skill_render=skill_render)
-    variables = {
-        "issue": issue_text,
-        "suspect_files_line": suspect_line,
-        "issue_type_hints": hints,
-        "skill_hint_block": render.text,
-    }
-    return variables, render
-
-
-def build_retriever_template_and_variables(
-    suspects,
-    plan=None,
-    issue: str = "",
-    *,
-    skill_render: SkillBlockRender | None = None,
-) -> tuple[str, dict[str, str], SkillBlockRender]:
-    render = (
-        _resolve_skill_render(plan, "retriever", skill_render=skill_render)
-        if plan
-        else SkillBlockRender(text="", role="retriever", source="none")
-    )
-    skill_hint_block = render.text
-    if suspects:
-        lines = ["根据以下嫌疑位置搜索相关代码："]
-        for s in suspects:
-            lines.append(f"  - {s.file_path}:{s.start_line} {s.function_name or ''}")
-        return (
-            "retriever_suspects",
-            {
-                "suspects_list": "\n".join(lines[1:]),
-                "header": lines[0],
-                "skill_hint_block": skill_hint_block,
-            },
-            render,
-        )
-
-    if plan and plan.suspect_files:
-        return (
-            "retriever_plan",
-            {
-                "issue": issue or plan.reasoning,
-                "suspect_files": ", ".join(plan.suspect_files),
-                "skill_hint_block": skill_hint_block,
-            },
-            render,
-        )
-
-    return "retriever_fallback", {"skill_hint_block": skill_hint_block}, render
-
-
 def build_patcher_variables(
     *,
     feedback: str = "",
+    evidence_block: str = "",
+    runtime_contract_block: str = "",
     issue_hints_block: str = "",
     skill_hint_block: str = "",
     allowed_files_line: str = "",
@@ -116,6 +52,8 @@ def build_patcher_variables(
         feedback_block = f"[上一轮验证反馈]\n{feedback}\n"
     return {
         "feedback_block": feedback_block,
+        "evidence_block": evidence_block,
+        "runtime_contract_block": runtime_contract_block,
         "issue_hints_block": issue_hints_block,
         "skill_hint_block": skill_hint_block,
         "allowed_files_line": allowed_files_line,

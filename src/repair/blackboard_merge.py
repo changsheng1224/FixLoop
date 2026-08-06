@@ -8,8 +8,8 @@ from src.state import RepairState, RetrievedContext, SuspectLocation
 SUSPECT_PREFIX = "suspect:"
 CONTEXT_PREFIX = "context:"
 SCRATCH_PREFIX = "scratch:"
-LOCALIZER_SOURCE = "localizer"
-RETRIEVER_SOURCE = "retriever"
+RULE_SEED_SOURCE = "rule_seed"
+RUNTIME_CONTEXT_SOURCE = "runtime_context"
 ORCHESTRATOR_SOURCE = "orchestrator"
 BLACKBOARD_SCHEMA_VERSION = 1
 
@@ -46,12 +46,12 @@ def scratch_key(field: str) -> str:
     return f"{SCRATCH_PREFIX}{field}"
 
 
-def write_localize_phase_to_blackboard(
+def write_seed_context_to_blackboard(
     bb: Blackboard,
     suspects: list[SuspectLocation],
     context: RetrievedContext | None,
 ) -> dict:
-    """Write parsed localize/retrieve outputs to the blackboard."""
+    """Write rule-seeded suspects and runtime context to the blackboard."""
     stats = {
         "suspects_written": 0,
         "context_keys_written": 0,
@@ -61,7 +61,7 @@ def write_localize_phase_to_blackboard(
         ok = bb.write(
             suspect_key(suspect),
             suspect.to_dict(),
-            source_agent=LOCALIZER_SOURCE,
+            source_agent=RULE_SEED_SOURCE,
         )
         if ok:
             stats["suspects_written"] += 1
@@ -73,7 +73,7 @@ def write_localize_phase_to_blackboard(
         value = getattr(ctx, field, None)
         if not value:
             continue
-        ok = bb.write(context_key(field), value, source_agent=RETRIEVER_SOURCE)
+        ok = bb.write(context_key(field), value, source_agent=RUNTIME_CONTEXT_SOURCE)
         if ok:
             stats["context_keys_written"] += 1
         else:
@@ -133,11 +133,6 @@ def _pick_conflict_winner(
     strategy: str,
 ) -> tuple[str, object]:
     source_to_value = dict(zip(sources, values, strict=False))
-    if strategy == "prefer_localizer":
-        if LOCALIZER_SOURCE in source_to_value:
-            return LOCALIZER_SOURCE, source_to_value[LOCALIZER_SOURCE]
-        if RETRIEVER_SOURCE in source_to_value:
-            return RETRIEVER_SOURCE, source_to_value[RETRIEVER_SOURCE]
     if strategy == "highest_confidence" and key.startswith(SUSPECT_PREFIX):
         best_source = sources[0]
         best_value = values[0]
@@ -157,11 +152,15 @@ def _pick_conflict_winner(
 def resolve_blackboard_conflicts(
     bb: Blackboard,
     *,
-    strategy: str = "prefer_localizer",
+    strategy: str = "highest_confidence",
 ) -> list[dict]:
     """Arbitrate pending write conflicts and apply winners to the blackboard."""
     resolved: list[dict] = []
     for conflict in list(bb.conflicts):
+        # Proposal/CAS conflicts do not have a legacy winner tuple.  Keep
+        # them pending for an explicit retry or model-mediated decision.
+        if conflict.get("status") in {"stale", "conflicted"}:
+            continue
         key = conflict["key"]
         sources = conflict["sources"]
         values = conflict["values"]
@@ -190,7 +189,7 @@ def merge_blackboard_for_patch(
     state: RepairState,
     bb: Blackboard,
     *,
-    conflict_strategy: str = "prefer_localizer",
+    conflict_strategy: str = "highest_confidence",
 ) -> dict:
     """Merge blackboard into RepairState at patch boundary (read_related + resolve)."""
     conflicts_resolved = resolve_blackboard_conflicts(bb, strategy=conflict_strategy)
@@ -203,6 +202,13 @@ def merge_blackboard_for_patch(
 
     snapshot = bb.snapshot()
     state.blackboard_snapshot = snapshot
+    state.blackboard_revision = int(snapshot.get("revision", bb.revision) or 0)
+    state.state_revision += 1
+    state.collaboration_attribution = {
+        "conflicts_resolved": len(conflicts_resolved),
+        "conflicts_pending": len(bb.conflicts),
+        "blackboard_revision": state.blackboard_revision,
+    }
 
     return {
         "suspect_count": len(suspects),
@@ -212,6 +218,7 @@ def merge_blackboard_for_patch(
         "scratch_feedback_applied": scratch_applied,
         "snapshot": snapshot,
         "retry_count": state.retry_count,
+        "blackboard_revision": state.blackboard_revision,
     }
 
 

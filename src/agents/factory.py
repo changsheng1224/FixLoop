@@ -12,26 +12,10 @@ from src.middleware import ToolGateway, build_repair_gateway
 from src.prompts.loader import load_system_prompt
 from src.tools.composite import build_repair_agent_tools
 
-MultiAgentRole = Literal["localizer", "retriever", "patcher", "verifier"]
-RepairAgentRole = Literal["localizer", "retriever", "patcher", "verifier", "baseline"]
-
-BASELINE_SYSTEM_PROMPT = (
-    "你是代码修复专家。分析错误、定位代码、生成补丁、在容器内验证修复。你可以使用所有工具。"
-)
+RepairAgentRole = Literal["patcher", "verifier"]
 
 # 分 Agent 预算表 — prompt_budget 从 RepairBudgetContext 统一来源读取
-_AGENT_DEFAULTS: dict[MultiAgentRole, dict] = {
-    "localizer": {
-        "max_steps": 6,
-        "max_new_tokens": 4096,
-        "prompt_budget": _DEFAULT_ALLOCATIONS["localizer"],
-    },
-    "retriever": {
-        "max_steps": 6,
-        "max_new_tokens": 2048,
-        "prompt_budget": _DEFAULT_ALLOCATIONS["retriever"],
-        "max_json_retries": 0,
-    },
+_AGENT_DEFAULTS: dict[RepairAgentRole, dict] = {
     "patcher": {
         "max_steps": 10,
         "max_new_tokens": 4096,
@@ -46,18 +30,11 @@ _AGENT_DEFAULTS: dict[MultiAgentRole, dict] = {
 }
 
 
-def _baseline_gateway(tool_names: list[str]) -> ToolGateway:
-    table = {name: {"baseline"} for name in tool_names}
-    table["*"] = {"baseline"}
-    return ToolGateway(table)
-
-
 def create_repair_agent(
     role: RepairAgentRole,
     model_client,
     workspace,
     cwd: str = "",
-    light_client=None,
     approval: str = "auto",
     *,
     dry_run: bool = False,
@@ -66,7 +43,7 @@ def create_repair_agent(
     budget=None,
     gateway: ToolGateway | None = None,
 ) -> Agent:
-    """创建指定角色的修复 Agent（含 baseline 单 Agent 变体）。
+    """创建 Patcher 或 Verifier Agent。
 
     Args:
         approval: Gate 7 审批策略。headless repair 默认 ``auto``（Layer 1 Gateway
@@ -77,34 +54,17 @@ def create_repair_agent(
     ctx = ToolContext(root=root)
     tools = build_repair_agent_tools(ctx, role)
 
-    if role == "baseline":
-        defaults = {"max_steps": 12, "max_new_tokens": 4096}
-        gw = _baseline_gateway(list(tools.keys()))
-        system_prompt = BASELINE_SYSTEM_PROMPT
-        agent_name = "baseline"
-        light = None
-    else:
-        defaults = _AGENT_DEFAULTS[role]
-        gw = gateway or build_repair_gateway(root)
-        if role == "verifier":
-            gw.grant("verifier", "sandbox_build")
-            gw.grant("verifier", "sandbox_test")
-            gw.grant("verifier", "sandbox_verify")
-        system_prompt = load_system_prompt(role)
-        agent_name = role
-        light = light_client if role in ("localizer", "retriever") else None
+    defaults = _AGENT_DEFAULTS[role]
+    gw = gateway or build_repair_gateway(root)
+    system_prompt = load_system_prompt(role)
+    agent_name = role
+    gw.bind_tools(tools)
 
-    # localizer/verifier：散文 JSON；retriever/patcher：工具终态（非 json_mode）
-    json_mode_roles = frozenset({"localizer", "verifier"})
-    json_mode = role in json_mode_roles
-    if role == "retriever":
+    json_mode = role == "verifier"
+    if role == "patcher":
         system_prompt += (
-            "\n\n【输出格式】探索后必须调用 submit_retrieved_context；"
-            "不要输出裸 JSON / Markdown / <final>。"
-        )
-    elif role == "patcher":
-        system_prompt += (
-            "\n\n【输出格式】优先 read_file / patch_file 修改文件；"
+            "\n\n【输出格式】优先 read_file → apply_patch（*** Begin/End Patch）修改文件；"
+            "patch_file 仅作兜底；可用 quick_test 跑 FAIL_TO_PASS；"
             "完成后简短说明。仅当无法调用工具时才输出 CandidatePatch JSON 数组。"
         )
     elif json_mode:
@@ -116,7 +76,6 @@ def create_repair_agent(
         cwd=root,
         tools=tools,
         system_prompt=system_prompt,
-        light_client=light,
         agent_name=agent_name,
         tool_dispatch=gw.dispatch,
         prefix_mode="repair",
@@ -130,26 +89,10 @@ def create_repair_agent(
     return agent
 
 
-def create_localizer(
-    model_client, workspace, cwd: str = "", light_client=None, approval: str = "auto", **kwargs
-) -> Agent:
-    return create_repair_agent(
-        "localizer", model_client, workspace, cwd, light_client, approval=approval, **kwargs
-    )
-
-
 def create_patcher(
     model_client, workspace, cwd: str = "", approval: str = "auto", **kwargs
 ) -> Agent:
     return create_repair_agent("patcher", model_client, workspace, cwd, approval=approval, **kwargs)
-
-
-def create_retriever(
-    model_client, workspace, cwd: str = "", light_client=None, approval: str = "auto", **kwargs
-) -> Agent:
-    return create_repair_agent(
-        "retriever", model_client, workspace, cwd, light_client, approval=approval, **kwargs
-    )
 
 
 def create_verifier(
@@ -160,22 +103,9 @@ def create_verifier(
     )
 
 
-def create_baseline_agent(
-    model_client, workspace, cwd: str = "", approval: str = "auto", **kwargs
-) -> Agent:
-    return create_repair_agent(
-        "baseline", model_client, workspace, cwd, approval=approval, **kwargs
-    )
-
-
 __all__ = [
-    "BASELINE_SYSTEM_PROMPT",
-    "MultiAgentRole",
     "RepairAgentRole",
-    "create_baseline_agent",
-    "create_localizer",
     "create_patcher",
     "create_repair_agent",
-    "create_retriever",
     "create_verifier",
 ]

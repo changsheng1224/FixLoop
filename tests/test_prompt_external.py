@@ -84,10 +84,10 @@ class TestPrefixIntegration:
 
     def test_repair_agents_share_assets_fingerprint(self, temp_workspace):
         from agent_runtime.providers.clients import FakeModelClient
-        from src.agents.factory import create_localizer, create_patcher
+        from src.agents.factory import create_patcher, create_verifier
 
         ws = WorkspaceContext.build(str(temp_workspace))
-        loc = create_localizer(FakeModelClient(["<final>ok</final>"]), ws, cwd=str(temp_workspace))
+        loc = create_verifier(FakeModelClient(["<final>ok</final>"]), ws, cwd=str(temp_workspace))
         pat = create_patcher(FakeModelClient(["<final>ok</final>"]), ws, cwd=str(temp_workspace))
         assert loc._prefix.assets_fingerprint == pat._prefix.assets_fingerprint
 

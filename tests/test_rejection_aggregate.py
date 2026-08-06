@@ -24,12 +24,12 @@ class TestMergeCountMaps:
 class TestAggregateRejection:
     def test_merges_across_agents(self):
         reports = {
-            "localizer": {
+            "patcher": {
                 "permission_denied_by_tool": {"write_file": 2},
                 "tool_rejections_by_layer": {"gateway": 2},
                 "tool_rejections_by_gate": {"gateway": 2},
             },
-            "retriever": {
+            "verifier": {
                 "permission_denied_by_tool": {"write_file": 1},
                 "tool_rejections_by_layer": {"gateway": 1},
                 "tool_rejections_by_gate": {"gateway": 1},
@@ -38,7 +38,7 @@ class TestAggregateRejection:
         summary = aggregate_rejection_from_agent_reports(reports)
         assert summary["permission_denied_by_tool"]["write_file"] == 3
         assert summary["tool_rejections_by_layer"]["gateway"] == 3
-        assert summary["permission_denied_by_agent"]["localizer"]["write_file"] == 2
+        assert summary["permission_denied_by_agent"]["patcher"]["write_file"] == 2
 
     def test_executor_only_excludes_permission_denied_by_tool(self):
         reports = {
@@ -68,27 +68,27 @@ class TestGatewayAgentErrors:
         errors: dict = {}
         apply_gateway_denials_to_agent_errors(
             errors,
-            {"localizer": {"write_file": 2}},
+            {"patcher": {"write_file": 2}},
         )
-        assert errors["localizer"] == f"{GATEWAY_AGENT_ERROR_PREFIX} write_file×2"
+        assert errors["patcher"] == f"{GATEWAY_AGENT_ERROR_PREFIX} write_file×2"
 
     def test_apply_merges_with_existing_error(self):
-        errors = {"localizer": "parse failed"}
+        errors = {"patcher": "parse failed"}
         apply_gateway_denials_to_agent_errors(
             errors,
-            {"localizer": {"write_file": 1}},
+            {"patcher": {"write_file": 1}},
         )
-        assert errors["localizer"] == (f"parse failed; {GATEWAY_AGENT_ERROR_PREFIX} write_file×1")
+        assert errors["patcher"] == (f"parse failed; {GATEWAY_AGENT_ERROR_PREFIX} write_file×1")
 
     def test_apply_skips_duplicate_gateway_suffix(self):
         errors = {
-            "localizer": f"{GATEWAY_AGENT_ERROR_PREFIX} write_file×2",
+            "patcher": f"{GATEWAY_AGENT_ERROR_PREFIX} write_file×2",
         }
         apply_gateway_denials_to_agent_errors(
             errors,
-            {"localizer": {"write_file": 3}},
+            {"patcher": {"write_file": 3}},
         )
-        assert errors["localizer"] == f"{GATEWAY_AGENT_ERROR_PREFIX} write_file×2"
+        assert errors["patcher"] == f"{GATEWAY_AGENT_ERROR_PREFIX} write_file×2"
 
     def test_apply_no_op_when_empty(self):
         errors = {"patcher": "apply_failed"}
@@ -101,7 +101,7 @@ class TestSummarizeRepairRejections:
     def test_reads_agent_report_files(self, tmp_path):
         run_dir = tmp_path / "run-1"
         run_dir.mkdir()
-        (run_dir / "agent_report.localizer.json").write_text(
+        (run_dir / "agent_report.patcher.json").write_text(
             json.dumps(
                 {
                     "permission_denied_by_tool": {"write_file": 1},

@@ -33,6 +33,7 @@ REPAIR_TRACE_EVENTS = frozenset(
         "baseline_verify_finished",
         "blackboard_snapshot",
         "blackboard_conflicts",
+        "repair_failure_decision",
     }
 )
 
@@ -212,6 +213,13 @@ class RepairRunTracer:
                 "count": len(state.blackboard_snapshot.get("conflicts", [])),
                 "items": state.blackboard_snapshot.get("conflicts", []),
             },
+            "collaboration_governance": {
+                "state_revision": int(getattr(state, "state_revision", 0) or 0),
+                "blackboard_revision": int(getattr(state, "blackboard_revision", 0) or 0),
+                "active_roles": list(getattr(state, "active_roles", []) or []),
+                "role_lifecycle": dict(getattr(state, "role_lifecycle", {}) or {}),
+                "attribution": dict(getattr(state, "collaboration_attribution", {}) or {}),
+            },
             "context_waterfall": build_context_waterfall(reports),
             "runtime_metrics": {
                 "retry_count": state.retry_count,
@@ -252,6 +260,7 @@ class RepairRunTracer:
         if obs:
             finished_payload.update(obs)
         self.close_dangling_ask_spans()
+        self.end_root_span()
         fin_status = "ok"
         st = str(state.status or "").lower()
         if st in ("failed", "error"):
@@ -264,4 +273,3 @@ class RepairRunTracer:
             finished_payload,
             status=fin_status,
         )
-        self.end_root_span()

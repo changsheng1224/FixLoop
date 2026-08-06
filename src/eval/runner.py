@@ -15,7 +15,7 @@ from pathlib import Path
 from src.eval.case_io import DEFAULT_CASES_DIR, build_case_issue, load_case_metadata
 from src.eval.models import CaseResult, EvalReport
 from src.eval.patch_utils import apply_unified_patch
-from src.repair.termination import introduced_regression, regression_detected
+from src.repair.verification.termination import introduced_regression, regression_detected
 
 # Agent 运行时会在 repo 内写入的目录，不计入评测 patch diff
 EVAL_DIFF_SKIP_DIRS = frozenset({".agent", ".pytest_cache", "__pycache__", ".git"})
@@ -98,27 +98,14 @@ def extract_agent_timings(node_timings: dict | None) -> dict:
     from src.repair.timing_schema import PHASES, get_phase_ms, phase_ms_key
 
     result: dict = {}
-    for key in ("parse_issue_ms", "localize_retrieve_ms", "baseline_ms"):
+    for key in ("parse_issue_ms", "baseline_ms"):
         if key in node_timings:
             result[key] = node_timings[key]
-    parallel = node_timings.get("parallel_wall_ms") or {}
-    if "localize_retrieve_ms" in parallel and "localize_retrieve_ms" not in result:
-        result["localize_retrieve_ms"] = parallel["localize_retrieve_ms"]
     for phase in PHASES:
         canon = phase_ms_key(phase)
         ms = get_phase_ms(node_timings, phase)
         if ms or canon in (node_timings.get("phases") or {}):
             result[canon] = ms
-    legacy_keys = (
-        "localizer_ms",
-        "retriever_ms",
-        "patcher_ms",
-        "verifier_ms",
-    )
-    for key in legacy_keys:
-        if key in node_timings:
-            result[key] = node_timings[key]
-
     # 性能矩阵字段（V1.4-Bonus5c）
     token_usage = node_timings.get("token_usage") or {}
     if isinstance(token_usage, dict):

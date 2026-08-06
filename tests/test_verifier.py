@@ -30,7 +30,7 @@ class TestVerifierAgent:
 
     def test_verifier_ask_returns_answer(self, client, workspace):
         agent = create_verifier(client, workspace)
-        answer = agent.ask("验证补丁")
+        answer = agent.ask("验证补丁", skip_plan=True)
         assert "all_passed" in answer
 
 
@@ -38,7 +38,7 @@ class TestVerifyStrategyExecutionTier:
     """Verify strategy execution_tier 标记测试。"""
 
     def test_pytest_strategy_marks_host_tier(self, tmp_path):
-        from src.repair.verify import PytestVerifyStrategy
+        from src.repair.verification.verify import PytestVerifyStrategy
 
         (tmp_path / "test_x.py").write_text("def test_pass(): assert True\n", encoding="utf-8")
         run = PytestVerifyStrategy().run(str(tmp_path))
@@ -50,7 +50,7 @@ class TestVerifyStrategyExecutionTier:
         assert "no sandbox isolation" in run.internal.get("warning", "").lower()
 
     def test_docker_strategy_returns_container_tier_on_success(self, monkeypatch, tmp_path):
-        from src.repair.verify import DockerVerifyStrategy
+        from src.repair.verification.verify import DockerVerifyStrategy
 
         # 跳过体检（patch 到 sandbox_verify 模块中）
         monkeypatch.setattr(
@@ -77,7 +77,7 @@ class TestVerifyStrategyExecutionTier:
 
     def test_docker_strategy_unavailable_marks_no_actual_tier(self, monkeypatch, tmp_path):
         from src.harness.sandbox_verify import SandboxNotAvailableError
-        from src.repair.verify import DockerVerifyStrategy
+        from src.repair.verification.verify import DockerVerifyStrategy
 
         monkeypatch.setattr(
             "src.harness.sandbox_verify.assert_sandbox_available",
@@ -93,7 +93,7 @@ class TestVerifyStrategyExecutionTier:
         assert run.internal.get("sandbox_unavailable") is True
 
     def test_static_strategy_checks_syntax_without_pytest(self, tmp_path):
-        from src.repair.verify import StaticVerifyStrategy
+        from src.repair.verification.verify import StaticVerifyStrategy
 
         (tmp_path / "app.py").write_text("def ok():\n    return 1\n", encoding="utf-8")
         run = StaticVerifyStrategy().run(str(tmp_path))
@@ -105,7 +105,7 @@ class TestVerifyStrategyExecutionTier:
         assert run.internal.get("trusted_execution") is False
 
     def test_static_strategy_reports_compile_error(self, tmp_path):
-        from src.repair.verify import StaticVerifyStrategy
+        from src.repair.verification.verify import StaticVerifyStrategy
 
         (tmp_path / "broken.py").write_text("def bad(:\n", encoding="utf-8")
         run = StaticVerifyStrategy().run(str(tmp_path))
@@ -117,7 +117,7 @@ class TestVerifyStrategyExecutionTier:
     def test_static_strategy_checks_java_with_javac(self, monkeypatch, tmp_path):
         import subprocess
 
-        from src.repair.verify import StaticVerifyStrategy
+        from src.repair.verification.verify import StaticVerifyStrategy
 
         (tmp_path / "Bar.java").write_text("class Bar { void x( }", encoding="utf-8")
         monkeypatch.setattr("shutil.which", lambda name: "javac" if name == "javac" else None)
@@ -143,7 +143,7 @@ class TestVerifyStrategyExecutionTier:
         assert any("Bar.java" in log for log in run.result.failure_logs)
 
     def test_static_strategy_reports_unsupported_language_tool(self, monkeypatch, tmp_path):
-        from src.repair.verify import StaticVerifyStrategy
+        from src.repair.verification.verify import StaticVerifyStrategy
 
         (tmp_path / "Bar.java").write_text("class Bar {}\n", encoding="utf-8")
         monkeypatch.setattr("shutil.which", lambda name: None)
@@ -167,7 +167,7 @@ class TestVerifierFallbackPolicy:
             lambda: (_ for _ in ()).throw(SandboxNotAvailableError("mock unavailable")),
         )
         (tmp_path / "test_x.py").write_text("def test_pass(): assert True\n", encoding="utf-8")
-        orch = Orchestrator(None, None, None, verifier=object(), use_pytest_verify=True)
+        orch = Orchestrator(None, verifier=object(), use_pytest_verify=True)
         orch._repo_root = str(tmp_path)
 
         result = orch._run_verifier(RepairState(issue_input="x"))
@@ -185,8 +185,6 @@ class TestVerifierFallbackPolicy:
         )
         (tmp_path / "app.py").write_text("def ok():\n    return 1\n", encoding="utf-8")
         orch = Orchestrator(
-            None,
-            None,
             None,
             verifier=object(),
             use_pytest_verify=False,
@@ -211,8 +209,6 @@ class TestVerifierFallbackPolicy:
         )
         orch = Orchestrator(
             None,
-            None,
-            None,
             verifier=object(),
             use_pytest_verify=True,
             require_sandbox=True,
@@ -233,8 +229,6 @@ class TestVerifierFallbackPolicy:
         (tmp_path / "app.py").write_text("def ok():\n    return 1\n", encoding="utf-8")
         orch = Orchestrator(
             None,
-            None,
-            None,
             verifier=None,
             use_pytest_verify=False,
             allow_static_verify_fallback=True,
@@ -249,7 +243,7 @@ class TestVerifierFallbackPolicy:
 
     def test_non_python_plan_uses_language_aware_static_verifier(self, monkeypatch, tmp_path):
         from src.orchestrator import Orchestrator
-        from src.repair.verify import VerifyRun
+        from src.repair.verification.verify import VerifyRun
         from src.state import RepairPlan, RepairState, VerificationResult
 
         seen: dict[str, str] = {}
@@ -263,7 +257,7 @@ class TestVerifierFallbackPolicy:
             )
 
         monkeypatch.setattr("src.orchestrator.StaticVerifyStrategy.run", fake_static_run)
-        orch = Orchestrator(None, None, None, verifier=object(), use_pytest_verify=True)
+        orch = Orchestrator(None, verifier=object(), use_pytest_verify=True)
         orch._repo_root = str(tmp_path)
         state = RepairState(
             issue_input="java.lang.NullPointerException at Bar.java:10",

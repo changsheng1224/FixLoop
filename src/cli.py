@@ -20,7 +20,7 @@ from src.eval.cli_helpers import (
     run_skill_eval_cmd,
 )
 from src.eval.runner import DEFAULT_CASES_DIR
-from src.repair.termination import is_repair_success
+from src.repair.verification.termination import is_repair_success
 from src.repair_factory import make_orchestrator_factory
 
 
@@ -177,7 +177,7 @@ def main() -> int:
         "--variant",
         action="append",
         dest="variants",
-        choices=["full", "single", "no_retriever"],
+        choices=["runtime", "naive"],
         help="指定变体（可多次指定；默认全部）",
     )
     p_ablation.add_argument(
@@ -291,7 +291,6 @@ def _repair(args) -> int:
         state = orch.repair(
             args.issue,
             cancel_token=cancel_token,
-            allow_baseline_degrade=not args.no_degrade,
             resume_run_id=getattr(args, "resume_repair", None) or "",
         )
 
@@ -401,24 +400,12 @@ def _print_repair_result(state, verbose: bool) -> None:
                 f"(patcher={patcher})",
                 file=sys.stderr,
             )
-        print(f"[Localizer] 定位 {len(state.suspect_locations)} 个嫌疑位置", file=sys.stderr)
-        if state.retrieved_context:
-            print(
-                f"[Retriever] 找到 {len(state.retrieved_context.related_tests)} 个相关测试",
-                file=sys.stderr,
-            )
+        print(f"[Runtime] 种子定位 {len(state.suspect_locations)} 个嫌疑位置", file=sys.stderr)
         print(f"[Patcher] 生成 {len(state.candidate_patches)} 个补丁", file=sys.stderr)
         print("--- Timing ---", file=sys.stderr)
         from src.repair.timing_schema import get_phase_ms
 
-        wall = state.node_timings.get("localize_retrieve_ms") or (
-            state.node_timings.get("parallel_wall_ms") or {}
-        ).get("localize_retrieve_ms")
-        if wall:
-            print(f"  localize+retrieve (parallel wall): {wall}ms", file=sys.stderr)
         phase_labels = (
-            ("localize", "localizer"),
-            ("retrieve", "retriever"),
             ("patch", "patcher"),
             ("verify", "verifier"),
         )

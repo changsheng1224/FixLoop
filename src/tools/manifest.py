@@ -1,12 +1,12 @@
-""".agent/tools.yaml manifest 加载与校验（V1.4-Bonus10b）。
+"""Load ToolSpec role overrides from ``.agent/tools.yaml``.
 
 用户可在 repo 根目录 ``.agent/tools.yaml`` 中自定义 Agent 工具权限。
-加载时校验工具名合法性，与内置 REPAIR_PERMISSION_TABLE 合并。
+Only tools already present in the canonical registry may be overridden.
 
 格式::
 
     tools:
-      write_file: [patcher, localizer]
+      write_file: [patcher]
       run_shell: []
       search: ["*"]
 """
@@ -25,8 +25,8 @@ from src.tools.composite import REPAIR_CANONICAL_TOOL_NAMES
 MANIFEST_FILENAME = "tools.yaml"
 
 
-def load_tools_manifest(repo_root: str | Path) -> dict[str, set[str]]:
-    """从 ``.agent/tools.yaml`` 加载用户自定义权限表。
+def load_tool_role_overrides(repo_root: str | Path) -> dict[str, set[str]]:
+    """Load canonical tool role overrides from the workspace manifest.
 
     Args:
         repo_root: 仓库根目录。
@@ -69,21 +69,3 @@ def load_tools_manifest(repo_root: str | Path) -> dict[str, set[str]]:
         elif agents == "*":
             result[tool_name] = {"*"}
     return result
-
-
-def merge_permission_table(
-    builtin: dict[str, set[str]], manifest: dict[str, set[str]]
-) -> dict[str, set[str]]:
-    """合并内置权限表与用户 manifest。用户设置覆盖内置默认。
-
-    Args:
-        builtin: 内置权限表（REPAIR_PERMISSION_TABLE）。
-        manifest: 用户 manifest（load_tools_manifest 返回值）。
-
-    Returns:
-        合并后的权限表。
-    """
-    merged = dict(builtin)
-    for tool_name, agents in manifest.items():
-        merged[tool_name] = agents  # 用户覆盖
-    return merged

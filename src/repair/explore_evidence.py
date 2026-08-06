@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from src.state import RetrievedContext, RepairPlan, SuspectLocation
+from src.state import RepairPlan, RetrievedContext, SuspectLocation
 
 __all__ = [
     "explore_has_anchor",
@@ -47,7 +47,7 @@ def explore_quality(
     has_plan_files = bool(plan and plan.suspect_files)
     grounded = False
     if repo_root:
-        from src.repair.symbol_index import has_grounded_impl_suspect
+        from src.repair.localization.symbol_index import has_grounded_impl_suspect
 
         grounded = has_grounded_impl_suspect(suspects, repo_root)
     soft_ok = explore_has_anchor(suspects, context, plan)
@@ -63,7 +63,7 @@ def explore_quality(
 
 
 def has_grounded_impl_for_state(state, repo_root: str) -> bool:
-    from src.repair.symbol_index import has_grounded_impl_suspect
+    from src.repair.localization.symbol_index import has_grounded_impl_suspect
 
     return has_grounded_impl_suspect(getattr(state, "suspect_locations", None), repo_root)
 

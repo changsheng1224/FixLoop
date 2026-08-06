@@ -16,7 +16,6 @@ class RepairRunContext:
     """Orchestrator repair 期间的可变会话状态（finally 中清理）。"""
 
     phase_timeout_config: PhaseTimeoutConfig | None = None
-    allow_baseline_degrade: bool = True
     cancel_token: Any = None
     repair_started_at: float | None = None
     blackboard: Blackboard | None = None

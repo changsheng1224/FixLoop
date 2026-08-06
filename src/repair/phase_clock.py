@@ -55,7 +55,8 @@ class PhaseTimeoutConfig:
         localize = DEFAULT_LOCALIZE_TIMEOUT_S
         if localize + min_patch + verify > total:
             localize = max(30, total - min_patch - verify)
-        patch = max(min_patch, min(DEFAULT_PATCH_TIMEOUT_S, max(min_patch, total - localize - verify)))
+        patch_room = max(min_patch, total - localize - verify)
+        patch = max(min_patch, min(DEFAULT_PATCH_TIMEOUT_S, patch_room))
         # 若 total 很大，允许 patch 略高于默认（最多 total/2）
         if total >= 600:
             patch = max(patch, min(total // 2, 450))
@@ -64,6 +65,24 @@ class PhaseTimeoutConfig:
         return cls(
             localize_s=int(localize),
             patch_s=int(max(0, patch)),
+            verify_s=int(verify),
+            repair_total_s=total,
+        )
+
+    @classmethod
+    def for_patcher_primary(cls, repair_timeout_s: int) -> PhaseTimeoutConfig:
+        """patcher_primary：无 localize 预算，patch 吃主份额。"""
+        if repair_timeout_s <= 0:
+            return cls(0, 0, 0, 0)
+        total = int(repair_timeout_s)
+        verify = min(DEFAULT_VERIFY_TIMEOUT_S, max(60, total // 8))
+        # Critic ≤15s 挤在 patch/verify 间隙，不单列阶段
+        patch = max(180, total - verify)
+        if patch + verify > total:
+            patch = max(0, total - verify)
+        return cls(
+            localize_s=0,
+            patch_s=int(patch),
             verify_s=int(verify),
             repair_total_s=total,
         )

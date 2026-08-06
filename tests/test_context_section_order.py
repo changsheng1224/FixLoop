@@ -4,7 +4,6 @@ import pytest
 
 from agent_runtime.config import AgentConfig
 from agent_runtime.context_manager import ContextManager
-from agent_runtime.prompt_prefix import cache_stable_text
 from agent_runtime.providers.clients import FakeModelClient, FakeNativeToolClient
 from agent_runtime.runtime import Agent
 from agent_runtime.workspace import WorkspaceContext
@@ -76,7 +75,7 @@ class TestSectionOrder:
 
 
 class TestNativePromptSplit:
-    def test_ask_uses_cache_stable_in_system_and_role_in_user(self, temp_workspace):
+    def test_ask_uses_native_system_without_xml_protocol(self, temp_workspace):
         client = FakeNativeToolClient(["<final>done</final>"])
         ws = WorkspaceContext.build(str(temp_workspace))
         agent = Agent(
@@ -87,10 +86,9 @@ class TestNativePromptSplit:
         agent.ask("hello")
 
         first_prompt = client.prompts[0]
-        cache = cache_stable_text(
-            agent._prefix.stable_system_text,
-            agent._prefix.stable_tools_text,
-        )
-        assert cache in first_prompt
+        assert "可用工具" in first_prompt
         assert "Workspace:" in first_prompt
-        assert first_prompt.index(cache) < first_prompt.index("Workspace:")
+        assert "推荐使用格式B" not in first_prompt
+        assert '<invoke name="工具名">' not in first_prompt
+        assert "tool_use" in first_prompt
+        assert first_prompt.index("可用工具") < first_prompt.index("Workspace:")

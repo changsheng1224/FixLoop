@@ -69,8 +69,30 @@ class PromptAssets:
     examples_source: str
 
 
-def default_rules_text() -> str:
-    """内置 rules 主体（不含 dry_run / approval 运行时后缀）。"""
+def default_rules_text(*, native_tools: bool = False) -> str:
+    """内置 rules 主体（不含 dry_run / approval 运行时后缀）。
+
+    native_tools=True：走 API tool_use，禁止在正文里写 XML 工具格式。
+    """
+    if native_tools:
+        return "\n".join(
+            [
+                "## 核心规则（必须严格遵守）",
+                "",
+                "**1. 工具调用**：仅通过接口提供的 tools / tool_use 调用工具。",
+                "   禁止在正文输出 `<function_calls>`、`<tool>`、`<invoke>` 等 XML。",
+                "   需要读文件/改文件时，发起对应 tool_use，不要把工具写成纯文本。",
+                "",
+                "**2. 结束任务**：完成或无法继续时，直接用自然语言说明结论"
+                "（无需 `<final>` 标签）。",
+                "",
+                "**3. 每次优先一个写操作**；先读结果再决定下一步。",
+                "   已定位实现后应尽快 `apply_patch`；连续多步只读不改视为停滞。",
+                "**4. 通过工具探索代码库**——不要猜测文件内容。",
+                "**5. 答案必须基于实际读取的文件内容**，不要捏造。",
+                "**6. 如果找不到答案，诚实告知而不是编造。**",
+            ]
+        )
     return "\n".join(
         [
             "## 核心规则（必须严格遵守）",
@@ -111,7 +133,34 @@ def render_examples(entries: list[dict]) -> str:
     return "\n".join(lines).rstrip()
 
 
-def default_examples_text() -> str:
+def default_examples_text(*, native_tools: bool = False) -> str:
+    """内置 few-shot；缺省 `.agent/examples.md` 时使用。
+
+    native_tools=True：只描述 API tool_use，不示范 XML。
+    """
+    if native_tools:
+        return "\n".join(
+            [
+                "## 调用示例",
+                "",
+                "通过接口 tools / tool_use 调用工具（禁止在正文输出 XML）。",
+                "读若干文件后应尽快 apply_patch；不要长时间只读不改。",
+                "",
+                "apply_patch 参数示例（V4A）：",
+                "```",
+                "*** Begin Patch",
+                "*** Update File: path/to/file.py",
+                "@@",
+                " def example():",
+                "-    return 0",
+                "+    return 1",
+                "*** End Patch",
+                "```",
+                "- read_file：path（可选 start/end）",
+                "- quick_test：跑相关失败测试",
+                "完成后用自然语言说明结论；不要输出 <function_calls>、<tool>、<final>。",
+            ]
+        )
     return render_examples(BUILTIN_TOOL_EXAMPLES)
 
 

@@ -22,6 +22,9 @@ def append_note(
     tags: list[str] | None = None,
     source: str = "",
     kind: str = "observation",
+    scope: str = "run",
+    source_type: str = "tool",
+    evidence_refs: list[str] | None = None,
 ):
     """向 episodic_notes 追加一条工具执行笔记（去重 + 上限裁剪）。"""
     if tags is None:
@@ -39,6 +42,11 @@ def append_note(
         "note_index": note_index,
         "kind": kind,
         "retrieve_count": 0,
+        "scope": scope,
+        "source_type": source_type,
+        "evidence_refs": list(evidence_refs or []),
+        "status": "candidate",
+        "confidence": 0.4 if source_type == "model" else 0.6,
     }
     notes.append(note)
     if len(notes) > MAX_EPISODIC_NOTES:
@@ -96,7 +104,14 @@ def retrieval_candidates(
                 ):
                     promotions.append(("key-decisions", f"Decision: {note['text']}"))
             scored.append((score, note))
-    scored.sort(key=lambda x: x[0], reverse=True)
+    scored.sort(
+        key=lambda x: x[0]
+        * {"task": 1.0, "repository": 0.9, "repository_version": 0.85, "user": 0.8, "run": 0.2}.get(
+            x[1].get("scope", "run"), 0.2
+        )
+        * float(x[1].get("confidence", 0.4)),
+        reverse=True,
+    )
 
     # 执行晋升
     if promotions and durable_store is not None:
@@ -105,4 +120,8 @@ def retrieval_candidates(
         except Exception:
             pass
 
-    return [{**note, "score": round(s, 2)} for s, note in scored[:limit]]
+    return [
+        {**note, "score": round(s, 2), "memory_role": "historical_candidate"}
+        for s, note in scored[:limit]
+        if note.get("status") not in {"rejected", "stale", "conflicted", "demoted"}
+    ]

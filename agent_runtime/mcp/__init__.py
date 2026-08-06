@@ -28,6 +28,7 @@ from agent_runtime.mcp.official import (
 )
 from agent_runtime.mcp.registry import (
     build_github_mcp_tool_registry,
+    build_github_mcp_tool_specs,
     build_github_mcp_tools_auto,
     build_mock_github_mcp_client,
     open_github_mcp_client,
@@ -49,6 +50,7 @@ __all__ = [
     "GITHUB_MCP_DENIED_TOOLS",
     "is_github_mcp_tool_allowed",
     "build_github_mcp_tool_registry",
+    "build_github_mcp_tool_specs",
     "build_mock_github_mcp_client",
     "build_official_github_mcp_client",
     "build_github_mcp_tools_auto",

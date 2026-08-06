@@ -7,7 +7,7 @@ import logging
 import re
 from typing import Any
 
-from src.repair.patch_applier import extract_json_block
+from src.repair.execution.patch_applier import extract_json_block
 from src.state import RetrievedContext, SuspectLocation, VerificationResult
 
 

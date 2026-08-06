@@ -79,3 +79,18 @@ class AgentConfig(BaseModel):
         le=5,
         description="json_mode final answer 校验失败后的格式修复重试次数。",
     )
+    repair_wall_timeout_s: int = Field(
+        default=0,
+        ge=0,
+        le=86400,
+        description="单次 repair 全局墙钟超时，0=禁用。",
+    )
+    max_tool_calls: int = Field(
+        default=0,
+        ge=0,
+        le=500,
+        description="单次 repair 工具调用上限，0=使用角色/分组预算。",
+    )
+    max_write_calls: int = Field(default=0, ge=0, le=100)
+    max_verify_calls: int = Field(default=0, ge=0, le=100)
+    max_recovery_attempts: int = Field(default=0, ge=0, le=50)

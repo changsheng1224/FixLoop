@@ -30,10 +30,35 @@ class TestMemoryHooks:
         assert "config.py" in mem["working"]["recent_files"]
         assert "config.py" in mem["file_summaries"]
         assert "AgentConfig" in mem["file_summaries"]["config.py"]["summary"]
+        assert mem["working"]["evidence_ledger"][0]["path"] == "config.py"
+
+    def test_repeated_read_updates_evidence_duplicate_count(self, agent_with_memory):
+        args = {"path": "config.py", "start": 1, "end": 20}
+        body = "1 | from pydantic import BaseModel\n2 | class AgentConfig..."
+        agent_with_memory.update_memory_after_tool("read_file", args, body)
+        agent_with_memory.update_memory_after_tool("read_file", args, body)
+        mem = agent_with_memory.session["memory"]
+        ledger = mem["working"]["evidence_ledger"]
+        assert len(ledger) == 1
+        assert ledger[0]["duplicate_count"] == 1
+
+    def test_context_memory_renders_evidence_ledger(self, agent_with_memory):
+        from agent_runtime.context_manager import ContextManager
+
+        agent_with_memory.update_memory_after_tool(
+            "read_file",
+            {"path": "config.py", "start": 1, "end": 20},
+            "1 | class AgentConfig:",
+        )
+        text = ContextManager(agent_with_memory)._get_memory()
+        assert "证据账本" in text
+        assert "config.py:1-20" in text
 
     def test_write_file_adds_and_invalidates(self, agent_with_memory):
         # 先建立摘要
-        agent_with_memory.update_memory_after_tool("read_file", {"path": "a.py"}, "old content")
+        agent_with_memory.update_memory_after_tool(
+            "read_file", {"path": "a.py"}, "old content"
+        )
         mem = agent_with_memory.session["memory"]
         assert "a.py" in mem["file_summaries"]
 
@@ -44,6 +69,7 @@ class TestMemoryHooks:
         # 文件仍在 recent_files，但摘要已失效
         assert "a.py" in mem["working"]["recent_files"]
         assert "a.py" not in mem["file_summaries"]
+        assert mem["working"]["evidence_ledger"][0]["stale"] is True
 
     def test_shell_error_appends_note(self, agent_with_memory):
         agent_with_memory.update_memory_after_tool(

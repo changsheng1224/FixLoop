@@ -22,7 +22,7 @@ class TestMergeAgentReport:
 
     def test_project_token_usage(self):
         reports = {
-            "localizer": {
+            "patcher": {
                 "total_tokens": 10,
                 "input_tokens": 6,
                 "output_tokens": 4,
@@ -32,5 +32,5 @@ class TestMergeAgentReport:
             }
         }
         projected = project_token_usage_by_agent(reports)
-        assert projected["localizer"]["total_tokens"] == 10
-        assert projected["localizer"]["tool_steps"] == 2
+        assert projected["patcher"]["total_tokens"] == 10
+        assert projected["patcher"]["tool_steps"] == 2

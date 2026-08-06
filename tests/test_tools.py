@@ -146,6 +146,9 @@ class TestToolRegistry:
             "grep",
             "write_file",
             "patch_file",
+            "apply_patch",
+            "expand_lock",
+            "quick_test",
             "run_shell",
         }
         assert names == expected
@@ -193,7 +196,9 @@ class TestGrep:
         from agent_runtime.tools import tool_grep
 
         ctx = ToolContext(root=str(temp_workspace))
-        assert tool_grep(ctx, {"pattern": "noSuchPattern", "path": "."}) == "(无匹配)"
+        assert "0 matches" in tool_grep(
+            ctx, {"pattern": "noSuchPattern", "path": "."}
+        )
 
     def test_grep_missing_pattern(self):
         from agent_runtime.tool_context import ToolContext
@@ -231,10 +236,11 @@ class TestGrep:
         assert registry["grep"]["execution_tier"] == "host"
 
     def test_grep_in_gateway_allow_all(self):
-        from src.middleware import REPAIR_PERMISSION_TABLE
+        from src.middleware import build_repair_gateway
 
-        assert "grep" in REPAIR_PERMISSION_TABLE
-        assert "*" in REPAIR_PERMISSION_TABLE["grep"]
+        gateway = build_repair_gateway()
+        assert gateway.can_call("patcher", "grep")
+        assert gateway.can_call("verifier", "grep")
 
     def test_grep_merges_adjacent_lines(self, temp_workspace):
         (temp_workspace / "a.py").write_text(

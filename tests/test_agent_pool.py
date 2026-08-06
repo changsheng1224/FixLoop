@@ -290,33 +290,8 @@ class TestWireOrchestratorWarmContext:
             dry_run=True,
         )
         assert isinstance(orch, Orchestrator)
-        assert orch.localizer is not None
-        assert orch.retriever is not None
         assert orch.patcher is not None
-        # 各 Agent 持有 warm_context
-        assert orch.localizer._warm_context is not None
-        assert orch.retriever._warm_context is not None
         assert orch.patcher._warm_context is not None
-        # 共享同一个 warm_context 实例
-        assert orch.localizer._warm_context is orch.retriever._warm_context
-        assert orch.localizer._warm_context is orch.patcher._warm_context
-
-    def test_wire_orchestrator_without_retriever(self, tmp_path: Path):
-        """with_retriever=False 时不创建 retriever。"""
-        from src.orchestrator import Orchestrator
-        from src.repair_factory import wire_orchestrator
-
-        orch = wire_orchestrator(
-            FakeModelClient(outputs=["<final>ok</final>"]),
-            str(tmp_path),
-            with_retriever=False,
-            skip_verify=True,
-            dry_run=True,
-        )
-        assert isinstance(orch, Orchestrator)
-        assert orch.localizer is not None
-        assert orch.retriever is None
-        assert orch.patcher is not None
 
     def test_wire_orchestrator_no_warm_context_leak(self, tmp_path: Path):
         """warm_context 不在 session 中持久化（不污染序列化）。"""
@@ -329,5 +304,5 @@ class TestWireOrchestratorWarmContext:
             dry_run=True,
         )
         # warm_context 不影响 session 序列化
-        session = orch.localizer.session
+        session = orch.patcher.session
         assert "warm_context" not in session

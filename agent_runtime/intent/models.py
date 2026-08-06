@@ -98,6 +98,35 @@ class IntentResult:
     confidence_breakdown: dict[str, float] = field(default_factory=dict)
     raw_signals: dict[str, Any] = field(default_factory=dict)
 
+    def to_repair_intent(self) -> RepairIntent:
+        """Return the execution-mode projection; repair details stay with the model."""
+        mode = {
+            "run_repair": "repair",
+            "run_debug": "debug",
+            "run_tests": "verify",
+            "review_code": "review",
+            "explain_code": "explain",
+            "run_refactor": "refactor",
+        }.get(self.action, "repair" if self.primary.startswith("repair") else "explain")
+        return RepairIntent(
+            mode=mode,
+            goal=self.reason or self.primary,
+            constraints=list((self.raw_signals or {}).get("constraints") or []),
+            verification_required=mode in {"repair", "debug", "refactor", "verify"},
+            confidence=self.confidence,
+        )
+
+
+@dataclass(frozen=True)
+class RepairIntent:
+    """Stable Router-to-Runtime contract; it never selects a target or patch."""
+
+    mode: Literal["repair", "debug", "verify", "explain", "review", "refactor"]
+    goal: str
+    constraints: list[str] = field(default_factory=list)
+    verification_required: bool = False
+    confidence: float = 0.0
+
 
 @dataclass
 class RouteContext:

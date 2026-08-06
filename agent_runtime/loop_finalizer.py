@@ -25,6 +25,8 @@ def finalize_agent_run(loop, ts) -> None:
         if report_token.get("prompt_budget") is None:
             report_token["prompt_budget"] = getattr(agent.config, "prompt_budget", 0)
         context_summary = loop._build_context_summary()
+        from agent_runtime.repair_runtime import tool_observation_summary
+
         report_body = {
             "run_id": ts.run_id,
             "agent": agent_name,
@@ -32,6 +34,13 @@ def finalize_agent_run(loop, ts) -> None:
             "attempts": ts.attempts,
             "stop_reason": ts.stop_reason,
             "status": ts.status,
+            "stream": {
+                "enabled": bool(getattr(loop, "_stream_enabled", False)),
+                "events": int(getattr(loop, "_stream_seq", 0)),
+            },
+            "phase": getattr(ts, "phase", ""),
+            "turn": getattr(ts, "turn", 0),
+            "failure_attribution": getattr(ts, "failure_attribution", {}),
             "prompt_cache_key": getattr(agent._prefix, "hash", ""),
             "node_timings": ts.node_timings,
             "tier_summary": {
@@ -46,7 +55,14 @@ def finalize_agent_run(loop, ts) -> None:
                 "tool_steps": ts.tool_steps,
                 "cache_hit_rate": context_summary.get("cache_hit_rate", 0.0),
                 "llm_calls": loop._llm_call_count,
-                "llm_call_limit": int(getattr(agent.config, "max_llm_calls_per_repair", 0) or 0),
+                "llm_call_limit": int(
+                    getattr(agent.config, "max_llm_calls_per_repair", 0) or 0
+                ),
+                "repair_budget": loop._repair_budget.summary(),
+                "tool_observations": tool_observation_summary(
+                    agent.session.get("tool_observations", [])
+                ),
+                "last_tool_observation": agent.session.get("_last_tool_observation", {}),
             },
             "retry_summary": {
                 "parse_retries": loop._retry_count,
@@ -108,18 +124,30 @@ def finalize_agent_run(loop, ts) -> None:
 def _promote_memory_candidates(agent, ts) -> None:
     """Promote candidate memories after ask() finalization."""
     try:
-        from agent_runtime.features.memory.candidate import (
-            candidates_from_answer,
-            promote_candidates,
-        )
-        from agent_runtime.features.memory.durable import DurableMemoryStore
+        from agent_runtime.features.memory.candidate import candidates_from_answer
+        from agent_runtime.features.memory.governance import MemoryGovernanceService
 
-        store = DurableMemoryStore(agent._cwd)
         candidates = list(agent.session.get("_memory_candidates", []))
         candidates.extend(candidates_from_answer(ts.final_answer, ts.user_request))
         if candidates:
-            light_client = getattr(agent, "light_client", None)
-            promote_candidates(store, candidates, light_client=light_client)
+            memory_state = agent.session.setdefault("memory", {})
+            identity = memory_state.get("memory_identity") or {}
+            governance = MemoryGovernanceService(
+                memory_state,
+                repo_root=agent._cwd,
+                user_id=str(identity.get("user_id", "") or ""),
+                task_id=str(identity.get("task_id", "") or ""),
+            )
+            for candidate in candidates:
+                governed = governance.ingest(
+                    candidate,
+                    scope=getattr(candidate, "scope", "task"),
+                    repo_fingerprint=getattr(candidate, "repo_fingerprint", ""),
+                )
+                refs = list(getattr(candidate, "evidence_refs", []) or [])
+                if refs:
+                    governance.bind_evidence(governed.memory_id, refs)
+            governance.run()
         agent.session.pop("_memory_candidates", None)
     except Exception:
         pass

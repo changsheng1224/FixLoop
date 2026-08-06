@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from src.repair.termination import has_repair_timeout, is_repair_success
+from src.repair.verification.termination import has_repair_timeout, is_repair_success
 from src.state import RepairState
 
 REPAIR_EXIT_OK = 0

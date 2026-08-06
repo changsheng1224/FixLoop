@@ -8,4 +8,6 @@ from agent_runtime.config import AgentConfig
 from agent_runtime.runtime import Agent
 from agent_runtime.workspace import WorkspaceContext
 
-__all__ = ["Agent", "AgentConfig", "WorkspaceContext"]
+__version__ = "0.2.0"
+
+__all__ = ["Agent", "AgentConfig", "WorkspaceContext", "__version__"]
