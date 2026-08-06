@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from src.repair.termination import (
+from src.repair.verification.termination import (
     RepairTerminalStatus,
     has_repair_timeout,
     introduced_regression,
@@ -40,7 +40,7 @@ REPAIR_METADATA_TAGS = frozenset({DEGRADED_BASELINE_TAG})
 
 def _is_verify_config_failure(state: RepairState) -> bool:
     """空收集 / pip / 依赖 / Django settings 等：验证环境问题，不是补丁语义失败。"""
-    from src.repair.verify_diagnose import VerifyBucket, diagnose_verification
+    from src.repair.verification.verify_diagnose import VerifyBucket, diagnose_verification
 
     vr = state.verification_result
     if vr is None:
@@ -94,7 +94,7 @@ def allowed_patch_files(state: RepairState) -> set[str]:
     test_patch = str(state.node_timings.get("verify_test_patch") or "")
     if test_patch and root:
         try:
-            from src.repair.localize_test_patch import suspects_from_test_patch
+            from src.repair.localization.localize_test_patch import suspects_from_test_patch
 
             for s in suspects_from_test_patch(test_patch, root, max_keep=16):
                 if s.file_path:
@@ -103,7 +103,7 @@ def allowed_patch_files(state: RepairState) -> set[str]:
             pass
     if state.issue_input and root:
         try:
-            from src.repair.localize_fastpath import suspects_from_fail_to_pass
+            from src.repair.localization.localize_fastpath import suspects_from_fail_to_pass
 
             for s in suspects_from_fail_to_pass(
                 state.issue_input, root, max_keep=8

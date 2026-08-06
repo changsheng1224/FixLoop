@@ -8,19 +8,19 @@ from src.blackboard import Blackboard
 class TestBlackboardReadWrite:
     def test_write_and_read(self):
         bb = Blackboard()
-        bb.write("key1", "val1", source_agent="localizer")
+        bb.write("key1", "val1", source_agent="patcher")
         assert bb.read("key1") == "val1"
 
     def test_same_source_overwrites(self):
         bb = Blackboard()
-        bb.write("k", "v1", source_agent="localizer")
-        bb.write("k", "v2", source_agent="localizer")
+        bb.write("k", "v1", source_agent="patcher")
+        bb.write("k", "v2", source_agent="patcher")
         assert bb.read("k") == "v2"
 
     def test_different_source_conflict(self):
         bb = Blackboard()
-        ok1 = bb.write("k", "v1", source_agent="localizer")
-        ok2 = bb.write("k", "v2", source_agent="retriever")
+        ok1 = bb.write("k", "v1", source_agent="patcher")
+        ok2 = bb.write("k", "v2", source_agent="verifier")
         assert ok1 is True
         assert ok2 is False  # 冲突，没有覆盖
         assert bb.read("k") == "v1"  # 保留第一个
@@ -28,56 +28,56 @@ class TestBlackboardReadWrite:
 
     def test_read_related_prefix(self):
         bb = Blackboard()
-        bb.write("suspect:calc.py", "loc", source_agent="localizer")
-        bb.write("suspect:main.py", "loc2", source_agent="localizer")
-        bb.write("other:key", "val", source_agent="retriever")
+        bb.write("suspect:calc.py", "loc", source_agent="patcher")
+        bb.write("suspect:main.py", "loc2", source_agent="patcher")
+        bb.write("other:key", "val", source_agent="verifier")
         results = bb.read_related("suspect:")
         assert len(results) == 2
 
     def test_ttl_expiry(self):
         bb = Blackboard()
-        bb.write("k", "v", source_agent="localizer", ttl=0.05)
+        bb.write("k", "v", source_agent="patcher", ttl=0.05)
         assert bb.read("k") == "v"
         time.sleep(0.1)
         assert bb.read("k") is None
 
     def test_snapshot(self):
         bb = Blackboard()
-        bb.write("k", "v", source_agent="localizer")
+        bb.write("k", "v", source_agent="patcher")
         snap = bb.snapshot()
         assert snap["entries"]["k"] == "v"
         assert snap["conflicts"] == []
 
     def test_apply_conflict_winner(self):
         bb = Blackboard()
-        bb.write("k", "v1", source_agent="localizer")
-        bb.write("k", "v2", source_agent="retriever")
+        bb.write("k", "v1", source_agent="patcher")
+        bb.write("k", "v2", source_agent="verifier")
         assert len(bb.conflicts) == 1
-        bb.apply_conflict_winner("k", "v1", "localizer")
+        bb.apply_conflict_winner("k", "v1", "patcher")
         assert bb.read("k") == "v1"
         assert bb.conflicts == []
 
 
 class TestOrchestratorConflictAPI:
-    def test_resolve_conflict_prefer_localizer(self):
+    def test_resolve_conflict_highest_confidence(self):
         from src.blackboard import Blackboard
         from src.repair.blackboard_merge import resolve_blackboard_conflicts
 
         bb = Blackboard()
-        bb.write("suspect:calc.py:42", {"confidence": 0.8}, source_agent="retriever")
-        bb.write("suspect:calc.py:42", {"confidence": 0.95}, source_agent="localizer")
+        bb.write("suspect:calc.py:42", {"confidence": 0.8}, source_agent="verifier")
+        bb.write("suspect:calc.py:42", {"confidence": 0.95}, source_agent="patcher")
         # 冲突已记录
         assert len(bb.conflicts) == 1
-        resolved = resolve_blackboard_conflicts(bb, strategy="prefer_localizer")
+        resolved = resolve_blackboard_conflicts(bb, strategy="highest_confidence")
         assert len(resolved) == 1
-        assert resolved[0]["strategy"] == "prefer_localizer"
+        assert resolved[0]["strategy"] == "highest_confidence"
 
     def test_no_conflict_returns_empty(self):
         from src.blackboard import Blackboard
         from src.repair.blackboard_merge import resolve_blackboard_conflicts
 
         bb = Blackboard()
-        bb.write("suspect:calc.py:42", {"confidence": 0.8}, source_agent="localizer")
+        bb.write("suspect:calc.py:42", {"confidence": 0.8}, source_agent="patcher")
         assert resolve_blackboard_conflicts(bb) == []
 
 
@@ -99,8 +99,8 @@ class TestBlackboardConflictsInReport:
         from src.blackboard import Blackboard
 
         bb = Blackboard()
-        bb.write("suspect:a.py:1", {"c": 0.5}, source_agent="localizer")
-        bb.write("suspect:a.py:1", {"c": 0.9}, source_agent="retriever")
+        bb.write("suspect:a.py:1", {"c": 0.5}, source_agent="patcher")
+        bb.write("suspect:a.py:1", {"c": 0.9}, source_agent="verifier")
         snap = bb.snapshot()
         assert "conflicts" in snap
         assert len(snap["conflicts"]) == 1

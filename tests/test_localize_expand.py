@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.repair.localize_expand import (
+from src.repair.localization.localize_expand import (
     expand_suspects_semantic,
     extract_symbols_from_issue,
     find_definitions,
     symbols_from_python_file,
 )
-from src.repair.localize_quality import refine_suspects
+from src.repair.localization.localize_quality import refine_suspects
 from src.state import SuspectLocation
 
 

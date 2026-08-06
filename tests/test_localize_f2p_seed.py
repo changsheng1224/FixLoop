@@ -5,9 +5,15 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from src.repair.fail_to_pass_hints import FAIL_TO_PASS_HEADER, extract_fail_to_pass_hints
-from src.repair.localize_fastpath import rule_first_suspects, suspects_from_fail_to_pass
-from src.repair.symbol_index import _INDEX_CACHE
+from src.repair.localization.fail_to_pass_hints import (
+    FAIL_TO_PASS_HEADER,
+    extract_fail_to_pass_hints,
+)
+from src.repair.localization.localize_fastpath import (
+    rule_first_suspects,
+    suspects_from_fail_to_pass,
+)
+from src.repair.localization.symbol_index import _INDEX_CACHE
 
 
 def _tiny_repo() -> Path:

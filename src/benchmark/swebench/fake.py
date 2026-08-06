@@ -15,7 +15,13 @@ class FakeGoldPatchOrchestrator:
         self._repo = Path(repo_path)
         self._gold = gold_patch or ""
 
-    def repair(self, issue: str, max_retries: int = 3, repair_timeout_s: int = 180, **kwargs) -> RepairState:
+    def repair(
+        self,
+        issue: str,
+        max_retries: int = 3,
+        repair_timeout_s: int = 180,
+        **kwargs,
+    ) -> RepairState:
         state = RepairState(issue_input=issue, max_retries=max_retries)
         del repair_timeout_s, kwargs
         patch = self._gold.strip()

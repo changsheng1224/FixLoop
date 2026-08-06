@@ -8,7 +8,10 @@ from dataclasses import dataclass
 from src.blackboard import Blackboard
 from src.repair.blackboard_merge import read_suspects_from_blackboard
 from src.repair.blackboard_subscribe import render_patcher_prefix_blocks
-from src.repair.suspect_blocks import render_suspects_summary, render_suspects_with_snippets
+from src.repair.localization.suspect_blocks import (
+    render_suspects_summary,
+    render_suspects_with_snippets,
+)
 from src.state import RepairPlan, RepairState, RetrievedContext, SuspectLocation
 
 __all__ = ["RepairContextBlocks", "build_repair_context_blocks"]

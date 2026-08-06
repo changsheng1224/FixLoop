@@ -103,7 +103,11 @@ class TestFilterPredictions:
             src, instance_ids=["django__django-11099", "a", "b"], out_path=work_dir / "h.jsonl"
         )
         assert ids == ["django__django-11099"]
-        kept = [json.loads(l) for l in out.read_text(encoding="utf-8").splitlines() if l.strip()]
+        kept = [
+            json.loads(line)
+            for line in out.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
         assert len(kept) == 1
 
     def test_allow_unverified_keeps_nonempty(self, work_dir):

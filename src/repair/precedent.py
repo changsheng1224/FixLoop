@@ -38,6 +38,7 @@ class RepairPrecedentStore:
         limit: int = 3,
         query: str = "",
         threshold: float = _DEFAULT_SIMILARITY_THRESHOLD,
+        use_semantic: bool = True,
     ) -> list[dict]:
         """读取相似修复先例，按语义相似度过滤。
 
@@ -46,6 +47,7 @@ class RepairPrecedentStore:
             limit: 最多返回条数。
             query: 语义相似度查询文本（如当前 issue）。空则不过滤。
             threshold: 最低语义相似度。低于此值不返回。
+            use_semantic: False 时跳过 embedding（patcher_primary / FIXLOOP_SEMANTIC=0）。
 
         Returns:
             匹配的先例列表（按时间倒序）。
@@ -54,7 +56,7 @@ class RepairPrecedentStore:
         matched = [e for e in entries if e.get("issue_type") == issue_type]
         matched.sort(key=lambda e: e.get("ts", 0), reverse=True)
 
-        if query and matched:
+        if use_semantic and query and matched:
             matched = self._semantic_filter(query, matched, threshold)
         return matched[:limit]
 

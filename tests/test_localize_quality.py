@@ -4,15 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.repair.issue_paths import extract_paths_from_issue
-from src.repair.localize_quality import (
+from src.repair.localization.issue_paths import extract_paths_from_issue
+from src.repair.localization.localize_quality import (
     normalize_repo_path,
     refine_suspects,
     retrieve_keywords,
     score_suspect,
     suspects_from_issue,
 )
-from src.state import RepairPlan, SuspectLocation
+from src.state import SuspectLocation
 
 
 def _repo_with_bug(tmp: Path) -> Path:
@@ -77,7 +77,6 @@ class TestRefineSuspects:
 
     def test_plan_files_boost(self, tmp_path: Path):
         root = _repo_with_bug(tmp_path)
-        plan = RepairPlan(suspect_files=["pkg/core.py"])
         s = SuspectLocation(file_path="pkg/core.py", start_line=1, end_line=1, confidence=0.5)
         score = score_suspect(
             s,

@@ -102,7 +102,28 @@ def create_checkpoint(
         "tool_steps": task_state.tool_steps,
         "stop_reason": task_state.stop_reason,
         "last_tool": last_tool,
+        "phase": str(getattr(task_state, "phase", "") or ""),
+        "turn": int(getattr(task_state, "turn", 0) or 0),
+        "repair_context": dict(working.get("repair_context", {}) or {}),
+        "evidence_ledger": list(working.get("evidence_ledger", []) or [])[-20:],
+        "tool_budget": (
+            agent._repair_budget.summary()
+            if getattr(agent, "_repair_budget", None) is not None
+            else {}
+        ),
+        "last_tool_observation": dict(agent.session.get("_last_tool_observation", {}) or {}),
+        "workspace_fingerprint": _workspace_fingerprint(agent._cwd),
     }
+    from agent_runtime.context_runtime import build_context_manifest
+
+    runtime_memory = agent.session.get("memory", {})
+    checkpoint["context_manifest"] = build_context_manifest(
+        runtime_memory,
+        workspace_fingerprint=checkpoint["workspace_fingerprint"],
+    )
+    checkpoint["action_ledger"] = list(
+        agent.session.get("action_ledger", []) or []
+    )[-100:]
     if trigger == "user_cancel" and in_flight_tool:
         checkpoint["in_flight_tool"] = in_flight_tool
     if step_payload:
@@ -176,7 +197,27 @@ def _resume_result(status: str, checkpoint: dict | None = None) -> dict:
 
 
 def _file_freshness(root: str, path: str) -> str:
-    """计算文件 freshness hash（mtime + size 的 SHA256）。"""
+    """计算内容 freshness hash，避免 mtime 在复制/恢复场景下失真。"""
+    return file_content_hash(root, path)
+
+
+def _workspace_fingerprint(root: str) -> str:
+    """Cheap workspace identity for resume diagnostics."""
+    try:
+        root_path = Path(root)
+        parts = []
+        for path in sorted(root_path.rglob("*")):
+            if path.is_file() and ".agent" not in path.parts and ".git" not in path.parts:
+                parts.append(f"{path.relative_to(root_path)}:{path.stat().st_size}")
+                if len(parts) >= 500:
+                    break
+        return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+    except OSError:
+        return ""
+
+
+def _legacy_file_freshness(root: str, path: str) -> str:
+    """Legacy mtime helper retained for old checkpoint readers."""
     try:
         p = Path(root) / path
         if p.exists():

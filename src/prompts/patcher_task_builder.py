@@ -8,12 +8,15 @@ from src.blackboard import Blackboard
 from src.prompts.repair_tasks import build_patcher_variables
 from src.repair.blackboard_merge import read_suspects_from_blackboard
 from src.repair.blackboard_subscribe import render_patcher_prefix_blocks
-from src.repair.disk_grounding import (
+from src.repair.execution.disk_grounding import (
     build_disk_grounding_block,
     collect_grounding_targets,
 )
+from src.repair.localization.suspect_blocks import (
+    render_suspects_diff_only,
+    render_suspects_with_snippets,
+)
 from src.repair.prompt_router import collect_patcher_user_hints, is_composite_multi_file
-from src.repair.suspect_blocks import render_suspects_diff_only, render_suspects_with_snippets
 from src.skills.skill_block import SkillBlockRender, render_skill_hint_for_plan
 from src.state import RepairPlan, RetrievedContext, SuspectLocation
 
@@ -55,6 +58,8 @@ def assemble_patcher_variables(
     blackboard: Blackboard | None = None,
     diff_only: bool = False,
     read_line_range: Callable[[str, int, int], str] | None = None,
+    evidence_block: str = "",
+    runtime_contract_block: str = "",
 ) -> tuple[dict[str, str], SkillBlockRender, dict | None]:
     subscribe_meta: dict | None = None
     effective_suspects: list[SuspectLocation]
@@ -140,6 +145,8 @@ def assemble_patcher_variables(
         render = skill_render
     variables = build_patcher_variables(
         feedback=feedback,
+        evidence_block=evidence_block,
+        runtime_contract_block=runtime_contract_block,
         issue_hints_block="\n".join(build_issue_hints(plan, issue)),
         skill_hint_block=render.text,
         allowed_files_line=allowed_files_line,

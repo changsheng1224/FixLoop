@@ -24,6 +24,7 @@ from agent_runtime.compression_pipeline import (
 # Re-export fit helpers for test / L2 import compatibility.
 from agent_runtime.context_fit import fit_prompt_to_budget, fit_repair_user_prompt  # noqa: F401
 from agent_runtime.context_projection import attach_context_projection
+from agent_runtime.context_runtime import ContextItem, ContextPolicyEngine, ContextRequest
 from agent_runtime.errors import ContextTooLargeError
 from agent_runtime.message_projection import (
     get_sealed_history,
@@ -230,11 +231,13 @@ class ContextManager:
     def build_for_native(self, user_message: str) -> tuple[str, str, dict]:
         """Native API：stable system+tools + 动态 user 上下文（含 skills/task）。
 
+        system/skills 使用 native 规则与示例（禁止 XML 工具协议），与 text 路径前缀分离。
+
         Raises:
             ContextTooLargeError: 若合计 tokens 超出硬顶限制。
         """
         metadata = self._base_metadata()
-        sections = self._fill_sections(user_message, metadata)
+        sections = self._fill_sections(user_message, metadata, native_tools=True)
         self._check_hard_cap(metadata.get("total_tokens", 0))
         system_parts = [sections[name] for name in self.NATIVE_SYSTEM_ORDER if sections.get(name)]
         system_prompt = "\n\n".join(system_parts)
@@ -262,6 +265,7 @@ class ContextManager:
         *,
         include_system: bool = True,
         include_request: bool = True,
+        native_tools: bool = False,
     ) -> dict[str, str]:
         """按预算填充各 section，返回 name → 文本。"""
         total = self.budget.total_limit
@@ -290,9 +294,18 @@ class ContextManager:
         )
 
         if include_system:
-            filler.add_stable_section("system", self._get_system(), BUDGET_SYSTEM)
-            filler.add_stable_section("tools", self._get_tools(), BUDGET_TOOLS)
-            filler.add_stable_section("skills", self._get_skills(), BUDGET_SKILLS)
+            if native_tools:
+                filler.add_stable_section(
+                    "system", self._get_system_for_native(), BUDGET_SYSTEM
+                )
+                filler.add_stable_section("tools", self._get_tools(), BUDGET_TOOLS)
+                filler.add_stable_section(
+                    "skills", self._get_skills_for_native(), BUDGET_SKILLS
+                )
+            else:
+                filler.add_stable_section("system", self._get_system(), BUDGET_SYSTEM)
+                filler.add_stable_section("tools", self._get_tools(), BUDGET_TOOLS)
+                filler.add_stable_section("skills", self._get_skills(), BUDGET_SKILLS)
         filler.add_section(
             "workspace",
             self._get_workspace(),
@@ -366,6 +379,30 @@ class ContextManager:
             return getattr(prefix, "stable_system_text", "") or ""
         return getattr(self.agent, "_system_prompt", "") or ""
 
+    def _get_system_for_native(self) -> str:
+        """Native：保留 persona / dry-run 等非协议段，规则换成 tool_use-only。"""
+        from agent_runtime.prompt_external import default_rules_text
+
+        original = self._get_system() or ""
+        head_lines: list[str] = []
+        for line in original.splitlines():
+            if line.startswith("## "):
+                break
+            head_lines.append(line)
+        head = "\n".join(head_lines).strip()
+        # 仅保留 compose_rules 挂的运行时后缀（8./9.），勿把 persona 再抄一遍
+        extras: list[str] = []
+        for line in original.splitlines():
+            s = line.strip()
+            if s.startswith("8.") or s.startswith("9."):
+                if "<function_calls>" in s or "<invoke" in s or "<tool>" in s:
+                    continue
+                extras.append(s)
+        parts = [p for p in [head, default_rules_text(native_tools=True)] if p]
+        if extras:
+            parts.append("\n".join(extras))
+        return "\n\n".join(parts)
+
     def _get_tools(self) -> str:
         prefix = getattr(self.agent, "_prefix", None)
         if prefix is None:
@@ -382,6 +419,19 @@ class ContextManager:
             parts.append(skills)
         role = getattr(prefix, "role_text", "") or ""
         if role:
+            parts.append(role)
+        return "\n\n".join(parts)
+
+    def _get_skills_for_native(self) -> str:
+        """Native：示例改为 API tool_use；保留 L2 role。"""
+        from agent_runtime.prompt_external import default_examples_text
+
+        prefix = getattr(self.agent, "_prefix", None)
+        role = ""
+        if prefix is not None:
+            role = getattr(prefix, "role_text", "") or ""
+        parts = [default_examples_text(native_tools=True)]
+        if role and "<function_calls>" not in role and "<invoke" not in role:
             parts.append(role)
         return "\n\n".join(parts)
 
@@ -409,6 +459,8 @@ class ContextManager:
         - memory：本次任务的临时上下文，每轮 ask() 重置。
         - knowledge：跨会话持久知识（episodic notes + durable facts），持久化存储。
         """
+        from agent_runtime.features.memory import render_evidence_ledger, render_repair_context
+
         snap = run_memory_snapshot(self.agent.session)
         mem = snap if snap is not None else self.agent.session.get("memory", {})
         working = mem.get("working", {})
@@ -431,6 +483,14 @@ class ContextManager:
             if lines:
                 parts.append("文件摘要:\n" + "\n".join(lines))
 
+        evidence = render_evidence_ledger(mem)
+        if evidence:
+            parts.append(evidence)
+
+        repair_state = render_repair_context(mem)
+        if repair_state:
+            parts.insert(0, repair_state)
+
         return "\n".join(parts) if parts else ""
 
     def _get_knowledge(self, query: str = "") -> str:
@@ -451,15 +511,67 @@ class ContextManager:
         )
 
         parts = []
+        request = ContextRequest(
+            phase=str(getattr(self.agent, "_l2_phase", "repair") or "repair"),
+            intent=query,
+            token_budget=BUDGET_KNOWLEDGE,
+        )
+        policy = ContextPolicyEngine()
 
         # Layer 1: Episodic 检索
         mem = self.agent.session.get("memory", {})
+        identity = mem.get("memory_identity") or {}
+        from agent_runtime.features.memory.governance import MemoryGovernanceService
+
+        governed = MemoryGovernanceService(
+            mem,
+            repo_root=str(getattr(self.agent, "_cwd", "") or ""),
+            user_id=str(identity.get("user_id", "") or ""),
+            task_id=str(identity.get("task_id", "") or ""),
+        )
+        governed_results = governed.recall(
+            query,
+            user_id=str(identity.get("user_id", "") or ""),
+            task_id=str(identity.get("task_id", "") or ""),
+            limit=2,
+        )
+        if governed_results:
+            governed_items = [
+                ContextItem(
+                    item_id=item["memory_id"],
+                    kind="memory",
+                    content=str(item.get("value", "")),
+                    source_ref=item["memory_id"],
+                    token_cost=max(1, len(str(item.get("value", "")).split())),
+                    relevance=float(item.get("score", 0.0)),
+                    confidence=float(item.get("confidence", 0.0)),
+                    freshness=1.0,
+                    evidence_strength=1.0 if item.get("evidence_refs") else 0.0,
+                    scope=str(item.get("scope", "task")),
+                )
+                for item in governed_results
+            ]
+            governed_items = policy.select(governed_items, request)
+            mem["recalled_memory_ids"] = [
+                item.source_ref for item in governed_items
+            ]
+            lines = ["治理记忆候选（必须由当前代码证据确认）:"]
+            for item in governed_items:
+                lines.append(
+                    f"  - {item.content[:150]} "
+                    f"[utility={item.utility(request):.4f} confidence={item.confidence:.2f}]"
+                )
+            parts.append("\n".join(lines))
         results = retrieval_candidates_semantic(mem, query, limit=2)
         results = filter_relevant_results(results, self.tier_policy)
         if results:
-            lines = ["相关记忆:"]
+            lines = ["历史经验候选（必须由当前代码证据确认，不是当前事实）:"]
             for r in results:
-                lines.append(f"  - {r.get('text', '')[:150]}")
+                lines.append(
+                    f"  - {r.get('text', '')[:150]} "
+                    f"[scope={r.get('scope', 'unknown')} "
+                    f"confidence={float(r.get('confidence', 0.0)):.2f}]"
+                )
             parts.append("\n".join(lines))
 
         # Layer 2: Durable 检索
@@ -467,7 +579,7 @@ class ContextManager:
             store = DurableMemoryStore(root=self.agent._cwd)
             durable_results = store.retrieval(query, limit=2)
             if durable_results:
-                lines = ["持久知识:"]
+                lines = ["持久知识候选（仅项目/用户事实；冲突时不得采用）:"]
                 for r in durable_results:
                     lines.append(f"  - {r[:150]}")
                 parts.append("\n".join(lines))
@@ -504,6 +616,7 @@ class ContextManager:
             return ""
 
         meta = metadata if metadata is not None else {}
+        meta["_memory_state"] = self.agent.session.get("memory", {})
         sealed_count, sealed_text = get_sealed_history(self.agent.session)
         include_header = not (sealed_count > 0 and sealed_text)
 

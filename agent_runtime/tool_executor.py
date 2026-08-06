@@ -81,6 +81,21 @@ class ToolExecutor:
 
     def execute_gated(self, name: str, args: dict) -> ToolExecutionResult:
         """按序执行 Executor 闸口（Gate 1–9），不含 Gateway 权限层。"""
+        from agent_runtime.repair_runtime import CanonicalToolCall
+
+        pending = self.agent.session.pop("_pending_canonical_tool_call", {})
+        call = CanonicalToolCall.create(
+            name,
+            args,
+            source=pending.get("source", "native"),
+            call_id=pending.get("call_id", ""),
+        )
+        self.agent.session["_last_canonical_tool_call"] = {
+            "call_id": call.call_id,
+            "name": call.name,
+            "arguments": call.arguments,
+            "source": call.source.value,
+        }
         token = getattr(self.agent, "cancel_token", None)
         if token is not None and token.is_cancelled:
             return self._rejected_cancel("Error: 任务已取消，跳过工具执行。")
@@ -105,7 +120,7 @@ class ToolExecutor:
         args = validated_args
 
         # ---- Gate 4: 配额检查 ----
-        shell_slot_acquired, quota_reject = self._check_quota(name)
+        shell_slot_acquired, quota_reject = self._check_quota(name, tool_spec)
         if quota_reject is not None:
             return quota_reject
 
@@ -171,6 +186,15 @@ class ToolExecutor:
         # ---- Gate 9: 执行工具 ----
         execution_result = self._run_tool(name, args, tool_spec, token)
         if isinstance(execution_result, ToolExecutionResult):
+            execution_result.metadata.setdefault(
+                "execution_tier", tool_spec.get("execution_tier", "host")
+            )
+            if gate7_meta:
+                execution_result.metadata.update(gate7_meta)
+            if patch_preview_meta:
+                execution_result.metadata["patch_preview"] = patch_preview_meta
+            if self._quota is not None:
+                self._quota.record(name, tool_spec)
             return execution_result
         result_text = execution_result
 
@@ -192,7 +216,7 @@ class ToolExecutor:
 
         # 记录配额
         if self._quota is not None:
-            self._quota.record(name)
+            self._quota.record(name, tool_spec)
 
         return ToolExecutionResult(content=result_text, metadata=metadata)
 
@@ -220,6 +244,21 @@ class ToolExecutor:
 
     def _validate_args(self, name: str, args: dict) -> tuple[dict, ToolExecutionResult | None]:
         """Gate 3：dataclass 参数校验与路径逃逸校验。"""
+        from agent_runtime.tool_schema import validate_tool_arguments
+
+        raw_schema = ((self.agent.tools or {}).get(name) or {}).get("schema", {})
+        normalized, shape_errors = validate_tool_arguments(raw_schema, args)
+        if shape_errors:
+            return args, self._rejected(
+                3,
+                "invalid_args",
+                f"Error: 参数校验失败: {shape_errors}",
+                error_code="invalid_arguments",
+                retryable=True,
+                expected=((self.agent.tools or {}).get(name) or {}).get("schema", {}),
+                provided=sorted(args) if isinstance(args, dict) else [],
+            )
+        args = normalized
         args_dataclass = self._get_args_class(name)
         if args_dataclass:
             try:
@@ -235,15 +274,29 @@ class ToolExecutor:
             return args, shell_reject
         return args, None
 
-    def _check_quota(self, name: str) -> tuple[bool, ToolExecutionResult | None]:
+    def _check_quota(
+        self, name: str, tool_spec: dict | None = None
+    ) -> tuple[bool, ToolExecutionResult | None]:
         """Gate 4：检查调用配额，并返回是否获取了 shell 并发槽。"""
         if self._quota is None:
             return False, None
-        if not self._quota.check(name):
+        decision = self._quota.decision(name, tool_spec)
+        if not self._quota.check(name, tool_spec):
+            extra = {}
+            if decision is not None:
+                self._quota.record_rejection(name, tool_spec)
+                extra = {
+                    "budget_group": decision.group.value,
+                    "budget_used": decision.used,
+                    "budget_limit": decision.limit,
+                    "budget_remaining": max(0, decision.limit - decision.used),
+                    "required_next_action": "choose_tool_from_available_budget_group",
+                }
             return False, self._rejected(
                 4,
                 "quota_exceeded",
                 f"Error: 工具 '{name}' 超出配额限制。{self._quota.status()}",
+                **extra,
             )
         if name == "run_shell":
             if not self._quota.acquire_shell():
@@ -324,20 +377,34 @@ class ToolExecutor:
     def _run_tool(self, name: str, args: dict, tool_spec: dict, token) -> str | ToolExecutionResult:
         """Gate 9：运行工具并把异常转换为结构化结果。"""
         timeout_s = int(getattr(self.agent.config, "tool_timeout_s", 0) or 0)
+        deadline = getattr(self.agent, "_repair_deadline", None)
+        remaining = deadline.remaining_s() if deadline is not None else None
+        if remaining is not None:
+            timeout_s = max(1, int(remaining)) if timeout_s <= 0 else max(
+                1, min(timeout_s, int(remaining))
+            )
         ctx = self.agent.tool_context
         prev_ctx_token = ctx.cancel_token
         # write/patch 必须等工具返回后再 restore；只读/shell 可协作式中断
-        run_cancel = token if name not in ("write_file", "patch_file") else None
+        run_cancel = token if name not in ("write_file", "patch_file", "apply_patch") else None
         ctx.cancel_token = token
         try:
             from agent_runtime.cancellation import CancelledError
             from agent_runtime.tool_timeout import ToolTimeoutError, run_with_timeout
 
-            return run_with_timeout(
+            result = run_with_timeout(
                 lambda: tool_spec["run"](args),
                 timeout_s=timeout_s,
                 cancel_token=run_cancel,
             )
+            if hasattr(result, "metadata") and hasattr(result, "content"):
+                metadata = dict(result.metadata or {})
+                if getattr(result, "structured_facts", None):
+                    metadata["structured_facts"] = list(result.structured_facts)
+                if getattr(result, "raw", None):
+                    metadata["raw_result"] = result.raw
+                return ToolExecutionResult(content=str(result.content), metadata=metadata)
+            return result
         except CancelledError:
             return ToolExecutionResult(
                 content=f"Error: 工具 '{name}' 执行已取消。",
@@ -730,12 +797,31 @@ class QuotaEnforcer:
         max_shell: int = 10,
         max_total: int = 50,
         max_concurrent_shell: int = 3,
+        *,
+        group_limits: dict | None = None,
     ):
         import threading
+
+        from agent_runtime.tool_budget import ToolBudgetLedger
 
         self._limits = {"write": max_writes, "shell": max_shell, "total": max_total}
         self._counts = {"write": 0, "shell": 0, "total": 0}
         self._shell_semaphore = threading.Semaphore(max_concurrent_shell)
+        self._group_ledger = ToolBudgetLedger(group_limits) if group_limits is not None else None
+
+    def _group_for(self, tool_name: str, tool_spec: dict | None = None):
+        from agent_runtime.tool_budget import infer_tool_budget_group
+
+        return infer_tool_budget_group(tool_name, tool_spec)
+
+    def decision(self, tool_name: str, tool_spec: dict | None = None):
+        if self._group_ledger is None:
+            return None
+        return self._group_ledger.check(self._group_for(tool_name, tool_spec))
+
+    def record_rejection(self, tool_name: str, tool_spec: dict | None = None) -> None:
+        if self._group_ledger is not None:
+            self._group_ledger.record_rejection(self._group_for(tool_name, tool_spec))
 
     def acquire_shell(self) -> bool:
         return self._shell_semaphore.acquire(blocking=False)
@@ -743,7 +829,7 @@ class QuotaEnforcer:
     def release_shell(self):
         self._shell_semaphore.release()
 
-    def check(self, tool_name: str) -> bool:
+    def check(self, tool_name: str, tool_spec: dict | None = None) -> bool:
         """检查工具是否在配额内。
 
         Args:
@@ -752,18 +838,23 @@ class QuotaEnforcer:
         Returns:
             True 如果允许执行。
         """
+        decision = self.decision(tool_name, tool_spec)
+        if decision is not None:
+            return decision.allowed
         if self._counts["total"] >= self._limits["total"]:
             return False
-        if tool_name in ("write_file", "patch_file"):
+        if tool_name in ("write_file", "patch_file", "apply_patch"):
             return self._counts["write"] < self._limits["write"]
         if tool_name == "run_shell":
             return self._counts["shell"] < self._limits["shell"]
         return True  # 只读工具不受限
 
-    def record(self, tool_name: str):
+    def record(self, tool_name: str, tool_spec: dict | None = None):
         """记录一次工具调用。"""
+        if self._group_ledger is not None:
+            self._group_ledger.record(self._group_for(tool_name, tool_spec))
         self._counts["total"] += 1
-        if tool_name in ("write_file", "patch_file"):
+        if tool_name in ("write_file", "patch_file", "apply_patch"):
             self._counts["write"] += 1
         elif tool_name == "run_shell":
             self._counts["shell"] += 1
@@ -772,19 +863,29 @@ class QuotaEnforcer:
         """返回当前配额使用情况。"""
         cnt = self._counts
         lim = self._limits
-        return (
+        legacy = (
             f"配额: writes {cnt['write']}/{lim['write']}, "
             f"shell {cnt['shell']}/{lim['shell']}, "
             f"total {cnt['total']}/{lim['total']}"
         )
+        if self._group_ledger is None:
+            return legacy
+        groups = self._group_ledger.summary()
+        compact = ", ".join(
+            f"{name} {values['used']}/{values['limit']}" for name, values in groups.items()
+        )
+        return f"{legacy}; groups: {compact}"
 
     def quota_summary(self) -> dict:
         """返回结构化配额使用数据（供 report.json）。"""
-        return {
+        summary = {
             "writes": {"used": self._counts["write"], "limit": self._limits["write"]},
             "shell": {"used": self._counts["shell"], "limit": self._limits["shell"]},
             "total": {"used": self._counts["total"], "limit": self._limits["total"]},
         }
+        if self._group_ledger is not None:
+            summary["groups"] = self._group_ledger.summary()
+        return summary
 
 
 def _sha256_file(path: Path) -> str:

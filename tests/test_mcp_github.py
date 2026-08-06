@@ -22,7 +22,7 @@ from agent_runtime.providers.clients import FakeModelClient
 from agent_runtime.runtime import Agent
 from agent_runtime.tool_executor import ToolExecutor
 from agent_runtime.tools import build_tool_registry
-from src.middleware import REPAIR_PERMISSION_TABLE, ToolGateway, build_repair_gateway
+from src.middleware import build_repair_gateway
 
 
 @pytest.fixture
@@ -142,35 +142,29 @@ class TestRegistry:
 
 
 class TestGatewayPermissions:
-    def test_permission_table_covers_mcp_tools(self):
-        for name in GITHUB_MCP_READ_TOOLS:
-            assert name in REPAIR_PERMISSION_TABLE
-            assert REPAIR_PERMISSION_TABLE[name] == {
-                "localizer",
-                "retriever",
-                "patcher",
-            }
-        assert REPAIR_PERMISSION_TABLE["github_create_draft_pr"] == {"patcher"}
-
-    def test_localizer_cannot_create_draft_pr(self):
+    def test_mcp_specs_bind_into_gateway(self, mock_pair):
+        client, _ = mock_pair
+        tools = build_github_mcp_tool_registry(client)
         gw = build_repair_gateway()
-        assert gw.can_call("localizer", "github_create_draft_pr") is False
+        gw.bind_tools(tools)
         assert gw.can_call("patcher", "github_create_draft_pr") is True
-        assert gw.can_call("localizer", "github_list_issues") is True
+        assert gw.can_call("verifier", "github_create_draft_pr") is False
+        assert gw.can_call("verifier", "github_list_issues") is True
 
-    def test_gateway_rejects_localizer_draft_pr(self, workspace):
+    def test_gateway_rejects_verifier_draft_pr(self, workspace):
         from agent_runtime.tool_context import ToolContext
 
         client, _ = build_mock_github_mcp_client()
         mcp_tools = build_github_mcp_tool_registry(client)
         tools = {**build_tool_registry(ToolContext(root=workspace.repo_root)), **mcp_tools}
-        gw = ToolGateway(dict(REPAIR_PERMISSION_TABLE))
+        gw = build_repair_gateway()
+        gw.bind_tools(tools)
         agent = Agent(
             config=AgentConfig(provider="fake", approval="auto"),
             model_client=FakeModelClient(["<final>ok</final>"]),
             workspace=workspace,
             tools=tools,
-            agent_name="localizer",
+            agent_name="verifier",
             tool_dispatch=gw.dispatch,
         )
         result = agent.execute_tool(

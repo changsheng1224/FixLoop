@@ -18,22 +18,26 @@ PrefixMode = Literal["default", "repair"]
 def _role_quota(agent_name: str = ""):
     """按 Agent 角色返回差异化配额。
 
-    Localizer: 只读 query 密集 → total=12
-    Retriever: 只读 search 中等 → total=10
     Patcher:   写文件宽松 → writes=8 shell=2 total=15
     Verifier:  sandbox 仅容器操作 → shell=3 total=6
     """
     from agent_runtime.tool_executor import QuotaEnforcer
 
     role = (agent_name or "").lower()
-    if role == "localizer":
-        return QuotaEnforcer(max_writes=0, max_shell=0, max_total=12)
-    if role == "retriever":
-        return QuotaEnforcer(max_writes=0, max_shell=0, max_total=10)
     if role == "patcher":
-        return QuotaEnforcer(max_writes=8, max_shell=2, max_total=15)
+        return QuotaEnforcer(
+            max_writes=8,
+            max_shell=2,
+            max_total=24,
+            group_limits={"read": 12, "write": 8, "verify": 2, "recovery": 2},
+        )
     if role == "verifier":
-        return QuotaEnforcer(max_writes=0, max_shell=3, max_total=6)
+        return QuotaEnforcer(
+            max_writes=0,
+            max_shell=3,
+            max_total=6,
+            group_limits={"read": 0, "write": 0, "verify": 6, "recovery": 0},
+        )
     return QuotaEnforcer()
 
 
@@ -94,6 +98,11 @@ class Agent:
         self._semantic_memory = None
         self.circuit_breaker = CircuitBreaker()
         self.quota = _role_quota(agent_name)
+
+    @property
+    def agent_name(self) -> str:
+        """角色名（patcher/verifier）；供 AgentLoop stall 等判定。"""
+        return self._agent_name or ""
 
     @property
     def semantic_memory(self):
@@ -172,7 +181,10 @@ class Agent:
         working = mem.get("working", {})
         if isinstance(working, dict):
             working["recent_files"] = []
-            working["file_summaries"] = {}
+            working["evidence_ledger"] = []
+            working["read_cache"] = {}
+        if isinstance(mem, dict):
+            mem["file_summaries"] = {}
         # 重建 prefix（workspace snapshot 变更影响 hash → prompt cache 失效）
         try:
             sp = self._system_prompt if hasattr(self, "_system_prompt") else ""
@@ -382,14 +394,6 @@ class Agent:
 
     # ---- 静态方法 ----
 
-    @staticmethod
-    @staticmethod
-    def parse(raw: str) -> tuple[str, dict | str]:
-        """解析模型输出 → 委托给 ModelOutputParser。"""
-        from agent_runtime.parse_strategies import ModelOutputParser
-
-        return ModelOutputParser.parse(raw)
-
     # ---- 内部方法 ----
 
     def _build_prefix(self, system_prompt: str = ""):
@@ -448,11 +452,15 @@ class Agent:
         from agent_runtime.features.memory import (
             append_note,
             invalidate_file_summary,
+            record_read_evidence,
+            record_search_evidence,
             remember_file,
             set_file_summary,
         )
+        from agent_runtime.repair_context import get_repair_context, update_repair_context
 
         mem = self.session["memory"]
+        context = get_repair_context(mem)
         path = args.get("path", "")
 
         if name == "read_file" and path:
@@ -460,14 +468,27 @@ class Agent:
             # 从结果中取前 180 字符作为摘要
             summary = result_text[:180]
             set_file_summary(mem, path, summary)
+            record_read_evidence(
+                mem,
+                path=path,
+                start=int(args.get("start", 1) or 1),
+                end=int(args.get("end", 200) or 200),
+                result_text=result_text,
+            )
+            context["candidate_files"] = list(
+                dict.fromkeys(context["candidate_files"] + [path])
+            )[-12:]
 
         elif name in ("write_file", "patch_file") and path:
             remember_file(mem, path)
             invalidate_file_summary(mem, path)
+            context["changed_files"] = list(dict.fromkeys(context["changed_files"] + [path]))[-12:]
+            context["next_action"] = "run targeted verification"
 
         elif name == "run_shell":
             command = args.get("command", "")
-            if "Error" in result_text or "exit_code: 1" in result_text:
+            passed = not ("Error" in result_text or "exit_code: 1" in result_text)
+            if not passed:
                 append_note(
                     mem,
                     f"Shell 命令失败: {command[:100]} — {result_text[:100]}",
@@ -483,6 +504,11 @@ class Agent:
                     source=command[:80],
                     kind="observation",
                 )
+            context["verification"] = {
+                "last_command": command[:160],
+                "passed": passed,
+                "result_excerpt": result_text[-500:],
+            }
 
         elif name == "search":
             pattern = args.get("pattern", "")
@@ -494,6 +520,20 @@ class Agent:
                     source=pattern,
                     kind="observation",
                 )
+                record_search_evidence(
+                    mem,
+                    pattern=pattern,
+                    path=str(args.get("path", "") or "."),
+                    result_text=result_text,
+                )
+
+        update_repair_context(
+            mem,
+            changed_files=context["changed_files"],
+            candidate_files=context["candidate_files"],
+            verification=context.get("verification", {}),
+            next_action=context.get("next_action", ""),
+        )
 
         # Candidate 抽取 hook（after_tool）
         self._extract_memory_candidates_from_tool(name, args, result_text)

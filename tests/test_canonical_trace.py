@@ -81,12 +81,12 @@ class TestSpanLifecycle:
         assert root.parent_span_id is None
         assert TraceSpanContext.depth() == 1
 
-        TraceSpanContext.push("ask:localizer:localize")
+        TraceSpanContext.push("ask:patcher:patch")
         child = TraceSpanContext.current()
         assert child is not None
         assert child.parent_span_id == root.span_id
-        tracer.emit("localizer", "tool_executed", {"tool": "stack_parse"})
-        tracer.emit("localizer", "agent_ask_finished", {"stop_reason": "final"}, status="ok")
+        tracer.emit("patcher", "tool_executed", {"tool": "stack_parse"})
+        tracer.emit("patcher", "agent_ask_finished", {"stop_reason": "final"}, status="ok")
         TraceSpanContext.pop()
         assert TraceSpanContext.current() == root
         tracer.close_dangling_ask_spans()

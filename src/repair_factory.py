@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
 
@@ -14,37 +12,15 @@ from agent_runtime.repair_budget import RepairBudgetContext
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.warm_context import create_warm_context
 from agent_runtime.workspace import WorkspaceContext
-from src.agents.localizer import create_localizer
 from src.agents.patcher import create_patcher
-from src.agents.retriever import create_retriever
 from src.agents.verifier import create_verifier
 from src.middleware import build_repair_gateway
 from src.orchestrator import Orchestrator
 from src.tools.composite import build_repair_canonical_tools
 
-# 动态 Agent 裁剪：根据 issue_type 决定哪些 Agent 参与修复
-# simple = 仅 Localizer + Patcher（跳过 Retriever）
-# full    = 全部四个 Agent
-_SIMPLE_ISSUE_TYPES = frozenset({"import_error", "syntax_error"})
-
-
-@dataclass(frozen=True)
-class AgentProfile:
-    """问题类型对应的 Agent 参与配置。"""
-
-    with_retriever: bool = True
-
-    @classmethod
-    def for_issue_type(cls, issue_type: str) -> AgentProfile:
-        if issue_type in _SIMPLE_ISSUE_TYPES:
-            return cls(with_retriever=False)
-        return cls(with_retriever=True)
-
-
 O = TypeVar("O", bound=Orchestrator)
 
 __all__ = [
-    "AgentProfile",
     "create_model_client",
     "load_dotenv",
     "make_orchestrator_factory",
@@ -75,20 +51,12 @@ def wire_orchestrator(
     repo_path: str,
     *,
     orch_class: type[O] = Orchestrator,
-    with_retriever: bool | None = None,
     skip_verify: bool = False,
     dry_run: bool = False,
     execution_tier: str = "auto",
     require_sandbox: bool = False,
-    agent_profile: AgentProfile | None = None,
 ) -> O:
-    """装配 Localizer / Retriever / Patcher / 可选 Verifier（Agent 池化预热）。
-
-    预热策略：
-    1. WarmContext 预加载分词器到模块级缓存（首次 ~0.5–1.5s，后续命中缓存）
-    2. ThreadPoolExecutor 并行创建 localizer + retriever（wall-clock 优化）
-    3. warm_context 注入 Agent，供 ContextManager 复用
-    """
+    """装配唯一的 Patcher-primary runtime 与可选 Verifier。"""
     ws = WorkspaceContext.build(repo_path)
     repo = str(Path(repo_path).resolve())
     ctx = ToolContext(root=repo)
@@ -100,12 +68,6 @@ def wire_orchestrator(
         approval="auto",
         repo_root=repo,
     )
-
-    # 动态 Agent 裁剪
-    if with_retriever is None and agent_profile is not None:
-        with_retriever = agent_profile.with_retriever
-    elif with_retriever is None:
-        with_retriever = True
 
     # 预热 tokenizer + 创建共享预算上下文
     wc = create_warm_context(model="deepseek-v4-pro", provider="deepseek")
@@ -125,17 +87,6 @@ def wire_orchestrator(
         kw["budget"] = budget_ctx.sub_budget(role)
         return kw
 
-    # 并行预建 localizer + retriever（ThreadPoolExecutor）
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        fut_loc = pool.submit(create_localizer, client, ws, repo, **_agent_kw("localizer"))
-        fut_ret = (
-            pool.submit(create_retriever, client, ws, repo, **_agent_kw("retriever"))
-            if with_retriever
-            else None
-        )
-        localizer = fut_loc.result()
-        retriever = fut_ret.result() if fut_ret else None
-
     patcher = create_patcher(client, ws, cwd=repo, **_agent_kw("patcher"))
     normalized_tier = (
         execution_tier if execution_tier in {"auto", "container", "host", "static"} else "auto"
@@ -145,8 +96,6 @@ def wire_orchestrator(
     should_try_verifier = (not skip_verify) and normalized_tier in {"auto", "container"}
 
     orch = orch_class(
-        localizer,
-        retriever,
         patcher,
         use_pytest_verify=use_pytest_verify,
         require_sandbox=require_sandbox or normalized_tier == "container",
@@ -158,6 +107,7 @@ def wire_orchestrator(
         verifier = try_create_verifier(client, ws, repo, **_agent_kw("verifier"))
         if verifier:
             orch.verifier = verifier
+            orch._repair_gateways = orch._collect_repair_gateways(patcher, verifier)
     return orch
 
 

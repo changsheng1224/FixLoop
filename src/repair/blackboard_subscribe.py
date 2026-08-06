@@ -13,7 +13,7 @@ from src.repair.blackboard_merge import (
     read_context_from_blackboard,
     read_suspects_from_blackboard,
 )
-from src.repair.suspect_blocks import render_suspects_with_snippets
+from src.repair.localization.suspect_blocks import render_suspects_with_snippets
 from src.state import RepairPlan, RetrievedContext, SuspectLocation
 
 __all__ = [

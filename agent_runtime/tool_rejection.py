@@ -31,6 +31,15 @@ TOOL_TRACE_PUBLIC_KEYS = (
     "approval_policy",
     "approval_result",
     "execution_tier",
+    "provider",
+    "mcp_server",
+    "mcp_tool",
+    "mcp_duration_ms",
+    "mcp_error_code",
+    "retryable",
+    "retry_limit",
+    "model_hint",
+    "observation_id",
 )
 
 

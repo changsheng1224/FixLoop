@@ -6,19 +6,20 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from src.repair.fail_to_pass_hints import FAIL_TO_PASS_HEADER
-from src.repair.localize_cheap_explore import cheap_explore_suspects
-from src.repair.localize_fastpath import filter_llm_suspects_to_disk, rule_first_suspects
-from src.repair.localize_landing import refine_suspect_landing
-from src.repair.localize_memory import (
+from src.repair.localization.localize_cheap_explore import cheap_explore_suspects
+from src.repair.localization.localize_fastpath import (
+    filter_llm_suspects_to_disk,
+    rule_first_suspects,
+)
+from src.repair.localization.localize_landing import refine_suspect_landing
+from src.repair.localization.localize_memory import (
     apply_localize_memory,
     remember_confirmed_impls,
     remember_negated_files,
-    save_localize_memory,
 )
-from src.repair.localize_test_patch import suspects_from_test_patch
-from src.repair.localize_tiers import SuspectTier, decide_patch_gate, tier_for_suspect
-from src.repair.symbol_index import _INDEX_CACHE
+from src.repair.localization.localize_test_patch import suspects_from_test_patch
+from src.repair.localization.localize_tiers import SuspectTier, decide_patch_gate, tier_for_suspect
+from src.repair.localization.symbol_index import _INDEX_CACHE
 from src.state import RepairState, SuspectLocation
 
 
@@ -53,7 +54,7 @@ diff --git a/tests/test_core.py b/tests/test_core.py
 @@ -1,3 +1,4 @@
  from pkg.core import compute
 +from pkg.core import compute as c2
- 
+
  def test_compute():
 """
     seeds = suspects_from_test_patch(patch, root)

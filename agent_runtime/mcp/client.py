@@ -45,11 +45,32 @@ class McpCallResult:
     content: str
     is_error: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
+    content_blocks: list[dict[str, Any]] = field(default_factory=list)
+    structured_content: Any = None
 
     def observation(self) -> str:
         if self.is_error:
             return f"Error: {self.content}"
         return self.content
+
+    def structured_facts(self) -> list[dict[str, Any]]:
+        facts: list[dict[str, Any]] = []
+        if self.structured_content is not None:
+            facts.append({"kind": "mcp_structured_content", "value": self.structured_content})
+        facts.append(
+            {
+                "kind": "mcp_result",
+                "is_error": self.is_error,
+                "content_types": sorted(
+                    {
+                        str(block.get("type") or "unknown")
+                        for block in self.content_blocks
+                        if isinstance(block, dict)
+                    }
+                ),
+            }
+        )
+        return facts
 
 
 class InProcessTransport:
@@ -150,6 +171,7 @@ class McpClient:
     def _normalize_call_result(raw: dict[str, Any]) -> McpCallResult:
         is_error = bool(raw.get("isError") or raw.get("is_error"))
         content = raw.get("content")
+        blocks = list(content) if isinstance(content, list) else []
         if isinstance(content, list):
             texts = []
             for block in content:
@@ -162,4 +184,10 @@ class McpClient:
             text = json.dumps(raw.get("result", raw), ensure_ascii=False)
         else:
             text = str(content)
-        return McpCallResult(content=text, is_error=is_error, raw=raw)
+        return McpCallResult(
+            content=text,
+            is_error=is_error,
+            raw=raw,
+            content_blocks=blocks,
+            structured_content=raw.get("structuredContent", raw.get("structured_content")),
+        )

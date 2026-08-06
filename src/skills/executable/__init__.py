@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 ToolFn = Callable[[dict[str, Any]], str]
 
@@ -217,7 +218,8 @@ def run_repo_code_search(
             r"(?i)(?:grep\s+for|find\s+definition\s+of|search\s+(?:code|symbol|repo)\s+for)\s+['\"]?([^\n'\"]+)",
             text,
         )
-        query = (m.group(1).strip() if m else text.strip().splitlines()[0][:120]) if text.strip() else ""
+        if text.strip():
+            query = m.group(1).strip() if m else text.strip().splitlines()[0][:120]
     hits: list[dict[str, Any]] = []
     if grep is not None and query:
         raw = grep({"pattern": query})
@@ -318,7 +320,11 @@ RUNNERS: dict[str, Callable[..., dict[str, Any]]] = {
 }
 
 
-def run_executable_skill(name: str, args: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+def run_executable_skill(
+    name: str,
+    args: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
     fn = RUNNERS.get(name)
     if fn is None:
         raise KeyError(f"no runner for skill: {name}")

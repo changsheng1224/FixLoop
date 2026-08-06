@@ -77,11 +77,11 @@ class TestJsonLogging:
     def test_json_includes_run_id_from_context(self):
         logger, stream = _capture_stderr_logger(log_format="json")
         run_id = str(uuid.uuid4())
-        with log_context(run_id=run_id, agent="localizer"):
+        with log_context(run_id=run_id, agent="patcher"):
             logger.warning("0 suspects")
         record = json.loads(stream.getvalue().strip())
         assert record["run_id"] == run_id
-        assert record["agent"] == "localizer"
+        assert record["agent"] == "patcher"
 
     def test_json_omits_run_id_without_context(self):
         logger, stream = _capture_stderr_logger(log_format="json")

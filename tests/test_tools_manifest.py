@@ -5,8 +5,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from src.middleware import REPAIR_PERMISSION_TABLE
-from src.tools.manifest import load_tools_manifest, merge_permission_table
+from src.tools.manifest import load_tool_role_overrides
 
 # ---------------------------------------------------------------------------
 # load_tools_manifest
@@ -16,7 +15,7 @@ from src.tools.manifest import load_tools_manifest, merge_permission_table
 class TestLoadManifest:
     def test_no_file_returns_empty(self):
         with tempfile.TemporaryDirectory() as tmp:
-            result = load_tools_manifest(tmp)
+            result = load_tool_role_overrides(tmp)
             assert result == {}
 
     def test_empty_file_returns_empty(self):
@@ -24,7 +23,7 @@ class TestLoadManifest:
             agent_dir = Path(tmp) / ".agent"
             agent_dir.mkdir()
             (agent_dir / "tools.yaml").write_text("")
-            result = load_tools_manifest(tmp)
+            result = load_tool_role_overrides(tmp)
             assert result == {}
 
     def test_loads_valid_manifest(self):
@@ -32,10 +31,10 @@ class TestLoadManifest:
             agent_dir = Path(tmp) / ".agent"
             agent_dir.mkdir()
             (agent_dir / "tools.yaml").write_text(
-                "tools:\n  write_file: [patcher, localizer]\n  search: ['*']\n"
+                "tools:\n  write_file: [patcher]\n  search: ['*']\n"
             )
-            result = load_tools_manifest(tmp)
-            assert result["write_file"] == {"patcher", "localizer"}
+            result = load_tool_role_overrides(tmp)
+            assert result["write_file"] == {"patcher"}
             assert result["search"] == {"*"}
 
     def test_unknown_tool_is_skipped(self):
@@ -45,7 +44,7 @@ class TestLoadManifest:
             (agent_dir / "tools.yaml").write_text(
                 "tools:\n  read_file: [patcher]\n  nonexistent_tool: [localizer]\n"
             )
-            result = load_tools_manifest(tmp)
+            result = load_tool_role_overrides(tmp)
             assert "read_file" in result
             assert "nonexistent_tool" not in result
 
@@ -54,34 +53,8 @@ class TestLoadManifest:
             agent_dir = Path(tmp) / ".agent"
             agent_dir.mkdir()
             (agent_dir / "tools.yaml").write_text("tools:\n  grep: '*'\n")
-            result = load_tools_manifest(tmp)
+            result = load_tool_role_overrides(tmp)
             assert result["grep"] == {"*"}
-
-
-# ---------------------------------------------------------------------------
-# merge_permission_table
-# ---------------------------------------------------------------------------
-
-
-class TestMergePermissionTable:
-    def test_manifest_overrides_builtin(self):
-        manifest = {"write_file": {"patcher", "localizer"}}
-        merged = merge_permission_table(dict(REPAIR_PERMISSION_TABLE), manifest)
-        assert merged["write_file"] == {"patcher", "localizer"}
-
-    def test_manifest_adds_new_tool(self):
-        manifest = {"new_tool": {"localizer"}}
-        merged = merge_permission_table(dict(REPAIR_PERMISSION_TABLE), manifest)
-        assert merged["new_tool"] == {"localizer"}
-
-    def test_builtin_preserved_when_not_in_manifest(self):
-        manifest = {}
-        merged = merge_permission_table(dict(REPAIR_PERMISSION_TABLE), manifest)
-        assert merged["read_file"] == {"*"}  # unchanged
-
-    def test_empty_manifest_no_change(self):
-        merged = merge_permission_table(dict(REPAIR_PERMISSION_TABLE), {})
-        assert merged == REPAIR_PERMISSION_TABLE
 
 
 # ---------------------------------------------------------------------------
@@ -96,7 +69,7 @@ class TestGatewayWithManifest:
         gw = build_repair_gateway()
         # 默认行为：patcher 可写文件
         assert gw.can_call("patcher", "write_file")
-        assert not gw.can_call("localizer", "write_file")
+        assert not gw.can_call("verifier", "write_file")
 
     def test_gateway_with_manifest(self):
         from src.middleware import build_repair_gateway
@@ -104,8 +77,7 @@ class TestGatewayWithManifest:
         with tempfile.TemporaryDirectory() as tmp:
             agent_dir = Path(tmp) / ".agent"
             agent_dir.mkdir()
-            (agent_dir / "tools.yaml").write_text("tools:\n  write_file: [patcher, localizer]\n")
+            (agent_dir / "tools.yaml").write_text("tools:\n  write_file: [verifier]\n")
             gw = build_repair_gateway(tmp)
-            # manifest 允许 localizer 写文件
-            assert gw.can_call("localizer", "write_file")
-            assert gw.can_call("patcher", "write_file")
+            assert gw.can_call("verifier", "write_file")
+            assert not gw.can_call("patcher", "write_file")

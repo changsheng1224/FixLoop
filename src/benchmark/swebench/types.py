@@ -11,6 +11,7 @@ class FailureClass(StrEnum):
 
     NONE = "none"  # resolved / 成功路径
     ENV = "env"  # Docker / 数据集 / checkout / harness 安装
+    BASELINE_DIRTY = "baseline_dirty"  # 运行前基线污染 / 非空 diff
     AGENT = "agent"  # 无 patch、超时、repair 异常
     EVAL = "eval"  # harness 跑通但未 resolved / patch 不可应用
 
@@ -81,6 +82,7 @@ class InstanceResult:
     harness_log: str = ""
     error: str = ""
     verified: bool = False
+    baseline_preflight: dict = field(default_factory=dict)
 
     def to_prediction(self) -> dict:
         return {

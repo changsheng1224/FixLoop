@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from src.repair.loose_patch_recover import (
+from src.repair.execution.loose_patch_recover import (
     parse_patches_with_recover,
     recover_patches_from_text,
 )
-from src.repair.patch_applier import parse_patches
+from src.repair.execution.patch_applier import parse_patches
 
 
 def test_recover_fenced_diff():

@@ -24,7 +24,7 @@ STATUSES = frozenset({STATUS_OK, STATUS_ERROR, STATUS_CANCELLED, STATUS_UNSET})
 # 文档化事件目录（既有名，不强制改名）
 EVENT_CATALOG: dict[str, tuple[str, ...]] = {
     "model": ("model_request_start", "model_first_token", "model_complete"),
-    "tool": ("tool_executed", "tool_preview", "tool_order_warning"),
+    "tool": ("tool_executed", "tool_preview", "tool_order_warning", "mcp_call"),
     "skill": ("skill_matched", "skill_hint_rendered", "skill_routed"),
     "context": ("context_built", "compression_triggered"),
     "state": (

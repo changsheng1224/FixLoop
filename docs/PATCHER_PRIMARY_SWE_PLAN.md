@@ -1,12 +1,13 @@
 # Patcher Primary：SWE-bench 主环改造方案
 
-> 状态：草案（待确认后实现）  
-> 日期：2026-08-06（Critic + SWE-agent ACI + Codex + Claude Code + **Cursor**；**primary 路径移除 Localizer/Retriever**）  
-> 背景：DEV5 R8–R10 显示瓶颈在「编辑落地 / 文件锁定 / 预算错配 / 超时拖尾」，而非再增加 Localizer/Retriever 能力。  
-> 对标：SWE-agent（ACI）+ Codex（`apply_patch`）+ Claude Code（搜读改测同环）+ Cursor（读结果再决策）。  
-> 约束：问题类通用修复；禁止 instance ID / gold patch 特判（见 `docs/SWE_BENCH_LITE_FIX_CONSTRAINTS.md`）。  
-> Claude Code 裁决：见 §5.3（编辑主面 **方案 A = `apply_patch` 优先**）。  
+> 状态：草案（待确认后实现）
+> 日期：2026-08-06（Critic + SWE-agent ACI + Codex + Claude Code + **Cursor**；**primary 路径移除 Localizer/Retriever**）
+> 背景：DEV5 R8–R10 显示瓶颈在「编辑落地 / 文件锁定 / 预算错配 / 超时拖尾」，而非再增加 Localizer/Retriever 能力。
+> 对标：SWE-agent（ACI）+ Codex（`apply_patch`）+ Claude Code（搜读改测同环）+ Cursor（读结果再决策）。
+> 约束：问题类通用修复；禁止 instance ID / gold patch 特判（见 `docs/SWE_BENCH_LITE_FIX_CONSTRAINTS.md`）。
+> Claude Code 裁决：见 §5.3（编辑主面 **方案 A = `apply_patch` 优先**）。
 > Cursor 裁决（2026-08-06）：见 §5.4；除「读结果再决策」外其余保持现稿。
+> **进度可感知**（2026-08-06）：运行中向用户展示阶段性进度输出，见 §4.9。
 
 ---
 
@@ -14,26 +15,29 @@
 
 ### 1.1 目标
 
-1. **SWE / repair 默认路径**改为：规则定位种子 → **Patcher 长环（搜+读+改）** → **Critic 轻审** → **Verifier（环外）**。  
-2. **`patcher_primary` 路径移除 Localizer / Retriever 调用**（搜读工作并入 Patcher；定位先验仅规则种子）。  
-3. 保留有价值的 multi 面：**Critic（评审）+ Verifier（判定）+ 停损**；去掉 Loc∥Ret 流水线交接。  
-4. 主环对齐 Codex：**以落盘 diff 为真源**、**结构化 `apply_patch` 优先于大 JSON 候选**、**测失败热回灌同对话**。  
-5. 主环对齐 Claude Code：**gather→act→verify 同环交织**、**未 Read 不可写**、**只读可并行 / 写串行**、**先 F2P/红测再广改**、**compact 序 + thrash 停**、同环 checklist。  
-6. 主环对齐 Cursor：**每步工具/测试结果必须进入下一决策**（读结果再决策）；**不**恢复语义 Ret、**不**做 Mode/Plan/Debug/checkpoint/无限步。  
-7. 先抬高 **非空 `model_patch`**，再追 **内部 `verified=true`**（本阶段不以官方 harness `resolved` 为唯一 KPI）。  
+1. **SWE / repair 默认路径**改为：规则定位种子 → **Patcher 长环（搜+读+改）** → **Critic 轻审** → **Verifier（环外）**。
+2. **`patcher_primary` 路径移除 Localizer / Retriever 调用**（搜读工作并入 Patcher；定位先验仅规则种子）。
+3. 保留有价值的 multi 面：**Critic（评审）+ Verifier（判定）+ 停损**；去掉 Loc∥Ret 流水线交接。
+4. 主环对齐 Codex：**以落盘 diff 为真源**、**结构化 `apply_patch` 优先于大 JSON 候选**、**测失败热回灌同对话**。
+5. 主环对齐 Claude Code：**gather→act→verify 同环交织**、**未 Read 不可写**、**只读可并行 / 写串行**、**先 F2P/红测再广改**、**compact 序 + thrash 停**、同环 checklist。
+6. 主环对齐 Cursor：**每步工具/测试结果必须进入下一决策**（读结果再决策）；**不**恢复语义 Ret、**不**做 Mode/Plan/Debug/checkpoint/无限步。
+7. 先抬高 **非空 `model_patch`**，再追 **内部 `verified=true`**（本阶段不以官方 harness `resolved` 为唯一 KPI）。
 8. **面试可演示**：规则种子 → Patcher/`apply_patch`+ACI → Critic → Verifier 回灌，trace 可观测。
+9. **运行进度可感知**：repair / SWE 跑批过程中，向用户（CLI / 日志 / 可选 SSE）持续输出**阶段性进度信息**，避免长时间「无输出黑盒」；进度事件与 Canonical Trace 同源或可对齐。
 
 ### 1.2 非目标
 
-- **不**在 Phase A 物理删除 `create_localizer` / `create_retriever` 源码（`pipeline` 模式暂留对照）；primary 路径 **零调用**。  
-- **不**用 LLM Critic/「投票」替代 pytest/sandbox Verifier（Critic 只做提交前廉价过滤）。  
-- 不把 Verifier 改成对话式 Agent。  
-- 不做整仓「一夜单 Agent」重构 Layer1；**不**绑定 OpenAI Responses API / Codex CLI 运行时。  
-- **不**开放无约束裸 shell 作为唯一编辑面（Codex/CC 可走 shell；FixLoop 仍用受限工具 + `apply_patch`）。  
-- **不**把编辑主面改成 Claude Code 式 `Edit` 优先（裁决：**方案 A**，`apply_patch` 为主；精确 replace 仅兜底）。  
-- **不**做交互 Plan mode / 前 N turn 只读软预算 / 每次 edit 文件 checkpoint（沿用超时 salvage）；**不**在 Patcher 内开 explore 子 Agent。  
-- **不**恢复 Cursor 式语义 codebase search / Retriever（primary 仍零 Ret）；**不**做 Ask/Plan/Debug Mode 产品面、HITL diff 审、Rules 引擎、Debug 插桩环、云端/Best-of-N、排队插话、无限 tool calls。  
+- **不**在 Phase A 物理删除 `create_localizer` / `create_retriever` 源码（`pipeline` 模式暂留对照）；primary 路径 **零调用**。
+- **不**用 LLM Critic/「投票」替代 pytest/sandbox Verifier（Critic 只做提交前廉价过滤）。
+- 不把 Verifier 改成对话式 Agent。
+- 不做整仓「一夜单 Agent」重构 Layer1；**不**绑定 OpenAI Responses API / Codex CLI 运行时。
+- **不**开放无约束裸 shell 作为唯一编辑面（Codex/CC 可走 shell；FixLoop 仍用受限工具 + `apply_patch`）。
+- **不**把编辑主面改成 Claude Code 式 `Edit` 优先（裁决：**方案 A**，`apply_patch` 为主；精确 replace 仅兜底）。
+- **不**做交互 Plan mode / 前 N turn 只读软预算 / 每次 edit 文件 checkpoint（沿用超时 salvage）；**不**在 Patcher 内开 explore 子 Agent。
+- **不**恢复 Cursor 式语义 codebase search / Retriever（primary 仍零 Ret）；**不**做 Ask/Plan/Debug Mode 产品面、HITL diff 审、Rules 引擎、Debug 插桩环、云端/Best-of-N、排队插话、无限 tool calls。
 - **不**在 primary 中恢复 Localizer∥Retriever，也不保留「弱锚再请 Localizer」旁路（搜读一律 Patcher）。
+- **不**做完整 TUI Dashboard / 实时 diff 可视化编辑器；进度输出以 **结构化阶段事件 + 短摘要** 为主（见 §4.9）。
+- **不**默认把模型完整思维链 / 全量 tool 输出刷屏；用户面只展示进度摘要，细节仍进 Trace。
 
 ### 1.3 成功指标（DEV5 同配置对照）
 
@@ -45,6 +49,7 @@
 | 空转 | parse_thrash 烧满 900s | parse_fail 连续 2 次必须换策略 | 同左 |
 | Critic | — | 空/越界 diff 在进沙箱前被拒，trace 可见 | 误伤率可接受（不系统性清空金标文件 diff） |
 | 编辑路径 | JSON/loose recover 主导 | Phase B：`apply_patch` 成功占比可观测 | 同左 |
+| 进度感知 | 长跑常无阶段性输出 | CLI/日志可见阶段心跳（种子/turn/工具/Critic/Verify） | 面试演示无「黑屏等 10 分钟」 |
 
 对比实验必须固定：模型、timeout、max_retries、DEV5 manifest、sandbox 开关、`repair_mode`。
 
@@ -70,9 +75,9 @@ SWE 上常见实际形态：
 
 ### 2.2 与成功单 Agent 的差距（要点）
 
-成功的 SWE / Codex / Claude Code / Cursor 类系统：**一个长环 + 稳编辑落盘 + 热测试反馈 + 读结果再决策 + 可控上下文**。  
-FixLoop 缺的不是「更多角色」，而是 **主闭环对准正确文件并持续有效尝试**。  
-Critic 补的是：**主环之外的廉价第二意见**，不是第二套主环。  
+成功的 SWE / Codex / Claude Code / Cursor 类系统：**一个长环 + 稳编辑落盘 + 热测试反馈 + 读结果再决策 + 可控上下文**。
+FixLoop 缺的不是「更多角色」，而是 **主闭环对准正确文件并持续有效尝试**。
+Critic 补的是：**主环之外的廉价第二意见**，不是第二套主环。
 Localizer/Retriever 在 SWE 上边际低、交接损耗高 → **primary 路径移除，改由规则种子 + Patcher 工具环（Grep/Read）承担**。
 
 ---
@@ -111,6 +116,9 @@ Issue
   ▼
 Verifier（sandbox / pytest，非 LLM）
   │ 失败摘要结构化回灌主环（下一 retry / 下一 turn）
+
+并行：ProgressEmitter（§4.9）
+  → CLI/stderr 阶段摘要 + Trace span（可选 progress.jsonl）
 ```
 
 ### 3.2 规则定位种子（替代 Localizer Agent）
@@ -153,8 +161,8 @@ FIXLOOP_APPLY_PATCH_PRIMARY=1         # Phase B：主编辑面优先 apply_patch
 FIXLOOP_PATCHER_COMPACT=1             # Phase B/C：长环工具史压缩
 ```
 
-- SWE adapter 强制或默认 `patcher_primary`。  
-- primary 下 `self.localizer` / `self.retriever` 可不构造，或构造但不调用；**禁止** `_run_localize_and_retrieve`。  
+- SWE adapter 强制或默认 `patcher_primary`。
+- primary 下 `self.localizer` / `self.retriever` 可不构造，或构造但不调用；**禁止** `_run_localize_and_retrieve`。
 - Critic LLM 失败 → accept + `critic_skipped`。
 
 ---
@@ -165,16 +173,16 @@ FIXLOOP_PATCHER_COMPACT=1             # Phase B/C：长环工具史压缩
 
 允许编辑集合 `allowed_edit` 初始为：
 
-1. 规则种子：test_patch 反推 impl、F2P 覆盖、栈帧、issue 路径  
+1. 规则种子：test_patch 反推 impl、F2P 覆盖、栈帧、issue 路径
 2. 主环 **已成功 read** 且通过 `is_file()` 的实现 `.py`（可上限 N=5）
 3. （沿用既有）本轮 `suspect_locations` 中的 HIGH/MID 实现路径（若有）
 
 硬约束（对齐 Codex writable paths + Claude Code Read-before-edit；自动化 SWE 无 HITL）：
 
-- **未成功 Read 的路径默认不可写**（写入 `allowed_edit` 的「已读集合」后才可 `apply_patch`）；规则种子路径可先自动预读或首写前强制 read。  
-- **apply 前**校验：patch 内所有路径 ⊆ `allowed_edit`（归一化、防 `..`）；越界 → **Reject**，工具返回可读原因（不必等 Critic）。  
-- 写工具若目标 ∉ `allowed_edit` → 拒绝并提示「先 read / 先从种子扩」；或要求显式 `expand_lock`（计次，默认最多 2 次）。  
-- apply/精确替换上下文 **stale / 未匹配** → reject + `near=`（对齐 CC Edit staleness 精神，不引入交互 rewind）。  
+- **未成功 Read 的路径默认不可写**（写入 `allowed_edit` 的「已读集合」后才可 `apply_patch`）；规则种子路径可先自动预读或首写前强制 read。
+- **apply 前**校验：patch 内所有路径 ⊆ `allowed_edit`（归一化、防 `..`）；越界 → **Reject**，工具返回可读原因（不必等 Critic）。
+- 写工具若目标 ∉ `allowed_edit` → 拒绝并提示「先 read / 先从种子扩」；或要求显式 `expand_lock`（计次，默认最多 2 次）。
+- apply/精确替换上下文 **stale / 未匹配** → reject + `near=`（对齐 CC Edit staleness 精神，不引入交互 rewind）。
 - **禁止**再用「与种子无关的短修 top-k」覆盖锁定集（修复 astropy 改偏类问题）。
 
 ### 4.2 编辑落地 — `apply_patch` 优先（裁决 A）+ ACI
@@ -183,10 +191,10 @@ FIXLOOP_PATCHER_COMPACT=1             # Phase B/C：长环工具史压缩
 
 **真源顺序：**
 
-1. **`apply_patch` 落盘**（首选）  
-2. 从工作区快照导出 unified diff → candidate / `model_patch`  
-3. 仅当落盘路径失败时：一轮精确 replace / JSON / loose recover（限时）  
-4. 仍空 → **记 parse_fail，触发策略切换**，不无限 grounded retry 烧超时  
+1. **`apply_patch` 落盘**（首选）
+2. 从工作区快照导出 unified diff → candidate / `model_patch`
+3. 仅当落盘路径失败时：一轮精确 replace / JSON / loose recover（限时）
+4. 仍空 → **记 parse_fail，触发策略切换**，不无限 grounded retry 烧超时
 
 `apply_patch` 行为规范（参考 Codex / GPT apply_patch，落地到既有 `patch_engine` / tools）：
 
@@ -221,14 +229,14 @@ FIXLOOP_PATCHER_COMPACT=1             # Phase B/C：长环工具史压缩
 
 #### 两级实现（推荐 `rules_first`）
 
-1. **Rules（默认必跑，零 LLM）**  
-   - `looks_like_unified_diff` / 非空  
-   - `patch_paths ⊆ allowed_edit`（归一化后）  
-   - 至少 1 个非测试实现文件（除非 issue 明确为 test-only，本阶段 SWE 默认要求有 impl）  
-   - 文件数 ≤ `MAX_EXPORT_FILES`、字节 ≤ 软阈（与导出闸门对齐）  
-2. **LLM（可选，`FIXLOOP_CRITIC_MODE=llm`）**  
-   - 输入：锁定集 + diff 摘要（≤4KB）+ 失败回灌（若有）  
-   - 输出 JSON：`{ "verdict": "accept"|"reject", "reasons": [...], "hint": "..." }`  
+1. **Rules（默认必跑，零 LLM）**
+   - `looks_like_unified_diff` / 非空
+   - `patch_paths ⊆ allowed_edit`（归一化后）
+   - 至少 1 个非测试实现文件（除非 issue 明确为 test-only，本阶段 SWE 默认要求有 impl）
+   - 文件数 ≤ `MAX_EXPORT_FILES`、字节 ≤ 软阈（与导出闸门对齐）
+2. **LLM（可选，`FIXLOOP_CRITIC_MODE=llm`）**
+   - 输入：锁定集 + diff 摘要（≤4KB）+ 失败回灌（若有）
+   - 输出 JSON：`{ "verdict": "accept"|"reject", "reasons": [...], "hint": "..." }`
    - `complete_once`，超时 ≤15s；失败则 accept + `critic_skipped`
 
 #### 与流水线衔接
@@ -240,8 +248,8 @@ Patcher 产出 candidate（磁盘真源）
   → accept: 进入 Verifier
 ```
 
-- Critic reject **不计**为 `verified` 失败，计为 `critic_rejected`（node_timings + failure 元数据）。  
-- 连续 Critic reject ×2 → 允许一次 `expand_lock` 或缩到单文件，避免死循环。  
+- Critic reject **不计**为 `verified` 失败，计为 `critic_rejected`（node_timings + failure 元数据）。
+- 连续 Critic reject ×2 → 允许一次 `expand_lock` 或缩到单文件，避免死循环。
 - Trace 事件：`critic_started` / `critic_finished`（含 verdict、mode=rules|llm、reasons）。
 
 #### 面试话术锚点
@@ -250,17 +258,18 @@ Patcher 产出 candidate（磁盘真源）
 
 ### 4.4 读/搜/动作纪律（ACI + Codex + Claude Code + Cursor）
 
-0. **读结果再决策（采纳 Cursor）**：每次 tool / 快检 / apply 回执必须进入下一 turn 的可见上下文；禁止「开火后不管」或只记 node_timings 却不进 Patcher prompt。下一步动作须由**上一结果**驱动（失败则纠、成功则推进 checklist）。  
-1. **窗口化 read**：默认约 **100 行**窗口 + 可选 scroll/goto；禁止主环一次灌入数千行 snippet（抑制 R10 类 `n_snippets` 爆炸）。  
-2. **精简 grep/glob（对齐 CC，保持）**：全仓搜索默认返回 **命中文件列表**（+ 可选每文件 1～2 行预览）；**Grep 优先于 embedding Retriever**（primary 已去 Ret；**不**恢复 Cursor 语义搜）。  
-3. **空输出显式化**：工具成功但无内容时返回固定文案（如 `command succeeded with no output`），禁止空白字符串。  
-4. **只读可并行、写串行（采纳 CC）**：同一 turn 允许多个 Read/Grep/Glob；**每 turn 至多一次写**（`apply_patch` / edit）；少「一次吐多文件大 JSON」。  
-5. **上下文 compact（采纳 CC 序）**：  
-   - 先丢弃/摘要 **旧的成功 tool 输出**（尤其大段 read）；  
-   - **保留最近 K 次失败 apply / 快检 / Verifier 回灌原文**；  
-   - 种子路径与 checklist 状态永不丢；  
-   - **compact thrash**：连续 compact 后上下文仍立即爆满 → 停损（不再空转 compact），记 `compact_thrash`。  
+0. **读结果再决策（采纳 Cursor）**：每次 tool / 快检 / apply 回执必须进入下一 turn 的可见上下文；禁止「开火后不管」或只记 node_timings 却不进 Patcher prompt。下一步动作须由**上一结果**驱动（失败则纠、成功则推进 checklist）。
+1. **窗口化 read**：默认约 **100 行**窗口 + 可选 scroll/goto；禁止主环一次灌入数千行 snippet（抑制 R10 类 `n_snippets` 爆炸）。
+2. **精简 grep/glob（对齐 CC，保持）**：全仓搜索默认返回 **命中文件列表**（+ 可选每文件 1～2 行预览）；**Grep 优先于 embedding Retriever**（primary 已去 Ret；**不**恢复 Cursor 语义搜）。
+3. **空输出显式化**：工具成功但无内容时返回固定文案（如 `command succeeded with no output`），禁止空白字符串。
+4. **只读可并行、写串行（采纳 CC）**：同一 turn 允许多个 Read/Grep/Glob；**每 turn 至多一次写**（`apply_patch` / edit）；少「一次吐多文件大 JSON」。
+5. **上下文 compact（采纳 CC 序）**：
+   - 先丢弃/摘要 **旧的成功 tool 输出**（尤其大段 read）；
+   - **保留最近 K 次失败 apply / 快检 / Verifier 回灌原文**；
+   - 种子路径与 checklist 状态永不丢；
+   - **compact thrash**：连续 compact 后上下文仍立即爆满 → 停损（不再空转 compact），记 `compact_thrash`。
 6. **硬停损优先于「无限 tool calls」**：学 Cursor 环结构，**不**学无上限；timeout / thrash / stop_loss 一律硬停。
+
 ### 4.5 环内快检 + 环外 Verifier（强化：先红测）
 
 对齐 Claude Code「给可验证目标」、Codex「测到过」、SWE-agent「测在环内」：
@@ -272,8 +281,8 @@ Patcher 产出 candidate（磁盘真源）
 
 **强化纪律（采纳）：**
 
-1. 有 F2P / fail_to_pass / 已知失败 nodeid 时：**优先跑这些**，再广搜/广改。  
-2. 规则种子应把 F2P nodeid 写入 Patcher 可见状态（prompt / blackboard）。  
+1. 有 F2P / fail_to_pass / 已知失败 nodeid 时：**优先跑这些**，再广搜/广改。
+2. 规则种子应把 F2P nodeid 写入 Patcher 可见状态（prompt / blackboard）。
 3. 无红测线索时：才允许「先 grep 定位 → 再改 → 再选测」。
 
 Verifier / 快检失败后写入主环可见结构（blackboard / node_timings + prompt 段）：
@@ -288,10 +297,10 @@ hint_files: 从 nodeid / traceback 解析的路径
 
 ### 4.6 超时与取消
 
-1. `repair_timeout_s` 触发后：先 **salvage disk→candidate**，再回滚未锁定变更（或保留已登记 patch）。  
-2. `cancel_token` 必须能打断/放弃后续 LLM 调用。  
-3. `ThreadPoolExecutor` 退出不得无界等待；目标：**墙钟 ≤ timeout + 30s**。  
-4. phase budget：primary **无 localize/retrieve 阶段**；patch 吃满预留；Critic ≤15s 挤在 patch/verify 间隙。  
+1. `repair_timeout_s` 触发后：先 **salvage disk→candidate**，再回滚未锁定变更（或保留已登记 patch）。
+2. `cancel_token` 必须能打断/放弃后续 LLM 调用。
+3. `ThreadPoolExecutor` 退出不得无界等待；目标：**墙钟 ≤ timeout + 30s**。
+4. phase budget：primary **无 localize/retrieve 阶段**；patch 吃满预留；Critic ≤15s 挤在 patch/verify 间隙。
 5. **不做**每次 edit 文件 checkpoint / 交互 rewind（裁决：保持现有 salvage）。
 
 ### 4.7 停损与策略
@@ -322,13 +331,60 @@ Patcher **默认**维护短 checklist（≤5 条，可由规则种子预填，�
 
 仅作 prompt 锚点与 trace；**不**单独占预算阶段。
 
+### 4.9 运行进度可感知（用户面输出）
+
+> **需求**：在 repair / SWE 批跑过程中，希望能显示一定的输出信息，供用户感知当前进度。
+> **对标心智**：Claude Code / Cursor 类 Agent 长跑时有阶段感（在搜、在改、在测）；FixLoop 批跑与 CLI 同样需要，避免只剩最终 `report.json`。
+
+#### 设计原则
+
+1. **进度事件 ≠ 完整 Trace**：用户面是短、稳、可读的摘要；完整工具输出 / prompt 仍写 Canonical Trace（可脱敏）。
+2. **与主环阶段对齐**：进度文案跟 primary 拓扑走，**不**再报 Loc/Ret 阶段（primary 路径）。
+3. **同源**：进度回调与 `node_timings` / span 共用同一套阶段枚举，禁止两套互不一致的状态机。
+4. **可关闭**：批跑默认开；`--quiet` / env 可关；CI 可只落日志文件。
+5. **不阻塞主环**：emit 失败不影响 repair；禁止为刷进度额外打 LLM。
+
+#### 必发进度事件（最小集）
+
+| 时机 | 事件名（建议） | 用户可见摘要示例 |
+|------|----------------|------------------|
+| repair 开始 | `repair_started` | `repair start mode=patcher_primary timeout=900s` |
+| 规则种子完成 | `seed_ready` | `seed: N files locked; F2P=…` |
+| Patcher turn 开始/结束 | `patcher_turn` | `turn 3/… checklist: apply_patch` |
+| 工具调用（聚合） | `tool_progress` | `grep → 12 hits` / `read foo.py:80-180` / `apply_patch ok` |
+| 快检 | `quick_test` | `F2P fail (excerpt…)` / `F2P pass` |
+| Critic | `critic_progress` | `critic reject: empty_diff` / `accept` |
+| Verifier 开始/结束 | `verify_progress` | `verify running…` / `verified=false collect=0` |
+| 停损 / 超时 / cancel | `stop_or_timeout` | `stop_loss: parse_fail×2` / `timeout salvage…` |
+| repair 结束 | `repair_finished` | `status=exhausted patch_B=300 verified=false` |
+
+可选增强（Phase C）：心跳 `heartbeat`（每 30–60s：当前 phase、已耗时、最近事件）；SWE runner 层 `instance_progress`（`2/5 django__… running`）。
+
+#### 输出通道
+
+| 通道 | 用途 | 落地 |
+|------|------|------|
+| **stderr / CLI 行日志** | 本地与面试演示默认 | `print`/`logging` 一行一文，带 `run_id` 短前缀 |
+| **Trace / Langfuse span 属性** | 复盘与飞轮 | 同事件写 span；用户面可只 mirror 摘要 |
+| **可选 SSE / JSONL progress 文件** | Web 或批跑仪表 | `.agent/runs/{id}/progress.jsonl` append-only |
+
+#### 与「读结果再决策」的关系
+
+- **模型侧**：工具完整 Observation 进下一 turn（§4.4.0）。
+- **用户侧**：同一工具只 mirror **一行摘要**（工具名 + 成败 + 关键路径/计数）。
+- 二者并行，互不替代。
+
+#### 面试话术锚点
+
+> 「主环跑很久时，用户不会对着黑屏干等：种子、每一 turn、apply、快检、Critic、Verify 都有进度行；细节在 Trace 里，演示时能边跑边讲卡在哪一拍。」
+
 ---
 
 ## 5. 对标借鉴：SWE-agent + Codex + Claude Code + Cursor
 
 ### 5.1 SWE-agent（ACI）
 
-> 参考：[SWE-agent ACI](https://swe-agent.com/latest/background/aci/)、Yang et al.  
+> 参考：[SWE-agent ACI](https://swe-agent.com/latest/background/aci/)、Yang et al.
 > 结论：**接口设计往往比堆角色更能抬分**。
 
 | 优先级 | SWE-agent 做法 | FixLoop 采纳 | 阶段 |
@@ -362,7 +418,7 @@ Patcher **默认**维护短 checklist（≤5 条，可由规则种子预填，�
 
 ### 5.3 Claude Code（代码修复逻辑）— 已裁决写入
 
-> 参考：[How Claude Code works](https://code.claude.com/docs/en/how-claude-code-works)（gather → take action → verify）；Grep/Read/Edit；只读并行；compact / thrash；Todo。  
+> 参考：[How Claude Code works](https://code.claude.com/docs/en/how-claude-code-works)（gather → take action → verify）；Grep/Read/Edit；只读并行；compact / thrash；Todo。
 > **用户裁决（2026-08-06）**：1 采纳 · 2 **选 A** · 3 采纳 · 4 采纳 · 5 保持 · 6 **强化** · 7 采纳 · 8 采纳 · 9–15 **保持**。
 
 | # | Claude Code | 裁决 | FixLoop 落地 |
@@ -385,7 +441,7 @@ Patcher **默认**维护短 checklist（≤5 条，可由规则种子预填，�
 
 ### 5.4 Cursor（代码修复逻辑）— 已裁决写入
 
-> 参考：[Cursor Agent](https://cursor.com/docs/agent/overview)、[Agent best practices](https://cursor.com/blog/agent-best-practices)（搜→改→跑命令→读结果；Rules；Plan/Debug Mode；语义搜；checkpoint）。  
+> 参考：[Cursor Agent](https://cursor.com/docs/agent/overview)、[Agent best practices](https://cursor.com/blog/agent-best-practices)（搜→改→跑命令→读结果；Rules；Plan/Debug Mode；语义搜；checkpoint）。
 > **用户裁决（2026-08-06）**：3 **采纳**；其余 1–2、4–15 **保持**（不新增 Cursor 能力面）。
 
 | # | Cursor | 裁决 | FixLoop 落地 |
@@ -418,10 +474,10 @@ apply 当时   →  已读校验 + path-safety + lint + 写后回显
 
 ### 5.6 对 nonempty / verified 的预期作用
 
-- `apply_patch` + 磁盘真源 + 未读不可写 + path-safety → 抬 **nonempty**  
-- 只读并行提高探仓密度；写串行降低脏写  
-- 先 F2P/红测 + 快检 + **读结果再决策** → 抬有效迭代，服务 **verified**  
-- CC 序 compact + thrash 停 → 抑制 R10 类上下文爆炸与超时拖尾  
+- `apply_patch` + 磁盘真源 + 未读不可写 + path-safety → 抬 **nonempty**
+- 只读并行提高探仓密度；写串行降低脏写
+- 先 F2P/红测 + 快检 + **读结果再决策** → 抬有效迭代，服务 **verified**
+- CC 序 compact + thrash 停 → 抑制 R10 类上下文爆炸与超时拖尾
 - 仅切 primary、不做上述编辑/compact → 改善有限
 
 ---
@@ -442,7 +498,9 @@ apply 当时   →  已读校验 + path-safety + lint + 写后回显
 | `src/benchmark/swebench/*` | 默认 `patcher_primary`；manifest 记录无 loc/ret、`apply_patch`、F2P 快检计数 | ~20–40 行 |
 | `src/repair/phase_clock.py` / adaptive | primary：无 localize/retrieve 预算 | ~20–40 行 |
 | 上下文 compact（可挂 runtime） | **CC 序**：丢旧成功 tool 输出→留失败/快检；`compact_thrash` 停损 | ~80–120 行 |
-| 测试 | 零 Loc/Ret、未读不可写、critic、`apply_patch`、F2P 优先、compact thrash | `tests/test_patcher_primary*.py` 等 |
+| **进度输出（§4.9）** | `ProgressEmitter`：阶段事件 → CLI/stderr + optional `progress.jsonl`；与 span 同源枚举 | ~60–100 行 |
+| `src/benchmark/swebench/runner.py` | instance 级进度行；透传 repair progress | ~20–40 行 |
+| 测试 | 零 Loc/Ret、未读不可写、critic、`apply_patch`、F2P 优先、compact thrash、**进度事件最小集** | `tests/test_patcher_primary*.py` 等 |
 
 旧 `pipeline` 路径保留；Critic 也可在后续挂到旧路径的 Patcher→Verifier 之间（可选，非 Phase A 必须）。
 
@@ -452,45 +510,49 @@ apply 当时   →  已读校验 + path-safety + lint + 写后回显
 
 ### Phase A — 切流骨架（先可跑）
 
-- [ ] `FIXLOOP_REPAIR_MODE` + SWE 默认 primary  
-- [ ] **primary：不调用 Localizer/Retriever**；仅规则种子 → Patcher  
-- [ ] Patcher 工具集含原 explore/grep/read（承接搜读）  
-- [ ] **apply 前 path-safety** + **未 Read 不可写**（种子路径可预读）  
-- [ ] F2P nodeid 注入 Patcher 可见状态（强化先红测的数据面）  
-- [ ] **Critic rules_first**；工具空输出显式化；默认 checklist  
-- [ ] 导出优先磁盘快照（若已有 tools diff，缩短 JSON 依赖）  
-- [ ] 单测：primary 路径无 `_run_localize` / retriever ask；未读拒写  
-- [ ] DEV5 冒烟：nonempty / 墙钟 / critic_rejected  
+- [x] `FIXLOOP_REPAIR_MODE` + SWE 默认 primary
+- [x] **primary：不调用 Localizer/Retriever**；仅规则种子 → Patcher
+- [x] Patcher 工具集含原 explore/grep/read（承接搜读）
+- [x] **apply 前 path-safety** + **未 Read 不可写**（种子路径可预读）
+- [x] F2P nodeid 注入 Patcher 可见状态（强化先红测的数据面）
+- [x] **Critic rules_first**；工具空输出显式化；默认 checklist
+- [x] 导出优先磁盘快照（若已有 tools diff，缩短 JSON 依赖）
+- [x] **进度最小集（§4.9）**：`repair_started` / `seed_ready` / `patcher_turn` / `repair_finished` 打到 CLI（可 `--quiet`）
+- [x] 单测：primary 路径无 `_run_localize` / retriever ask；未读拒写；进度事件可断言
+- [ ] DEV5 冒烟：nonempty / 墙钟 / critic_rejected；**跑批时可见阶段行**
 
 ### Phase B — `apply_patch`（裁决 A）+ ACI + CC 纪律 + 快检
 
-- [ ] 文件锁定 + expand_lock  
-- [ ] **`apply_patch` 优先**（lenient + stale/`near=`）+ edit-time lint + 写后回显  
-- [ ] 窗口化 read + 精简 grep；**只读并行、写串行**  
-- [ ] **先 F2P/红测再广改**；环内快检同 turn 回灌 + Verifier 结构化回灌  
-- [ ] 工具史 **CC 序 compact** + **`compact_thrash` 停损**  
-- [ ] Critic reject 闭环；parse/apply thrash 早停  
-- [ ] DEV5：nonempty ≥3/5；报告 `apply_patch_ok_count`、`unread_write_reject_count`  
+- [x] 文件锁定 + expand_lock
+- [x] **`apply_patch` 优先**（lenient + stale/`near=`）+ edit-time lint + 写后回显
+- [x] 窗口化 read + 精简 grep；**写串行**（多只读并行调度未做 ThreadPool）
+- [x] **先 F2P/红测再广改**；环内 `quick_test` + Verifier `verify_progress`
+- [x] 工具史 **CC 序 compact** + **`compact_thrash` 停损**
+- [x] Critic reject 闭环（A）；parse/apply thrash 沿用 stop_loss
+- [x] **进度补齐**：`tool_progress` / `critic_progress` / `verify_progress`
+- [ ] DEV5：nonempty ≥3/5；报告 `apply_patch_ok_count`、`unread_write_reject_count`
 
 ### Phase C — 超时与面试可观测
 
-- [ ] cancel 硬停 + salvage（墙钟 ≤ timeout+30s；**无**每 edit checkpoint）  
-- [ ] prompt 前缀稳定化（cache 友好）  
-- [ ] Critic/Verifier/ACI/`apply_patch`/规则种子/F2P 快检 span 齐全（**无 Loc/Ret span**）  
-- [ ] DEV5：墙钟达标；冲击 verified ≥1  
-- [ ] 归档 pipeline Loc/Ret（非必须）；脱敏 trace + 架构图  
+- [x] cancel 硬停 + salvage（`repair_timeout.py`；`shutdown(wait=False)`；**无**每 edit checkpoint）
+- [x] primary 阶段预算无 localize；既有 prefix cache 沿用
+- [x] Critic/种子/`apply_patch` span + ProgressEmitter 对齐（**无 Loc/Ret span**）
+- [x] **进度增强**：`heartbeat`、`FIXLOOP_PROGRESS_JSONL`；SWE `instance_progress`
+- [ ] DEV5：墙钟达标；冲击 verified ≥1
+- [x] 演示文档：`docs/PATCHER_PRIMARY_DEMO.md`；归档 pipeline Loc/Ret（非必须）待决策
 
 ---
 
 ## 8. 面试可演示的轨迹
 
-1. **规则种子**（test_patch/F2P）→ `allowed_edit` + F2P nodeid  
-2. **Patcher** checklist：先红测/看失败 → grep/read（可并行）→ **`apply_patch`**（须已读）→ lint/回显  
-3. **快检失败** → 同环再 patch  
-4. **Critic reject**（空/越锁）→ 回灌再改  
-5. **Critic accept → Verifier fail → 结构化回灌 → Patcher**  
+1. **规则种子**（test_patch/F2P）→ `allowed_edit` + F2P nodeid（CLI：`seed_ready`）
+2. **Patcher** checklist：先红测/看失败 → grep/read（可并行）→ **`apply_patch`**（须已读）→ lint/回显（CLI：`patcher_turn` / `tool_progress`）
+3. **快检失败** → 同环再 patch（CLI：`quick_test`）
+4. **Critic reject**（空/越锁）→ 回灌再改（CLI：`critic_progress`）
+5. **Critic accept → Verifier fail → 结构化回灌 → Patcher**（CLI：`verify_progress`）
+6. **全程**：旁观者不靠黑屏猜进度；需要细节时打开 Trace / `progress.jsonl`
 
-口述：定位用规则 + Grep（对齐 Claude Code）；编辑用 `apply_patch`（裁决 A / Codex）；**每步读结果再决策**（Cursor）；搜改测在 **一个 Patcher 单环**；Critic 评审、Verifier 判定——**不再维护 Loc/Ret 双 LLM**。
+口述：定位用规则 + Grep（对齐 Claude Code）；编辑用 `apply_patch`（裁决 A / Codex）；**每步读结果再决策**（Cursor）；搜改测在 **一个 Patcher 单环**；Critic 评审、Verifier 判定——**不再维护 Loc/Ret 双 LLM**；**运行中有阶段进度行，面试可边跑边讲**。
 
 ---
 
@@ -511,36 +573,40 @@ apply 当时   →  已读校验 + path-safety + lint + 写后回显
 | 旧 pipeline 回归 | SWE 默认 primary；单测双模式 |
 | 超时 salvage 脏 diff | scoped 导出（E12） |
 | 照搬裸 shell / Edit 主面 / Plan mode / 子 Agent | 明确不采纳（§5.3） |
+| 进度刷屏 / 泄露 prompt | 用户面仅摘要；完整输出进 Trace；`--quiet` 可关 |
+| 进度与 Trace 状态不一致 | 共用阶段枚举；emit 失败不阻断主环 |
 
 ---
 
 ## 10. 明确不做
 
-- Instance / repo 特判、读取 gold patch 调参。  
-- 用 Critic 或 LLM「语义正确」替代 Verifier。  
-- 用 Critic 替代 **edit-time lint** 或 **apply-time path-safety / 已读校验**。  
-- Critic 长环工具探索。  
-- 整仓改为 SWE-agent 裸 bash / Codex CLI / Claude Code 运行时依赖 / 删除 multi 角色。  
-- **以 Claude Code `Edit` 取代 `apply_patch` 主面**（已选 A）。  
-- 交互 Plan mode、前 N turn 只读软预算、每次 edit checkpoint/rewind、Patcher 内 explore 子 Agent。  
-- Cursor 式：语义 Retriever、Ask/Plan/Debug Mode、HITL diff、Rules 引擎、Debug 插桩环、云端/Best-of-N、排队插话、无限 tool calls。  
-- 同时大改 Skill Router / Intent 等无关子系统。  
-- 在 primary 未验收前继续加「空更安全」且不可观测的硬拦。  
-- 本改造范围内新做 Memorizer 角色 / 统一 repair memory API。  
-- **`patcher_primary` 中调用 Localizer/Retriever**（含弱锚一跳）；搜读只允许 Patcher + 规则种子。  
+- Instance / repo 特判、读取 gold patch 调参。
+- 用 Critic 或 LLM「语义正确」替代 Verifier。
+- 用 Critic 替代 **edit-time lint** 或 **apply-time path-safety / 已读校验**。
+- Critic 长环工具探索。
+- 整仓改为 SWE-agent 裸 bash / Codex CLI / Claude Code 运行时依赖 / 删除 multi 角色。
+- **以 Claude Code `Edit` 取代 `apply_patch` 主面**（已选 A）。
+- 交互 Plan mode、前 N turn 只读软预算、每次 edit checkpoint/rewind、Patcher 内 explore 子 Agent。
+- Cursor 式：语义 Retriever、Ask/Plan/Debug Mode、HITL diff、Rules 引擎、Debug 插桩环、云端/Best-of-N、排队插话、无限 tool calls。
+- 同时大改 Skill Router / Intent 等无关子系统。
+- 在 primary 未验收前继续加「空更安全」且不可观测的硬拦。
+- 本改造范围内新做 Memorizer 角色 / 统一 repair memory API。
+- **`patcher_primary` 中调用 Localizer/Retriever**（含弱锚一跳）；搜读只允许 Patcher + 规则种子。
 - 恢复独立 Planner Agent 占预算（仅允许 §4.8 同环 checklist）。
+- 完整 TUI Dashboard / 实时 diff 可视化编辑器（§4.9 仅结构化进度摘要）。
+- 默认刷屏模型思维链或全量 tool Observation（细节进 Trace）。
 
 ---
 
 ## 11. 验收实验协议
 
-1. **R_control**：`pipeline`，Critic off，同模型、900s、max_retries=3、DEV5。  
-2. **R_primary_A**：Phase A（primary + Critic rules + path-safety + 未读不可写 + F2P 注入）。  
-3. **R_primary_B**：Phase B（+ `apply_patch` 优先 + ACI + 只读并行 + 先红测 + CC compact）。  
+1. **R_control**：`pipeline`，Critic off，同模型、900s、max_retries=3、DEV5。
+2. **R_primary_A**：Phase A（primary + Critic rules + path-safety + 未读不可写 + F2P 注入 + **进度最小集**）。
+3. **R_primary_B**：Phase B（+ `apply_patch` 优先 + ACI + 只读并行 + 先红测 + CC compact + **工具/快检/Critic/Verify 进度行**）。
 
-报告字段：`repair_mode`、`critic_mode`、每实例 `patch_bytes`、`verified`、`critic_rejected_count`、`edit_lint_reject_count`、`apply_patch_ok_count`、`apply_path_reject_count`、`unread_write_reject_count`、`compact_thrash_count`、`repair_status`、`failure_detail`、墙钟、`phase_timeout_consumed_s`。
+报告字段：`repair_mode`、`critic_mode`、每实例 `patch_bytes`、`verified`、`critic_rejected_count`、`edit_lint_reject_count`、`apply_patch_ok_count`、`apply_path_reject_count`、`unread_write_reject_count`、`compact_thrash_count`、`repair_status`、`failure_detail`、墙钟、`phase_timeout_consumed_s`、**进度事件是否齐全（人工或日志断言）**。
 
-主结论：**nonempty 与超时拖尾**；`verified` 为第二指标。  
+主结论：**nonempty 与超时拖尾**；`verified` 为第二指标；**长跑可感知**为演示与批跑体验门槛。
 消融建议：`primary` vs `primary+apply_patch` vs `+未读不可写/先F2P/compact`。
 
 ---
@@ -558,6 +624,7 @@ apply 当时   →  已读校验 + path-safety + lint + 写后回显
 | Cursor？ | **采纳**「读结果再决策」；**保持不做**语义 Ret / Mode / Plan / Debug 插桩 / checkpoint / HITL / Rules 引擎 / 无限步 |
 | Critic？ | **加**：默认 rules_first；不替代 Verifier / lint / path-safety |
 | Memorizer？ | **本方案不纳入** |
+| 运行进度？ | **采纳**：阶段进度摘要（CLI/日志/可选 JSONL）；与 Trace 同源；不做 TUI Dashboard |
 | 先优化什么数字？ | nonempty → verified →（其后）官方 resolved |
 
 ---
@@ -566,12 +633,13 @@ apply 当时   →  已读校验 + path-safety + lint + 写后回显
 
 Claude Code（§5.3）与 Cursor（§5.4）对比项已按裁决写入。实现前仍请确认：
 
-1. SWE adapter 默认 `patcher_primary`，是否同意？  
-2. primary **彻底不调用** Loc/Ret（含弱锚），是否同意？  
-3. Phase A 是否捆绑「超时硬停」，还是先切流 + Critic rules + path-safety + 未读不可写？  
-4. Critic 默认 **`rules_first`**（推荐）还是 Phase A 就上 `llm`？  
-5. Phase B 是否将 **`apply_patch` 优先 + 磁盘真源 + 未读不可写 + edit-time lint** 作为 nonempty 硬门槛（推荐：是）？  
-6. 工具史 **compact（含 thrash 停）** 放 Phase B（推荐）还是 C？  
-7. `pipeline` 模式保留多久（仅对照 / 随后删除 Loc·Ret 代码）？  
+1. SWE adapter 默认 `patcher_primary`，是否同意？
+2. primary **彻底不调用** Loc/Ret（含弱锚），是否同意？
+3. Phase A 是否捆绑「超时硬停」，还是先切流 + Critic rules + path-safety + 未读不可写？
+4. Critic 默认 **`rules_first`**（推荐）还是 Phase A 就上 `llm`？
+5. Phase B 是否将 **`apply_patch` 优先 + 磁盘真源 + 未读不可写 + edit-time lint** 作为 nonempty 硬门槛（推荐：是）？
+6. 工具史 **compact（含 thrash 停）** 放 Phase B（推荐）还是 C？
+7. `pipeline` 模式保留多久（仅对照 / 随后删除 Loc·Ret 代码）？
+8. **进度输出**：Phase A 是否捆绑 CLI 最小事件集（推荐：是）？默认通道 stderr 还是 `progress.jsonl`？是否需要 SSE？
 
 确认后按 Phase A → B → C 开分支（建议：`bonus/patcher-primary-swe`）。

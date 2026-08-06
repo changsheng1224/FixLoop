@@ -78,14 +78,16 @@ LOOP_PATH_SNAPSHOTS: dict[str, dict[str, list[str]]] = {
     "native": {
         "one_tool_then_final": [
             "run_started",
+            "react_phase:reasoning",
             "context_built",
             "model_request_start",
-            "react_phase:reasoning",
             "react_phase:acting",
+            "react_phase:observation",
             "tool_executed",
             "react_phase:recording",
-            "react_phase:observation",
             "react_phase:reasoning",
+            "context_built",
+            "model_request_start",
             "model_first_token?",
             "model_complete?",
             "react_phase:recording",
@@ -105,7 +107,7 @@ _ORDER_RULES_BY_PATH: dict[LoopPath, list[tuple[str, str]]] = {
     ],
     "native": [
         ("tool_executed", "react_phase:recording"),
-        ("react_phase:recording", "react_phase:observation"),
+        ("react_phase:observation", "tool_executed"),
     ],
 }
 

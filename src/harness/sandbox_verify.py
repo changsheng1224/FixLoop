@@ -149,7 +149,10 @@ def run_sandbox_verification_flow(
             timings["user_cancel"] = True
             return verification_result_for_user_cancel(), timings
         if timings.get("pip_failed") and result.total_tests == 0:
-            pip_note = f"sandbox pip soft-continue after failure:\n{timings.get('build_result', '')}"
+            pip_note = (
+                "sandbox pip soft-continue after failure:\n"
+                f"{timings.get('build_result', '')}"
+            )
             result.failure_logs = list(result.failure_logs or []) + [pip_note[:800]]
         return result, timings
     finally:

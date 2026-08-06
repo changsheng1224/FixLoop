@@ -3,7 +3,7 @@
 > 用 Lite 开发集（先 5 题，后扩 10–30）做失败驱动迭代时的改码红线。  
 > 目标：根据失败原因优化 Agent / Adapter / Harness，同时避免针对单题过拟合。  
 > 相关：`docs/SWE_BENCH_ADAPTER.md`、开发集产物 `artifacts/swebench_lite_dev_live/`。  
-> 5 题问题与证据：`docs/SWE_BENCH_LITE_DEV5_FAILURES.md`（R1/R2）；R3：`docs/SWE_BENCH_LITE_DEV5_R3_FAILURES.md`；R4：`docs/SWE_BENCH_LITE_DEV5_R4_FAILURES.md`；R5：`docs/SWE_BENCH_LITE_DEV5_R5_FAILURES.md`；R6：`docs/SWE_BENCH_LITE_DEV5_R6_FAILURES.md`。
+> 5 题问题与证据：`docs/SWE_BENCH_LITE_DEV5_FAILURES.md`（R1/R2）；R3：`docs/SWE_BENCH_LITE_DEV5_R3_FAILURES.md`；R4：`docs/SWE_BENCH_LITE_DEV5_R4_FAILURES.md`；R5：`docs/SWE_BENCH_LITE_DEV5_R5_FAILURES.md`；R6：`docs/SWE_BENCH_LITE_DEV5_R6_FAILURES.md`；R10（patcher_primary / skip-verify）：`docs/SWE_BENCH_LITE_DEV5_R10_FAILURES.md`。
 
 ---
 

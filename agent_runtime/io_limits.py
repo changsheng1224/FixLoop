@@ -64,6 +64,8 @@ def truncate_text(text: str, max_bytes: int, *, label: str = "output") -> tuple[
         return text or "", False
     cut = raw[:max_bytes].decode("utf-8", errors="ignore")
     return (
-        cut + f"\n... [{label} truncated at {max_bytes} bytes; raise FIXLOOP_*_MAX_BYTES to see more]",
+        cut
+        + f"\n... [{label} truncated at {max_bytes} bytes; "
+        "raise FIXLOOP_*_MAX_BYTES to see more]",
         True,
     )

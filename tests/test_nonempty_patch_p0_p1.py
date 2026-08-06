@@ -5,13 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from src.benchmark.swebench.patch_export import export_model_patch
+from src.repair.execution.patch_applier import PatchApplier
 from src.repair.failure_tags import (
     allowed_patch_files,
     check_patch_faithfulness,
     promote_paths_to_suspects,
 )
-from src.repair.localize_tiers import SuspectTier, decide_patch_gate, tier_for_suspect
-from src.repair.patch_applier import PatchApplier
+from src.repair.localization.localize_tiers import SuspectTier, decide_patch_gate, tier_for_suspect
 from src.repair.path_resolve import resolve_repo_relpath
 from src.repair.phase_clock import PhaseTimeoutConfig
 from src.state import CandidatePatch, RepairState, SuspectLocation
@@ -133,7 +133,7 @@ class TestPhaseBudgetReserve:
 
 class TestExportSuspectFallback:
     def test_exports_scoped_suspect_diff_without_candidates(self, tmp_path):
-        root = _tmp_repo(tmp_path)
+        _tmp_repo(tmp_path)
         original = tmp_path / "orig"
         modified = tmp_path / "mod"
         original.mkdir()

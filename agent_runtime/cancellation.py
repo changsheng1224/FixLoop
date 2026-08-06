@@ -47,11 +47,20 @@ class CancellationToken:
         self._cancelled = False
         self._reason = ""
         self._lock = threading.Lock()
+        self._cause = None
 
     def cancel(self, reason: str = "user") -> None:
+        from agent_runtime.repair_run import CancellationCause
+
         with self._lock:
             self._cancelled = True
             self._reason = reason or "user"
+            self._cause = CancellationCause(kind=self._reason, reason=self._reason)
+
+    @property
+    def cause(self):
+        with self._lock:
+            return self._cause
 
     @property
     def is_cancelled(self) -> bool:

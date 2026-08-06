@@ -6,7 +6,6 @@ import json
 import shutil
 import subprocess
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -246,7 +245,6 @@ def _run_harness_wsl(
         instance_ids=instance_ids,
         python_bin=python_bin,
     )
-    t0 = time.time()
     result = run_wsl(
         cmd,
         distro=distro,

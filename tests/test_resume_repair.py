@@ -76,7 +76,7 @@ class TestResumeSkipsParse:
             def _repair_impl(self, state, initial_snapshot=None):
                 return state
 
-        orch = CaptureResumeOrchestrator(None, None, None)
+        orch = CaptureResumeOrchestrator(None)
         orch._repo_root = str(tmp_path)
 
         result = orch.repair(
@@ -143,7 +143,7 @@ class TestResumeSkipsParse:
 
         class ResumeOrchestrator(Orchestrator):
             def __init__(self):
-                super().__init__(None, None, None, use_pytest_verify=False)
+                super().__init__(None, use_pytest_verify=False)
                 self._repo_root = repo
                 self.patch_calls = 0
 
@@ -155,9 +155,6 @@ class TestResumeSkipsParse:
 
             def _parse_issue(self, issue):
                 raise AssertionError("resume path should skip parse")
-
-            def _run_localize_and_retrieve(self, state):
-                raise AssertionError("resume path should skip localize/retrieve")
 
             def _run_patcher(self, state):
                 self.patch_calls += 1

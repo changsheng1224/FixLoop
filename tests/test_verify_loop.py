@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from src.orchestrator import Orchestrator
 from src.repair.failure_tags import FailureTag, classify_failure_tags
-from src.repair.verify_diagnose import (
+from src.repair.verification.verify_diagnose import (
     VerifyBucket,
     diagnose_verification,
     enrich_related_tests_from_diagnosis,

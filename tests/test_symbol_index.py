@@ -5,12 +5,12 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from src.repair.localize_quality import (
+from src.repair.localization.localize_quality import (
     ensure_grounded_suspects,
     has_grounded_impl_suspect,
     refine_suspects,
 )
-from src.repair.symbol_index import (
+from src.repair.localization.symbol_index import (
     boost_suspects_from_index,
     build_symbol_index,
     get_or_build_index,

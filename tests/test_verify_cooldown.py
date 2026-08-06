@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.repair.verify_cooldown import VerifyCooldown, _hash_failures
+from src.repair.verification.verify_cooldown import VerifyCooldown, _hash_failures
 
 
 class TestHashFailures:

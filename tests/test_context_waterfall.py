@@ -24,11 +24,11 @@ class TestBuildContextWaterfall:
 
     def test_single_agent_waterfall(self):
         reports = {
-            "localizer": _make_agent_report(system=200, tools=150, request=100),
+            "patcher": _make_agent_report(system=200, tools=150, request=100),
         }
         wf = build_context_waterfall(reports)
-        assert "localizer" in wf
-        entries = wf["localizer"]
+        assert "patcher" in wf
+        entries = wf["patcher"]
         assert len(entries) == 3
         # pct 和 ≈ 100
         pct_sum = sum(e["pct"] for e in entries)
@@ -36,19 +36,19 @@ class TestBuildContextWaterfall:
 
     def test_multi_agent_waterfall_pct_sum(self):
         reports = {
-            "localizer": _make_agent_report(
+            "patcher": _make_agent_report(
                 system=300, tools=200, skills=100, memory=80, history=400, request=150
             ),
-            "retriever": _make_agent_report(
+            "verifier": _make_agent_report(
                 system=250, tools=180, skills=90, history=300, request=120
             ),
         }
         wf = build_context_waterfall(reports)
-        assert "localizer" in wf
-        assert "retriever" in wf
+        assert "patcher" in wf
+        assert "verifier" in wf
 
         # 每个 agent 的 pct 和 ≈ 100
-        for agent in ("localizer", "retriever"):
+        for agent in ("patcher", "verifier"):
             entries = wf[agent]
             pct_sum = sum(e["pct"] for e in entries)
             assert 99.0 <= pct_sum <= 101.0, f"{agent} pct sum={pct_sum}, entries={entries}"

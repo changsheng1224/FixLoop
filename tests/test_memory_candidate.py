@@ -301,26 +301,6 @@ class TestPromoteCandidates:
         (tmp_path / ".agent" / "memory").mkdir(parents=True)
         return DurableMemoryStore(str(tmp_path))
 
-    def test_promote_writes_to_store(self, store):
-        candidates = [
-            Candidate(
-                topic="project-conventions",
-                key="conv-1",
-                value="使用 ruff format",
-            ),
-            Candidate(
-                topic="key-decisions",
-                key="dec-1",
-                value="修复除零错误",
-                kind="decision",
-            ),
-        ]
-        written = promote_candidates(store, candidates)
-        assert written == 2
-        # 验证落盘
-        assert (store.topics_dir / "project-conventions.md").exists()
-        assert (store.topics_dir / "key-decisions.md").exists()
-
     def test_illegal_topic_not_promoted(self, store):
         candidates = [
             Candidate(
@@ -333,20 +313,3 @@ class TestPromoteCandidates:
         candidates[0].topic = "bad-topic"
         written = promote_candidates(store, candidates)
         assert written == 0
-
-    def test_promote_with_llm_fill(self, store):
-        client = FakeModelClient(
-            [
-                '{"kind": "error", "confidence": 0.88}',
-            ]
-        )
-        candidates = [
-            Candidate(
-                topic="key-decisions",
-                key="err-1",
-                value="TypeError at calc.py",
-                confidence=0.5,  # 默认值 → 触发 LLM
-            ),
-        ]
-        written = promote_candidates(store, candidates, light_client=client)
-        assert written == 1

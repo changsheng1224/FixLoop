@@ -1,6 +1,6 @@
 """issue_paths 单测。"""
 
-from src.repair.issue_paths import extract_paths_from_issue
+from src.repair.localization.issue_paths import extract_paths_from_issue
 
 
 def test_extract_paths_dedupes_and_preserves_order():

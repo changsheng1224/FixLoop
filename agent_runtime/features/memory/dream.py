@@ -36,6 +36,12 @@ class MemoryDreamer:
             "routing_entries": 0,
         }
         self.promotion_hints: list[dict] = []
+        from agent_runtime.features.memory.governance import MemoryGovernanceService
+
+        self.governance = MemoryGovernanceService(
+            memory_state,
+            repo_root=durable_root,
+        )
 
     def run(
         self,
@@ -57,6 +63,8 @@ class MemoryDreamer:
             self._expire(ttl_days)
         self._trim()
         self._suggest_promotions(hit_min=PROMOTE_SUGGEST_HIT_MIN)
+        governance_stats = self.governance.run()
+        self.stats.update(governance_stats)
         if max_durable > 0:
             self._gc_durable(max_durable)
         self._rebuild_routing_table()
@@ -268,6 +276,15 @@ def dream_summary_to_trace(stats: dict, dreamer: MemoryDreamer | None = None) ->
         "total_after": stats.get("total_after", 0),
         "promotion_suggestions": stats.get("promotion_suggestions", 0),
         "routing_entries": stats.get("routing_entries", 0),
+        "normalized": stats.get("normalized", 0),
+        "supported": stats.get("supported", 0),
+        "verified": stats.get("verified", 0),
+        "promoted": stats.get("promoted", 0),
+        "demoted": stats.get("demoted", 0),
+        "stale_marked": stats.get("stale_marked", 0),
+        "conflicts_detected": stats.get("conflicts_detected", 0),
+        "rejected": stats.get("rejected", 0),
+        "recall_hits": stats.get("recall_hits", 0),
     }
     if dreamer is not None and dreamer.promotion_hints:
         payload["promotion_hints"] = dreamer.promotion_hints

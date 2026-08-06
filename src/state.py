@@ -189,7 +189,7 @@ class RepairPlan:
         estimated_impact: 预估影响的文件列表。
         skill: Skill 匹配上下文（matched_skill · tools · guidance · fallback）。
         reasoning: 判定依据。
-        prompt_variants: 各 Agent prompt 变体键（patcher / localizer）。
+        prompt_variants: Patcher prompt 变体键。
     """
 
     language: str = "python"
@@ -313,7 +313,7 @@ class CandidatePatch:
     @classmethod
     def from_dict(cls, data: dict) -> CandidatePatch:
         """从 dict 反序列化。"""
-        from src.repair.patch_applier import normalize_patch_text_field
+        from src.repair.execution.patch_applier import normalize_patch_text_field
 
         return cls(
             file_path=str(data.get("file_path", "") or ""),
@@ -411,6 +411,18 @@ class RepairState:
     blackboard_snapshot: dict = field(default_factory=dict)
     degraded_mode: bool = False
     schema_version: str = "1.0"
+    state_revision: int = 0
+    attempt: int = 0
+    intent: dict = field(default_factory=dict)
+    hypotheses: list[dict] = field(default_factory=list)
+    evidence: list[dict] = field(default_factory=list)
+    changed_files: list[str] = field(default_factory=list)
+    tool_budget: dict = field(default_factory=dict)
+    active_roles: list[str] = field(default_factory=list)
+    role_lifecycle: dict[str, dict] = field(default_factory=dict)
+    blackboard_revision: int = 0
+    field_owners: dict[str, str] = field(default_factory=dict)
+    collaboration_attribution: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """序列化为 JSON 可写 dict。"""
@@ -438,6 +450,18 @@ class RepairState:
             "blackboard_snapshot": dict(self.blackboard_snapshot),
             "degraded_mode": self.degraded_mode,
             "schema_version": self.schema_version,
+            "state_revision": self.state_revision,
+            "attempt": self.attempt,
+            "intent": dict(self.intent),
+            "hypotheses": list(self.hypotheses),
+            "evidence": list(self.evidence),
+            "changed_files": list(self.changed_files),
+            "tool_budget": dict(self.tool_budget),
+            "active_roles": list(self.active_roles),
+            "role_lifecycle": dict(self.role_lifecycle),
+            "blackboard_revision": self.blackboard_revision,
+            "field_owners": dict(self.field_owners),
+            "collaboration_attribution": dict(self.collaboration_attribution),
         }
 
     @classmethod
@@ -477,4 +501,16 @@ class RepairState:
             blackboard_snapshot=dict(data.get("blackboard_snapshot") or {}),
             degraded_mode=data.get("degraded_mode", False),
             schema_version=data.get("schema_version", "1.0"),
+            state_revision=int(data.get("state_revision", 0) or 0),
+            attempt=int(data.get("attempt", 0) or 0),
+            intent=dict(data.get("intent") or {}),
+            hypotheses=list(data.get("hypotheses") or []),
+            evidence=list(data.get("evidence") or []),
+            changed_files=list(data.get("changed_files") or []),
+            tool_budget=dict(data.get("tool_budget") or {}),
+            active_roles=list(data.get("active_roles") or []),
+            role_lifecycle=dict(data.get("role_lifecycle") or {}),
+            blackboard_revision=int(data.get("blackboard_revision", 0) or 0),
+            field_owners=dict(data.get("field_owners") or {}),
+            collaboration_attribution=dict(data.get("collaboration_attribution") or {}),
         )

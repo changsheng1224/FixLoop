@@ -40,7 +40,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="覆盖默认 DEV 5 题；默认使用固定 DEV_INSTANCE_IDS",
     )
     p.add_argument("--limit", type=int, default=0, help="仅跑前 N 题（在选定 ids 上截断）")
-    p.add_argument("--dry-run", action="store_true", help="只写 Manifest + 转换 Issue，不 clone/repair")
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="只写 Manifest + 转换 Issue，不 clone/repair",
+    )
     p.add_argument("--fake", action="store_true", help="使用 FakeGoldPatchOrchestrator（无 API）")
     p.add_argument("--skip-clone", action="store_true", help="不 clone，使用 work-root 已有目录")
     p.add_argument("--run-harness", action="store_true", help="repair 后调用官方/WSL harness")
@@ -79,7 +83,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--allow-unverified-harness",
         action="store_true",
-        help="允许未 verify 的 patch 进入官方 harness（默认禁止；与 --skip-verify 联用或旧 predictions）",
+        help=(
+            "允许未 verify 的 patch 进入官方 harness"
+            "（默认禁止；与 --skip-verify 联用或旧 predictions）"
+        ),
     )
     p.add_argument("--model", default="", help="模型名；默认读 DEEPSEEK_MODEL / 内置默认")
     p.add_argument(
@@ -167,7 +174,12 @@ def main(argv: list[str] | None = None) -> int:
             force_rebuild=args.force_rebuild_images,
             max_workers=args.max_workers,
         )
-        print(json.dumps({k: payload[k] for k in payload if k not in ("stdout_tail", "stderr_tail")}, indent=2))
+        public = {
+            key: value
+            for key, value in payload.items()
+            if key not in ("stdout_tail", "stderr_tail")
+        }
+        print(json.dumps(public, indent=2))
         if payload.get("stdout_tail"):
             print("--- stdout ---")
             print(payload["stdout_tail"])
@@ -224,6 +236,7 @@ def main(argv: list[str] | None = None) -> int:
         max_workers=args.max_workers,
         harness_backend=args.harness_backend,
         wsl_distro=args.wsl_distro or None,
+        allow_gold_patch_injection=bool(args.fake or args.provider == "fake"),
     )
 
     adapter = SweBenchAdapter(

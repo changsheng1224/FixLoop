@@ -9,8 +9,9 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Iterable
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from src.state import CandidatePatch, RepairState, SuspectLocation, VerificationResult
@@ -26,7 +27,7 @@ __all__ = [
 ]
 
 
-def _patch_files(patches: Iterable["CandidatePatch"] | None) -> list[str]:
+def _patch_files(patches: Iterable[CandidatePatch] | None) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
     for p in patches or []:
@@ -37,7 +38,7 @@ def _patch_files(patches: Iterable["CandidatePatch"] | None) -> list[str]:
     return out
 
 
-def _verify_hash(result: "VerificationResult | None") -> str:
+def _verify_hash(result: VerificationResult | None) -> str:
     if result is None:
         return ""
     parts = [str(x)[:220] for x in list(result.failure_logs or [])[:6]]
@@ -47,7 +48,7 @@ def _verify_hash(result: "VerificationResult | None") -> str:
     return hashlib.sha256(blob.encode("utf-8", errors="replace")).hexdigest()[:12]
 
 
-def _assertions(result: "VerificationResult | None", *, limit: int = 4) -> list[str]:
+def _assertions(result: VerificationResult | None, *, limit: int = 4) -> list[str]:
     if result is None:
         return []
     out: list[str] = []
@@ -90,7 +91,7 @@ class Hypothesis:
         }
 
     @classmethod
-    def from_dict(cls, raw: dict) -> "Hypothesis":
+    def from_dict(cls, raw: dict) -> Hypothesis:
         return cls(
             id=str(raw.get("id") or ""),
             files=[str(x) for x in (raw.get("files") or [])],
@@ -158,10 +159,14 @@ class FailureLedger:
         }
 
     @classmethod
-    def from_dict(cls, raw: dict | None) -> "FailureLedger":
+    def from_dict(cls, raw: dict | None) -> FailureLedger:
         if not isinstance(raw, dict):
             return cls()
-        hyps = [Hypothesis.from_dict(h) for h in (raw.get("hypotheses") or []) if isinstance(h, dict)]
+        hyps = [
+            Hypothesis.from_dict(item)
+            for item in (raw.get("hypotheses") or [])
+            if isinstance(item, dict)
+        ]
         return cls(
             next_id=int(raw.get("next_id") or 1),
             hypotheses=hyps,
@@ -172,18 +177,18 @@ class FailureLedger:
         )
 
 
-def apply_ledger_to_state(state: "RepairState", ledger: FailureLedger) -> None:
+def apply_ledger_to_state(state: RepairState, ledger: FailureLedger) -> None:
     state.node_timings["failure_ledger"] = ledger.to_dict()
 
 
-def load_ledger_from_state(state: "RepairState") -> FailureLedger:
+def load_ledger_from_state(state: RepairState) -> FailureLedger:
     return FailureLedger.from_dict(state.node_timings.get("failure_ledger"))
 
 
 def record_verify_into_ledger(
-    state: "RepairState",
+    state: RepairState,
     *,
-    result: "VerificationResult | None",
+    result: VerificationResult | None,
     bucket: str = "",
     is_regression: bool = False,
 ) -> FailureLedger:
@@ -236,9 +241,9 @@ def record_verify_into_ledger(
 
 
 def shrink_suspects_for_regression(
-    suspects: list["SuspectLocation"] | None,
+    suspects: list[SuspectLocation] | None,
     ledger: FailureLedger,
-) -> list["SuspectLocation"]:
+) -> list[SuspectLocation]:
     """回归后：把引入回归的文件降到末尾，优先其它嫌疑。"""
     forbidden = ledger.forbidden_files()
     if not suspects:
@@ -263,7 +268,8 @@ def build_ledger_prompt_block(ledger: FailureLedger, *, max_chars: int = 2200) -
     active = ledger.active()
     if active:
         lines.append(
-            f"当前假设 {active.id}: files={', '.join(active.files) or '(none)'}; status={active.status}"
+            f"当前假设 {active.id}: files={', '.join(active.files) or '(none)'}; "
+            f"status={active.status}"
         )
         if active.counterexamples:
             lines.append("反例/断言:")

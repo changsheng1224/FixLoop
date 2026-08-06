@@ -4,17 +4,10 @@
 
 from __future__ import annotations
 
-
-
 import re
-
 from pathlib import Path
 
-
-
 from src.benchmark.swebench.types import SweInstance
-
-
 
 _FAIL_TO_PASS_HEADER = "FAIL_TO_PASS tests (hints, may not exist locally):"
 
@@ -71,7 +64,7 @@ def extract_fail_to_pass_hints(issue: str) -> list[str]:
 
     供 Retriever 降级与 Verifier ``test_path`` 选择使用，避免空路径跑全仓收集 0 tests。
     """
-    from src.repair.fail_to_pass_hints import extract_fail_to_pass_hints as _extract
+    from src.repair.localization.fail_to_pass_hints import extract_fail_to_pass_hints as _extract
 
     return _extract(issue)
 

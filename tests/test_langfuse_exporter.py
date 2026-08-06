@@ -20,7 +20,6 @@ from agent_runtime.observability.langfuse_exporter import (
 )
 from agent_runtime.run_store import RunStore
 
-
 SAMPLE = Path(__file__).resolve().parents[1] / "docs" / "examples" / "canonical-trace-sample.jsonl"
 
 

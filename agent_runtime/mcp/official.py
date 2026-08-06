@@ -34,6 +34,7 @@ class OfficialMappedClient:
             server_name="official-github-mcp",
         )
         self.server_name = self._inner.server_name
+        self.timeout_s = timeout_s
         self._remote_names: set[str] | None = None
 
     def list_tools(self, *, refresh: bool = False) -> list[McpToolSpec]:

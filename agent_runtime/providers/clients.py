@@ -14,6 +14,12 @@ from agent_runtime.providers.http_timing import read_http_body_with_timing
 from agent_runtime.providers.session_usage import SessionUsageMixin
 
 
+def _usage_dict(usage: dict | None) -> dict[str, int]:
+    from agent_runtime.token_accounting import parse_provider_usage
+
+    return parse_provider_usage(usage or {})
+
+
 def _check_empty_response(raw: str, model: str = "") -> None:
     """检查模型响应是否为空；空时抛出 EmptyModelResponse。"""
     if not (raw or "").strip():
@@ -74,111 +80,62 @@ class FakeModelClient(SessionUsageMixin):
 
 
 class FakeNativeToolClient(FakeModelClient):
-    """带 chat_with_tools 的 FakeClient，用于测试原生 tool API 路径。"""
+    """Fake client implementing the provider-neutral single-turn contract."""
 
-    def chat_with_tools(
-        self,
-        system_prompt: str,
-        user_message: str,
-        tools: list[dict],
-        executor,
-        max_turns: int = 6,
-        phase_hook=None,
-        step_boundary_hook=None,
-        cancel_token=None,
-    ) -> tuple[str, dict]:
-        """模拟原生 tool 多轮对话（测试用）。"""
-        import json
-        import re
-
-        from agent_runtime.cancellation import CancelledError
-
-        call_usage = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cache_read_tokens": 0,
-            "cache_creation_tokens": 0,
-            "calls": 0,
-        }
-        call_timings: list[ModelCallTiming] = []
-        user_msg = user_message
-
-        for turn in range(max_turns):
-            if cancel_token is not None and cancel_token.is_cancelled:
-                raise CancelledError(cancel_token.reason)
-            step = turn + 1
-            if phase_hook is not None:
-                from agent_runtime.react_phases import ReactPhase
-
-                phase_hook(ReactPhase.REASONING, step=step)
-            full = f"{system_prompt}\n\n{user_msg}" if system_prompt else user_msg
-            raw = self.complete(full)
-            if step_boundary_hook is not None:
-                step_boundary_hook(step)
-            usage = dict(self.last_usage)
-            call_usage["input_tokens"] += int(usage.get("input_tokens", 0) or 0)
-            call_usage["output_tokens"] += int(usage.get("output_tokens", 0) or 0)
-            call_usage["cache_read_tokens"] += int(usage.get("cache_read_tokens", 0) or 0)
-            call_usage["cache_creation_tokens"] += int(usage.get("cache_creation_tokens", 0) or 0)
-            call_usage["calls"] += 1
-            if self.last_call_timing is not None:
-                timing = ModelCallTiming(
-                    ttft_ms=self.last_call_timing.ttft_ms,
-                    total_ms=self.last_call_timing.total_ms,
-                    output_tokens=self.last_call_timing.output_tokens,
-                    step=turn + 1,
-                )
-                call_timings.append(timing)
-                self.last_call_timing = timing
-
-            final_match = re.search(r"<final>(.*?)</final>", raw, re.DOTALL)
-            if final_match:
-                answer = final_match.group(1).strip()
-                self.last_call_usage = dict(call_usage)
-                self.last_call_timings = call_timings
-                return answer, call_usage
-
-            tool_match = re.search(r"<tool>(.*?)</tool>", raw, re.DOTALL)
-            if tool_match:
-                try:
-                    payload = json.loads(tool_match.group(1))
-                except json.JSONDecodeError:
-                    self.last_call_usage = dict(call_usage)
-                    self.last_call_timings = call_timings
-                    return raw.strip(), call_usage
-                name = payload.get("name", "")
-                args = payload.get("args", {})
-                if phase_hook is not None:
-                    from agent_runtime.react_phases import ReactPhase
-
-                    phase_hook(ReactPhase.ACTING, step=step, tool=name)
-                try:
-                    result = executor(name, args)
-                except Exception as e:
-                    from agent_runtime.terminal_tool import TerminalToolAccepted
-
-                    if isinstance(e, TerminalToolAccepted):
-                        self.last_call_usage = dict(call_usage)
-                        self.last_call_timings = call_timings
-                        raise
-                    raise
-                if phase_hook is not None:
-                    from agent_runtime.react_phases import ReactPhase
-
-                    phase_hook(ReactPhase.OBSERVATION, step=step, tool=name)
-                user_msg = f"工具 {name} 执行完成。\n结果:\n{result}"
-                continue
-
-            self.last_call_usage = dict(call_usage)
-            self.last_call_timings = call_timings
-            return raw.strip(), call_usage
-
-        self.last_call_usage = dict(call_usage)
-        self.last_call_timings = call_timings
-        from agent_runtime.loop_limits import NATIVE_MAX_TURNS_MESSAGE
-
-        return NATIVE_MAX_TURNS_MESSAGE, call_usage
-
+    def complete_turn(self, request):
+        """Return one normalized fake turn; tool execution stays in Runtime."""
+        from agent_runtime.canonical_protocol import parse_model_response
+        from agent_runtime.model_turn import (
+            FinishKind,
+            ModelTurnResult,
+            ProviderFinish,
+            ToolCall,
+        )
+        latest = request.messages[-1].get("content", "") if request.messages else ""
+        if isinstance(latest, list):
+            latest = json.dumps(latest, ensure_ascii=False)
+        full = f"{request.system_prompt}\n\n{latest}" if request.system_prompt else str(latest)
+        raw = self.complete(full, max_new_tokens=request.max_output_tokens)
+        usage = _usage_dict(self.last_usage)
+        parsed = parse_model_response(raw)
+        if parsed.response_kind == "final":
+            text = str(parsed.payload.get("text", ""))
+            return ModelTurnResult(
+                text=text,
+                content=[{"type": "text", "text": text}],
+                finish=ProviderFinish(FinishKind.TEXT_COMPLETE, "end_turn", "fake"),
+                usage=usage,
+            )
+        if parsed.response_kind == "tool_call":
+            canonical_call = parsed.payload["call"]
+            call = ToolCall(
+                name=canonical_call.name,
+                arguments=canonical_call.arguments,
+                call_id=f"fake-tool-{self._index}",
+            )
+            return ModelTurnResult(
+                tool_calls=[call],
+                content=[
+                    {
+                        "type": "tool_use",
+                        "id": call.call_id,
+                        "name": call.name,
+                        "input": call.arguments,
+                    }
+                ],
+                finish=ProviderFinish(FinishKind.TOOL_CALLS, "tool_use", "fake"),
+                usage=usage,
+            )
+        return ModelTurnResult(
+            text=raw.strip(),
+            content=[{"type": "text", "text": raw.strip()}] if raw.strip() else [],
+            finish=ProviderFinish(
+                FinishKind.TEXT_COMPLETE if raw.strip() else FinishKind.EMPTY_OUTPUT,
+                "end_turn" if raw.strip() else "empty",
+                "fake",
+            ),
+            usage=usage,
+        )
 
 class AnthropicCompatibleModelClient(SessionUsageMixin):
     """Anthropic Messages API 兼容客户端。
@@ -255,166 +212,67 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
         }
         return self._call_api(payload, prompt)
 
-    def chat_with_tools(
-        self,
-        system_prompt: str,
-        user_message: str,
-        tools: list[dict],
-        executor,
-        max_turns: int = 6,
-        phase_hook=None,
-        step_boundary_hook=None,
-        cancel_token=None,
-    ) -> tuple[str, dict]:
-        """使用原生 Anthropic tool_use 协议进行多轮对话。
-
-        Args:
-            system_prompt: 系统提示词。
-            user_message: 用户消息。
-            tools: 工具定义列表 [{"name":"...","description":"...","input_schema":{...}}]。
-            executor: 工具执行回调 fn(name, args) -> str。
-            max_turns: 最大对话轮数。
-
-        Returns:
-            (最终文本回复, 本次 call 累计 usage dict)。
-        """
-        from agent_runtime.cancellation import CancelledError
-
-        messages = []
-        call_usage = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cache_read_tokens": 0,
-            "cache_creation_tokens": 0,
-            "calls": 0,
-        }
-        call_timings: list[ModelCallTiming] = []
-        self.last_call_timings = []
-        # 系统提示词放在第一条消息中
-        full_text = system_prompt + "\n\n" + user_message if system_prompt else user_message
-        messages.append(
-            {
-                "role": "user",
-                "content": [{"type": "text", "text": full_text}],
-            }
+    def complete_turn(self, request):
+        """Perform exactly one native tool-capable provider request."""
+        from agent_runtime.model_turn import (
+            ModelTurnResult,
+            ProviderFinish,
+            ToolCall,
+            normalize_anthropic_finish,
         )
 
-        payload_base = {
+        messages = list(request.messages)
+        payload = {
             "model": self.model,
             "messages": messages,
-            "max_tokens": 4096,
+            "max_tokens": max(1, int(request.max_output_tokens)),
             "temperature": self.temperature,
-            "tools": tools,
         }
-
-        for turn in range(max_turns):
-            if cancel_token is not None and cancel_token.is_cancelled:
-                raise CancelledError(cancel_token.reason)
-            step = turn + 1
-            if phase_hook is not None:
-                from agent_runtime.react_phases import ReactPhase
-
-                phase_hook(ReactPhase.REASONING, step=step)
-            payload = dict(payload_base)
-            payload["messages"] = list(messages)  # shallow copy
-            body = json.dumps(payload).encode("utf-8")
-            data, timing = self._post_messages(body)
-            if step_boundary_hook is not None:
-                step_boundary_hook(step)
-            timing.step = turn + 1
-            call_timings.append(timing)
-            self.last_call_timing = timing
-            self.last_call_timings = list(call_timings)
-
-            turn_usage = data.get("usage") or {}
-            self._record_usage(turn_usage)
-            from agent_runtime.token_accounting import parse_provider_usage
-
-            parsed = parse_provider_usage(turn_usage)
-            call_usage["input_tokens"] += parsed["input_tokens"]
-            call_usage["output_tokens"] += parsed["output_tokens"]
-            call_usage["cache_read_tokens"] += parsed["cache_read_tokens"]
-            call_usage["cache_creation_tokens"] += parsed["cache_creation_tokens"]
-            call_usage["calls"] += 1
-
-            # 解析响应中的 content blocks
-            content_blocks = data.get("content", [])
-            if isinstance(content_blocks, str):
-                self.last_call_usage = dict(call_usage)
-                self.last_call_timings = call_timings
-                return content_blocks
-
-            # 收集所有 content blocks
-            text_parts = []
-            tool_uses = []
-
-            for block in content_blocks:
-                if not isinstance(block, dict):
-                    continue
-                if block.get("type") == "text":
-                    text_parts.append(block.get("text", ""))
-                elif block.get("type") == "tool_use":
-                    tool_uses.append(block)
-
-            # 将模型的回复加入 messages
-            messages.append({"role": "assistant", "content": content_blocks})
-
-            # 如果有工具调用，执行并继续
-            if tool_uses:
-                tool_results = []
-                for tu in tool_uses:
-                    name = tu.get("name", "")
-                    inp = tu.get("input", {})
-                    tu_id = tu.get("id", "")
-                    if phase_hook is not None:
-                        from agent_runtime.react_phases import ReactPhase
-
-                        phase_hook(ReactPhase.ACTING, step=step, tool=name)
-                    try:
-                        result = executor(name, inp)
-                    except Exception as e:
-                        from agent_runtime.terminal_tool import TerminalToolAccepted
-
-                        if isinstance(e, TerminalToolAccepted):
-                            self._save_request(full_text, e.payload)
-                            self.last_call_usage = dict(call_usage)
-                            self.last_call_timings = call_timings
-                            raise
-                        result = f"Error: {e}"
-                    if phase_hook is not None:
-                        from agent_runtime.react_phases import ReactPhase
-
-                        phase_hook(ReactPhase.OBSERVATION, step=step, tool=name)
-                    tool_results.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tu_id,
-                            "content": str(result),
-                        }
+        if request.system_prompt:
+            payload["system"] = request.system_prompt
+        if request.tools:
+            payload["tools"] = request.tools
+        data, timing = self._post_messages(
+            json.dumps(payload).encode("utf-8"), deadline=request.deadline
+        )
+        self.last_call_timing = timing
+        self.last_call_timings = [timing]
+        self._record_usage(data.get("usage"))
+        content = data.get("content") or []
+        if isinstance(content, str):
+            content = [{"type": "text", "text": content}]
+        text_parts: list[str] = []
+        tool_calls: list[ToolCall] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text":
+                text_parts.append(str(block.get("text") or ""))
+            elif block.get("type") == "tool_use":
+                args = block.get("input") or {}
+                tool_calls.append(
+                    ToolCall(
+                        name=str(block.get("name") or ""),
+                        arguments=args if isinstance(args, dict) else {},
+                        call_id=str(block.get("id") or ""),
                     )
-                messages.append({"role": "user", "content": tool_results})
-                continue  # 继续下一轮
+                )
+        text = "".join(text_parts)
+        raw_reason = str(data.get("stop_reason") or "")
+        finish_kind = normalize_anthropic_finish(
+            raw_reason, has_tools=bool(tool_calls), has_text=bool(text.strip())
+        )
+        return ModelTurnResult(
+            text=text,
+            tool_calls=tool_calls,
+            content=[b for b in content if isinstance(b, dict)],
+            finish=ProviderFinish(finish_kind, raw_reason, "anthropic"),
+            usage=_usage_dict(data.get("usage")),
+        )
 
-            # 没有工具调用 → 返回文本
-            if text_parts:
-                answer = "".join(text_parts)
-                self._save_request(full_text, answer)
-                self.last_call_usage = dict(call_usage)
-                self.last_call_timings = call_timings
-                return answer, call_usage
-
-            # 既没有文本也没有工具调用 → 空响应
-            self.last_call_usage = dict(call_usage)
-            self.last_call_timings = call_timings
-            return "", call_usage
-
-        self.last_call_usage = dict(call_usage)
-        self.last_call_timings = call_timings
-        from agent_runtime.loop_limits import NATIVE_MAX_TURNS_MESSAGE
-
-        return NATIVE_MAX_TURNS_MESSAGE, call_usage
-
-    def _post_messages(self, body: bytes) -> tuple[dict, ModelCallTiming]:
+    def _post_messages(
+        self, body: bytes, *, deadline: float | None = None
+    ) -> tuple[dict, ModelCallTiming]:
         """POST /messages with retries; return parsed JSON and TTFB timing."""
         from agent_runtime.logging_setup import get_logger
         from agent_runtime.providers.retry_policy import (
@@ -430,6 +288,12 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
 
         for attempt in range(max_retries):
             try:
+                request_timeout = float(self.timeout)
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("provider deadline exceeded")
+                    request_timeout = max(0.001, min(request_timeout, remaining))
                 request = urllib.request.Request(
                     f"{self.base_url}/messages",
                     data=body,
@@ -440,7 +304,7 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
                         "Connection": "keep-alive",
                     },
                 )
-                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                with urllib.request.urlopen(request, timeout=request_timeout) as response:
                     raw_bytes, ttft_ms, total_ms = read_http_body_with_timing(response)
                 raw_text = raw_bytes.decode("utf-8")
                 _check_empty_response(raw_text, model=self.model)
@@ -456,6 +320,9 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
                 self.last_call_timing = timing
                 self._latencies.append(total_ms / 1000.0)
                 return data, timing
+
+            except TimeoutError:
+                raise
 
             except urllib.error.HTTPError as e:
                 last_error = e

@@ -1,4 +1,4 @@
-"""工具化 Patcher：磁盘 diff → CandidatePatch + edit mode 切换。"""
+"""工具化 Patcher：磁盘 diff → CandidatePatch。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 from src.agents.factory import create_repair_agent
 from src.orchestrator import Orchestrator
-from src.repair.edit_from_disk import patches_from_snapshot_diff
+from src.repair.execution.edit_from_disk import patches_from_snapshot_diff
 from src.state import RepairPlan, RepairState, SuspectLocation
 
 
@@ -49,12 +49,7 @@ class TestPatcherToolizedOrchestrator:
         target = repo / "v.py"
         target.write_text("value = 1\n", encoding="utf-8")
 
-        orch = Orchestrator(
-            localizer=None,
-            retriever=None,
-            patcher=MagicMock(),
-            verifier=None,
-        )
+        orch = Orchestrator(MagicMock(), verifier=None)
         orch._repo_root = str(repo)
         orch._repair_ctx = None
         orch._merge_blackboard_for_patch = lambda state: None
@@ -82,9 +77,3 @@ class TestPatcherToolizedOrchestrator:
         assert applied[0].file_path == "v.py"
         assert meta.get("edit_mode") == "tools"
         assert state.node_timings.get("patcher_edit_mode") == "tools"
-
-    def test_edit_mode_env_json(self, monkeypatch):
-        monkeypatch.setenv("FIXLOOP_PATCHER_EDIT_MODE", "json")
-        assert Orchestrator._patcher_edit_mode() == "json"
-        monkeypatch.setenv("FIXLOOP_PATCHER_EDIT_MODE", "tools")
-        assert Orchestrator._patcher_edit_mode() == "tools"

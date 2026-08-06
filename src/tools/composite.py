@@ -10,10 +10,12 @@ from agent_runtime.tools import build_tool_registry
 from src.tools.registry import build_repair_tools
 from src.tools.sandbox_tools import build_sandbox_tool_registry
 
-RepairAgentRole = Literal["localizer", "retriever", "patcher", "verifier", "baseline"]
+RepairAgentRole = Literal["patcher", "verifier"]
 
 REPAIR_CANONICAL_TOOL_NAMES: tuple[str, ...] = (
+    "apply_patch",
     "ast_parse",
+    "expand_lock",
     "find_test",
     "git_blame",
     "git_diff",
@@ -23,6 +25,7 @@ REPAIR_CANONICAL_TOOL_NAMES: tuple[str, ...] = (
     "java_stack_parse",
     "list_files",
     "patch_file",
+    "quick_test",
     "read_file",
     "run_shell",
     "sandbox_build",
@@ -30,7 +33,6 @@ REPAIR_CANONICAL_TOOL_NAMES: tuple[str, ...] = (
     "sandbox_verify",
     "search",
     "stack_parse",
-    "submit_retrieved_context",
     "write_file",
 )
 
@@ -41,9 +43,6 @@ def build_repair_canonical_tools(ctx: ToolContext) -> dict:
     tools = build_tool_registry(ctx)
     tools.update(build_repair_tools(ctx))
     tools.update(build_sandbox_tool_registry(ctx))
-    from src.tools.submit_retrieved_context import build_submit_retrieved_context_tool
-
-    tools["submit_retrieved_context"] = build_submit_retrieved_context_tool()
     # composite 工具（未在子注册表中）
     tools["inspect_file"] = {
         "schema": tools["read_file"]["schema"],
@@ -51,11 +50,15 @@ def build_repair_canonical_tools(ctx: ToolContext) -> dict:
         "execution_tier": "host",
         "description": (
             "read_file + ast_parse 组合：一次调用完成文件读取与 AST 解析。"
-            "参数: path, start(默认1), end(默认200)"
+            "参数: path, start(默认1), end(默认100)"
         ),
         "run": lambda args: tool_inspect_file(ctx, args),
     }
-    return {name: tools[name] for name in REPAIR_CANONICAL_TOOL_NAMES}
+    # L1 registry 已含 apply_patch / expand_lock / quick_test
+    selected = {name: tools[name] for name in REPAIR_CANONICAL_TOOL_NAMES}
+    from src.tools.spec import bind_execution_tools, default_repair_tool_registry
+
+    return bind_execution_tools(selected, default_repair_tool_registry())
 
 
 def is_repair_canonical_registry(tools: dict) -> bool:

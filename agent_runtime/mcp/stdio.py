@@ -31,7 +31,7 @@ class StdioTransport:
         timeout_s: float = 30.0,
         protocol_version: str = _DEFAULT_PROTOCOL_VERSION,
         client_name: str = "fixloop",
-        client_version: str = "0.1.0",
+        client_version: str = "0.2.0",
     ) -> None:
         if not command:
             raise ValueError("StdioTransport command 不能为空")

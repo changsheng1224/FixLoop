@@ -1,6 +1,6 @@
 [project]
 name = "agent_runtime"
-version = "0.1.0"
+version = "0.2.0"
 description = "Multi-Agent code repair system with hand-written Agent runtime kernel"
 requires-python = ">=3.11"
 license = { text = "MIT" }

@@ -5,15 +5,24 @@ from pathlib import Path
 MAX_RECENT_FILES = 8
 MAX_FILE_SUMMARIES = 6
 MAX_EPISODIC_NOTES = 12
+MAX_EVIDENCE_ENTRIES = 10
 
 
 def default_memory_state() -> dict:
     """返回初始记忆结构。"""
     return {
-        "working": {"task_summary": "", "recent_files": []},
+        "working": {
+            "task_summary": "",
+            "repair_context": {},
+            "recent_files": [],
+            "evidence_ledger": [],
+            "read_cache": {},
+        },
         "episodic_notes": [],
         "file_summaries": {},
         "next_note_index": 0,
+        "memory_identity": {"user_id": "", "task_id": ""},
+        "recalled_memory_ids": [],
     }
 
 
@@ -22,16 +31,36 @@ def normalize_memory_state(state: dict, workspace_root: str) -> dict:
     if not isinstance(state, dict):
         return default_memory_state()
     if "working" not in state:
-        state["working"] = {"task_summary": "", "recent_files": []}
+        state["working"] = {
+            "task_summary": "",
+            "recent_files": [],
+            "evidence_ledger": [],
+            "read_cache": {},
+        }
     working = state["working"]
     if not isinstance(working, dict):
-        working = {"task_summary": "", "recent_files": []}
+        working = {
+            "task_summary": "",
+            "recent_files": [],
+            "evidence_ledger": [],
+            "read_cache": {},
+        }
         state["working"] = working
     working.setdefault("task_summary", "")
+    working.setdefault("repair_context", {})
     working.setdefault("recent_files", [])
+    working.setdefault("evidence_ledger", [])
+    working.setdefault("read_cache", {})
     working["recent_files"] = _filter_existing(
         working["recent_files"][:MAX_RECENT_FILES], workspace_root
     )
+    ledger = working["evidence_ledger"]
+    if isinstance(ledger, list):
+        working["evidence_ledger"] = ledger[-MAX_EVIDENCE_ENTRIES:]
+    else:
+        working["evidence_ledger"] = []
+    if not isinstance(working["read_cache"], dict):
+        working["read_cache"] = {}
     if "episodic_notes" not in state:
         state["episodic_notes"] = []
     state["episodic_notes"] = state["episodic_notes"][:MAX_EPISODIC_NOTES]
@@ -46,7 +75,20 @@ def normalize_memory_state(state: dict, workspace_root: str) -> dict:
         )
         state["file_summaries"] = dict(sorted_items[:MAX_FILE_SUMMARIES])
     state.setdefault("next_note_index", 0)
+    identity = state.setdefault("memory_identity", {"user_id": "", "task_id": ""})
+    if not isinstance(identity, dict):
+        state["memory_identity"] = {"user_id": "", "task_id": ""}
+    state.setdefault("recalled_memory_ids", [])
     return state
+
+
+def set_memory_identity(state: dict, *, user_id: str = "", task_id: str = "") -> dict:
+    """Set the caller boundary used by governed recall and feedback."""
+    state["memory_identity"] = {
+        "user_id": str(user_id or ""),
+        "task_id": str(task_id or ""),
+    }
+    return state["memory_identity"]
 
 
 def _filter_existing(paths: list[str], root: str) -> list[str]:

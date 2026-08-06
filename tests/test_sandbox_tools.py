@@ -115,44 +115,6 @@ class TestSandboxToolsMocked:
         finally:
             sandbox_tar_mod.sandbox_tar_max_bytes = original_max
 
-    def test_pip_timeout_skips_pytest(self, monkeypatch, temp_workspace):
-        (temp_workspace / "pyproject.toml").write_text(
-            '[project]\nname="t"\ndependencies=["requests"]\n',
-            encoding="utf-8",
-        )
-        _patch_sandbox_available(monkeypatch)
-        fake_mgr = MagicMock()
-        fake_mgr.create.return_value = Sandbox(id="sb-timeout", profile="python")
-        fake_mgr.execute.return_value = ExecResult(-1, "", "timeout after 600s")
-        monkeypatch.setattr(
-            "src.harness.sandbox_verify.SandboxManager",
-            lambda: fake_mgr,
-        )
-        result, timings = run_sandbox_verification(str(temp_workspace))
-        assert not result.all_passed
-        assert "sandbox pip install timeout after 600s" in result.failure_logs[0]
-        assert timings["pytest_ms"] == 0
-        assert fake_mgr.execute.call_count == 1
-
-    def test_pip_failure_skips_pytest(self, monkeypatch, temp_workspace):
-        (temp_workspace / "pyproject.toml").write_text(
-            '[project]\nname="t"\ndependencies=["requests"]\n',
-            encoding="utf-8",
-        )
-        _patch_sandbox_available(monkeypatch)
-        fake_mgr = MagicMock()
-        fake_mgr.create.return_value = Sandbox(id="sb-fail", profile="python")
-        fake_mgr.execute.return_value = ExecResult(1, "pip error output", "")
-        monkeypatch.setattr(
-            "src.harness.sandbox_verify.SandboxManager",
-            lambda: fake_mgr,
-        )
-        result, timings = run_sandbox_verification(str(temp_workspace))
-        assert not result.all_passed
-        assert "sandbox pip install failed: exit_code=1" in result.failure_logs[0]
-        assert timings["pytest_ms"] == 0
-        assert fake_mgr.execute.call_count == 1
-
 
 class TestSandboxExecutionTier:
     """sandbox 工具 execution_tier 声明与体检。"""

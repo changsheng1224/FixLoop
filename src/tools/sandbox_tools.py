@@ -60,6 +60,7 @@ def build_sandbox_tool_registry(context) -> dict:
     """Docker sandbox 三件套工具注册表（Verifier / Baseline 共用）。"""
     return {
         "sandbox_build": {
+            "budget_group": "verify",
             "schema": {"repo_path": "str"},
             "risky": False,
             "execution_tier": TIER_CONTAINER,
@@ -67,6 +68,7 @@ def build_sandbox_tool_registry(context) -> dict:
             "run": lambda args: sandbox_build(context, args),
         },
         "sandbox_test": {
+            "budget_group": "verify",
             "schema": {"repo_path": "str", "test_path": "str="},
             "risky": False,
             "execution_tier": TIER_CONTAINER,
@@ -74,6 +76,7 @@ def build_sandbox_tool_registry(context) -> dict:
             "run": lambda args: sandbox_test(context, args),
         },
         "sandbox_verify": {
+            "budget_group": "verify",
             "schema": {"repo_path": "str", "test_path": "str="},
             "risky": False,
             "execution_tier": TIER_CONTAINER,

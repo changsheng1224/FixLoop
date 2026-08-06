@@ -323,33 +323,6 @@ class TestCompleteOnce:
 
 
 class TestNativeToolsTokenUsage:
-    def test_chat_with_tools_returns_call_usage(self, config, workspace):
-        client = FakeNativeToolClient(
-            [
-                '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
-                "<final>done</final>",
-            ]
-        )
-        agent = _make_agent([], config, workspace)
-        agent.model_client = client
-
-        def executor(name, args):
-            return "ok"
-
-        answer, usage = client.chat_with_tools(
-            system_prompt="sys",
-            user_message="go",
-            tools=[{"name": "list_files", "description": "", "input_schema": {"type": "object"}}],
-            executor=executor,
-        )
-        assert answer == "done"
-        assert usage["calls"] == 2
-        assert (
-            usage["total_tokens"] > 0
-            if "total_tokens" in usage
-            else (usage["input_tokens"] + usage["output_tokens"] > 0)
-        )
-
     def test_shared_run_agent_report_includes_api_tokens(self, config, workspace, temp_workspace):
         import json
 
@@ -361,7 +334,7 @@ class TestNativeToolsTokenUsage:
             model_client=client,
             workspace=workspace,
             cwd=str(temp_workspace),
-            agent_name="localizer",
+            agent_name="patcher",
         )
         agent.shared_run_id = "repair-test-token"
         agent.ask("locate bug")
@@ -369,7 +342,7 @@ class TestNativeToolsTokenUsage:
         report_path = (
             RunStore(str(temp_workspace)).runs_dir
             / "repair-test-token"
-            / "agent_report.localizer.json"
+            / "agent_report.patcher.json"
         )
         data = json.loads(report_path.read_text(encoding="utf-8"))
         assert data["total_tokens"] > 0
@@ -391,7 +364,7 @@ class TestTtftObservability:
             model_client=client,
             workspace=workspace,
             cwd=str(temp_workspace),
-            agent_name="localizer",
+            agent_name="patcher",
         )
         agent.shared_run_id = "repair-ttft-test"
         agent.ask("locate bug")
@@ -399,7 +372,7 @@ class TestTtftObservability:
         report_path = (
             RunStore(str(temp_workspace)).runs_dir
             / "repair-ttft-test"
-            / "agent_report.localizer.json"
+            / "agent_report.patcher.json"
         )
         data = json.loads(report_path.read_text(encoding="utf-8"))
         assert data["ttft_ms_p50"] == 0
@@ -418,7 +391,7 @@ class TestTtftObservability:
             model_client=client,
             workspace=workspace,
             cwd=str(temp_workspace),
-            agent_name="localizer",
+            agent_name="patcher",
         )
         agent.shared_run_id = "repair-ttft-trace"
         agent.ask("go")

@@ -7,7 +7,7 @@ from agent_runtime.prefix_stable import hash_stable_prefix
 from agent_runtime.providers.clients import FakeModelClient, FakeNativeToolClient
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.workspace import WorkspaceContext
-from src.agents.factory import create_localizer, create_patcher, create_retriever, create_verifier
+from src.agents.factory import create_patcher, create_verifier
 from src.tools.composite import (
     REPAIR_CANONICAL_TOOL_NAMES,
     build_repair_agent_tools,
@@ -31,7 +31,7 @@ class TestRepairCanonicalTools:
         assert is_repair_canonical_registry(tools)
 
     def test_all_repair_roles_share_same_tool_registry(self, ctx):
-        roles = ("localizer", "retriever", "patcher", "verifier", "baseline")
+        roles = ("patcher", "verifier")
         registries = [build_repair_agent_tools(ctx, role) for role in roles]
         keys = [tuple(sorted(r.keys())) for r in registries]
         assert len(set(keys)) == 1
@@ -46,8 +46,6 @@ class TestRepairPrefixHash:
     def test_repair_agents_share_prefix_hash(self, ws):
         client = FakeModelClient(["<final>ok</final>"])
         agents = [
-            create_localizer(client, ws, cwd=str(ws.repo_root)),
-            create_retriever(client, ws, cwd=str(ws.repo_root)),
             create_patcher(client, ws, cwd=str(ws.repo_root)),
             create_verifier(client, ws, cwd=str(ws.repo_root)),
         ]
@@ -56,7 +54,7 @@ class TestRepairPrefixHash:
         assert all(len(h) == 64 for h in hashes)
 
     def test_repair_agents_differ_in_role_text_not_stable(self, ws):
-        loc = create_localizer(FakeModelClient(["<final>ok</final>"]), ws)
+        loc = create_verifier(FakeModelClient(["<final>ok</final>"]), ws)
         pat = create_patcher(FakeModelClient(["<final>ok</final>"]), ws)
         assert loc._prefix.hash == pat._prefix.hash
         assert loc._prefix.stable_text == pat._prefix.stable_text
@@ -65,14 +63,14 @@ class TestRepairPrefixHash:
         assert loc._prefix.role_text not in loc._prefix.stable_text
 
     def test_tool_names_tuple_sorted(self, ws):
-        agent = create_localizer(FakeModelClient(["<final>ok</final>"]), ws)
+        agent = create_patcher(FakeModelClient(["<final>ok</final>"]), ws)
         assert isinstance(agent._tool_names, tuple)
         assert agent._tool_names == REPAIR_CANONICAL_TOOL_NAMES
 
     def test_stable_hash_includes_tools_not_l2_role(self, ws):
         from agent_runtime.prompt_prefix import cache_stable_text
 
-        agent = create_localizer(FakeModelClient(["<final>ok</final>"]), ws)
+        agent = create_patcher(FakeModelClient(["<final>ok</final>"]), ws)
         cache = cache_stable_text(
             agent._prefix.stable_system_text,
             agent._prefix.stable_tools_text,
@@ -83,9 +81,9 @@ class TestRepairPrefixHash:
 
 
 class TestRepairGatewayStillRestricts:
-    def test_localizer_cannot_write_via_gateway(self, temp_workspace):
+    def test_verifier_cannot_write_via_gateway(self, temp_workspace):
         ws = WorkspaceContext.build(str(temp_workspace))
-        agent = create_localizer(FakeModelClient(["<final>ok</final>"]), ws)
+        agent = create_verifier(FakeModelClient(["<final>ok</final>"]), ws)
         result = agent.execute_tool("write_file", {"path": "x.py", "content": "bad"})
         assert "不可用" in result.content or "permission" in result.content.lower()
 
@@ -96,7 +94,7 @@ class TestRepairNativePromptSplit:
 
         client = FakeNativeToolClient(["<final>done</final>"])
         ws = WorkspaceContext.build(str(temp_workspace))
-        agent = create_localizer(
+        agent = create_patcher(
             client,
             ws,
             cwd=str(temp_workspace),
@@ -104,13 +102,12 @@ class TestRepairNativePromptSplit:
         )
         agent.config.hard_cap = 100_000
         role_snippet = agent._prefix.role_text[:30]
-        agent.ask("locate bug")
+        agent.ask("fix bug")
         first = client.prompts[0]
         cache = cache_stable_text(
             agent._prefix.stable_system_text,
             agent._prefix.stable_tools_text,
         )
-        assert cache in first
+        assert "仅通过接口提供的 tools / tool_use" in first
         assert role_snippet in first
         assert role_snippet not in cache
-        assert first.index(cache) < first.index(role_snippet)

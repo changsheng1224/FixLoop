@@ -14,7 +14,7 @@ class _StubAgent:
 class TestMakeRepairTaskId:
     def test_first_attempt_no_suffix(self):
         rid = "550e8400-e29b-41d4-a716-446655440000"
-        assert make_repair_task_id(rid, "localizer", 0) == f"{rid}-localizer"
+        assert make_repair_task_id(rid, "patcher", 0) == f"{rid}-patcher"
 
     def test_retry_includes_attempt(self):
         rid = "550e8400-e29b-41d4-a716-446655440000"
@@ -27,13 +27,13 @@ class TestBindL2Context:
         task_id = bind_l2_context(
             agent,
             repair_run_id="run-1",
-            agent_name="localizer",
-            phase="localize",
+            agent_name="patcher",
+            phase="patch",
             attempt=0,
             started_ms=100,
         )
-        assert task_id == "run-1-localizer"
-        assert agent._l2_agent == "localizer"
+        assert task_id == "run-1-patcher"
+        assert agent._l2_agent == "patcher"
         clear_l2_context(agent)
         assert not hasattr(agent, "_l2_agent")
 

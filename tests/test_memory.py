@@ -10,7 +10,9 @@ from agent_runtime.features.memory import (
     default_memory_state,
     invalidate_file_summary,
     normalize_memory_state,
+    record_read_evidence,
     remember_file,
+    render_evidence_ledger,
     retrieval_candidates,
     set_file_summary,
     set_task_summary,
@@ -31,6 +33,8 @@ class TestDefaultState:
         assert "working" in s
         assert s["working"]["task_summary"] == ""
         assert s["working"]["recent_files"] == []
+        assert s["working"]["evidence_ledger"] == []
+        assert s["working"]["read_cache"] == {}
         assert s["episodic_notes"] == []
         assert s["file_summaries"] == {}
         assert s["next_note_index"] == 0
@@ -85,6 +89,41 @@ class TestWorkingMemory:
         set_file_summary(state, "a.py", "summary")
         invalidate_file_summary(state, "a.py")
         assert "a.py" not in state["file_summaries"]
+
+    def test_read_evidence_dedupes_and_renders(self, state):
+        first = record_read_evidence(
+            state,
+            path="a.py",
+            start=1,
+            end=20,
+            result_text="1 | def f():\n2 |     return 1",
+        )
+        second = record_read_evidence(
+            state,
+            path="a.py",
+            start=1,
+            end=20,
+            result_text="1 | def f():\n2 |     return 1",
+        )
+        assert first["duplicate"] is False
+        assert second["duplicate"] is True
+        assert len(state["working"]["evidence_ledger"]) == 1
+        assert state["working"]["evidence_ledger"][0]["duplicate_count"] == 1
+        rendered = render_evidence_ledger(state)
+        assert "证据账本" in rendered
+        assert "dup=1" in rendered
+
+    def test_write_invalidates_read_evidence(self, state):
+        record_read_evidence(
+            state,
+            path="a.py",
+            start=1,
+            end=20,
+            result_text="1 | old",
+        )
+        invalidate_file_summary(state, "a.py")
+        entry = state["working"]["evidence_ledger"][0]
+        assert entry["stale"] is True
 
 
 class TestEpisodicMemory:

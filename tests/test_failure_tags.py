@@ -6,7 +6,7 @@ from src.repair.failure_tags import (
     apply_failure_tags,
     classify_failure_tags,
 )
-from src.repair.termination import RepairTerminalStatus
+from src.repair.verification.termination import RepairTerminalStatus
 from src.state import (
     CandidatePatch,
     RepairPlan,

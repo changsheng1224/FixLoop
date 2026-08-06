@@ -8,10 +8,8 @@ Usage::
     budget_ctx = RepairBudgetContext.create(
         model="deepseek-v4-pro", provider="deepseek",
     )
-    # 各 Agent 获取子预算视图
-    loc_budget = budget_ctx.sub_budget("localizer")   # 2000 tokens
-    ret_budget = budget_ctx.sub_budget("retriever")   # 3000 tokens
-    pat_budget = budget_ctx.sub_budget("patcher")     # 4000 tokens
+    # Each active role receives a tokenizer-sharing budget view.
+    pat_budget = budget_ctx.sub_budget("patcher")
     # 注入 ContextManager
     cm = ContextManager(agent, budget=loc_budget)
 """
@@ -24,11 +22,8 @@ from agent_runtime.context_manager import TOTAL_BUDGET, TokenBudget
 
 # 分 Agent 预算表（prompt_budget，token 数）
 _DEFAULT_ALLOCATIONS: dict[str, int] = {
-    "localizer": 2000,
-    "retriever": 3000,
     "patcher": 4000,
     "verifier": 1000,
-    "baseline": 6000,
 }
 
 _MASTER_BUDGET = 100_000
@@ -85,7 +80,7 @@ class RepairBudgetContext:
         不同角色之间预算独立，不互相影响。
 
         Args:
-            role: Agent 角色名（localizer/retriever/patcher/verifier/baseline）。
+            role: Agent 角色名（patcher/verifier）。
 
         Returns:
             角色专属的 TokenBudget 实例。

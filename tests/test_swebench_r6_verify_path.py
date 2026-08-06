@@ -8,7 +8,7 @@ from src.benchmark.swebench.convert import (
     normalize_related_test_refs,
     resolve_test_ref_for_pytest,
 )
-from src.repair.patch_applier import (
+from src.repair.execution.patch_applier import (
     PatchApplier,
     apply_patch_to_text,
     normalize_patch_text_field,
@@ -146,7 +146,7 @@ class TestE6aCollapsedWhitespaceApply:
         assert "\\Z" in out
 
     def test_hunk_mismatch_includes_near_lines(self, tmp_path: Path):
-        from src.repair.patch_applier import describe_hunk_mismatch
+        from src.repair.execution.patch_applier import describe_hunk_mismatch
 
         repo = tmp_path / "repo"
         repo.mkdir()

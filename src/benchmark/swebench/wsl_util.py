@@ -97,7 +97,6 @@ def resolve_wsl_python(explicit: str | None = None) -> str:
     if env:
         return env
     # 约定路径（setup 脚本安装位置）
-    candidate = "$HOME/.venvs/swebench/bin/python"
     # 在 WSL 里展开检测
     distro = preferred_wsl_distro()
     if distro:
@@ -227,7 +226,14 @@ def _rewrite_loopback_proxy(url: str, host_ip: str) -> str:
 def wsl_proxy_env(distro: str | None = None) -> dict[str, str]:
     """把 Windows 侧代理 / HF 缓存映射到 WSL。"""
     out: dict[str, str] = {}
-    for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "HF_ENDPOINT"):
+    for key in (
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "ALL_PROXY",
+        "HF_ENDPOINT",
+    ):
         val = os.environ.get(key, "").strip()
         if val:
             out[key] = val
