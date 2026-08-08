@@ -30,6 +30,9 @@ class ToolPolicy:
     phases: frozenset[str] = frozenset()
     requires_evidence: bool = False
     requires_read_before_write: bool = False
+    side_effect: str = "read"
+    risk_level: str = "low"
+    requires_approval: bool = False
 
 
 @dataclass
@@ -192,6 +195,9 @@ class CollaborationGovernance:
                     phases=spec.phases,
                     requires_evidence=spec.requires_evidence,
                     requires_read_before_write=spec.requires_read_before_write,
+                    side_effect=getattr(spec, "side_effect", "read"),
+                    risk_level=getattr(spec, "risk_level", "low"),
+                    requires_approval=bool(getattr(spec, "requires_approval", False)),
                 )
                 for name in registry.names()
                 if (spec := registry.get(name)) is not None
@@ -208,6 +214,8 @@ class CollaborationGovernance:
         phase: str = "",
         evidence: bool = False,
         read_before_write: bool = True,
+        control_mode: str = "auto",
+        approved: bool = False,
     ) -> RoleDecision:
         policy = self.policies.get(tool)
         if policy is None:
@@ -222,6 +230,19 @@ class CollaborationGovernance:
             return RoleDecision(False, "missing_evidence", self._alternatives(role, mode, phase))
         if policy.requires_read_before_write and not read_before_write:
             return RoleDecision(False, "file_not_read", self._alternatives(role, mode, phase))
+        if str(control_mode) == "read_only" and policy.side_effect != "read":
+            return RoleDecision(False, "human_read_only", self._alternatives(role, mode, phase))
+        if (
+            str(control_mode) == "approval_required"
+            and policy.side_effect != "read"
+            and policy.requires_approval
+            and not approved
+        ):
+            return RoleDecision(
+                False,
+                "human_approval_required",
+                self._alternatives(role, mode, phase),
+            )
         return RoleDecision(True, "allowed")
 
     @staticmethod

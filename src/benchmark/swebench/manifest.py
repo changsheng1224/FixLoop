@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from agent_runtime.harness_engineering import build_harness_manifest
 from src.benchmark.swebench.dev_instances import DATASET_NAME, DATASET_SPLIT, DEV_INSTANCE_IDS
 
 
@@ -68,6 +69,19 @@ def build_manifest(
             "Do not swap instance_ids after first freeze for a report series."
         ),
     }
+    manifest["harness"] = build_harness_manifest(
+        root,
+        run_id=f"swebench-manifest-{int(time.time())}",
+        model=model,
+        provider=provider,
+        config={
+            "dataset": harness_dataset,
+            "instance_count": len(ids),
+            "max_retries": max_retries,
+            "repair_timeout_s": repair_timeout_s,
+            "tool_profile": tool_profile,
+        },
+    )
     if extra:
         manifest["extra"] = extra
     return manifest

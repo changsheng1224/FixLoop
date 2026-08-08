@@ -767,6 +767,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             except Exception:
                 pass
         self._end_repair_trace(state)
+        # Harness finalization enriches state; persist once more so state,
+        # trace and report expose the same terminal control snapshot.
+        self._checkpoint_progress(state)
         self._push_repair_metrics(state)
         lock = getattr(self, "_edit_lock", None)
         if lock is not None:
@@ -1077,6 +1080,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             except Exception:
                 pass
         self._end_repair_trace(state)
+        # Harness finalization enriches state; persist once more so state,
+        # trace and report expose the same terminal control snapshot.
+        self._checkpoint_progress(state)
         self._push_repair_metrics(state)
         log.info("总耗时: %dms, status=%s", total_ms, state.status)
         return state

@@ -354,6 +354,12 @@ class Orchestrator(RepairPipelineMixin):
         """Pass current mode/phase to gateways when the runtime owns the state."""
         # Localizer/Retriever are legacy compatibility agents.  Governance is
         # intentionally enforced only on the current repair roles.
+        harness = getattr(self._repair_ctx, "harness_control", None)
+        control_mode = (
+            getattr(getattr(harness, "control_mode", None), "value", "")
+            or (state.human_control or {}).get("mode", "auto")
+        )
+        approved_tools = set((state.human_control or {}).get("approved_tools", []) or [])
         for agent in (self.patcher, self.verifier):
             gateway = getattr(agent, "_tool_dispatch", None)
             if gateway is not None and hasattr(gateway, "set_context"):
@@ -365,6 +371,8 @@ class Orchestrator(RepairPipelineMixin):
                     read_before_write=bool(
                         state.node_timings.get("allowed_edit") or state.suspect_locations
                     ),
+                    control_mode=control_mode,
+                    approved_tools=approved_tools,
                 )
 
     def _on_collaboration_phase(self, state: RepairState, phase: str, reason: str = "") -> None:
@@ -377,6 +385,18 @@ class Orchestrator(RepairPipelineMixin):
                 transition.to_dict()
             )
             return
+        harness = getattr(self._repair_ctx, "harness_control", None)
+        if harness is not None:
+            harness.record_phase(
+                phase,
+                state_revision=int(getattr(state, "state_revision", 0) or 0),
+                reason=reason,
+            )
+            if (
+                phase == "patch"
+                and int(getattr(state, "retry_count", 0) or 0) >= harness.attempt
+            ):
+                harness.retry(reason="repair retry")
         if phase == "patch":
             for role in ("verifier",):
                 if role in state.active_roles:
@@ -425,6 +445,26 @@ class Orchestrator(RepairPipelineMixin):
         if tracer is not None:
             tracer.emit("orchestrator", "agent_set_changed", event)
 
+    def _on_harness_event(self, state: RepairState, event: dict) -> None:
+        """Persist one Harness event in state and the canonical repair trace."""
+        events = list(getattr(state, "harness_events", []) or [])
+        events.append(dict(event))
+        state.harness_events = events[-2000:]
+        control = getattr(self._repair_ctx, "harness_control", None)
+        if control is not None:
+            snapshot = control.snapshot()
+            state.harness_control = {
+                key: value for key, value in snapshot.items() if key not in {"events", "metrics"}
+            }
+            state.harness_metrics = dict(snapshot.get("metrics") or {})
+            state.human_control = {
+                **dict(getattr(state, "human_control", {}) or {}),
+                "mode": snapshot.get("control_mode", "auto"),
+            }
+        tracer = getattr(self._repair_ctx, "repair_tracer", None)
+        if tracer is not None:
+            tracer.emit("harness", "harness_event", event, status=event.get("status") or None)
+
     @contextmanager
     def _repair_cancel_scope(self, token):
         """绑定 cancel token 到子 Agent，退出时解绑。"""
@@ -459,6 +499,10 @@ class Orchestrator(RepairPipelineMixin):
     def _emit_repair_cancelled(self, state: RepairState) -> None:
         ctx = self._repair_ctx
         self._maybe_leave_worktree(cancelled=True)
+        harness = getattr(ctx, "harness_control", None) if ctx is not None else None
+        if harness is not None:
+            harness.request_control("cancel", reason="repair cancelled")
+            harness.finish("cancelled", reason="repair cancelled")
         tracer = ctx.repair_tracer if ctx is not None else None
         if tracer is None:
             return
@@ -742,6 +786,69 @@ class Orchestrator(RepairPipelineMixin):
         if phase_cfg is not None and phase_cfg.any_enabled():
             l1_meta["phase_timeout_budgets"] = phase_cfg.budget_dict()
         run_id = tracer.begin(state.issue_input, **l1_meta)
+        from agent_runtime.harness_engineering import (
+            ExecutionContract,
+            HarnessControlPlane,
+            build_harness_manifest,
+            stable_fingerprint,
+        )
+
+        def _harness_sink(event: dict) -> None:
+            self._on_harness_event(state, event)
+
+        harness = HarnessControlPlane(
+            run_id,
+            max_attempts=max(1, int(state.max_retries or 0) + 1),
+            budget_limits={
+                str(key): float(value)
+                for key, value in (state.tool_budget or {}).items()
+                if isinstance(value, int | float) and float(value) >= 0
+            },
+            event_sink=_harness_sink,
+        )
+        self._repair_ctx.harness_control = harness
+        model = ""
+        provider = ""
+        for agent in (self.patcher, self.verifier):
+            config = getattr(agent, "config", None)
+            if config is not None:
+                model = model or str(getattr(config, "model", "") or "")
+                provider = provider or str(getattr(config, "provider", "") or "")
+        registry = getattr(self.patcher, "tool_registry", None)
+        tool_names = registry.names() if registry is not None and hasattr(registry, "names") else ()
+        manifest = build_harness_manifest(
+            self._repo_root,
+            run_id=run_id,
+            model=model,
+            provider=provider,
+            tool_schema_hash=stable_fingerprint(tool_names),
+            config={"max_retries": state.max_retries, "tool_budget": dict(state.tool_budget)},
+        )
+        state.harness_manifest = manifest
+        contract = ExecutionContract(
+            run_id=run_id,
+            attempt=1,
+            state_revision=int(getattr(state, "state_revision", 0) or 0),
+            phase=str(getattr(state, "phase", "") or ""),
+            budget={
+                key: float(value)
+                for key, value in (state.tool_budget or {}).items()
+                if isinstance(value, int | float)
+            },
+            manifest_fingerprint=manifest["manifest_fingerprint"],
+        )
+        harness.start(contract)
+        state.harness_control = {
+            key: value
+            for key, value in harness.snapshot().items()
+            if key not in {"events", "metrics"}
+        }
+        state.harness_metrics = harness.metrics.snapshot()
+        state.human_control = {
+            **dict(getattr(state, "human_control", {}) or {}),
+            "mode": harness.control_mode.value,
+        }
+        tracer.emit("harness", "harness_manifest", manifest, status="ok")
         tracer.bind_agents(
             self.patcher,
             self.verifier,
@@ -874,6 +981,66 @@ class Orchestrator(RepairPipelineMixin):
         tracer = ctx.repair_tracer if ctx is not None else None
         if tracer is None:
             return
+        harness = getattr(ctx, "harness_control", None) if ctx is not None else None
+        if harness is not None and not harness.terminal:
+            from agent_runtime.harness_engineering import (
+                BadCaseStore,
+                HarnessFailureCode,
+                HarnessStatus,
+                attribute_harness_failure,
+                extract_bad_case,
+            )
+
+            status = str(getattr(state, "status", "") or "").lower()
+            if status == "fixed":
+                target = HarnessStatus.COMPLETED
+                attribution = None
+            elif status in {"timeout", "timed_out"}:
+                target = HarnessStatus.TIMED_OUT
+                attribution = attribute_harness_failure(
+                    code=HarnessFailureCode.TIMEOUT,
+                    evidence_refs=[f"trace:{state.repair_run_id}"],
+                )
+            elif status == "user_cancel" or state.node_timings.get("user_cancel"):
+                target = HarnessStatus.CANCELLED
+                attribution = attribute_harness_failure(
+                    code=HarnessFailureCode.CANCELLED,
+                    evidence_refs=[f"trace:{state.repair_run_id}"],
+                )
+            else:
+                target = HarnessStatus.FAILED
+                attribution = attribute_harness_failure(
+                    code=(
+                        HarnessFailureCode.VERIFICATION_FAILED
+                        if state.verification_result and not state.verification_result.all_passed
+                        else HarnessFailureCode.UNKNOWN
+                    ),
+                    contributing_causes=list(state.failure_tags),
+                    evidence_refs=[f"trace:{state.repair_run_id}"],
+                )
+            harness.finish(target, reason=status or target.value, attribution=attribution)
+            snapshot = harness.snapshot()
+            snapshot["manifest_fingerprint"] = state.harness_manifest.get(
+                "manifest_fingerprint", ""
+            )
+            state.harness_control = {
+                key: value for key, value in snapshot.items() if key not in {"events", "metrics"}
+            }
+            state.harness_events = list(snapshot.get("events") or [])
+            state.harness_metrics = dict(snapshot.get("metrics") or {})
+            state.harness_attribution = attribution.to_dict() if attribution else {}
+            state.human_control = {
+                **dict(getattr(state, "human_control", {}) or {}),
+                "mode": snapshot.get("control_mode", "auto"),
+            }
+            if target != HarnessStatus.COMPLETED:
+                record = extract_bad_case(snapshot)
+                if record is not None:
+                    state.bad_cases.append(record.to_dict())
+                    try:
+                        BadCaseStore(self._repo_root).append(record)
+                    except OSError:
+                        pass
         token_summary = state.node_timings.get("token_usage") or {}
         tracer.finalize(state, token_summary)
         tracer.unbind_agents(

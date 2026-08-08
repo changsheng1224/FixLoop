@@ -79,6 +79,13 @@ def migrate_state_payload(data: dict[str, Any] | None) -> dict[str, Any]:
         payload.setdefault("handoffs", [])
         payload.setdefault("effect_receipts", {})
         payload.setdefault("task_dag_snapshot", {})
+        payload.setdefault("harness_control", {})
+        payload.setdefault("harness_events", [])
+        payload.setdefault("harness_metrics", {})
+        payload.setdefault("harness_manifest", {})
+        payload.setdefault("harness_attribution", {})
+        payload.setdefault("human_control", {})
+        payload.setdefault("bad_cases", [])
         payload["schema_version"] = CURRENT_STATE_SCHEMA_VERSION
     return payload
 
@@ -501,6 +508,13 @@ class RepairState:
     handoffs: list[dict] = field(default_factory=list)
     effect_receipts: dict[str, dict] = field(default_factory=dict)
     task_dag_snapshot: dict = field(default_factory=dict)
+    harness_control: dict = field(default_factory=dict)
+    harness_events: list[dict] = field(default_factory=list)
+    harness_metrics: dict = field(default_factory=dict)
+    harness_manifest: dict = field(default_factory=dict)
+    harness_attribution: dict = field(default_factory=dict)
+    human_control: dict = field(default_factory=dict)
+    bad_cases: list[dict] = field(default_factory=list)
     phase_history: list[dict] = field(default_factory=list)
     workspace_manifest: dict = field(default_factory=dict)
     action_ledger: list[dict] = field(default_factory=list)
@@ -561,6 +575,19 @@ class RepairState:
             errors.append("handoffs require handoff_id")
         if len(handoff_ids) != len(set(handoff_ids)):
             errors.append("handoff_ids must be unique")
+        event_sequences = [
+            int(item.get("sequence", 0) or 0)
+            for item in (self.harness_events or [])
+            if isinstance(item, dict)
+        ]
+        if event_sequences != sorted(event_sequences):
+            errors.append("harness event sequence must be ordered")
+        control_status = str((self.harness_control or {}).get("status", "") or "")
+        if (
+            control_status in {"completed", "failed", "cancelled", "timed_out"}
+            and not self.harness_metrics
+        ):
+            errors.append("terminal harness control requires metrics")
         if strict and self.status in {
             RepairStatus.FIXED,
             RepairStatus.FAILED,
@@ -666,6 +693,13 @@ class RepairState:
             "handoffs": list(self.handoffs),
             "effect_receipts": dict(self.effect_receipts),
             "task_dag_snapshot": dict(self.task_dag_snapshot),
+            "harness_control": dict(self.harness_control),
+            "harness_events": list(self.harness_events),
+            "harness_metrics": dict(self.harness_metrics),
+            "harness_manifest": dict(self.harness_manifest),
+            "harness_attribution": dict(self.harness_attribution),
+            "human_control": dict(self.human_control),
+            "bad_cases": list(self.bad_cases),
             "phase_history": list(self.phase_history),
             "workspace_manifest": dict(self.workspace_manifest),
             "action_ledger": list(self.action_ledger),
@@ -728,6 +762,13 @@ class RepairState:
             handoffs=list(data.get("handoffs") or []),
             effect_receipts=dict(data.get("effect_receipts") or {}),
             task_dag_snapshot=dict(data.get("task_dag_snapshot") or {}),
+            harness_control=dict(data.get("harness_control") or {}),
+            harness_events=list(data.get("harness_events") or []),
+            harness_metrics=dict(data.get("harness_metrics") or {}),
+            harness_manifest=dict(data.get("harness_manifest") or {}),
+            harness_attribution=dict(data.get("harness_attribution") or {}),
+            human_control=dict(data.get("human_control") or {}),
+            bad_cases=list(data.get("bad_cases") or []),
             phase_history=list(data.get("phase_history") or []),
             workspace_manifest=dict(data.get("workspace_manifest") or {}),
             action_ledger=list(data.get("action_ledger") or []),
