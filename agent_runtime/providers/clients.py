@@ -49,6 +49,19 @@ class FakeModelClient(SessionUsageMixin):
         self.session_usage["output_tokens"] += out
         self.session_usage["calls"] += 1
 
+    @property
+    def capabilities(self):
+        from agent_runtime.providers.contracts import ProviderCapabilities
+
+        return ProviderCapabilities(
+            provider="fake",
+            model="fake",
+            native_tools=False,
+            streaming=False,
+            usage=True,
+            cancellation=False,
+        )
+
     def complete(self, prompt: str, max_new_tokens: int = 512, prompt_cache_key: str = "") -> str:
         """弹出下一个预设输出。
 
@@ -160,6 +173,20 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
         self.supports_prompt_cache = True
         self._latencies: list[float] = []
         self._init_usage_tracking()
+
+    @property
+    def capabilities(self):
+        from agent_runtime.providers.contracts import ProviderCapabilities
+
+        return ProviderCapabilities(
+            provider="anthropic-compatible",
+            model=self.model,
+            native_tools=True,
+            streaming=False,
+            usage=True,
+            prompt_cache=self.supports_prompt_cache,
+            cancellation=True,
+        )
 
     def _record_usage(self, usage: dict | None) -> None:
         from agent_runtime.token_accounting import parse_provider_usage
@@ -479,6 +506,19 @@ class OllamaModelClient:
         self.timeout = timeout
         self.supports_prompt_cache = False
 
+    @property
+    def capabilities(self):
+        from agent_runtime.providers.contracts import ProviderCapabilities
+
+        return ProviderCapabilities(
+            provider="ollama",
+            model=self.model,
+            native_tools=False,
+            streaming=True,
+            usage=False,
+            cancellation=True,
+        )
+
     def complete(self, prompt: str, max_new_tokens: int = 512, prompt_cache_key: str = "") -> str:
         """调用 Ollama /api/generate 并返回文本。"""
         payload = {
@@ -572,6 +612,19 @@ class OpenAICompatibleModelClient:
         self.temperature = temperature
         self.timeout = timeout
         self.supports_prompt_cache = False
+
+    @property
+    def capabilities(self):
+        from agent_runtime.providers.contracts import ProviderCapabilities
+
+        return ProviderCapabilities(
+            provider="openai-compatible",
+            model=self.model,
+            native_tools=True,
+            streaming=True,
+            usage=True,
+            cancellation=True,
+        )
 
     def complete(self, prompt: str, max_new_tokens: int = 512, prompt_cache_key: str = "") -> str:
         """调用 OpenAI Responses API。"""

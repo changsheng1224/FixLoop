@@ -377,6 +377,42 @@ def validate_trace(events: list[dict[str, Any]], *, require_terminal: bool = Tru
     return list(dict.fromkeys(issues))
 
 
+def validate_runtime_trace(
+    events: list[dict[str, Any]], *, require_terminal: bool = True
+) -> list[str]:
+    """Validate canonical envelope plus runtime lifecycle semantics."""
+    issues = validate_trace(events, require_terminal=require_terminal)
+    canonical = [event for event in events if event.get("schema_version") == SCHEMA_VERSION]
+    if not canonical:
+        return issues
+    names = [str(event.get("event") or event.get("event_type") or "") for event in canonical]
+    if not any(name in {"run_started", "repair_started", "evaluation_started"} for name in names):
+        issues.append("missing_runtime_start_event")
+    terminals = [
+        event
+        for event in canonical
+        if event.get("event") in {
+            "run_finished",
+            "repair_finished",
+            "evaluation_finished",
+            "run_terminal",
+        }
+    ]
+    for event in terminals:
+        if event.get("status") == STATUS_UNSET:
+            issues.append(f"terminal_status_unset:{event.get('event')}")
+    for index, event in enumerate(canonical):
+        name = str(event.get("event") or event.get("event_type") or "")
+        payload = event.get("payload") or {}
+        if name in {"tool_executed", "mcp_call"} and not payload.get("tool"):
+            issues.append(f"event[{index}]:tool_name_missing")
+        if name == "tool_executed" and payload.get("receipt") is not None:
+            receipt = payload.get("receipt")
+            if not isinstance(receipt, dict) or not receipt.get("schema_version"):
+                issues.append(f"event[{index}]:invalid_tool_receipt")
+    return list(dict.fromkeys(issues))
+
+
 def build_span_tree(events: list[dict[str, Any]]) -> dict[str, list[str]]:
     """span_id -> child span_ids（按首次出现顺序）。"""
     children: dict[str, list[str]] = {}

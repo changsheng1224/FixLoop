@@ -90,6 +90,7 @@ class ToolExecutor:
             "call_id": call.call_id,
             "name": call.name,
             "arguments": call.arguments,
+            "arguments_hash": _canonical_args_hash(name, call.arguments),
             "source": call.source.value,
         }
         token = getattr(self.agent, "cancel_token", None)
@@ -236,6 +237,18 @@ class ToolExecutor:
             result.metadata.update(self._diff_snapshots(before_snapshot, after_snapshot))
         result.metadata.setdefault("tool_status", result.status)
         result.metadata.setdefault("retryable", result.retryable)
+        from agent_runtime.tool_result import build_tool_receipt
+
+        result.receipt = build_tool_receipt(
+            name,
+            result,
+            args_hash=_canonical_args_hash(name, args),
+            run_id=str(getattr(self.agent, "shared_run_id", "") or ""),
+            call_id=str(
+                (self.agent.session.get("_last_canonical_tool_call", {}) or {}).get("call_id", "")
+            ),
+        )
+        result.metadata["receipt"] = result.receipt
 
         result.metadata.update(
             {
@@ -414,17 +427,29 @@ class ToolExecutor:
 
     def _run_tool(self, name: str, args: dict, tool_spec: dict, token) -> str | ToolExecutionResult:
         """Run with bounded retries and update the per-tool circuit state."""
+        from agent_runtime.providers.retry_policy import RetryPolicy
+
         attempts = self._resilience.max_attempts(tool_spec)
+        policy = RetryPolicy(
+            max_attempts=attempts,
+            base_delay_s=self._resilience.backoff_s(tool_spec, 1),
+            idempotent=bool(tool_spec.get("idempotent", True)),
+        )
         for attempt in range(1, attempts + 1):
             result = self._run_tool_once(name, args, tool_spec, token)
             normalized = normalize_tool_result(result, tool_name=name)
             self._resilience.after(name, tool_spec, success=normalized.ok)
-            if normalized.ok or not normalized.retryable or attempt >= attempts:
+            deadline = getattr(self.agent, "_repair_deadline", None)
+            remaining = deadline.remaining_s() if deadline is not None else None
+            if normalized.ok or not policy.should_retry(
+                attempt=attempt,
+                retryable=bool(normalized.retryable),
+                deadline_s=remaining,
+            ):
                 return result
             import time
 
-            delay = self._resilience.backoff_s(tool_spec, attempt)
-            deadline = getattr(self.agent, "_repair_deadline", None)
+            delay = policy.delay(attempt)
             if deadline is not None:
                 remaining = deadline.remaining_s()
                 if remaining <= 0:

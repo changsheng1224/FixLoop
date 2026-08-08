@@ -42,6 +42,22 @@ def finalize_agent_run(loop, ts) -> None:
             "phase": getattr(ts, "phase", ""),
             "turn": getattr(ts, "turn", 0),
             "failure_attribution": getattr(ts, "failure_attribution", {}),
+            "runtime_contract": dict(getattr(ts, "runtime_contract", {}) or {}),
+            "terminal_contract": {
+                "terminal": str(getattr(ts, "status", ""))
+                in {"completed", "failed", "stopped"},
+                "stop_reason": str(getattr(ts, "stop_reason", "") or ""),
+                "unresolved_side_effects": [
+                    item
+                    for item in (getattr(ts, "side_effects", []) or [])
+                    if str(item.get("status", "")) in {"uncertain", "dispatched"}
+                ],
+            },
+            "provider_capabilities": (
+                getattr(agent.provider_capabilities, "__dict__", {})
+                if hasattr(agent, "provider_capabilities")
+                else {}
+            ),
             "prompt_cache_key": getattr(agent._prefix, "hash", ""),
             "node_timings": ts.node_timings,
             "tier_summary": {

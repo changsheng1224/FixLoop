@@ -6,6 +6,7 @@
 from dataclasses import dataclass, field
 
 from agent_runtime.run_ids import new_run_id
+from agent_runtime.runtime_contracts import RuntimePhase, RuntimeStateMachine, RuntimeStatus
 from agent_runtime.stop_reasons import (
     StopReason,
     normalize_stop_reason,
@@ -51,6 +52,7 @@ class TaskState:
     workspace_manifest: dict = field(default_factory=dict)
     action_ledger: list[dict] = field(default_factory=list)
     side_effects: list[dict] = field(default_factory=list)
+    runtime_contract: dict = field(default_factory=dict)
 
     @classmethod
     def create(
@@ -78,7 +80,28 @@ class TaskState:
             user_request=user_request,
             session_id=session_id,
             attempt_id=attempt_id,
+            runtime_contract=RuntimeStateMachine().snapshot(),
         )
+
+    def advance_runtime(
+        self,
+        phase: RuntimePhase | str,
+        *,
+        status: RuntimeStatus | str | None = None,
+        stop_reason: str = "",
+        metadata: dict | None = None,
+    ) -> dict:
+        """Advance the explicit runtime lifecycle and persist its revision."""
+        machine = RuntimeStateMachine.from_snapshot(self.runtime_contract)
+        machine.transition(
+            phase,
+            status=status,
+            stop_reason=stop_reason,
+            metadata=metadata,
+        )
+        self.runtime_contract = machine.snapshot()
+        self.state_revision = max(self.state_revision, machine.revision)
+        return self.runtime_contract
 
     # ---- 状态转换方法 ----
 
@@ -190,6 +213,16 @@ class TaskState:
         self.final_answer = final_answer
         self.status = "completed"
         self.stop_reason = StopReason.FINAL.value
+        if not (self.runtime_contract or {}).get("terminal"):
+            try:
+                self.advance_runtime(RuntimePhase.FINALIZING)
+                self.advance_runtime(
+                    RuntimePhase.COMPLETED,
+                    status=RuntimeStatus.COMPLETED,
+                    stop_reason=StopReason.FINAL.value,
+                )
+            except ValueError:
+                self.runtime_contract["contract_error"] = "invalid_success_transition"
 
     # ---- 序列化 ----
 
@@ -224,6 +257,7 @@ class TaskState:
             "workspace_manifest": dict(self.workspace_manifest),
             "action_ledger": list(self.action_ledger),
             "side_effects": list(self.side_effects),
+            "runtime_contract": dict(self.runtime_contract),
         }
 
     @classmethod
@@ -266,4 +300,5 @@ class TaskState:
             workspace_manifest=dict(data.get("workspace_manifest", {}) or {}),
             action_ledger=list(data.get("action_ledger", []) or []),
             side_effects=list(data.get("side_effects", []) or []),
+            runtime_contract=dict(data.get("runtime_contract", {}) or {}),
         )

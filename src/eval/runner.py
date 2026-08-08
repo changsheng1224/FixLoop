@@ -86,7 +86,7 @@ def _hash_text(value: str) -> str:
 def _trace_integrity(path: str) -> dict:
     if not path:
         return {"available": False, "valid": None, "issues": []}
-    from agent_runtime.canonical_trace import validate_trace
+    from agent_runtime.canonical_trace import validate_runtime_trace
     from agent_runtime.run_store import read_trace_path
 
     trace_path = Path(path)
@@ -96,7 +96,7 @@ def _trace_integrity(path: str) -> dict:
             events.append(json.loads(line))
         except json.JSONDecodeError:
             pass
-    issues = validate_trace(events, require_terminal=True)
+    issues = validate_runtime_trace(events, require_terminal=True)
     return {"available": True, "valid": not issues, "issues": issues}
 
 

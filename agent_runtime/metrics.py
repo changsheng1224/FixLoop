@@ -111,6 +111,8 @@ _METRIC_TYPE: dict[str, str] = {
     "fixloop_intent_action_total": "counter",
 }
 
+_HISTOGRAM_BUCKETS_MS = (100, 500, 1_000, 5_000, 30_000, 120_000, 600_000)
+
 
 def _format_labels(labels: dict[str, str] | None) -> str:
     if not labels:
@@ -153,7 +155,16 @@ def _render_prometheus(
         for label_tuple, values in sorted(labeled.items()):
             labels = dict(pair.split("=", 1) for pair in label_tuple) if label_tuple else {}
             suffix = _format_labels(labels)
-            lines.append(f"{name}_count{suffix} {len(values)}")
+            ordered = sorted(float(value) for value in values)
+            for bucket in _HISTOGRAM_BUCKETS_MS:
+                bucket_labels = dict(labels)
+                bucket_labels["le"] = str(bucket)
+                count = sum(value <= bucket for value in ordered)
+                lines.append(f"{name}_bucket{_format_labels(bucket_labels)} {count}")
+            inf_labels = dict(labels)
+            inf_labels["le"] = "+Inf"
+            lines.append(f"{name}_bucket{_format_labels(inf_labels)} {len(ordered)}")
+            lines.append(f"{name}_count{suffix} {len(ordered)}")
             lines.append(f"{name}_sum{suffix} {sum(values):.6g}")
     lines.append("")
     return "\n".join(lines)

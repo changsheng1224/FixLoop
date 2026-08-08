@@ -295,6 +295,14 @@ def evaluate_resume_state(agent) -> dict:
     if last.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
         return _emit_resume_result(agent, _resume_result("schema-mismatch", last))
 
+    from agent_runtime.context_runtime import validate_context_manifest
+
+    context_issues = validate_context_manifest(last.get("context_manifest") or {})
+    if context_issues:
+        result = _resume_result("integrity-failure", last)
+        result["context_contract_issues"] = context_issues
+        return _emit_resume_result(agent, result)
+
     result = _resume_result("full-valid", last)
 
     saved_context = last.get("context_contract") or last.get("context_manifest") or {}

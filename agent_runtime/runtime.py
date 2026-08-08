@@ -108,6 +108,19 @@ class Agent:
         return self._agent_name or ""
 
     @property
+    def provider_capabilities(self):
+        """Return the normalized provider capability contract."""
+        from agent_runtime.providers.contracts import ProviderCapabilities
+
+        capabilities = getattr(self.model_client, "capabilities", None)
+        if isinstance(capabilities, ProviderCapabilities):
+            return capabilities
+        return ProviderCapabilities(
+            provider=str(getattr(self.config, "provider", "unknown") or "unknown"),
+            model=str(getattr(self.config, "model", "") or ""),
+        )
+
+    @property
     def semantic_memory(self):
         """首次访问时加载语义模型（全局单例，线程安全）。"""
         if self._semantic_memory is None:

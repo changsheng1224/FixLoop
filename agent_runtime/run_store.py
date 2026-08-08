@@ -217,9 +217,9 @@ class RunStore:
 
     def validate_trace(self, run_id: str, *, require_terminal: bool = True) -> list[str]:
         """Return integrity issues for one persisted run trace."""
-        from agent_runtime.canonical_trace import validate_trace
+        from agent_runtime.canonical_trace import validate_runtime_trace
 
-        return validate_trace(
+        return validate_runtime_trace(
             self.load_ordered_trace(run_id),
             require_terminal=require_terminal,
         )

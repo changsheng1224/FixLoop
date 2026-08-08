@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+RECEIPT_SCHEMA_VERSION = "1"
+
 
 class ToolStatus(StrEnum):
     SUCCESS = "success"
@@ -126,6 +128,38 @@ def normalize_tool_result(result: Any, *, tool_name: str = "") -> ToolResult:
     return ToolResult(content=text, status=ToolStatus.SUCCESS.value)
 
 
+def build_tool_receipt(
+    tool_name: str,
+    result: ToolResult,
+    *,
+    args_hash: str = "",
+    run_id: str = "",
+    call_id: str = "",
+) -> dict[str, Any]:
+    """Build a replay/audit receipt with stable fields for every tool call."""
+    import hashlib
+    import json
+
+    changed = list(result.changed_files or result.metadata.get("affected_paths") or [])
+    body = {
+        "schema_version": RECEIPT_SCHEMA_VERSION,
+        "tool": str(tool_name),
+        "call_id": str(call_id or ""),
+        "args_hash": str(args_hash or ""),
+        "status": str(result.status),
+        "error_code": str(result.error_code or ""),
+        "retryable": bool(result.retryable),
+        "duration_ms": int(result.duration_ms or result.metadata.get("duration_ms", 0) or 0),
+        "affected_paths": changed,
+        "run_id": str(run_id or ""),
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(body, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+    ).hexdigest()[:20]
+    body["receipt_id"] = "receipt-" + fingerprint
+    return body
+
+
 def result_metadata(result: Any) -> dict[str, Any]:
     """Compatibility helper for callers that only need a metadata projection."""
     return normalize_tool_result(result).metadata
@@ -135,6 +169,8 @@ __all__ = [
     "ToolErrorCode",
     "ToolResult",
     "ToolStatus",
+    "RECEIPT_SCHEMA_VERSION",
+    "build_tool_receipt",
     "normalize_tool_result",
     "result_metadata",
 ]
