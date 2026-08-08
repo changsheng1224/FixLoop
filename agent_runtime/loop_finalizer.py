@@ -108,7 +108,8 @@ def finalize_agent_run(loop, ts) -> None:
                     else ""
                 ),
             )
-            ts.checkpoint_id = cp.get("run_id", "") if cp else ""
+            ts.checkpoint_id = cp.get("checkpoint_id", "") if cp else ""
+            ts.checkpoint_sequence = int(cp.get("sequence", 0) or 0) if cp else 0
             store.write_task_state(ts)
             compress_stats = store.compress_trace_if_needed(ts.run_id)
             if compress_stats:
@@ -121,7 +122,7 @@ def finalize_agent_run(loop, ts) -> None:
             root=agent._cwd,
         )
         _promote_memory_candidates(agent, ts)
-        SessionStore(root=agent._cwd).save(agent.session)
+        SessionStore(root=agent._cwd, trace=loop._emit).save(agent.session)
     except Exception:
         pass
 

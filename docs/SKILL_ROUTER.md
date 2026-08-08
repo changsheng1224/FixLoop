@@ -32,7 +32,7 @@ Orchestrator.parse_issue
         └─► SkillRouter.route(issue) ──fail-soft──► skill_routed
                     │
                     ▼（按需）
-            run_executable_skill(name, args) → 结构化产物
+            execute_skill(name, args) → Governed Invocation + Observation
 ```
 
 ---
@@ -44,7 +44,7 @@ Orchestrator.parse_issue
 | ExecutableSkillSpec | Description、±Trigger、IO Schema、allowed_tools、evidence、version、lifecycle |
 | SkillRegistry | `get/list/register/load_yaml/resolve_version`；默认加载 `executable/specs.yaml` |
 | SkillRouter | 规则短路径 / Top-1 margin / LLM fallback / generic fallback |
-| Runners | 7 个纯函数 Runner，可注入 Tool |
+| Runners | 7 个纯函数 Runner；公开调用经 Governed Execution Gateway，可注入 Tool |
 | Trace | `skill_routed`：candidates、selection_reason、margin、skill_version、router_version |
 | 离线评测 | easy / hard（门槛）+ heldout（诊断，含中文） |
 | 指标 | Top-1、误触发、漏触发、Fallback、低 Margin、Skill 切换 |
@@ -64,7 +64,8 @@ Orchestrator.parse_issue
 | `draft_pr_prepare` | Draft PR 元数据（**draft=true**） | `draft_pr` | `github_create_draft_pr` |
 
 规格文件：`src/skills/executable/specs.yaml`。  
-Runner：`src/skills/executable/__init__.py`（`run_executable_skill` / 各 `run_*`）。
+Runner：`src/skills/executable/__init__.py`（内部原语 `run_executable_skill` / 各
+`run_*`）；公开入口为 `src.skills.execute_skill`。
 
 计划首批三技能为前三者；后四者为同切片扩展，共用同一 Registry/Router。
 
@@ -149,3 +150,43 @@ pytest tests/test_skill_registry_router.py -v
 ## 8. 一句话总结
 
 `src/skills` 可执行层：7 Skills + Registry + 规则/关键词/Embedding Router（低 Margin 可选 LLM）+ easy/hard/heldout 评测与 `skill_routed` Trace。
+
+---
+
+## 9. Governed Skill Runtime
+
+Router selection is now separated from runtime admission and execution:
+
+```text
+Canonical Skill Decision
+→ version / lifecycle / trust admission
+→ input schema validation
+→ runtime tool-policy intersection
+→ timeout / cancellation / tool budget
+→ runner
+→ output schema / completion-evidence validation
+→ Canonical Observation
+→ usage feedback / Trace
+```
+
+Key modules:
+
+| Module | Responsibility |
+|---|---|
+| `contract.py` | Canonical guidance/executable contract, SemVer, trust, scope and JSON contract validation |
+| `decision.py` | One decision envelope over legacy guidance matching and executable routing |
+| `execution.py` | Runtime-enforced admission and execution gateway |
+| `invocation.py` | Invocation state machine and stable error taxonomy |
+| `composition.py` | Bounded sequential composition, cancellation propagation and aggregate budgets |
+| `feedback.py` | Conservative routed/projected/invoked/applied/verified usage feedback |
+| `src/eval/skill_runtime_eval.py` | Execution-contract and outcome-ablation metrics |
+
+Executable Skills cannot grant Tool permissions. Tool bindings must be declared by the Skill and
+separately admitted by Runtime. Untrusted executable Skills are guidance-only. Side-effecting
+Skills require an idempotency key or dry-run, and checkpoint resume pins the exact Skill version.
+Local writes additionally require read-before-write evidence; declared preconditions and
+postconditions are checked at the Gateway, and successful side effects produce a receipt.
+
+Canonical Trace includes discovery, decision, admission, start, Tool call, completion, failure,
+fallback and feedback events. Skill output is persisted as a provenance-bearing `OBS-*`
+observation after central redaction.

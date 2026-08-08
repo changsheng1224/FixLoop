@@ -63,6 +63,8 @@ class SkillContext:
     example_patch: str = ""
     fallback_strategy: str = ""
     confidence: float = 0.0
+    canonical_decision: dict = field(default_factory=dict)
+    invocation_refs: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -74,6 +76,8 @@ class SkillContext:
             "example_patch": self.example_patch,
             "fallback_strategy": self.fallback_strategy,
             "confidence": self.confidence,
+            "canonical_decision": dict(self.canonical_decision),
+            "invocation_refs": list(self.invocation_refs),
         }
 
     @classmethod
@@ -90,6 +94,8 @@ class SkillContext:
                 raw.get("fallback_strategy") or raw.get("skill_fallback_strategy") or ""
             ),
             confidence=float(raw.get("confidence", 0.0)),
+            canonical_decision=dict(raw.get("canonical_decision") or {}),
+            invocation_refs=list(raw.get("invocation_refs") or []),
         )
 
 
@@ -423,6 +429,12 @@ class RepairState:
     blackboard_revision: int = 0
     field_owners: dict[str, str] = field(default_factory=dict)
     collaboration_attribution: dict = field(default_factory=dict)
+    phase_history: list[dict] = field(default_factory=list)
+    workspace_manifest: dict = field(default_factory=dict)
+    action_ledger: list[dict] = field(default_factory=list)
+    side_effects: list[dict] = field(default_factory=list)
+    checkpoint_id: str = ""
+    checkpoint_sequence: int = 0
 
     def to_dict(self) -> dict:
         """序列化为 JSON 可写 dict。"""
@@ -462,6 +474,12 @@ class RepairState:
             "blackboard_revision": self.blackboard_revision,
             "field_owners": dict(self.field_owners),
             "collaboration_attribution": dict(self.collaboration_attribution),
+            "phase_history": list(self.phase_history),
+            "workspace_manifest": dict(self.workspace_manifest),
+            "action_ledger": list(self.action_ledger),
+            "side_effects": list(self.side_effects),
+            "checkpoint_id": self.checkpoint_id,
+            "checkpoint_sequence": self.checkpoint_sequence,
         }
 
     @classmethod
@@ -513,4 +531,10 @@ class RepairState:
             blackboard_revision=int(data.get("blackboard_revision", 0) or 0),
             field_owners=dict(data.get("field_owners") or {}),
             collaboration_attribution=dict(data.get("collaboration_attribution") or {}),
+            phase_history=list(data.get("phase_history") or []),
+            workspace_manifest=dict(data.get("workspace_manifest") or {}),
+            action_ledger=list(data.get("action_ledger") or []),
+            side_effects=list(data.get("side_effects") or []),
+            checkpoint_id=str(data.get("checkpoint_id", "") or ""),
+            checkpoint_sequence=int(data.get("checkpoint_sequence", 0) or 0),
         )

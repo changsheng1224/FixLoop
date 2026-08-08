@@ -15,6 +15,13 @@ import time
 from pathlib import Path
 from typing import Literal
 
+from agent_runtime.session_contract import (
+    CheckpointEnvelope,
+    SessionIdentity,
+    compare_workspace_manifest,
+    workspace_manifest,
+)
+
 CHECKPOINT_SCHEMA_VERSION = "1.0"
 CheckpointTrigger = Literal["step_end", "user_cancel", "ask_end"]
 VALID_TRIGGERS: frozenset[str] = frozenset({"step_end", "user_cancel", "ask_end"})
@@ -27,6 +34,7 @@ RUNTIME_IDENTITY_KEYS = [
     "approval",
     "max_steps",
     "prompt_assets_fingerprint",
+    "tools_signature",
 ]
 
 
@@ -89,8 +97,32 @@ def create_checkpoint(
         if freshness:
             key_files[path] = freshness
 
+    sequence = max(
+        int(agent.session.get("checkpoint_sequence", 0) or 0),
+        len(agent.session.get("checkpoints", []) or []),
+    ) + 1
+    previous = (agent.session.get("checkpoints", []) or [])[-1:]
+    previous_id = str((previous[0] or {}).get("checkpoint_id", "")) if previous else ""
+    scope = dict(agent.session.get("session_scope") or {})
+    identity = SessionIdentity(
+        session_id=str(agent.session.get("id", "")),
+        user_id=str(scope.get("user_id", "")),
+        workspace_id=str(scope.get("workspace_id", "")),
+        task_id=str(getattr(task_state, "task_id", "") or ""),
+        run_id=str(getattr(task_state, "run_id", "") or ""),
+        attempt_id=str(getattr(task_state, "attempt_id", "") or ""),
+        parent_run_id=str(getattr(task_state, "l2_repair_run_id", "") or ""),
+    )
+    control = _runtime_control_snapshot(agent, task_state)
+    manifest = workspace_manifest(agent._cwd, key_files=list(key_files))
     checkpoint = {
         "schema_version": CHECKPOINT_SCHEMA_VERSION,
+        "checkpoint_envelope_version": "2.0",
+        "checkpoint_id": "cp-" + hashlib.sha256(
+            f"{identity.run_id}:{sequence}:{time.time_ns()}".encode()
+        ).hexdigest()[:16],
+        "sequence": sequence,
+        "parent_checkpoint_id": previous_id,
         "created_at": time.time(),
         "trigger": trigger,
         "run_id": task_state.run_id,
@@ -113,6 +145,12 @@ def create_checkpoint(
         ),
         "last_tool_observation": dict(agent.session.get("_last_tool_observation", {}) or {}),
         "workspace_fingerprint": _workspace_fingerprint(agent._cwd),
+        "identity": identity.to_dict(),
+        "runtime_control": control,
+        "workspace_manifest": manifest,
+        "task_state": task_state.to_dict(),
+        "side_effects": list(agent.session.get("side_effects", []) or []),
+        "terminal_status": str(getattr(task_state, "status", "running") or "running"),
     }
     from agent_runtime.context_runtime import build_context_manifest
 
@@ -126,27 +164,125 @@ def create_checkpoint(
     )[-100:]
     if trigger == "user_cancel" and in_flight_tool:
         checkpoint["in_flight_tool"] = in_flight_tool
+        checkpoint["in_flight_action"] = dict(
+            agent.session.get("_in_flight_action", {}) or {}
+        )
+        checkpoint["side_effect_status"] = "uncertain"
     if step_payload:
         checkpoint.update(step_payload)
 
+    task_state.checkpoint_id = checkpoint["checkpoint_id"]
+    task_state.checkpoint_sequence = sequence
+    task_state.parent_checkpoint_id = previous_id
+    checkpoint["task_state"] = task_state.to_dict()
+
+    envelope = CheckpointEnvelope(
+        checkpoint_id=checkpoint["checkpoint_id"],
+        sequence=sequence,
+        trigger=trigger,
+        safe_point="tool_step" if trigger == "step_end" else "full_session",
+        identity=identity.to_dict(),
+        runtime_control=control,
+        task_state=checkpoint.get("task_state", {}),
+        context_manifest=checkpoint.get("context_manifest", {}),
+        workspace_manifest=manifest,
+        action_ledger=checkpoint.get("action_ledger", []),
+        side_effects=checkpoint.get("side_effects", []),
+        terminal_status=checkpoint["terminal_status"],
+        parent_checkpoint_id=previous_id,
+    ).seal()
+    checkpoint["checkpoint_envelope"] = envelope.to_dict()
+    checkpoint["checksum"] = envelope.checksum
+    checkpoint["safe_point"] = envelope.safe_point
+
     # 存入 session
     agent.session.setdefault("checkpoints", []).append(checkpoint)
+    agent.session["checkpoints"] = agent.session["checkpoints"][-100:]
+    agent.session["checkpoint_sequence"] = sequence
+    loop = getattr(agent, "_loop", None)
+    if loop is not None and hasattr(loop, "_emit"):
+        try:
+            loop._emit(
+                "checkpoint_committed",
+                {
+                    "checkpoint_id": checkpoint["checkpoint_id"],
+                    "sequence": sequence,
+                    "trigger": trigger,
+                    "safe_point": envelope.safe_point,
+                },
+            )
+        except Exception:
+            pass
     return checkpoint
+
+
+def _runtime_control_snapshot(agent, task_state) -> dict:
+    budget = getattr(agent, "_repair_budget", None)
+    deadline = getattr(agent, "_repair_deadline", None)
+    loop = getattr(agent, "_loop", None)
+    return {
+        "max_steps": int(
+            getattr(loop, "max_steps", 0)
+            or getattr(agent.config, "max_steps", 0)
+            or 0
+        ),
+        "budget": budget.snapshot() if budget is not None else {},
+        "deadline": deadline.snapshot() if deadline is not None else {"remaining_s": None},
+        "retry_count": int(getattr(loop, "_retry_count", 0) or 0),
+        "no_progress_steps": int(getattr(loop, "_no_progress_steps", 0) or 0),
+        "json_retry_count": int(getattr(loop, "_json_retry_count", 0) or 0),
+        "empty_retries": int(getattr(loop, "_empty_retries", 0) or 0),
+        "turn": int(getattr(task_state, "turn", 0) or 0),
+        "tool_steps": int(getattr(task_state, "tool_steps", 0) or 0),
+    }
 
 
 def evaluate_resume_state(agent) -> dict:
     """评估 resume 状态。返回 status + stale_files + identity_diff + last_checkpoint。"""
     checkpoints = agent.session.get("checkpoints", [])
     if not checkpoints:
-        return _resume_result("no-checkpoint")
+        return _emit_resume_result(agent, _resume_result("no-checkpoint"))
 
     last = checkpoints[-1]
 
+    envelope_raw = last.get("checkpoint_envelope")
+    if isinstance(envelope_raw, dict):
+        try:
+            envelope = CheckpointEnvelope.from_dict(envelope_raw)
+            if not envelope.verify():
+                return _emit_resume_result(agent, _resume_result("integrity-failure", last))
+            if last.get("identity") and last.get("identity") != envelope.identity:
+                return _emit_resume_result(agent, _resume_result("integrity-failure", last))
+            for field in (
+                "task_state",
+                "context_manifest",
+                "workspace_manifest",
+                "action_ledger",
+                "side_effects",
+            ):
+                if field in last and last.get(field) != getattr(envelope, field):
+                    return _emit_resume_result(agent, _resume_result("integrity-failure", last))
+        except (TypeError, ValueError):
+            return _emit_resume_result(agent, _resume_result("integrity-failure", last))
+
     # Schema 版本检查
     if last.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
-        return _resume_result("schema-mismatch", last)
+        return _emit_resume_result(agent, _resume_result("schema-mismatch", last))
 
     result = _resume_result("full-valid", last)
+
+    saved_manifest = last.get("workspace_manifest")
+    if isinstance(saved_manifest, dict) and saved_manifest:
+        manifest_diff = compare_workspace_manifest(
+            saved_manifest,
+            workspace_manifest(
+                agent._cwd,
+                key_files=list((saved_manifest.get("files") or {}).keys()),
+            ),
+        )
+        result["workspace_manifest_diff"] = manifest_diff
+        result["stale_files"].extend(manifest_diff["stale_files"])
+        result["identity_diff"].extend(manifest_diff["identity_diff"])
 
     # 检查 key_files freshness
     for path, saved_hash in last.get("key_files", {}).items():
@@ -161,6 +297,17 @@ def evaluate_resume_state(agent) -> dict:
     saved_id = last.get("runtime_identity", {})
     for key in RUNTIME_IDENTITY_KEYS:
         if current_id.get(key) != saved_id.get(key):
+            result["identity_diff"].append(key)
+    saved_identity = last.get("identity") or {}
+    session_scope = agent.session.get("session_scope") or {}
+    for key in ("session_id", "user_id", "workspace_id"):
+        expected = saved_identity.get(key, "")
+        current = (
+            agent.session.get("id", "")
+            if key == "session_id"
+            else session_scope.get(key, "")
+        )
+        if expected and str(expected) != str(current):
             result["identity_diff"].append(key)
 
     _validate_step_effects(agent, last, result)
@@ -184,6 +331,23 @@ def evaluate_resume_state(agent) -> dict:
             "effects": last.get("effects", []),
         }
 
+    return _emit_resume_result(agent, result)
+
+
+def _emit_resume_result(agent, result: dict) -> dict:
+    loop = getattr(agent, "_loop", None)
+    if loop is not None and hasattr(loop, "_emit"):
+        try:
+            loop._emit(
+                "resume_evaluated",
+                {
+                    "status": result.get("status", ""),
+                    "stale_files": list(result.get("stale_files", []) or []),
+                    "identity_diff": list(result.get("identity_diff", []) or []),
+                },
+            )
+        except Exception:
+            pass
     return result
 
 

@@ -5,6 +5,7 @@
 
 import json
 import time as _time
+import uuid
 
 from agent_runtime.cancellation import CancelledError, run_with_cancellation
 from agent_runtime.compression_pipeline import truncate_tool_result_for_agent
@@ -60,6 +61,7 @@ class AgentLoop:
 
     def __init__(self, agent, max_steps: int | None = None, *, stream: bool = False):
         self.agent = agent
+        agent._loop = self
         self.max_steps = max_steps or agent.config.max_steps
         self.stop_reason = ""
         self._task_state = None
@@ -276,6 +278,18 @@ class AgentLoop:
             changed_files=list(repair_context.get("changed_files", []) or []),
             evidence_count=len(working.get("evidence_ledger", []) or []),
         )
+        terminal_status = ts.stop_reason or ts.status or "completed"
+        if not self._terminal_guard.try_finish(
+            ts.run_id,
+            terminal_status,
+            self._run_finished_payload(ts),
+        ):
+            late = self._terminal_guard.late_events[-1]
+            self._emit(late.kind, late.payload)
+            return answer
+        terminal_event = self._terminal_guard.event
+        if terminal_event is not None:
+            self._emit("run_terminal", terminal_event.payload)
         if recording is not None:
             self._notify_react_phase(
                 ReactPhase.RECORDING,
@@ -481,8 +495,37 @@ class AgentLoop:
         t0 = _time.time()
         if not budget_rejected:
             self._in_flight_tool = tool_name
+            from agent_runtime.context_runtime import build_action_record
+
+            tool_spec = (self.agent.tools or {}).get(tool_name) or {}
+            action = build_action_record(
+                tool_name,
+                tool_args,
+                revision=int(self.agent.session.get("state_revision", 0) or 0),
+                side_effect=str(tool_spec.get("side_effect", "none") or "none"),
+                idempotency_key=f"{ts.run_id}:{step}:{tool_name}",
+                status="dispatched",
+            )
+            self.agent.session["_in_flight_action"] = action.__dict__.copy()
             try:
                 result = self.agent.execute_tool(tool_name, tool_args)
+            except BaseException:
+                self.agent.session["_in_flight_action"]["status"] = "uncertain"
+                self.agent.session["_in_flight_action"]["uncertain_reason"] = "runtime_exception"
+                raise
+            else:
+                action_raw = self.agent.session.get("_in_flight_action", {})
+                action_raw["status"] = (
+                    "acknowledged"
+                    if (getattr(result, "metadata", {}) or {}).get("tool_status") == "success"
+                    else "failed"
+                )
+                action_raw["result_ref"] = str(
+                    (getattr(result, "metadata", {}) or {}).get("observation_id", "")
+                )
+                self.agent.session.setdefault("action_ledger", []).append(action_raw)
+                self.agent.session["action_ledger"] = self.agent.session["action_ledger"][-100:]
+                self.agent.session.pop("_in_flight_action", None)
             finally:
                 self._in_flight_tool = ""
         # Gateway/权限拒绝不计入 tool_steps，避免无效步耗尽预算（E5）
@@ -1115,7 +1158,8 @@ class AgentLoop:
                 last_tool=tool_name,
                 step_payload=payload,
             )
-            ts.checkpoint_id = cp.get("run_id", "") if cp else ""
+            ts.checkpoint_id = cp.get("checkpoint_id", "") if cp else ""
+            ts.checkpoint_sequence = int(cp.get("sequence", 0) or 0) if cp else 0
             SessionStore(root=self.agent._cwd).save(self.agent.session)
             self._get_store().write_task_state(ts)
         except Exception:
@@ -1133,7 +1177,12 @@ class AgentLoop:
 
         shared = getattr(self.agent, "shared_run_id", None)
         agent_name = getattr(self.agent, "_agent_name", "") or "agent"
-        ts = TaskState.create(user_request=user_message, run_id=shared)
+        ts = TaskState.create(
+            user_request=user_message,
+            run_id=shared,
+            session_id=str(self.agent.session.get("id", "") or ""),
+            attempt_id="attempt-" + uuid.uuid4().hex[:16],
+        )
         l2_agent = getattr(self.agent, "_l2_agent", "") or ""
         if shared and l2_agent:
             ts.task_id = getattr(self.agent, "_l2_task_id", "") or f"{shared}-{agent_name}"
@@ -1143,6 +1192,15 @@ class AgentLoop:
             ts.l2_attempt = int(getattr(self.agent, "_l2_attempt", 0) or 0)
         elif shared:
             ts.task_id = f"{shared}-{agent_name}"
+        session_identity = self.agent.session.setdefault("session_identity", {})
+        session_identity.update(
+            {
+                "session_id": ts.session_id,
+                "task_id": ts.task_id,
+                "run_id": ts.run_id,
+                "attempt_id": ts.attempt_id,
+            }
+        )
         self._task_state = ts
         self._call_timings = []
         self._retry_count = 0
@@ -1211,9 +1269,14 @@ class AgentLoop:
         ts.stop_reason = ""
         ts.final_answer = ""
         self._task_state = ts
+        if checkpoint.get("action_ledger") is not None:
+            self.agent.session["action_ledger"] = list(checkpoint.get("action_ledger") or [])[-100:]
+        if checkpoint.get("side_effects") is not None:
+            self.agent.session["side_effects"] = list(checkpoint.get("side_effects") or [])
+        if checkpoint.get("workspace_manifest"):
+            self.agent.session["workspace_manifest"] = dict(checkpoint["workspace_manifest"])
+        self._restore_runtime_control(checkpoint.get("runtime_control") or {})
         self._call_timings = []
-        self._retry_count = 0
-        self._no_progress_steps = 0
         user_message = checkpoint.get("next_user_message", "")
 
         cb = self.agent.circuit_breaker
@@ -1245,6 +1308,25 @@ class AgentLoop:
                 return answer
         finally:
             cb.remove_listener(self._circuit_trace_listener)
+
+    def _restore_runtime_control(self, control: dict) -> None:
+        """Restore budget/deadline/retry counters without resetting run limits."""
+        from agent_runtime.repair_runtime import ExecutionDeadline
+
+        if not control:
+            return
+        max_steps = int(control.get("max_steps", self.max_steps) or self.max_steps)
+        self.max_steps = max_steps
+        budget = control.get("budget") or {}
+        if budget:
+            self._repair_budget.restore(budget)
+        deadline = control.get("deadline") or {}
+        self._repair_deadline = ExecutionDeadline.from_remaining(deadline.get("remaining_s"))
+        self.agent._repair_deadline = self._repair_deadline
+        self._retry_count = int(control.get("retry_count", self._retry_count) or 0)
+        self._no_progress_steps = int(control.get("no_progress_steps", 0) or 0)
+        self._json_retry_count = int(control.get("json_retry_count", 0) or 0)
+        self._empty_retries = int(control.get("empty_retries", 0) or 0)
 
     def _run_with_native_tools(self, user_message: str, ts, callback=None) -> str:
         client = self.agent.model_client

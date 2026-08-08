@@ -89,6 +89,9 @@ class Observation:
     token_cost: int = 0
     created_at: float = field(default_factory=time.time)
     stale: bool = False
+    provenance: dict[str, Any] = field(default_factory=dict)
+    status: str = "ok"
+    redacted: bool = False
 
 
 class ObservationStore:
@@ -113,6 +116,9 @@ class ObservationStore:
         summary: str = "",
         source_version: str = "",
         structured_facts: list[dict[str, Any]] | None = None,
+        provenance: dict[str, Any] | None = None,
+        status: str = "ok",
+        redact: bool = False,
     ) -> Observation:
         args_hash = self._args_hash(args)
         key = f"{tool}:{args_hash}:{source_version}"
@@ -122,7 +128,8 @@ class ObservationStore:
             if not existing.stale:
                 return existing
         observation_id = "OBS-" + hashlib.sha256(key.encode()).hexdigest()[:12]
-        raw_ref = self._persist_raw(observation_id, raw_text)
+        persisted_text = self._redact(raw_text) if redact else raw_text
+        raw_ref = self._persist_raw(observation_id, persisted_text)
         observation = Observation(
             observation_id=observation_id,
             tool=tool,
@@ -132,10 +139,30 @@ class ObservationStore:
             raw_ref=raw_ref,
             structured_facts=list(structured_facts or []),
             token_cost=max(1, len((summary or raw_text).split())),
+            provenance=dict(provenance or {}),
+            status=status,
+            redacted=redact,
         )
         self.registry[observation_id] = asdict(observation)
         self.state.setdefault("observation_index", {})[key] = observation_id
         return observation
+
+    @staticmethod
+    def _redact(text: str) -> str:
+        """Best-effort central redaction before raw persistence."""
+        import re
+
+        result = str(text)
+        result = re.sub(
+            r"(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*[^\s,;]+",
+            lambda match: f"{match.group(1)}:[REDACTED]",
+            result,
+        )
+        return re.sub(
+            r"(?i)authorization:\s*bearer\s+[^\s]+",
+            "authorization:[REDACTED]",
+            result,
+        )
 
     def mark_stale_for_version(self, source_version: str) -> int:
         count = 0
@@ -227,6 +254,11 @@ class ActionRecord:
     result_ref: str = ""
     side_effect: str = "none"
     replay_policy: str = "revalidate"
+    status: str = "planned"
+    idempotency_key: str = ""
+    receipt: str = ""
+    postcondition: dict[str, Any] = field(default_factory=dict)
+    uncertain_reason: str = ""
 
 
 def build_context_manifest(
@@ -251,6 +283,8 @@ def build_action_record(
     revision: int,
     result_ref: str = "",
     side_effect: str = "none",
+    idempotency_key: str = "",
+    status: str = "planned",
 ) -> ActionRecord:
     raw = json.dumps(args or {}, sort_keys=True, ensure_ascii=True, default=str)
     return ActionRecord(
@@ -260,7 +294,20 @@ def build_action_record(
         precondition_revision=revision,
         result_ref=result_ref,
         side_effect=side_effect,
-        replay_policy="never_replay" if side_effect in {"write", "external"} else "revalidate",
+        replay_policy=(
+            "never_replay"
+            if side_effect in {
+                "write",
+                "external",
+                "local_write",
+                "remote_write",
+                "external_write",
+                "destructive",
+            }
+            else "revalidate"
+        ),
+        status=status,
+        idempotency_key=idempotency_key,
     )
 
 
@@ -283,3 +330,32 @@ def replay_policy(state: dict[str, Any], tool: str, args: dict[str, Any]) -> str
     if not matches:
         return "revalidate"
     return str(matches[-1].get("replay_policy", "revalidate"))
+
+
+def action_recovery_decision(
+    state: dict[str, Any],
+    tool: str,
+    args: dict[str, Any],
+) -> dict[str, Any]:
+    """Return a conservative replay decision for an interrupted action."""
+    raw = json.dumps(args or {}, sort_keys=True, ensure_ascii=True, default=str)
+    args_hash = hashlib.sha256(raw.encode()).hexdigest()[:16]
+    matches = [
+        item
+        for item in state.get("action_ledger", [])
+        if item.get("tool") == tool and item.get("args_hash") == args_hash
+    ]
+    if not matches:
+        return {"decision": "execute", "reason": "no_prior_action", "matches": 0}
+    latest = matches[-1]
+    status = str(latest.get("status", "planned"))
+    policy = str(latest.get("replay_policy", "revalidate"))
+    if status in {"verified", "acknowledged", "succeeded"}:
+        return {"decision": "reuse", "reason": "already_verified", "action": latest}
+    if status in {"dispatched", "uncertain"}:
+        return {"decision": "revalidate", "reason": "side_effect_uncertain", "action": latest}
+    if policy == "never_replay":
+        return {"decision": "block", "reason": "never_replay", "action": latest}
+    if policy == "retry_idempotent" and latest.get("idempotency_key"):
+        return {"decision": "retry", "reason": "idempotent_retry", "action": latest}
+    return {"decision": "revalidate", "reason": "policy_revalidate", "action": latest}

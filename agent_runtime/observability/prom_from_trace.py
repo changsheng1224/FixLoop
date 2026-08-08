@@ -74,6 +74,16 @@ def record_canonical_event(record: dict[str, Any], registry: Any | None = None) 
                 ),
             )
 
+        if event.startswith("skill_"):
+            registry.counter_inc(
+                "fixloop_skill_events_total",
+                labels=low_cardinality_labels(
+                    skill=_skill_label(payload),
+                    status=status,
+                    phase=event.removeprefix("skill_"),
+                ),
+            )
+
         if status == "error" or event in ("repair_cancelled", "run_cancelled"):
             registry.counter_inc(
                 "fixloop_errors_total",

@@ -169,7 +169,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         state.node_timings["repair_mode"] = "patcher_primary"
         state.node_timings["localize_skipped"] = True
         state.node_timings["retrieve_skipped"] = True
-        state.phase = "seed"
+        from src.repair.phase_fsm import RepairPhaseFSM
+
+        RepairPhaseFSM.from_state(state).apply(state, "seed", "primary localization seed")
 
         test_patch = ""
         if self._repair_ctx is not None:
@@ -430,10 +432,16 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     )
                     # 可执行 Skill Router（与策略 YAML Skill 并存；失败不影响主路径）
                     try:
+                        from src.skills.decision import build_canonical_skill_decision
                         from src.skills.router import SkillRouter
 
                         decision = SkillRouter().route(issue)
                         tracer.emit("orchestrator", "skill_routed", decision.to_trace_payload())
+                        canonical = build_canonical_skill_decision(matched, decision)
+                        state.repair_plan.skill.canonical_decision = canonical.to_dict()
+                        tracer.emit("orchestrator", "skill_decided", canonical.to_dict())
+                        if canonical.fallback:
+                            tracer.emit("orchestrator", "skill_fallback", canonical.to_dict())
                     except Exception:
                         pass
                 state.node_timings["parse_issue_ms"] = parse_ms
@@ -928,8 +936,24 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
     def _restore_state_from_repair_checkpoint(self, state: RepairState, checkpoint: dict) -> None:
         """从 checkpoint 恢复长程可续跑字段（含 timings / 策略 / 失败面）。"""
+        from agent_runtime.session_contract import compare_workspace_manifest, workspace_manifest
         from src.state import CandidatePatch, RepairPlan, VerificationResult
 
+        saved_manifest = checkpoint.get("workspace_manifest") or {}
+        if saved_manifest:
+            repo_root = getattr(self, "_repo_root", "") or saved_manifest.get("root", "")
+            manifest_diff = compare_workspace_manifest(
+                saved_manifest,
+                workspace_manifest(
+                    repo_root,
+                    key_files=list((saved_manifest.get("files") or {}).keys()),
+                ),
+            )
+            state.node_timings["resume_workspace_manifest"] = manifest_diff
+            if not manifest_diff["exact_match"]:
+                state.node_timings["resume_workspace_stale"] = True
+
+        state.node_timings = dict(checkpoint.get("node_timings") or {})
         state.retry_count = checkpoint.get("retry_count", 0)
         state.max_retries = checkpoint.get("max_retries", state.max_retries)
         state.phase = checkpoint.get("phase", "patch")
@@ -941,7 +965,6 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         else:
             state.status = status
         state.failure_tags = list(checkpoint.get("failure_tags") or [])
-        state.node_timings = dict(checkpoint.get("node_timings") or {})
         state.agent_errors = dict(checkpoint.get("agent_errors") or {})
         state.blackboard_snapshot = checkpoint.get("blackboard_snapshot", {}) or {}
         state.degraded_mode = bool(checkpoint.get("degraded_mode", False))
@@ -967,6 +990,30 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             plan_data = checkpoint["repair_plan"]
             if isinstance(plan_data, dict):
                 state.repair_plan = RepairPlan.from_dict(plan_data)
+        state.state_revision = int(checkpoint.get("state_revision", state.state_revision) or 0)
+        state.attempt = int(checkpoint.get("attempt", state.attempt) or 0) + 1
+        state.intent = dict(checkpoint.get("intent") or {})
+        state.hypotheses = list(checkpoint.get("hypotheses") or [])
+        state.evidence = list(checkpoint.get("evidence") or [])
+        state.changed_files = list(checkpoint.get("changed_files") or [])
+        state.tool_budget = dict(checkpoint.get("tool_budget") or {})
+        state.active_roles = list(checkpoint.get("active_roles") or [])
+        state.role_lifecycle = dict(checkpoint.get("role_lifecycle") or {})
+        state.blackboard_revision = int(checkpoint.get("blackboard_revision", 0) or 0)
+        state.field_owners = dict(checkpoint.get("field_owners") or {})
+        state.phase_history = list(checkpoint.get("phase_history") or [])
+        state.workspace_manifest = dict(checkpoint.get("workspace_manifest") or {})
+        state.action_ledger = list(checkpoint.get("action_ledger") or [])
+        state.side_effects = list(checkpoint.get("side_effects") or [])
+        state.checkpoint_id = str(checkpoint.get("checkpoint_id", "") or "")
+        state.checkpoint_sequence = int(checkpoint.get("checkpoint_sequence", 0) or 0)
+        if state.node_timings.get("resume_workspace_stale"):
+            state.retrieved_context = None
+            state.candidate_patches = []
+            state.verification_result = None
+            from src.repair.phase_fsm import resume_phase_for_invalidated_workspace
+
+            state.phase = resume_phase_for_invalidated_workspace(state)
 
     def _checkpoint_progress(self, state: RepairState) -> None:
         """patch/verify 回合中落盘，支持中断后续跑。"""

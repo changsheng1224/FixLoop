@@ -42,6 +42,15 @@ class TaskState:
     phase: str = ""
     turn: int = 0
     failure_attribution: dict = field(default_factory=dict)
+    session_id: str = ""
+    attempt_id: str = ""
+    parent_checkpoint_id: str = ""
+    checkpoint_sequence: int = 0
+    state_revision: int = 0
+    runtime_control: dict = field(default_factory=dict)
+    workspace_manifest: dict = field(default_factory=dict)
+    action_ledger: list[dict] = field(default_factory=list)
+    side_effects: list[dict] = field(default_factory=list)
 
     @classmethod
     def create(
@@ -49,6 +58,8 @@ class TaskState:
         task_id: str = "",
         user_request: str = "",
         run_id: str | None = None,
+        session_id: str = "",
+        attempt_id: str = "",
     ) -> "TaskState":
         """创建新的 TaskState。
 
@@ -65,6 +76,8 @@ class TaskState:
             run_id=rid,
             task_id=task_id or rid,
             user_request=user_request,
+            session_id=session_id,
+            attempt_id=attempt_id,
         )
 
     # ---- 状态转换方法 ----
@@ -202,6 +215,15 @@ class TaskState:
             "phase": self.phase,
             "turn": self.turn,
             "failure_attribution": self.failure_attribution,
+            "session_id": self.session_id,
+            "attempt_id": self.attempt_id,
+            "parent_checkpoint_id": self.parent_checkpoint_id,
+            "checkpoint_sequence": self.checkpoint_sequence,
+            "state_revision": self.state_revision,
+            "runtime_control": dict(self.runtime_control),
+            "workspace_manifest": dict(self.workspace_manifest),
+            "action_ledger": list(self.action_ledger),
+            "side_effects": list(self.side_effects),
         }
 
     @classmethod
@@ -235,4 +257,13 @@ class TaskState:
             phase=data.get("phase", ""),
             turn=int(data.get("turn", 0) or 0),
             failure_attribution=dict(data.get("failure_attribution", {}) or {}),
+            session_id=str(data.get("session_id", "") or ""),
+            attempt_id=str(data.get("attempt_id", "") or ""),
+            parent_checkpoint_id=str(data.get("parent_checkpoint_id", "") or ""),
+            checkpoint_sequence=int(data.get("checkpoint_sequence", 0) or 0),
+            state_revision=int(data.get("state_revision", 0) or 0),
+            runtime_control=dict(data.get("runtime_control", {}) or {}),
+            workspace_manifest=dict(data.get("workspace_manifest", {}) or {}),
+            action_ledger=list(data.get("action_ledger", []) or []),
+            side_effects=list(data.get("side_effects", []) or []),
         )
