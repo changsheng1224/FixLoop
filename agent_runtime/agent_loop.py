@@ -46,7 +46,7 @@ def _build_anthropic_tools(tools_registry: dict) -> list[dict]:
 
     result = []
     for name, spec in tool_schema_view(tools_registry).items():
-        schema = spec.get("schema", {})
+        schema = spec.get("json_schema") or spec.get("schema", {})
         result.append(
             {
                 "name": name,
@@ -568,8 +568,48 @@ class AgentLoop:
         from agent_runtime.tool_budget import infer_tool_budget_group
 
         group = infer_tool_budget_group(tool_name, (self.agent.tools or {}).get(tool_name))
+        idempotency_key = f"{ts.run_id}:{step}:{tool_name}"
+        replayed = False
+        replay_blocked = False
+        from agent_runtime.context_runtime import find_action_by_idempotency
+
+        prior_action = find_action_by_idempotency(self.agent.session, idempotency_key)
+        if prior_action is not None:
+            prior_status = str(prior_action.get("status", ""))
+            prior_spec = (self.agent.tools or {}).get(tool_name) or {}
+            if prior_status in {"verified", "succeeded"}:
+                from agent_runtime.tool_executor import ToolExecutionResult
+
+                result = ToolExecutionResult(
+                    content="[idempotent replay] 已复用已验证的工具结果",
+                    status="success",
+                    metadata={
+                        "tool_status": "success",
+                        "replayed": True,
+                        "observation_id": prior_action.get("result_ref", ""),
+                        "receipt": prior_action.get("receipt", {}),
+                    },
+                )
+                replayed = True
+            elif prior_status in {"dispatched", "uncertain"} and str(
+                prior_spec.get("side_effect", "none")
+            ) not in {"read", "none", ""}:
+                from agent_runtime.tool_executor import ToolExecutionResult
+
+                result = ToolExecutionResult(
+                    content="Error: 幂等操作状态不确定，需先执行 postcondition reconciliation",
+                    status="uncertain",
+                    error_code="idempotency_conflict",
+                    metadata={
+                        "tool_status": "uncertain",
+                        "tool_error_code": "idempotency_conflict",
+                        "retryable": False,
+                        "action": prior_action,
+                    },
+                )
+                replay_blocked = True
         budget_rejected = self._repair_deadline.expired()
-        if budget_rejected:
+        if not replayed and not replay_blocked and budget_rejected:
             from agent_runtime.tool_executor import ToolExecutionResult
 
             result = ToolExecutionResult(
@@ -580,8 +620,10 @@ class AgentLoop:
                     "retryable": False,
                 },
             )
-        elif not self._repair_budget.allow_tool(group.value) or not self._budget_allows_tool(
+        elif not replayed and not replay_blocked and (
+            not self._repair_budget.allow_tool(group.value) or not self._budget_allows_tool(
             group.value
+            )
         ):
             from agent_runtime.tool_executor import ToolExecutionResult
 
@@ -621,14 +663,14 @@ class AgentLoop:
                 }
             )
         t0 = _time.time()
-        if not budget_rejected:
+        if not budget_rejected and not replayed and not replay_blocked:
             self._budget_reserve("tool_calls")
             if group.value in {"write", "verify", "recovery"}:
                 self._budget_reserve(
                     {"write": "writes", "verify": "verifies", "recovery": "recoveries"}[group.value]
                 )
             self._in_flight_tool = tool_name
-            from agent_runtime.context_runtime import build_action_record
+            from agent_runtime.context_runtime import build_action_record, transition_action
 
             tool_spec = (self.agent.tools or {}).get(tool_name) or {}
             action = build_action_record(
@@ -636,7 +678,7 @@ class AgentLoop:
                 tool_args,
                 revision=int(self.agent.session.get("state_revision", 0) or 0),
                 side_effect=str(tool_spec.get("side_effect", "none") or "none"),
-                idempotency_key=f"{ts.run_id}:{step}:{tool_name}",
+                idempotency_key=idempotency_key,
                 status="dispatched",
             )
             self.agent.session["_in_flight_action"] = action.__dict__.copy()
@@ -648,14 +690,35 @@ class AgentLoop:
                 raise
             else:
                 action_raw = self.agent.session.get("_in_flight_action", {})
-                action_raw["status"] = (
-                    "acknowledged"
-                    if (getattr(result, "metadata", {}) or {}).get("tool_status") == "success"
-                    else "failed"
-                )
-                action_raw["result_ref"] = str(
-                    (getattr(result, "metadata", {}) or {}).get("observation_id", "")
-                )
+                result_meta = getattr(result, "metadata", {}) or {}
+                result_status = str(result_meta.get("tool_status", "error"))
+                error_code = str(result_meta.get("tool_error_code", "") or "")
+                if result_status == "success":
+                    next_status = (
+                        "verified"
+                        if str(tool_spec.get("side_effect", "none")) in {"read", "none"}
+                        or result_meta.get("postcondition_verified")
+                        else "acknowledged"
+                    )
+                elif result_status in {"cancelled", "uncertain"} or error_code in {
+                    "tool_timeout",
+                    "deadline_exceeded",
+                    "tool_cancelled",
+                }:
+                    next_status = "uncertain"
+                else:
+                    next_status = "failed"
+                try:
+                    action_raw = transition_action(
+                        action_raw,
+                        next_status,
+                        reason=error_code,
+                        receipt=result_meta.get("receipt"),
+                    )
+                except ValueError:
+                    action_raw["status"] = "uncertain"
+                    action_raw["uncertain_reason"] = "invalid_transition"
+                action_raw["result_ref"] = str(result_meta.get("observation_id", ""))
                 self.agent.session.setdefault("action_ledger", []).append(action_raw)
                 self.agent.session["action_ledger"] = self.agent.session["action_ledger"][-100:]
                 self.agent.session.pop("_in_flight_action", None)
@@ -719,10 +782,15 @@ class AgentLoop:
             tool_args,
             raw_observation,
             summary=result_text[:500],
-            source_version=str(_meta.get("source_version", "") or ""),
+            source_version=str(
+                _meta.get("source_version")
+                or ((self.agent.tools or {}).get(tool_name) or {}).get("version", "")
+                or ""
+            ),
             structured_facts=structured_facts,
             dependencies=list(observation.changed_files),
             error_code=observation.failure_class,
+            status=observation.status,
             evidence_refs=list(observation.evidence_ids),
             redact=True,
         )
@@ -732,6 +800,16 @@ class AgentLoop:
         observation_dict["observation_id"] = stored.observation_id
         observation_dict["raw_ref"] = stored.raw_ref
         _meta["observation_id"] = stored.observation_id
+        _meta["artifact_ref"] = stored.raw_ref
+        # Complete the action receipt after the observation has been durably
+        # stored. This makes idempotent resume able to point at the exact
+        # persisted result instead of replaying an opaque success message.
+        ledger = self.agent.session.get("action_ledger", [])
+        for action_raw in reversed(ledger):
+            if action_raw.get("idempotency_key") == idempotency_key:
+                action_raw["result_ref"] = stored.observation_id
+                action_raw["artifact_ref"] = stored.raw_ref
+                break
         self._emit(
             "observation_stored",
             {
@@ -771,7 +849,17 @@ class AgentLoop:
             elapsed_ms=te_ms,
             path=str(path),
         )
-        result_text = truncate_tool_result_for_agent(self.agent, tool_name, result_text)
+        projected_result_text = truncate_tool_result_for_agent(self.agent, tool_name, result_text)
+        if len(projected_result_text) < len(result_text):
+            _meta["output_truncated"] = True
+            if hasattr(result, "output_truncated"):
+                result.output_truncated = True
+            if stored.raw_ref:
+                projected_result_text += (
+                    f"\n[output_truncated=true artifact_ref={stored.raw_ref} "
+                    f"observation_id={stored.observation_id}]"
+                )
+        result_text = projected_result_text
         ts.node_timings.setdefault("tool_exec_ms", 0)
         ts.node_timings["tool_exec_ms"] += te_ms
         _log_loop(f"  [loop] {tool_name} tool={te_ms}ms\n")

@@ -30,6 +30,18 @@ class ToolSpec:
     requires_read_before_write: bool = False
     provider: str = "local"
     server: str = ""
+    execution_mode: str = "thread"
+    max_retries: int = 0
+    retry_backoff_s: float = 0.1
+    rate_limit_per_minute: int = 0
+    circuit_breaker_threshold: int = 0
+
+    def json_schema(self) -> dict[str, Any]:
+        """Return the canonical provider-neutral JSON Schema."""
+        from agent_runtime.tool_schema import schema_to_json
+
+        source = self.protocol_schema or self.input_schema
+        return schema_to_json(dict(source or {}))
 
     def public_view(self) -> dict[str, Any]:
         raw = asdict(self)
@@ -38,6 +50,7 @@ class ToolSpec:
         raw["phases"] = sorted(self.phases)
         raw["modes"] = sorted(self.modes)
         raw["capabilities"] = sorted(self.capabilities)
+        raw["json_schema"] = self.json_schema()
         return raw
 
 
@@ -91,7 +104,9 @@ class ToolRegistry:
                         name=name,
                         description=str(legacy.get("description", "")),
                         input_schema=dict(legacy.get("schema") or {}),
-                        protocol_schema=dict(legacy.get("protocol_schema") or {}),
+                        protocol_schema=dict(
+                            legacy.get("json_schema") or legacy.get("protocol_schema") or {}
+                        ),
                         executor=legacy.get("run"),
                         roles=frozenset(legacy.get("roles") or []),
                         phases=frozenset(legacy.get("phases") or []),
@@ -106,6 +121,13 @@ class ToolRegistry:
                         capabilities=frozenset(legacy.get("capabilities") or []),
                         provider=str(legacy.get("provider") or "local"),
                         server=str(legacy.get("server") or ""),
+                        execution_mode=str(legacy.get("execution_mode") or "thread"),
+                        max_retries=max(0, int(legacy.get("max_retries") or 0)),
+                        retry_backoff_s=float(legacy.get("retry_backoff_s") or 0.1),
+                        rate_limit_per_minute=max(0, int(legacy.get("rate_limit_per_minute") or 0)),
+                        circuit_breaker_threshold=max(
+                            0, int(legacy.get("circuit_breaker_threshold") or 0)
+                        ),
                     )
                 )
                 continue
@@ -114,7 +136,9 @@ class ToolRegistry:
                 description=str(legacy.get("description") or current.description),
                 input_schema=dict(legacy.get("schema") or current.input_schema),
                 protocol_schema=dict(
-                    legacy.get("protocol_schema") or current.protocol_schema
+                    legacy.get("json_schema")
+                    or legacy.get("protocol_schema")
+                    or current.protocol_schema
                 ),
                 executor=legacy.get("run") or current.executor,
                 budget_group=str(legacy.get("budget_group") or current.budget_group),
@@ -127,6 +151,19 @@ class ToolRegistry:
                 capabilities=frozenset(legacy.get("capabilities") or current.capabilities),
                 provider=str(legacy.get("provider") or current.provider),
                 server=str(legacy.get("server") or current.server),
+                execution_mode=str(legacy.get("execution_mode") or current.execution_mode),
+                max_retries=max(0, int(legacy.get("max_retries") or current.max_retries)),
+                retry_backoff_s=float(legacy.get("retry_backoff_s") or current.retry_backoff_s),
+                rate_limit_per_minute=max(
+                    0, int(legacy.get("rate_limit_per_minute") or current.rate_limit_per_minute)
+                ),
+                circuit_breaker_threshold=max(
+                    0,
+                    int(
+                        legacy.get("circuit_breaker_threshold")
+                        or current.circuit_breaker_threshold
+                    ),
+                ),
             )
         return self
 
@@ -221,6 +258,7 @@ def bind_execution_tools(tools: dict[str, dict], registry: ToolRegistry) -> dict
         legacy.update(
             {
                 "version": spec.version,
+                "json_schema": spec.json_schema(),
                 "lifecycle": spec.lifecycle,
                 "roles": sorted(spec.roles),
                 "phases": sorted(spec.phases),
@@ -233,6 +271,11 @@ def bind_execution_tools(tools: dict[str, dict], registry: ToolRegistry) -> dict
                 "capabilities": sorted(spec.capabilities),
                 "provider": spec.provider,
                 "server": spec.server,
+                "execution_mode": spec.execution_mode,
+                "max_retries": spec.max_retries,
+                "retry_backoff_s": spec.retry_backoff_s,
+                "rate_limit_per_minute": spec.rate_limit_per_minute,
+                "circuit_breaker_threshold": spec.circuit_breaker_threshold,
             }
         )
     return tools
@@ -244,6 +287,7 @@ def project_tool_specs(specs: list[ToolSpec]) -> dict[str, dict]:
     for spec in specs:
         projected[spec.name] = {
             "schema": dict(spec.input_schema),
+            "json_schema": spec.json_schema(),
             "protocol_schema": dict(spec.protocol_schema),
             "description": spec.description,
             "run": spec.executor,
@@ -262,5 +306,10 @@ def project_tool_specs(specs: list[ToolSpec]) -> dict[str, dict]:
             "capabilities": sorted(spec.capabilities),
             "provider": spec.provider,
             "server": spec.server,
+            "execution_mode": spec.execution_mode,
+            "max_retries": spec.max_retries,
+            "retry_backoff_s": spec.retry_backoff_s,
+            "rate_limit_per_minute": spec.rate_limit_per_minute,
+            "circuit_breaker_threshold": spec.circuit_breaker_threshold,
         }
     return projected
