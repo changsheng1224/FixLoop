@@ -75,6 +75,10 @@ def migrate_state_payload(data: dict[str, Any] | None) -> dict[str, Any]:
         # attribution.  Keep the migration explicit and deterministic.
         payload.setdefault("attempt", 0)
         payload.setdefault("collaboration_attribution", {})
+        payload.setdefault("collaboration_tasks", [])
+        payload.setdefault("handoffs", [])
+        payload.setdefault("effect_receipts", {})
+        payload.setdefault("task_dag_snapshot", {})
         payload["schema_version"] = CURRENT_STATE_SCHEMA_VERSION
     return payload
 
@@ -493,6 +497,10 @@ class RepairState:
     blackboard_revision: int = 0
     field_owners: dict[str, str] = field(default_factory=dict)
     collaboration_attribution: dict = field(default_factory=dict)
+    collaboration_tasks: list[dict] = field(default_factory=list)
+    handoffs: list[dict] = field(default_factory=list)
+    effect_receipts: dict[str, dict] = field(default_factory=dict)
+    task_dag_snapshot: dict = field(default_factory=dict)
     phase_history: list[dict] = field(default_factory=list)
     workspace_manifest: dict = field(default_factory=dict)
     action_ledger: list[dict] = field(default_factory=list)
@@ -532,6 +540,27 @@ class RepairState:
         for suspect in self.suspect_locations:
             if suspect.start_line < 0 or suspect.end_line < suspect.start_line:
                 errors.append("suspect location line range is invalid")
+        tasks = list(self.collaboration_tasks or [])
+        task_ids = [str(item.get("task_id", "")) for item in tasks]
+        if any(not task_id for task_id in task_ids):
+            errors.append("collaboration tasks require task_id")
+        if len(task_ids) != len(set(task_ids)):
+            errors.append("collaboration task_ids must be unique")
+        known_task_ids = set(task_ids)
+        for item in tasks:
+            unknown = [
+                str(dep)
+                for dep in (item.get("depends_on") or [])
+                if str(dep) not in known_task_ids
+            ]
+            if unknown:
+                errors.append("collaboration task has unknown dependency")
+                break
+        handoff_ids = [str(item.get("handoff_id", "")) for item in (self.handoffs or [])]
+        if any(not handoff_id for handoff_id in handoff_ids):
+            errors.append("handoffs require handoff_id")
+        if len(handoff_ids) != len(set(handoff_ids)):
+            errors.append("handoff_ids must be unique")
         if strict and self.status in {
             RepairStatus.FIXED,
             RepairStatus.FAILED,
@@ -633,6 +662,10 @@ class RepairState:
             "blackboard_revision": self.blackboard_revision,
             "field_owners": dict(self.field_owners),
             "collaboration_attribution": dict(self.collaboration_attribution),
+            "collaboration_tasks": list(self.collaboration_tasks),
+            "handoffs": list(self.handoffs),
+            "effect_receipts": dict(self.effect_receipts),
+            "task_dag_snapshot": dict(self.task_dag_snapshot),
             "phase_history": list(self.phase_history),
             "workspace_manifest": dict(self.workspace_manifest),
             "action_ledger": list(self.action_ledger),
@@ -691,6 +724,10 @@ class RepairState:
             blackboard_revision=int(data.get("blackboard_revision", 0) or 0),
             field_owners=dict(data.get("field_owners") or {}),
             collaboration_attribution=dict(data.get("collaboration_attribution") or {}),
+            collaboration_tasks=list(data.get("collaboration_tasks") or []),
+            handoffs=list(data.get("handoffs") or []),
+            effect_receipts=dict(data.get("effect_receipts") or {}),
+            task_dag_snapshot=dict(data.get("task_dag_snapshot") or {}),
             phase_history=list(data.get("phase_history") or []),
             workspace_manifest=dict(data.get("workspace_manifest") or {}),
             action_ledger=list(data.get("action_ledger") or []),

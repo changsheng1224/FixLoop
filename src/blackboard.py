@@ -84,6 +84,8 @@ class Blackboard:
         self._conflict_history: list[dict[str, Any]] = []
         self._revision = 0
         self._proposals: dict[str, dict[str, Any]] = {}
+        self._events: list[dict[str, Any]] = []
+        self._event_sequence = 0
         self._lock = RLock()
         self._namespace_policies = list(namespace_policies or [])
 
@@ -134,6 +136,18 @@ class Blackboard:
         for key in expired:
             self._entries.pop(key, None)
 
+    def _append_event_locked(self, event_type: str, payload: dict[str, Any]) -> None:
+        self._event_sequence += 1
+        self._events.append(
+            {
+                "sequence": self._event_sequence,
+                "event_type": str(event_type),
+                "payload": copy.deepcopy(payload),
+                "created_at": time.time(),
+            }
+        )
+        del self._events[:-1000]
+
     def propose(
         self,
         key: str,
@@ -161,6 +175,7 @@ class Blackboard:
                 "created_at": time.time(),
             }
             self._proposals[proposal["proposal_id"]] = proposal
+            self._append_event_locked("proposal_created", proposal)
             return copy.deepcopy(proposal)
 
     def merge_proposal(self, proposal: dict[str, Any]) -> dict[str, Any]:
@@ -171,6 +186,7 @@ class Blackboard:
             existing = self._entries.get(key)
             if proposal.get("status") == "rejected":
                 self._record_conflict_locked({**proposal, "status": "rejected"})
+                self._append_event_locked("proposal_rejected", proposal)
                 return {**proposal, "status": "rejected"}
             expected_entry = proposal.get("base_entry_revision")
             if expected_entry is not None:
@@ -182,10 +198,12 @@ class Blackboard:
                         "current_entry_revision": current_entry_revision,
                     }
                     self._record_conflict_locked(conflict)
+                    self._append_event_locked("proposal_stale", conflict)
                     return conflict
             elif int(proposal.get("base_revision", 0) or 0) != self._revision:
                 conflict = {**proposal, "status": "stale", "current_revision": self._revision}
                 self._record_conflict_locked(conflict)
+                self._append_event_locked("proposal_conflicted", conflict)
                 return conflict
             if existing and existing.value != proposal.get("value"):
                 conflict = {
@@ -206,6 +224,7 @@ class Blackboard:
                 existing.revision = self._revision
                 accepted = {**proposal, "status": "accepted", "revision": self._revision}
                 self._proposals.pop(proposal.get("proposal_id", ""), None)
+                self._append_event_locked("blackboard_merge", accepted)
                 return accepted
             self._revision += 1
             policy = self._policy_for(key)
@@ -225,6 +244,7 @@ class Blackboard:
             self._entries[key] = entry
             accepted = {**proposal, "status": "accepted", "revision": self._revision}
             self._proposals.pop(proposal.get("proposal_id", ""), None)
+            self._append_event_locked("blackboard_merge", accepted)
             return accepted
 
     def _record_conflict_locked(self, conflict: dict[str, Any]) -> None:
@@ -236,6 +256,7 @@ class Blackboard:
         }
         self._conflicts.append(item)
         self._conflict_history.append(copy.deepcopy(item))
+        self._append_event_locked("conflict_detected", item)
 
     def write(
         self,
@@ -256,6 +277,9 @@ class Blackboard:
                 self._record_conflict_locked(
                     {"key": key, "source_agent": source_agent, "value": value, "status": "rejected"}
                 )
+                self._append_event_locked(
+                    "write_rejected", {"key": key, "source_agent": source_agent}
+                )
                 return False
             existing = self._entries.get(key)
             current_entry_revision = existing.revision if existing else 0
@@ -269,6 +293,7 @@ class Blackboard:
                         "current_entry_revision": current_entry_revision,
                     }
                 )
+                self._append_event_locked("write_stale", {"key": key, "source_agent": source_agent})
                 return False
             if existing and existing.source_agent != source_agent:
                 self._record_conflict_locked(
@@ -278,6 +303,9 @@ class Blackboard:
                         "values": [copy.deepcopy(existing.value), copy.deepcopy(value)],
                         "key_revision": current_entry_revision,
                     }
+                )
+                self._append_event_locked(
+                    "write_conflicted", {"key": key, "source_agent": source_agent}
                 )
                 return False
             policy = self._policy_for(key)
@@ -293,6 +321,17 @@ class Blackboard:
                 base_revision=current_entry_revision,
                 revision=self._revision,
                 entry_id=existing.entry_id if existing else uuid.uuid4().hex[:12],
+            )
+            self._append_event_locked(
+                "blackboard_write",
+                {
+                    "key": key,
+                    "value": copy.deepcopy(value),
+                    "source_agent": source_agent,
+                    "ttl": ttl,
+                    "evidence_refs": list(dict.fromkeys(evidence_refs or [])),
+                    "revision": self._revision,
+                },
             )
             return True
 
@@ -324,6 +363,8 @@ class Blackboard:
                 "conflict_history": copy.deepcopy(self._conflict_history),
                 "revision": self._revision,
                 "proposals": copy.deepcopy(list(self._proposals.values())),
+                "events": copy.deepcopy(self._events),
+                "event_sequence": self._event_sequence,
             }
 
     def restore_snapshot(self, snapshot: dict[str, Any] | None) -> None:
@@ -362,6 +403,40 @@ class Blackboard:
                 for item in data.get("proposals", [])
                 if item.get("proposal_id")
             }
+            self._events = copy.deepcopy(data.get("events") or [])
+            self._event_sequence = int(
+                data.get("event_sequence", 0)
+                or max(
+                    (int(item.get("sequence", 0) or 0) for item in self._events),
+                    default=0,
+                )
+            )
+
+    def event_log(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return copy.deepcopy(self._events)
+
+    @classmethod
+    def replay_events(
+        cls,
+        events: list[dict[str, Any]],
+        *,
+        namespace_policies: list[NamespacePolicy] | None = None,
+    ) -> Blackboard:
+        """Rebuild accepted writes from an append-only event stream."""
+        board = cls(namespace_policies=namespace_policies)
+        for event in sorted(events or [], key=lambda item: int(item.get("sequence", 0) or 0)):
+            if event.get("event_type") != "blackboard_write":
+                continue
+            payload = event.get("payload") or {}
+            board.write(
+                payload.get("key", ""),
+                payload.get("value"),
+                payload.get("source_agent", "replay"),
+                ttl=payload.get("ttl"),
+                evidence_refs=list(payload.get("evidence_refs") or []),
+            )
+        return board
 
     @contextmanager
     def transaction(self) -> Iterator[Blackboard]:

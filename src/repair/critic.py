@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import re
+import uuid
 from dataclasses import dataclass
 
 from src.state import CandidatePatch
@@ -20,6 +21,29 @@ class CriticVerdict:
     reason: str
     mode: str
     skipped: bool = False
+    verdict_id: str = ""
+    input_revision: int = 0
+    evidence_refs: list[str] | None = None
+    coverage_status: str = "not_evaluated"
+    independent: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.verdict_id:
+            self.verdict_id = "critic-" + uuid.uuid4().hex[:12]
+        self.evidence_refs = list(dict.fromkeys(self.evidence_refs or []))
+
+    def to_dict(self) -> dict:
+        return {
+            "accepted": self.accepted,
+            "reason": self.reason,
+            "mode": self.mode,
+            "skipped": self.skipped,
+            "verdict_id": self.verdict_id,
+            "input_revision": self.input_revision,
+            "evidence_refs": list(self.evidence_refs or []),
+            "coverage_status": self.coverage_status,
+            "independent": self.independent,
+        }
 
 
 def resolve_critic_mode(env: dict[str, str] | None = None) -> str:

@@ -206,6 +206,7 @@ class Orchestrator(RepairPipelineMixin):
         self.allow_static_verify_fallback = allow_static_verify_fallback
         self.l1_prompt_cache_key = l1_prompt_cache_key or self._resolve_l1_prompt_cache_key()
         self._repair_ctx: RepairRunContext | None = None
+        self._collaboration_runtime = None
         self._log_run_id_token = None
         # 修复目标目录：优先 --repo / Agent cwd，而非 git 顶层仓库
         self._repo_root = str(Path.cwd())
@@ -406,6 +407,16 @@ class Orchestrator(RepairPipelineMixin):
                     state, role, RoleLifecycle.COMPLETED, reason or "repair finalized"
                 )
                 self._emit_collaboration_event(event)
+        runtime = getattr(self, "_collaboration_runtime", None)
+        if runtime is not None:
+            try:
+                runtime.advance(
+                    phase,
+                    state,
+                    terminal_status=str(getattr(state, "status", "") or ""),
+                )
+            except Exception as exc:
+                state.agent_errors.setdefault("collaboration_runtime", str(exc)[:500])
         self._set_collaboration_context(state)
 
     def _emit_collaboration_event(self, event: dict) -> None:
@@ -738,6 +749,13 @@ class Orchestrator(RepairPipelineMixin):
         if self._repair_ctx is not None:
             self._repair_ctx.repair_tracer = tracer
         state.repair_run_id = run_id
+        try:
+            from src.collaboration.repair_runtime import RepairCollaborationRuntime
+
+            self._collaboration_runtime = RepairCollaborationRuntime(self._repo_root, run_id, state)
+        except Exception as exc:
+            self._collaboration_runtime = None
+            state.agent_errors.setdefault("collaboration_runtime", str(exc)[:500])
         if self._repair_ctx is not None:
             self._repair_ctx.log_run_id_token = bind_run_id(run_id)
 
@@ -1220,7 +1238,10 @@ class Orchestrator(RepairPipelineMixin):
 
     def _run_verifier(self, state: RepairState) -> "VerificationResult":
         """Docker 沙箱或本地 pytest 验证（不走 LLM Agent loop）。"""
+        from src.collaboration.isolation import role_projection
         from src.repair.verification.verify_test_patch import VerifyTestPatchOverlay
+
+        state.node_timings["verifier_input_projection"] = role_projection(state, "verifier")
 
         cancel_token = self._repair_ctx.cancel_token if self._repair_ctx else None
         test_patch = ""

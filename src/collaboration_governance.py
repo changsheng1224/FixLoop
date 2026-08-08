@@ -224,6 +224,49 @@ class CollaborationGovernance:
             return RoleDecision(False, "file_not_read", self._alternatives(role, mode, phase))
         return RoleDecision(True, "allowed")
 
+    @staticmethod
+    def authorize_handoff(handoff, state, *, expected_revision: int | None = None) -> RoleDecision:
+        """Validate a typed handoff against active roles and state revision."""
+        errors = handoff.validate()
+        if errors:
+            return RoleDecision(False, "handoff_invalid:" + ",".join(errors))
+        if expected_revision is not None and int(expected_revision) != int(
+            getattr(state, "state_revision", 0)
+        ):
+            return RoleDecision(False, "handoff_state_revision_stale")
+        active = set(getattr(state, "active_roles", []) or [])
+        if active and handoff.from_role not in active:
+            return RoleDecision(False, "handoff_source_role_inactive")
+        if active and handoff.to_role not in active:
+            return RoleDecision(False, "handoff_target_role_inactive")
+        return RoleDecision(True, "handoff_allowed")
+
+    @staticmethod
+    def record_handoff(state, handoff, *, status: str = "accepted") -> dict[str, Any]:
+        """Append a handoff audit record to RepairState without sharing mutables."""
+        from src.collaboration.contracts import HandoffStatus
+
+        decision = CollaborationGovernance.authorize_handoff(handoff, state)
+        if not decision.allowed:
+            raise ValueError(decision.reason)
+        handoff.status = HandoffStatus(str(status))
+        payload = handoff.to_dict()
+        state.handoffs.append(payload)
+        state.handoffs = state.handoffs[-200:]
+        state.state_revision += 1
+        return payload
+
+    @staticmethod
+    def register_task(state, task) -> dict[str, Any]:
+        errors = task.validate()
+        if errors:
+            raise ValueError("; ".join(errors))
+        payload = task.to_dict()
+        state.collaboration_tasks.append(payload)
+        state.collaboration_tasks = state.collaboration_tasks[-500:]
+        state.state_revision += 1
+        return payload
+
     def _alternatives(self, role: str, mode: str, phase: str) -> list[str]:
         return [
             name
@@ -274,6 +317,8 @@ class CollaborationGovernance:
                 state.verification_result.to_dict() if state.verification_result else {}
             ),
             "active_roles": list(state.active_roles),
+            "collaboration_tasks": list(getattr(state, "collaboration_tasks", []) or []),
+            "handoffs": list(getattr(state, "handoffs", []) or [])[-20:],
         }
 
     @staticmethod
