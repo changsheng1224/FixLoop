@@ -460,6 +460,29 @@ class Agent:
         from agent_runtime.repair_context import get_repair_context, update_repair_context
 
         mem = self.session["memory"]
+        recalled_ids = list(mem.get("recalled_memory_ids") or [])
+        if recalled_ids:
+            from agent_runtime.features.memory.governance import MemoryGovernanceService
+
+            identity = mem.get("memory_identity") or {}
+            governance = MemoryGovernanceService(
+                mem,
+                repo_root=str(self._cwd or ""),
+                user_id=str(identity.get("user_id", "") or ""),
+                task_id=str(identity.get("task_id", "") or ""),
+            )
+            stage = (
+                "patch"
+                if name in {"write_file", "patch_file", "apply_patch"}
+                else "tool"
+            )
+            for memory_id in recalled_ids:
+                governance.record_usage_stage(
+                    memory_id,
+                    usage="applied",
+                    stage=stage,
+                    task_id=str(identity.get("task_id", "") or ""),
+                )
         context = get_repair_context(mem)
         path = args.get("path", "")
 

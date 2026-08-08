@@ -23,6 +23,12 @@ def default_memory_state() -> dict:
         "next_note_index": 0,
         "memory_identity": {"user_id": "", "task_id": ""},
         "recalled_memory_ids": [],
+        "memory_usage_events": [],
+        "governed_memories": {},
+        "memory_policies": {},
+        "memory_conflicts": {},
+        "memory_governance_audit": [],
+        "memory_revalidation_queue": [],
     }
 
 
@@ -79,6 +85,14 @@ def normalize_memory_state(state: dict, workspace_root: str) -> dict:
     if not isinstance(identity, dict):
         state["memory_identity"] = {"user_id": "", "task_id": ""}
     state.setdefault("recalled_memory_ids", [])
+    if not isinstance(state.get("memory_usage_events"), list):
+        state["memory_usage_events"] = []
+    state.setdefault("governed_memories", {})
+    state.setdefault("memory_policies", {})
+    state.setdefault("memory_conflicts", {})
+    state.setdefault("memory_governance_audit", [])
+    if not isinstance(state.get("memory_revalidation_queue"), list):
+        state["memory_revalidation_queue"] = []
     return state
 
 

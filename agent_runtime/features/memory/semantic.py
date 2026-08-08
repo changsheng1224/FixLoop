@@ -233,12 +233,28 @@ class SemanticMemory:
                 embedding = _load_embed_cache(content_hash)
                 if embedding is not None:
                     _embed_cache_hits += 1
-                    self._notes.append({**note, "embedding": embedding})
+                    self._notes.append(
+                        {
+                            **note,
+                            "memory_id": note.get(
+                                "memory_id", f"EP-{note.get('note_index', len(self._notes))}"
+                            ),
+                            "embedding": embedding,
+                        }
+                    )
                     return
                 _embed_cache_misses += 1
                 embedding = self.model.encode(truncated)
                 _save_embed_cache(content_hash, embedding)
-                self._notes.append({**note, "embedding": embedding})
+                self._notes.append(
+                    {
+                        **note,
+                        "memory_id": note.get(
+                            "memory_id", f"EP-{note.get('note_index', len(self._notes))}"
+                        ),
+                        "embedding": embedding,
+                    }
+                )
             else:
                 # 长文本：chunk + max-pool
                 cmn = ChunkedMemoryNote(text, note, self.model)
