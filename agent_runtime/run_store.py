@@ -215,6 +215,15 @@ class RunStore:
 
         return order_events(self.load_trace_events(run_id))
 
+    def validate_trace(self, run_id: str, *, require_terminal: bool = True) -> list[str]:
+        """Return integrity issues for one persisted run trace."""
+        from agent_runtime.canonical_trace import validate_runtime_trace
+
+        return validate_runtime_trace(
+            self.load_ordered_trace(run_id),
+            require_terminal=require_terminal,
+        )
+
     def write_task_state_named(self, run_id: str, filename: str, task_state) -> Path:
         """写入命名 task_state 文件（共享 run 下每个 Agent 一份）。"""
         run_dir = self.start_run_by_id(run_id)

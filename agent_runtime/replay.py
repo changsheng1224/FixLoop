@@ -3,10 +3,12 @@
 不重新调模型（结果不确定），只读 trace 文件做审计/调试。
 """
 
+import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from agent_runtime.canonical_trace import validate_trace
 from agent_runtime.run_store import read_trace_path
 
 
@@ -99,11 +101,12 @@ class ReplayResult:
     diffs: list[dict] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     total: int = 0
+    integrity_issues: list[str] = field(default_factory=list)
 
     @property
     def all_match(self) -> bool:
         """回放结果与 trace 是否完全一致（无 diff 且无 error）。"""
-        return len(self.diffs) == 0 and len(self.errors) == 0
+        return len(self.diffs) == 0 and len(self.errors) == 0 and not self.integrity_issues
 
 
 class ReplayRunner:
@@ -112,7 +115,7 @@ class ReplayRunner:
     def __init__(self, trace_path: str):
         self.trace_path = Path(trace_path)
 
-    def replay(self, agent) -> ReplayResult:
+    def replay(self, agent, *, execute: bool = True) -> ReplayResult:
         """回放 trace 中的所有 tool_executed 事件。
 
         Args:
@@ -128,12 +131,16 @@ class ReplayRunner:
             result.errors.append(f"Trace file not found: {self.trace_path}")
             return result
 
+        events: list[dict] = []
         for line in lines:
             try:
                 event = json.loads(line)
+                events.append(event)
             except json.JSONDecodeError:
                 result.errors.append(f"Invalid JSON: {line[:100]}")
-                continue
+        result.integrity_issues = validate_trace(events, require_terminal=False)
+
+        for event in events:
 
             if event.get("event") != "tool_executed":
                 continue
@@ -141,16 +148,41 @@ class ReplayRunner:
             payload = event.get("payload", {})
             tool_name = payload.get("tool", "")
             result.total += 1
-
-            # 重新执行工具（需要参数信息）
-            # trace 中只记录了 tool name，没有 args
-            # 实际使用时需要从 history 重建 args
-            result.diffs.append(
-                {
-                    "tool": tool_name,
-                    "expected": "(trace recorded)",
-                    "actual": "(args unavailable from trace alone)",
-                }
-            )
+            tool_args = payload.get("tool_args") or payload.get("args")
+            expected_hash = str(payload.get("result_hash") or "")
+            if not isinstance(tool_args, dict):
+                # Historical traces predate canonical argument capture. They remain
+                # auditable, but cannot be re-executed without inventing inputs.
+                if agent is not None and execute:
+                    result.diffs.append(
+                        {
+                            "tool": tool_name,
+                            "expected": "(trace recorded)",
+                            "actual": "(args unavailable from trace alone)",
+                        }
+                    )
+                continue
+            if not execute:
+                result.matches += 1
+                continue
+            if agent is None or not hasattr(agent, "execute_tool"):
+                result.errors.append("replay agent must provide execute_tool")
+                continue
+            try:
+                actual = agent.execute_tool(tool_name, tool_args)
+                content = str(getattr(actual, "content", actual) or "")
+                actual_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()[:20]
+                if expected_hash and actual_hash != expected_hash:
+                    result.diffs.append(
+                        {
+                            "tool": tool_name,
+                            "expected_hash": expected_hash,
+                            "actual_hash": actual_hash,
+                        }
+                    )
+                else:
+                    result.matches += 1
+            except Exception as exc:
+                result.errors.append(f"{tool_name}: {exc}")
 
         return result

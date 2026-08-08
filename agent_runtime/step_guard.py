@@ -71,6 +71,7 @@ class StepContext:
     tool_name: str = ""
     tool_args: dict = field(default_factory=dict)
     has_affected: bool = False
+    progress_key: str = ""
 
 
 @dataclass
@@ -80,6 +81,7 @@ class StepVerdict:
     reason: str  # StopReason 值
     detail: str
     replan_hint: str = ""
+    action: str = "terminate"
 
 
 class StepGuard:
@@ -165,6 +167,7 @@ class StepGuard:
                     "建议：缩小排查范围、提供更具体的错误信息，"
                     "或 /reset 后重新描述问题。"
                 ),
+                action="replan_then_terminate",
             )
         return None
 
@@ -194,6 +197,7 @@ class StepGuard:
                     f"连续 {self._drift_count} 步操作与任务无关的文件"
                     f"（目标: {suspects}，当前: {target}）"
                 ),
+                action="replan_then_terminate",
                 replan_hint=(
                     f"任务「{task}」疑似目标漂移。"
                     f"当前操作文件 {target!r} 不在 suspect 列表 [{suspects}] 中。"
@@ -208,5 +212,6 @@ class StepGuard:
                 reason="",  # 空 reason = warning，不终止
                 detail=f"目标漂移预警：{target!r} 不在 suspect 列表中",
                 replan_hint="",
+                action="warn",
             )
         return None

@@ -36,6 +36,12 @@ TOOL_TRACE_PUBLIC_KEYS = (
     "mcp_tool",
     "mcp_duration_ms",
     "mcp_error_code",
+    "args_hash",
+    "tool_args",
+    "result_hash",
+    "duration_ms",
+    "receipt",
+    "affected_paths",
     "retryable",
     "retry_limit",
     "model_hint",
@@ -150,11 +156,32 @@ def build_gate7_pass_metadata(approval_policy: str) -> dict:
     }
 
 
-def tool_trace_payload(tool_name: str, metadata: dict | None) -> dict:
+def tool_trace_payload(
+    tool_name: str,
+    metadata: dict | None,
+    *,
+    tool_args: dict | None = None,
+    result_content: str = "",
+) -> dict:
     """从 ToolExecutionResult.metadata 提取 trace 安全字段。"""
     meta = metadata or {}
     payload = {"tool": tool_name}
     for key in TOOL_TRACE_PUBLIC_KEYS:
         if key in meta:
             payload[key] = meta[key]
+    if tool_args is not None:
+        import hashlib
+        import json
+
+        canonical = json.dumps(tool_args, sort_keys=True, ensure_ascii=False, default=str)
+        payload["tool_args"] = dict(tool_args)
+        payload["args_hash"] = hashlib.sha256(
+            f"{tool_name}:{canonical}".encode()
+        ).hexdigest()[:20]
+    if result_content:
+        import hashlib
+
+        payload["result_hash"] = hashlib.sha256(
+            str(result_content).encode("utf-8")
+        ).hexdigest()[:20]
     return payload

@@ -69,6 +69,73 @@ class BudgetManager:
                 reason="" if allowed else f"{key}_budget_exhausted",
             )
 
+    def reserve_many(self, reservations: dict[str, float]) -> list[BudgetDecision]:
+        """Atomically reserve several resources before dispatching an action."""
+        normalized = {
+            str(resource): max(0.0, float(amount))
+            for resource, amount in (reservations or {}).items()
+        }
+        with self._lock:
+            decisions: list[BudgetDecision] = []
+            for resource, amount in normalized.items():
+                used = self._used.setdefault(resource, 0.0)
+                limit = self._limits.setdefault(resource, 0.0)
+                allowed = limit <= 0 or used + amount <= limit
+                remaining = None if limit <= 0 else max(0.0, limit - used)
+                decisions.append(
+                    BudgetDecision(
+                        resource=resource,
+                        allowed=allowed,
+                        used=used,
+                        limit=limit,
+                        remaining=float("inf") if remaining is None else remaining,
+                        action="continue" if allowed else self.ACTIONS.get(resource, "stop"),
+                        reason="" if allowed else f"{resource}_budget_exhausted",
+                    )
+                )
+            if any(not decision.allowed for decision in decisions):
+                for decision in decisions:
+                    if not decision.allowed:
+                        self._rejected[decision.resource] = (
+                            self._rejected.get(decision.resource, 0) + 1
+                        )
+                return decisions
+            for resource, amount in normalized.items():
+                self._used[resource] += amount
+            return [
+                BudgetDecision(
+                    resource=decision.resource,
+                    allowed=True,
+                    used=self._used[decision.resource],
+                    limit=decision.limit,
+                    remaining=(
+                        float("inf")
+                        if decision.limit <= 0
+                        else max(0.0, decision.limit - self._used[decision.resource])
+                    ),
+                    action="continue",
+                )
+                for decision in decisions
+            ]
+
+    def backpressure(self) -> list[dict[str, Any]]:
+        """Return resources that are exhausted or nearly exhausted."""
+        with self._lock:
+            pressure = []
+            for resource in sorted(set(self._limits) | set(self._used)):
+                limit = self._limits.get(resource, 0.0)
+                used = self._used.get(resource, 0.0)
+                if limit > 0 and used >= limit:
+                    pressure.append(
+                        {
+                            "resource": resource,
+                            "used": used,
+                            "limit": limit,
+                            "action": self.ACTIONS.get(resource, "stop"),
+                        }
+                    )
+            return pressure
+
     def check(self, resource: str, amount: float = 1.0) -> BudgetDecision:
         """Check capacity without consuming it (useful for multi-resource gates)."""
         key = str(resource)

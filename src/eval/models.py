@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from src.eval.contracts import EVAL_CONTRACT_VERSION, FailureClass, FailureCode
+
 
 @dataclass
 class CaseResult:
@@ -18,6 +20,7 @@ class CaseResult:
     actual_lines: int = 0
     minimal_lines: int = 0
     duration_ms: int = 0
+    cost_usd: float = 0.0
     agent_timings: dict = field(default_factory=dict)
     error: str = ""
     introduced_regression: bool = False
@@ -35,6 +38,23 @@ class CaseResult:
     judge_score: int = 0
     judge_reason: str = ""
     equivalence: str = ""  # full / partial / none (patch_equivalence vs expected_patch.diff)
+    language: str = ""
+    tool_permission_profile: str = ""
+    run_id: str = ""
+    trace_path: str = ""
+    manifest_fingerprint: str = ""
+    eval_contract_version: str = EVAL_CONTRACT_VERSION
+    contract_required: bool = True
+    baseline_failed: bool = False
+    target_passed: bool = False
+    regression_passed: bool = True
+    environment_ok: bool = True
+    failure_class: str = FailureClass.NONE.value
+    failure_code: str = FailureCode.NONE.value
+    bad_case_id: str = ""
+    replay: dict = field(default_factory=dict)
+    judge_metadata: dict = field(default_factory=dict)
+    eval_run_id: str = ""
 
     def to_dict(self) -> dict:
         """序列化为 JSON 可写 dict。"""
@@ -48,6 +68,7 @@ class CaseResult:
             "actual_lines": self.actual_lines,
             "minimal_lines": self.minimal_lines,
             "duration_ms": self.duration_ms,
+            "cost_usd": self.cost_usd,
             "agent_timings": self.agent_timings,
             "error": self.error,
             "introduced_regression": self.introduced_regression,
@@ -58,6 +79,23 @@ class CaseResult:
             "total_tokens": self.total_tokens,
             "token_usage": self.token_usage,
             "equivalence": self.equivalence,
+            "language": self.language,
+            "tool_permission_profile": self.tool_permission_profile,
+            "run_id": self.run_id,
+            "trace_path": self.trace_path,
+            "manifest_fingerprint": self.manifest_fingerprint,
+            "eval_contract_version": self.eval_contract_version,
+            "contract_required": self.contract_required,
+            "baseline_failed": self.baseline_failed,
+            "target_passed": self.target_passed,
+            "regression_passed": self.regression_passed,
+            "environment_ok": self.environment_ok,
+            "failure_class": self.failure_class,
+            "failure_code": self.failure_code,
+            "bad_case_id": self.bad_case_id,
+            "replay": self.replay,
+            "judge_metadata": self.judge_metadata,
+            "eval_run_id": self.eval_run_id,
         }
         if self.permission_denied_by_tool:
             data["permission_denied_by_tool"] = self.permission_denied_by_tool
@@ -80,10 +118,15 @@ class EvalReport:
     by_type: dict = field(default_factory=dict)
     by_difficulty: dict = field(default_factory=dict)
     by_variant: dict = field(default_factory=dict)
+    by_language: dict = field(default_factory=dict)
+    by_failure_class: dict = field(default_factory=dict)
+    by_permission_profile: dict = field(default_factory=dict)
     skill_metrics: dict = field(default_factory=dict)
     pass_at_k: dict = field(default_factory=dict)
     performance: dict = field(default_factory=dict)
     judge_summary: dict = field(default_factory=dict)
+    eval_run_id: str = ""
+    trace_path: str = ""
 
     def to_dict(self) -> dict:
         """序列化为 JSON 可写 dict（含 summary 与 cases 列表）。"""
@@ -91,7 +134,12 @@ class EvalReport:
             "summary": self.summary,
             "by_type": self.by_type,
             "by_difficulty": self.by_difficulty,
+            "by_language": self.by_language,
+            "by_failure_class": self.by_failure_class,
+            "by_permission_profile": self.by_permission_profile,
             "cases": [c.to_dict() for c in self.cases],
+            "eval_run_id": self.eval_run_id,
+            "trace_path": self.trace_path,
         }
         if self.by_variant:
             data["by_variant"] = self.by_variant

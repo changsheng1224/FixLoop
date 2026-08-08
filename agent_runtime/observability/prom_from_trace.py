@@ -17,6 +17,12 @@ for _cat, _names in EVENT_CATALOG.items():
     for _name in _names:
         _EVENT_TO_CATEGORY[_name] = _cat
 
+SLO_THRESHOLDS_MS = {
+    "repair": 300_000,
+    "tool": 30_000,
+    "evaluation": 600_000,
+}
+
 
 def event_category(event: str) -> str:
     return _EVENT_TO_CATEGORY.get(event, "other")
@@ -56,6 +62,30 @@ def record_canonical_event(record: dict[str, Any], registry: Any | None = None) 
         status = str(record.get("status") or "unset")
         category = event_category(event)
         payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+
+        duration = payload.get("duration_ms") or payload.get("elapsed_ms")
+        if duration is not None:
+            duration_ms = float(duration)
+            if category == "tool":
+                registry.histogram_observe(
+                    "fixloop_tool_duration_ms",
+                    duration_ms,
+                    labels=low_cardinality_labels(phase=_phase_label(payload)),
+                )
+            elif category == "evaluation":
+                registry.histogram_observe(
+                    "fixloop_eval_duration_ms", duration_ms
+                )
+            elif event in {"repair_finished", "run_finished"}:
+                registry.histogram_observe("fixloop_repair_duration_ms", duration_ms)
+            slo_kind = "evaluation" if category == "evaluation" else (
+                "tool" if category == "tool" else "repair"
+            )
+            if duration_ms > SLO_THRESHOLDS_MS[slo_kind]:
+                registry.counter_inc(
+                    "fixloop_slo_exceeded_total",
+                    labels=low_cardinality_labels(operation=slo_kind),
+                )
 
         registry.counter_inc(
             "fixloop_trace_events_total",
@@ -138,17 +168,23 @@ def record_canonical_event(record: dict[str, Any], registry: Any | None = None) 
         if event in {"security_denied", "sandbox_violation"}:
             registry.counter_inc(
                 "fixloop_security_denials_total",
-                labels=low_cardinality_labels(reason=sanitize_label_value(payload.get("reason", event))),
+                labels=low_cardinality_labels(
+                    reason=sanitize_label_value(payload.get("reason", event))
+                ),
             )
         if event == "patch_rollback":
             registry.counter_inc(
                 "fixloop_patch_rollbacks_total",
-                labels=low_cardinality_labels(reason=sanitize_label_value(payload.get("reason", "unknown"))),
+                labels=low_cardinality_labels(
+                    reason=sanitize_label_value(payload.get("reason", "unknown"))
+                ),
             )
         if event == "stale_patch_rejected":
             registry.counter_inc(
                 "fixloop_stale_patch_rejections_total",
-                labels=low_cardinality_labels(reason=sanitize_label_value(payload.get("reason", "base_hash_mismatch"))),
+                labels=low_cardinality_labels(
+                    reason=sanitize_label_value(payload.get("reason", "base_hash_mismatch"))
+                ),
             )
         if event == "sandbox_policy":
             registry.counter_inc(
@@ -161,12 +197,16 @@ def record_canonical_event(record: dict[str, Any], registry: Any | None = None) 
         if event in {"worktree_created", "worktree_removed", "worktree_lease"}:
             registry.counter_inc(
                 "fixloop_worktree_events_total",
-                labels=low_cardinality_labels(action=sanitize_label_value(payload.get("action", event))),
+                labels=low_cardinality_labels(
+                    action=sanitize_label_value(payload.get("action", event))
+                ),
             )
         if event == "workspace_policy":
             registry.counter_inc(
                 "fixloop_workspace_policy_events_total",
-                labels=low_cardinality_labels(action=sanitize_label_value(payload.get("action", "evaluate"))),
+                labels=low_cardinality_labels(
+                    action=sanitize_label_value(payload.get("action", "evaluate"))
+                ),
             )
     except Exception:
         pass

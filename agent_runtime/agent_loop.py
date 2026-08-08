@@ -301,6 +301,31 @@ class AgentLoop:
     ) -> str:
         """TaskState 已写入终态后：同步 stop_reason、可选 recording、落盘。"""
         self._sync_stop_reason(ts)
+        from agent_runtime.runtime_contracts import RuntimePhase, RuntimeStatus
+
+        terminal_phase = {
+            "completed": RuntimePhase.COMPLETED,
+            "stopped": RuntimePhase.CANCELLED,
+            "failed": RuntimePhase.FAILED,
+        }.get(str(ts.status), RuntimePhase.FAILED)
+        runtime_snapshot = ts.runtime_contract or {}
+        if not runtime_snapshot.get("terminal"):
+            try:
+                ts.advance_runtime(RuntimePhase.FINALIZING)
+                ts.advance_runtime(
+                    terminal_phase,
+                    status={
+                        RuntimePhase.COMPLETED: RuntimeStatus.COMPLETED,
+                        RuntimePhase.CANCELLED: RuntimeStatus.CANCELLED,
+                        RuntimePhase.FAILED: RuntimeStatus.FAILED,
+                    }[terminal_phase],
+                    stop_reason=str(ts.stop_reason or self.stop_reason or "terminal"),
+                )
+            except ValueError as exc:
+                self._emit(
+                    "runtime_contract_violation",
+                    {"detail": str(exc), "phase": str(ts.phase)},
+                )
         from agent_runtime.repair_run import attribute_failure
 
         memory = self.agent.session.get("memory", {}) or {}
@@ -367,6 +392,8 @@ class AgentLoop:
         return None
 
     def _stop_for_api_error(self, ts, error: Exception) -> str | None:
+        from agent_runtime.providers.contracts import ProviderError, normalize_provider_error
+
         if isinstance(error, RateLimitExceededError):
             ts.stop_with_reason(StopReason.RATE_LIMITED, "stopped", detail=str(error))
             return self._complete_run(ts, f"<final>API 限流：{error}</final>")
@@ -375,6 +402,15 @@ class AgentLoop:
         if isinstance(error, CircuitBreakerOpenError):
             ts.stop_with_reason(StopReason.CIRCUIT_BREAKER, "stopped", detail=str(error))
             return self._complete_run(ts, f"<final>API 熔断：{error}</final>")
+        provider_error = error if isinstance(error, ProviderError) else None
+        if provider_error is None and isinstance(error, TimeoutError | OSError):
+            provider_error = normalize_provider_error(error)
+        if isinstance(provider_error, ProviderError):
+            ts.stop_with_reason(StopReason.API_ERROR, "failed", detail=str(provider_error))
+            return self._complete_run(
+                ts,
+                f"<final>Provider 错误（{provider_error.code.value}）：{provider_error}</final>",
+            )
         return None
 
     def _circuit_trace_listener(self, event: str, payload: dict) -> None:
@@ -447,10 +483,12 @@ class AgentLoop:
         callback=None,
     ) -> None:
         from agent_runtime.react_phases import build_react_phase_payload
+        from agent_runtime.step_engine import StepEngine
 
         if self._task_state is not None:
-            self._task_state.phase = str(phase)
-            self._task_state.turn = int(step)
+            StepEngine(self._task_state, self._emit).enter(
+                str(phase), step=step, path=path, tool=tool or ""
+            )
         self._emit(
             "react_phase",
             build_react_phase_payload(phase, step=step, path=path, tool=tool),
@@ -885,6 +923,7 @@ class AgentLoop:
                     f"observation_id={stored.observation_id}]"
                 )
         result_text = projected_result_text
+        _meta["duration_ms"] = te_ms
         ts.node_timings.setdefault("tool_exec_ms", 0)
         ts.node_timings["tool_exec_ms"] += te_ms
         _log_loop(f"  [loop] {tool_name} tool={te_ms}ms\n")
@@ -897,7 +936,7 @@ class AgentLoop:
                 callback=callback,
             )
         self.agent.update_memory_after_tool(tool_name, tool_args, result_text)
-        self._record_tool_outcome(tool_name, result, ts)
+        self._record_tool_outcome(tool_name, result, ts, tool_args)
         if emit_recording:
             self._notify_react_phase(
                 ReactPhase.RECORDING,
@@ -2371,12 +2410,29 @@ class AgentLoop:
         except Exception:
             pass
 
-    def _record_tool_outcome(self, tool_name: str, result, ts) -> None:
-        meta = getattr(result, "metadata", None) or {}
-        ts.record_tool_rejection(tool_name, meta)
-        self._emit_tool_trace(tool_name, result)
+    def _record_tool_outcome(
+        self, tool_name: str, result, ts, tool_args: dict | None = None
+    ) -> None:
+        from agent_runtime.tool_result import build_tool_receipt, normalize_tool_result
 
-    def _emit_tool_trace(self, tool_name: str, result) -> None:
+        normalized = normalize_tool_result(result, tool_name=tool_name)
+        call = self.agent.session.get("_last_canonical_tool_call", {}) or {}
+        args_hash = str(call.get("arguments_hash", "") or "")
+        receipt = build_tool_receipt(
+            tool_name,
+            normalized,
+            args_hash=args_hash,
+            run_id=str(getattr(ts, "run_id", "") or ""),
+            call_id=str(call.get("call_id", "") or ""),
+        )
+        normalized.receipt = receipt
+        normalized.metadata["receipt"] = receipt
+        meta = getattr(result, "metadata", None) or {}
+        meta["receipt"] = receipt
+        ts.record_tool_rejection(tool_name, meta)
+        self._emit_tool_trace(tool_name, normalized, tool_args)
+
+    def _emit_tool_trace(self, tool_name: str, result, tool_args: dict | None = None) -> None:
         from agent_runtime.tool_rejection import tool_trace_payload
 
         meta = getattr(result, "metadata", None) or {}
@@ -2394,9 +2450,16 @@ class AgentLoop:
         preview = meta.get("patch_preview")
         if preview:
             self._emit("tool_preview", {"tool": tool_name, **preview})
+        content = str(getattr(result, "content", "") or "")
+        trace_payload = tool_trace_payload(
+            tool_name,
+            meta,
+            tool_args=tool_args,
+            result_content=content,
+        )
         if meta.get("provider") == "mcp":
-            self._emit("mcp_call", tool_trace_payload(tool_name, meta))
-        self._emit("tool_executed", tool_trace_payload(tool_name, meta))
+            self._emit("mcp_call", trace_payload)
+        self._emit("tool_executed", trace_payload)
 
     def _emit(self, event: str, payload: dict | None = None):
         try:

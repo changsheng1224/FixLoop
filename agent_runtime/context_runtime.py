@@ -943,6 +943,27 @@ def build_context_manifest(
     }
 
 
+def validate_context_manifest(manifest: dict[str, Any] | None) -> list[str]:
+    """Validate context provenance before a checkpoint can be resumed."""
+    data = manifest or {}
+    issues: list[str] = []
+    for key in ("schema_version", "policy_version"):
+        if not str(data.get(key, "")):
+            issues.append(f"missing_{key}")
+    for key in ("selected_context_ids", "dropped_context_ids", "observation_refs", "memory_refs"):
+        if not isinstance(data.get(key, []), list):
+            issues.append(f"{key}_must_be_list")
+    if not isinstance(data.get("selection", {}), dict):
+        issues.append("selection_must_be_dict")
+    if "state_revision" in data:
+        try:
+            if int(data["state_revision"]) < 0:
+                issues.append("state_revision_negative")
+        except (TypeError, ValueError):
+            issues.append("state_revision_invalid")
+    return issues
+
+
 def build_action_record(
     tool: str,
     args: dict[str, Any],

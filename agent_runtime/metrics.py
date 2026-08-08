@@ -32,6 +32,10 @@ _METRIC_HELP: dict[str, str] = {
     "fixloop_token_usage_total": "Total token consumption across all repairs.",
     "fixloop_cache_hit_rate": "Prompt cache hit rate (0.0–1.0).",
     "fixloop_retry_count": "Current repair retry count.",
+    "fixloop_repair_duration_ms": "Repair duration distribution in milliseconds.",
+    "fixloop_tool_duration_ms": "Tool duration distribution in milliseconds.",
+    "fixloop_eval_duration_ms": "Evaluation duration distribution in milliseconds.",
+    "fixloop_slo_exceeded_total": "SLO violations by operation.",
     # Canonical Trace → Prometheus（低基数）
     "fixloop_trace_events_total": "Canonical Trace events by category and status.",
     "fixloop_skill_matched_total": "Skill match outcomes by skill and status.",
@@ -74,6 +78,10 @@ _METRIC_TYPE: dict[str, str] = {
     "fixloop_token_usage_total": "counter",
     "fixloop_cache_hit_rate": "gauge",
     "fixloop_retry_count": "gauge",
+    "fixloop_repair_duration_ms": "histogram",
+    "fixloop_tool_duration_ms": "histogram",
+    "fixloop_eval_duration_ms": "histogram",
+    "fixloop_slo_exceeded_total": "counter",
     "fixloop_trace_events_total": "counter",
     "fixloop_skill_matched_total": "counter",
     "fixloop_errors_total": "counter",
@@ -103,6 +111,8 @@ _METRIC_TYPE: dict[str, str] = {
     "fixloop_intent_action_total": "counter",
 }
 
+_HISTOGRAM_BUCKETS_MS = (100, 500, 1_000, 5_000, 30_000, 120_000, 600_000)
+
 
 def _format_labels(labels: dict[str, str] | None) -> str:
     if not labels:
@@ -130,6 +140,7 @@ def _render_metric_group(
 def _render_prometheus(
     counters: dict[str, dict[tuple, int]],
     gauges: dict[str, dict[tuple, float]],
+    histograms: dict[str, dict[tuple, list[float]]],
 ) -> str:
     """渲染 Prometheus text exposition format。"""
     lines: list[str] = []
@@ -137,6 +148,24 @@ def _render_prometheus(
         lines.extend(_render_metric_group(name, labeled))
     for name, labeled in sorted(gauges.items()):
         lines.extend(_render_metric_group(name, labeled, value_fmt="{:.6g}"))
+    for name, labeled in sorted(histograms.items()):
+        help_text = _METRIC_HELP.get(name, "")
+        lines.append(f"# HELP {name} {help_text}")
+        lines.append(f"# TYPE {name} histogram")
+        for label_tuple, values in sorted(labeled.items()):
+            labels = dict(pair.split("=", 1) for pair in label_tuple) if label_tuple else {}
+            suffix = _format_labels(labels)
+            ordered = sorted(float(value) for value in values)
+            for bucket in _HISTOGRAM_BUCKETS_MS:
+                bucket_labels = dict(labels)
+                bucket_labels["le"] = str(bucket)
+                count = sum(value <= bucket for value in ordered)
+                lines.append(f"{name}_bucket{_format_labels(bucket_labels)} {count}")
+            inf_labels = dict(labels)
+            inf_labels["le"] = "+Inf"
+            lines.append(f"{name}_bucket{_format_labels(inf_labels)} {len(ordered)}")
+            lines.append(f"{name}_count{suffix} {len(ordered)}")
+            lines.append(f"{name}_sum{suffix} {sum(values):.6g}")
     lines.append("")
     return "\n".join(lines)
 
@@ -170,6 +199,7 @@ class MetricsRegistry:
         self._lock = threading.Lock()
         self._counters: dict[str, dict[tuple, int]] = {}
         self._gauges: dict[str, dict[tuple, float]] = {}
+        self._histograms: dict[str, dict[tuple, list[float]]] = {}
 
     # ── counter ──
 
@@ -196,6 +226,18 @@ class MetricsRegistry:
             key = _label_key(labels)
             labeled[key] = labeled.get(key, 0.0) + float(value)
 
+    def histogram_observe(
+        self, name: str, value: float, labels: dict[str, str] | None = None
+    ) -> None:
+        labels = _safe_labels(labels)
+        with self._lock:
+            labeled = self._histograms.setdefault(name, {})
+            key = _label_key(labels)
+            samples = labeled.setdefault(key, [])
+            samples.append(float(value))
+            if len(samples) > 10000:
+                del samples[:-10000]
+
     # ── render ──
 
     def render(self) -> str:
@@ -203,6 +245,7 @@ class MetricsRegistry:
             return _render_prometheus(
                 dict(self._counters),
                 dict(self._gauges),
+                dict(self._histograms),
             )
 
     # ── reset ──
@@ -211,6 +254,7 @@ class MetricsRegistry:
         with self._lock:
             self._counters.clear()
             self._gauges.clear()
+            self._histograms.clear()
 
 
 # 进程级单例

@@ -89,6 +89,8 @@ class TestFormatMarkdown:
         assert "## By Difficulty" in md
         assert "## Failure Breakdown" in md
         assert "## Performance Detail" in md
+        assert "## Confidence & Cost" in md
+        assert "## Pass@k" in md
         assert "case_001" in md
         assert "full" in md
         assert "patch_precision" in md

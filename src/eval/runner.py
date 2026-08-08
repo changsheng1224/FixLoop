@@ -2,17 +2,25 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import platform
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 
 from src.eval.case_io import DEFAULT_CASES_DIR, build_case_issue, load_case_metadata
+from src.eval.contracts import (
+    EVAL_CONTRACT_VERSION,
+    EvaluationContract,
+    attribute_failure,
+)
 from src.eval.models import CaseResult, EvalReport
 from src.eval.patch_utils import apply_unified_patch
 from src.repair.verification.termination import introduced_regression, regression_detected
@@ -40,16 +48,56 @@ def should_include_in_eval_diff(rel_path: str) -> bool:
     return True
 
 
-def run_pytest(repo: Path) -> tuple[int, str]:
-    """在 repo 根目录运行 pytest -q，返回 (exit_code, combined_output)。"""
+def run_pytest(repo: Path, test_files: list[str] | None = None) -> tuple[int, str]:
+    """在 repo 根目录运行 pytest，返回 (exit_code, combined_output)。"""
+    targets = [str(item) for item in (test_files or []) if str(item).strip()]
     proc = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q"],
+        [sys.executable, "-m", "pytest", "-q", *targets],
         cwd=repo,
         capture_output=True,
         text=True,
     )
     out = (proc.stdout or "") + (proc.stderr or "")
     return proc.returncode, out
+
+
+def _environment_failure(output: str, returncode: int) -> bool:
+    """Classify infrastructure/collection failures separately from test failures."""
+    text = str(output or "").lower()
+    if returncode in {3, 4, 5}:
+        return True
+    return any(
+        marker in text
+        for marker in (
+            "internal error",
+            "no module named 'pytest'",
+            "could not load plugin",
+            "docker",
+            "network is unreachable",
+            "permissionerror",
+        )
+    )
+
+
+def _hash_text(value: str) -> str:
+    return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()[:20]
+
+
+def _trace_integrity(path: str) -> dict:
+    if not path:
+        return {"available": False, "valid": None, "issues": []}
+    from agent_runtime.canonical_trace import validate_runtime_trace
+    from agent_runtime.run_store import read_trace_path
+
+    trace_path = Path(path)
+    events: list[dict] = []
+    for line in read_trace_path(trace_path):
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            pass
+    issues = validate_runtime_trace(events, require_terminal=True)
+    return {"available": True, "valid": not issues, "issues": issues}
 
 
 def collect_repo_diff(original: Path, modified: Path) -> str:
@@ -198,6 +246,39 @@ class EvalRunner:
         if cp.is_file():
             cp.unlink()
 
+    def _start_evaluation_trace(self, eval_run_id: str, case_ids: list[str]) -> tuple[object, str]:
+        """Create the evaluation-level trace and emit its start event."""
+        from agent_runtime.canonical_trace import TraceSpanContext, reset_seq
+        from agent_runtime.run_store import RunStore
+
+        store = RunStore(str(self.output_dir))
+        TraceSpanContext.reset()
+        reset_seq(eval_run_id)
+        store.start_run_by_id(eval_run_id)
+        store.append_trace_event(
+            eval_run_id,
+            "evaluation_started",
+            {
+                "case_ids": list(case_ids),
+                "case_count": len(case_ids),
+                "contract_version": EVAL_CONTRACT_VERSION,
+            },
+            status="ok",
+        )
+        return store, str(store.runs_dir / eval_run_id / "trace.jsonl")
+
+    @staticmethod
+    def _emit_evaluation_event(
+        store,
+        eval_run_id: str,
+        event: str,
+        payload: dict,
+        *,
+        status: str | None = None,
+    ) -> None:
+        """Append an evaluation lifecycle event without affecting case traces."""
+        store.append_trace_event(eval_run_id, event, payload, status=status)
+
     def _is_fake_mode(self) -> bool:
         if hasattr(self, "_cached_fake_mode"):
             return self._cached_fake_mode
@@ -217,6 +298,36 @@ class EvalRunner:
             p.name
             for p in self.cases_dir.iterdir()
             if p.is_dir() and re.match(r"case_[\w]+$", p.name)
+        )
+
+    def _persist_run_artifacts(
+        self,
+        case_id: str,
+        run_id: str,
+        repo: Path,
+        manifest: dict,
+    ) -> tuple[str, str]:
+        """Copy ephemeral run artifacts before the case workspace is removed."""
+        if not run_id:
+            return "", str(manifest.get("manifest_fingerprint", "") or "")
+        source = repo / ".agent" / "runs" / run_id
+        destination = self.output_dir / "runs" / case_id / run_id
+        if source.is_dir():
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if destination.exists():
+                shutil.rmtree(destination)
+            shutil.copytree(source, destination)
+        trace_path = destination / "trace.jsonl"
+        if not trace_path.exists() and (destination / "trace.jsonl.gz").exists():
+            trace_path = destination / "trace.jsonl.gz"
+        manifest_path = destination / "manifest.json"
+        if destination.is_dir():
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        return str(trace_path) if trace_path.exists() else "", str(
+            manifest.get("manifest_fingerprint", "") or ""
         )
 
     def run_all(
@@ -242,14 +353,46 @@ class EvalRunner:
         ids = case_ids or self.list_cases()
         completed = self._load_checkpoint() if resume else set()
 
+        eval_run_id = "eval-" + uuid.uuid4().hex[:16]
+        trace_store, eval_trace_path = self._start_evaluation_trace(eval_run_id, ids)
         results: list[CaseResult] = []
         for case_id in ids:
             for run_idx in range(repetitions):
                 if resume and (case_id, variant, run_idx) in completed:
                     continue
-                result = self.run_case(case_id)
+                result = self.run_case(case_id, eval_run_id=eval_run_id)
                 result.run_index = run_idx
                 results.append(result)
+                self._emit_evaluation_event(
+                    trace_store,
+                    eval_run_id,
+                    "evaluation_contract_checked",
+                    {
+                        "case_id": case_id,
+                        "run_index": run_idx,
+                        "passed": result.fixed,
+                        "contract_required": result.contract_required,
+                        "failure_class": result.failure_class,
+                        "failure_code": result.failure_code,
+                        "case_run_id": result.run_id,
+                        "case_trace_path": result.trace_path,
+                        "manifest_fingerprint": result.manifest_fingerprint,
+                    },
+                    status="ok" if result.fixed else "error",
+                )
+                if result.bad_case_id:
+                    self._emit_evaluation_event(
+                        trace_store,
+                        eval_run_id,
+                        "bad_case_created",
+                        {
+                            "case_id": case_id,
+                            "bad_case_id": result.bad_case_id,
+                            "failure_code": result.failure_code,
+                            "case_run_id": result.run_id,
+                        },
+                        status="error",
+                    )
                 if resume:
                     self._save_checkpoint_entry(
                         case_id,
@@ -259,9 +402,33 @@ class EvalRunner:
 
         if resume and not results:
             print("[eval] 所有 case 已完成", file=sys.stderr)
-            return build_eval_report([])
+            report = build_eval_report([])
+            report.eval_run_id = eval_run_id
+            report.trace_path = eval_trace_path
+            self._emit_evaluation_event(
+                trace_store,
+                eval_run_id,
+                "evaluation_finished",
+                {"status": "completed", "total": 0, "fixed": 0},
+                status="ok",
+            )
+            return report
 
         report = build_eval_report(results)
+        report.eval_run_id = eval_run_id
+        report.trace_path = eval_trace_path
+        self._emit_evaluation_event(
+            trace_store,
+            eval_run_id,
+            "evaluation_finished",
+            {
+                "status": "completed",
+                "total": len(results),
+                "fixed": sum(1 for result in results if result.fixed),
+                "failed": sum(1 for result in results if not result.fixed),
+            },
+            status="ok",
+        )
         out = report_path or (self.output_dir / "eval_report.json")
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(report.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
@@ -270,17 +437,22 @@ class EvalRunner:
             self._clear_checkpoint()
         return report
 
-    def run_case(self, case_id: str) -> CaseResult:
+    def run_case(self, case_id: str, *, eval_run_id: str = "") -> CaseResult:
         """运行单个 Case：复制 repo → repair → pytest → 记录 diff 与指标。"""
         case_dir = self.cases_dir / case_id
         if not case_dir.is_dir():
-            return CaseResult(case_id=case_id, error=f"unknown case: {case_id}")
+            return CaseResult(
+                case_id=case_id,
+                error=f"unknown case: {case_id}",
+                eval_run_id=eval_run_id,
+            )
 
         meta = load_case_metadata(case_dir)
         language = str(meta.get("language", "python")).lower()
         is_fake = self._is_fake_mode()
         issue = build_case_issue(case_dir, metadata=meta)
         minimal_lines = _read_min_lines(case_dir)
+        target_files = [str(item) for item in (meta.get("test_files") or [])]
 
         with tempfile.TemporaryDirectory(prefix=f"fixloop_eval_{case_id}_") as tmp:
             tmp_repo = Path(tmp) / "repo"
@@ -305,7 +477,11 @@ class EvalRunner:
             post_code, post_out = (
                 (0, "") if (is_fake and language != "python") else run_pytest(tmp_repo)
             )
-            fixed = post_code == 0
+            target_code, target_out = (
+                (post_code, post_out)
+                if not target_files or (is_fake and language != "python")
+                else run_pytest(tmp_repo, target_files)
+            )
 
             original_snapshot = Path(tmp) / "original"
             _copy_case_repo(case_dir / "repo", original_snapshot)
@@ -316,11 +492,22 @@ class EvalRunner:
             if state and introduced_regression(state):
                 introduced_regression_flag = True
 
+            baseline_failed = pre_code != 0
+            target_passed = target_code == 0
+            regression_passed = not introduced_regression_flag
+            environment_ok = not (
+                _environment_failure(pre_out, pre_code)
+                or _environment_failure(post_out, post_code)
+                or _environment_failure(target_out, target_code)
+            )
+            fixed = target_passed and regression_passed and environment_ok
+
             retry_count = state.retry_count if state else 0
             status = state.status if state else ""
             failure_tags = list(state.failure_tags) if state else []
             total_tokens = 0
             token_usage: dict = {}
+            cost_usd = 0.0
             permission_denied_by_tool: dict = {}
             if state and getattr(state, "node_timings", None):
                 node_timings = state.node_timings
@@ -334,6 +521,9 @@ class EvalRunner:
                     )
                 else:
                     token_usage = {}
+                cost_usd = float(
+                    (getattr(state, "harness_metrics", {}) or {}).get("cost_usd", 0.0) or 0.0
+                )
             if not error and state and getattr(state, "agent_errors", None):
                 errs = state.agent_errors
                 if errs:
@@ -344,6 +534,88 @@ class EvalRunner:
                 status = "fixed" if fixed else "failed"
             if status == "pending":
                 status = "fixed" if fixed else "failed"
+
+            run_id = str(getattr(state, "repair_run_id", "") or "")
+            manifest = dict(getattr(state, "harness_manifest", {}) or {})
+            if not manifest:
+                manifest = {
+                    "schema_version": 1,
+                    "run_id": run_id,
+                    "case_id": case_id,
+                    "language": language,
+                    "model": {"name": "", "provider": ""},
+                    "prompt_hash": _hash_text(issue),
+                    "runtime": {
+                        "python": platform.python_version(),
+                        "platform": platform.platform(),
+                    },
+                }
+                manifest["manifest_fingerprint"] = _hash_text(
+                    json.dumps(manifest, sort_keys=True, default=str)
+                )
+            trace_path, manifest_fingerprint = self._persist_run_artifacts(
+                case_id,
+                run_id,
+                tmp_repo,
+                manifest,
+            )
+            replay_meta = _trace_integrity(trace_path)
+            if replay_meta.get("available") and not replay_meta.get("valid"):
+                failure_tags.append("trace_invalid")
+
+            contract = EvaluationContract(
+                baseline_failed=baseline_failed,
+                target_passed=target_passed,
+                regression_passed=regression_passed,
+                environment_ok=environment_ok,
+                patch_present=bool(actual_patch.strip()),
+            )
+            contract_required = str(meta.get("status", "") or "").lower() == "verified"
+            agent_error = bool(error)
+            failure_class, failure_code = attribute_failure(
+                contract,
+                agent_error=agent_error,
+            )
+            if contract_required:
+                fixed = contract.passed
+            else:
+                fixed = target_passed and regression_passed and environment_ok and not agent_error
+                if fixed:
+                    failure_class, failure_code = attribute_failure(
+                        EvaluationContract(
+                            baseline_failed=True,
+                            target_passed=True,
+                            regression_passed=True,
+                            environment_ok=True,
+                            patch_present=True,
+                        )
+                    )
+            if not fixed:
+                if contract_required and failure_class.value == "contract":
+                    status = "contract_failed"
+                if failure_code.value not in failure_tags:
+                    failure_tags.append(failure_code.value)
+
+            bad_case_id = ""
+            if not fixed:
+                from agent_runtime.harness_engineering import BadCaseRecord, BadCaseStore
+
+                bad_case_id = "badcase-eval-" + _hash_text(
+                    f"{case_id}:{run_id}:{failure_code.value}:{manifest_fingerprint}"
+                )
+                bad_case = BadCaseRecord(
+                    badcase_id=bad_case_id,
+                    run_id=run_id,
+                    manifest_fingerprint=manifest_fingerprint,
+                    primary_cause=failure_code.value,
+                    contributing_causes=list(failure_tags),
+                    evidence_refs=[f"case:{case_id}", f"contract:{EVAL_CONTRACT_VERSION}"],
+                    trace_refs=[trace_path] if trace_path else [],
+                )
+                try:
+                    BadCaseStore(self.output_dir).append(bad_case)
+                except OSError:
+                    pass
 
             from src.eval.skill_metrics import skill_result_fields_from_plan
 
@@ -384,6 +656,7 @@ class EvalRunner:
                 actual_lines=actual_lines,
                 minimal_lines=minimal_lines,
                 duration_ms=duration_ms,
+                cost_usd=cost_usd,
                 agent_timings=extract_agent_timings(getattr(state, "node_timings", None)),
                 error=error,
                 introduced_regression=introduced_regression_flag,
@@ -395,6 +668,27 @@ class EvalRunner:
                 equivalence=equivalence,
                 judge_score=judge_score,
                 judge_reason=judge_reason,
+                language=language,
+                tool_permission_profile=str(meta.get("tool_permission_profile", "") or ""),
+                run_id=run_id,
+                trace_path=trace_path,
+                manifest_fingerprint=manifest_fingerprint,
+                eval_contract_version=EVAL_CONTRACT_VERSION,
+                contract_required=contract_required,
+                baseline_failed=baseline_failed,
+                target_passed=target_passed,
+                regression_passed=regression_passed,
+                environment_ok=environment_ok,
+                failure_class=failure_class.value,
+                failure_code=failure_code.value,
+                bad_case_id=bad_case_id,
+                replay=replay_meta,
+                judge_metadata=(
+                    dict(getattr(self.judge_client, "metadata", {}) or {})
+                    if self.judge_client
+                    else {}
+                ),
+                eval_run_id=eval_run_id,
             )
 
 

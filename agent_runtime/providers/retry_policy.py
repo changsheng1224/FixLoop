@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import random
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 
 __all__ = [
     "RateLimitExceededError",
+    "RetryPolicy",
     "apply_equal_jitter",
     "apply_full_jitter",
     "compute_rate_limit_delay",
@@ -19,6 +21,34 @@ __all__ = [
 DEFAULT_RETRY_CAP = 120.0
 DEFAULT_RATE_LIMIT_BASE = 1.0
 DEFAULT_SERVER_ERROR_BASE = 2.0
+
+
+@dataclass(frozen=True)
+class RetryPolicy:
+    """Central retry decision for model/tool operations."""
+
+    max_attempts: int = 1
+    base_delay_s: float = 0.5
+    max_delay_s: float = DEFAULT_RETRY_CAP
+    idempotent: bool = True
+
+    def should_retry(
+        self,
+        *,
+        attempt: int,
+        retryable: bool,
+        deadline_s: float | None = None,
+    ) -> bool:
+        if not self.idempotent or not retryable or attempt >= max(1, self.max_attempts):
+            return False
+        return deadline_s is None or deadline_s > 0
+
+    def delay(self, attempt: int, *, retry_after_s: float | None = None) -> float:
+        if retry_after_s is not None:
+            raw = min(self.max_delay_s, max(0.0, retry_after_s))
+        else:
+            raw = min(self.max_delay_s, self.base_delay_s * (2 ** max(0, attempt - 1)))
+        return apply_equal_jitter(raw)
 
 
 class RateLimitExceededError(RuntimeError):
