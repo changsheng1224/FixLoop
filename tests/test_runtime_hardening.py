@@ -15,7 +15,12 @@ from agent_runtime.providers.contracts import (
 from agent_runtime.providers.retry_policy import RetryPolicy
 from agent_runtime.runtime_contracts import RuntimePhase, RuntimeStateMachine
 from agent_runtime.session_store import SessionStore
-from agent_runtime.tool_result import ToolResult, ToolStatus, build_tool_receipt
+from agent_runtime.tool_result import (
+    ToolResult,
+    ToolStatus,
+    attach_tool_receipt,
+    build_tool_receipt,
+)
 
 
 def test_runtime_state_machine_requires_reason_for_terminal_transition():
@@ -28,6 +33,30 @@ def test_runtime_state_machine_requires_reason_for_terminal_transition():
     machine.transition(RuntimePhase.COMPLETED, stop_reason="final")
     with pytest.raises(ValueError, match="terminal runtime"):
         machine.transition(RuntimePhase.REASONING)
+
+
+def test_runtime_finalize_centralizes_stopped_to_cancelled_mapping():
+    machine = RuntimeStateMachine()
+    machine.transition(RuntimePhase.REASONING)
+    machine.finalize("stopped", stop_reason="user_cancel")
+
+    assert machine.phase == RuntimePhase.CANCELLED
+    assert machine.status.value == "cancelled"
+    assert machine.terminal is True
+
+
+def test_attach_tool_receipt_normalizes_and_preserves_metadata():
+    normalized = attach_tool_receipt(
+        "ok",
+        "read_file",
+        args_hash="args-1",
+        run_id="run-1",
+        call_id="call-1",
+    )
+
+    assert normalized.ok is True
+    assert normalized.metadata["receipt"] == normalized.receipt
+    assert normalized.receipt["call_id"] == "call-1"
 
 
 def test_provider_error_and_retry_policy_are_deterministic():

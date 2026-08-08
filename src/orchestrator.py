@@ -210,9 +210,7 @@ class Orchestrator(RepairPipelineMixin):
         self._log_run_id_token = None
         # 修复目标目录：优先 --repo / Agent cwd，而非 git 顶层仓库
         self._repo_root = str(Path.cwd())
-        for agent in (patcher, verifier):
-            if agent is None:
-                continue
+        for agent in self._active_agents:
             workspace = getattr(agent, "workspace", None)
             candidate = (
                 getattr(agent, "_cwd", "")
@@ -223,9 +221,13 @@ class Orchestrator(RepairPipelineMixin):
                 self._repo_root = candidate
                 break
         self._repair_gateways = self._collect_repair_gateways(
-            patcher,
-            verifier,
+            *self._active_agents,
         )
+
+    @property
+    def _active_agents(self) -> tuple:
+        """Return configured repair agents without repeating null filtering."""
+        return tuple(agent for agent in (self.patcher, self.verifier) if agent is not None)
 
     @staticmethod
     def _collect_repair_gateways(*agents) -> tuple:
@@ -256,10 +258,7 @@ class Orchestrator(RepairPipelineMixin):
         return ""
 
     def _resolve_l1_prompt_cache_key(self) -> str:
-        return self._resolve_l1_prompt_cache_key_from_agents(
-            self.patcher,
-            self.verifier,
-        )
+        return self._resolve_l1_prompt_cache_key_from_agents(*self._active_agents)
 
     def repair(
         self,
@@ -360,7 +359,7 @@ class Orchestrator(RepairPipelineMixin):
             or (state.human_control or {}).get("mode", "auto")
         )
         approved_tools = set((state.human_control or {}).get("approved_tools", []) or [])
-        for agent in (self.patcher, self.verifier):
+        for agent in self._active_agents:
             gateway = getattr(agent, "_tool_dispatch", None)
             if gateway is not None and hasattr(gateway, "set_context"):
                 gateway.set_context(
@@ -482,14 +481,12 @@ class Orchestrator(RepairPipelineMixin):
         return self._is_repair_cancelled()
 
     def _bind_cancel_token(self, token) -> None:
-        for agent in (self.patcher, self.verifier):
-            if agent is not None:
-                agent.cancel_token = token
+        for agent in self._active_agents:
+            agent.cancel_token = token
 
     def _unbind_cancel_token(self) -> None:
-        for agent in (self.patcher, self.verifier):
-            if agent is not None:
-                agent.cancel_token = None
+        for agent in self._active_agents:
+            agent.cancel_token = None
 
     def _is_repair_cancelled(self) -> bool:
         ctx = self._repair_ctx
@@ -809,7 +806,7 @@ class Orchestrator(RepairPipelineMixin):
         self._repair_ctx.harness_control = harness
         model = ""
         provider = ""
-        for agent in (self.patcher, self.verifier):
+        for agent in self._active_agents:
             config = getattr(agent, "config", None)
             if config is not None:
                 model = model or str(getattr(config, "model", "") or "")
@@ -1058,12 +1055,12 @@ class Orchestrator(RepairPipelineMixin):
     def _reset_token_tracking(self) -> None:
         from src.eval.token_usage import reset_clients_session_usage
 
-        reset_clients_session_usage(self.patcher, self.verifier)
+        reset_clients_session_usage(*self._active_agents)
 
     def _attach_token_usage(self, state: RepairState) -> None:
         from src.eval.token_usage import build_repair_token_usage, resolve_model_clients
 
-        clients = resolve_model_clients(self.patcher, self.verifier)
+        clients = resolve_model_clients(*self._active_agents)
         if not clients:
             return
         summary = build_repair_token_usage(
@@ -1082,9 +1079,7 @@ class Orchestrator(RepairPipelineMixin):
             state.node_timings["total_tool_steps"] = summary["total_tool_steps"]
         # 分 Agent latency
         latency_by_agent: dict[str, dict] = {}
-        for agent in (self.patcher, self.verifier):
-            if agent is None:
-                continue
+        for agent in self._active_agents:
             client = getattr(agent, "model_client", None)
             name = getattr(agent, "_agent_name", "") or "agent"
             if client and hasattr(client, "latency_stats"):

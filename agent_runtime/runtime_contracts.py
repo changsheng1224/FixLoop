@@ -57,6 +57,13 @@ _TERMINAL_PHASES = frozenset(
     {RuntimePhase.COMPLETED, RuntimePhase.FAILED, RuntimePhase.CANCELLED}
 )
 
+_TERMINAL_STATUS_PHASES: dict[str, tuple[RuntimePhase, RuntimeStatus]] = {
+    RuntimeStatus.COMPLETED.value: (RuntimePhase.COMPLETED, RuntimeStatus.COMPLETED),
+    RuntimeStatus.FAILED.value: (RuntimePhase.FAILED, RuntimeStatus.FAILED),
+    RuntimeStatus.CANCELLED.value: (RuntimePhase.CANCELLED, RuntimeStatus.CANCELLED),
+    RuntimeStatus.STOPPED.value: (RuntimePhase.CANCELLED, RuntimeStatus.CANCELLED),
+}
+
 
 @dataclass
 class RuntimeStateMachine:
@@ -102,6 +109,29 @@ class RuntimeStateMachine:
         if metadata:
             self.metadata.update(metadata)
         self.revision += 1
+
+    def finalize(
+        self,
+        status: RuntimeStatus | str,
+        *,
+        stop_reason: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Drive any non-terminal phase through finalizing exactly once."""
+        if self.terminal:
+            return
+        target_phase, target_status = _TERMINAL_STATUS_PHASES.get(
+            str(status),
+            (RuntimePhase.FAILED, RuntimeStatus.FAILED),
+        )
+        if self.phase != RuntimePhase.FINALIZING:
+            self.transition(RuntimePhase.FINALIZING)
+        self.transition(
+            target_phase,
+            status=target_status,
+            stop_reason=str(stop_reason or target_status.value),
+            metadata=metadata,
+        )
 
     def terminal_contract(self) -> dict[str, Any]:
         """Return evidence required by report/checkpoint finalizers."""

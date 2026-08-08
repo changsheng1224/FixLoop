@@ -103,6 +103,20 @@ class TaskState:
         self.state_revision = max(self.state_revision, machine.revision)
         return self.runtime_contract
 
+    def finalize_runtime(
+        self,
+        status: RuntimeStatus | str,
+        *,
+        stop_reason: str,
+        metadata: dict | None = None,
+    ) -> dict:
+        """Finalize the runtime contract through its single state-machine path."""
+        machine = RuntimeStateMachine.from_snapshot(self.runtime_contract)
+        machine.finalize(status, stop_reason=stop_reason, metadata=metadata)
+        self.runtime_contract = machine.snapshot()
+        self.state_revision = max(self.state_revision, machine.revision)
+        return self.runtime_contract
+
     # ---- 状态转换方法 ----
 
     def record_attempt(self):
@@ -215,10 +229,8 @@ class TaskState:
         self.stop_reason = StopReason.FINAL.value
         if not (self.runtime_contract or {}).get("terminal"):
             try:
-                self.advance_runtime(RuntimePhase.FINALIZING)
-                self.advance_runtime(
-                    RuntimePhase.COMPLETED,
-                    status=RuntimeStatus.COMPLETED,
+                self.finalize_runtime(
+                    RuntimeStatus.COMPLETED,
                     stop_reason=StopReason.FINAL.value,
                 )
             except ValueError:

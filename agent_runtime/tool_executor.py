@@ -28,7 +28,12 @@ from agent_runtime.tool_rejection import (
     build_gate7_pass_metadata,
 )
 from agent_runtime.tool_resilience import ToolResilienceController
-from agent_runtime.tool_result import ToolResult, ToolStatus, normalize_tool_result
+from agent_runtime.tool_result import (
+    ToolResult,
+    ToolStatus,
+    attach_tool_receipt,
+    normalize_tool_result,
+)
 
 
 @dataclass
@@ -237,18 +242,15 @@ class ToolExecutor:
             result.metadata.update(self._diff_snapshots(before_snapshot, after_snapshot))
         result.metadata.setdefault("tool_status", result.status)
         result.metadata.setdefault("retryable", result.retryable)
-        from agent_runtime.tool_result import build_tool_receipt
-
-        result.receipt = build_tool_receipt(
-            name,
+        result = attach_tool_receipt(
             result,
+            name,
             args_hash=_canonical_args_hash(name, args),
             run_id=str(getattr(self.agent, "shared_run_id", "") or ""),
             call_id=str(
                 (self.agent.session.get("_last_canonical_tool_call", {}) or {}).get("call_id", "")
             ),
         )
-        result.metadata["receipt"] = result.receipt
 
         result.metadata.update(
             {
