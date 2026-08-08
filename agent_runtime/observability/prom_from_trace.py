@@ -134,5 +134,39 @@ def record_canonical_event(record: dict[str, Any], registry: Any | None = None) 
                     "fixloop_degradation_total",
                     labels=low_cardinality_labels(action=sanitize_label_value(action)),
                 )
+
+        if event in {"security_denied", "sandbox_violation"}:
+            registry.counter_inc(
+                "fixloop_security_denials_total",
+                labels=low_cardinality_labels(reason=sanitize_label_value(payload.get("reason", event))),
+            )
+        if event == "patch_rollback":
+            registry.counter_inc(
+                "fixloop_patch_rollbacks_total",
+                labels=low_cardinality_labels(reason=sanitize_label_value(payload.get("reason", "unknown"))),
+            )
+        if event == "stale_patch_rejected":
+            registry.counter_inc(
+                "fixloop_stale_patch_rejections_total",
+                labels=low_cardinality_labels(reason=sanitize_label_value(payload.get("reason", "base_hash_mismatch"))),
+            )
+        if event == "sandbox_policy":
+            registry.counter_inc(
+                "fixloop_sandbox_policy_events_total",
+                labels=low_cardinality_labels(
+                    action=sanitize_label_value(payload.get("action", "evaluate")),
+                    reason=sanitize_label_value(payload.get("policy", "preferred")),
+                ),
+            )
+        if event in {"worktree_created", "worktree_removed", "worktree_lease"}:
+            registry.counter_inc(
+                "fixloop_worktree_events_total",
+                labels=low_cardinality_labels(action=sanitize_label_value(payload.get("action", event))),
+            )
+        if event == "workspace_policy":
+            registry.counter_inc(
+                "fixloop_workspace_policy_events_total",
+                labels=low_cardinality_labels(action=sanitize_label_value(payload.get("action", "evaluate"))),
+            )
     except Exception:
         pass

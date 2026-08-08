@@ -37,6 +37,29 @@ SENSITIVE_PATH_SUBSTRINGS: tuple[str, ...] = (
     "\\.gnupg\\",
 )
 
+# Repository control-plane and deployment credential files.  These are
+# intentionally path-pattern based so nested CI/deployment files are covered
+# without blocking ordinary source files named ``config.py``.
+SENSITIVE_PATH_GLOBS: tuple[str, ...] = (
+    ".git/config",
+    ".gitmodules",
+    ".npmrc",
+    ".pypirc",
+    ".docker/config.json",
+    ".terraformrc",
+    "*.tfvars",
+    "*.tfvars.json",
+    "kubeconfig",
+    "*/kubeconfig",
+    ".github/workflows/*",
+    ".gitlab-ci.yml",
+    ".circleci/config.yml",
+    "azure-pipelines.yml",
+    "Jenkinsfile",
+    "docker-compose*.yml",
+    "docker-compose*.yaml",
+)
+
 _WRITE_TOOLS = frozenset({"write_file", "patch_file"})
 _READ_TOOLS = frozenset({"read_file", "grep", "search", "inspect_file", "ast_parse"})
 
@@ -50,6 +73,14 @@ def is_sensitive_path(path: str | Path) -> bool:
     for sub in SENSITIVE_PATH_SUBSTRINGS:
         if sub.replace("\\", "/").lower() in lower:
             return True
+    normalized = lower.lstrip("./")
+    if any(
+        fnmatch.fnmatch(normalized, pattern.lower())
+        or fnmatch.fnmatch(normalized, pattern.lower().lstrip("./"))
+        or fnmatch.fnmatch(normalized, f"*/{pattern.lower().lstrip('./')}")
+        for pattern in SENSITIVE_PATH_GLOBS
+    ):
+        return True
     name = Path(text).name
     for pat in SENSITIVE_BASENAME_GLOBS:
         if fnmatch.fnmatch(name, pat) or fnmatch.fnmatch(name.lower(), pat.lower()):

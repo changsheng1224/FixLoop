@@ -9,6 +9,7 @@ auto_schema() 从 dataclass 自动推导参数字典，新增工具无需手写 
 
 import os
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -419,7 +420,88 @@ def tool_expand_lock(context, args: dict) -> str:
     )
 
 
+def _patch_transaction_paths(context, patch_text: str) -> dict:
+    """Capture only paths named by an apply_patch envelope."""
+    import re
+
+    snapshot: dict = {}
+    for raw in re.findall(r"\*\*\*\s+(?:Update|Add|Delete) File:\s*(.+)", patch_text or ""):
+        try:
+            target = context.resolve(raw.strip())
+        except ValueError:
+            continue
+        try:
+            stat = target.lstat() if target.exists() else None
+            snapshot[str(target)] = {
+                "exists": bool(stat),
+                "bytes": target.read_bytes() if stat and target.is_file() else None,
+                "mode": stat.st_mode if stat else None,
+            }
+        except OSError:
+            snapshot[str(target)] = {"exists": False, "bytes": None, "mode": None}
+    return snapshot
+
+
+def _restore_patch_transaction(snapshot: dict) -> None:
+    for raw_path, before in snapshot.items():
+        target = Path(raw_path)
+        try:
+            if before["exists"]:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(before["bytes"] or b"")
+                if before.get("mode") is not None:
+                    target.chmod(before["mode"])
+            elif target.exists() or target.is_symlink():
+                target.unlink()
+        except OSError:
+            # Preserve the original patch error; the caller records rollback
+            # failure through the returned metadata/trace path.
+            pass
+
+
 def tool_apply_patch(context, args: dict) -> str:
+    """Transactional wrapper around the canonical apply_patch implementation."""
+    patch_text = args.get("patch") or args.get("diff") or args.get("input") or ""
+    snapshot = _patch_transaction_paths(context, str(patch_text))
+    expected = args.get("base_sha256") or args.get("base_hash")
+    if expected:
+        expected_by_path = expected if isinstance(expected, dict) else {}
+        for raw_path in expected_by_path or {"": expected}:
+            if isinstance(expected, dict):
+                value = expected_by_path.get(raw_path)
+                try:
+                    target = context.resolve(raw_path)
+                except ValueError:
+                    return f"Error: base hash path invalid: {raw_path}"
+            else:
+                value = expected
+                target = next((Path(path) for path in snapshot), None)
+            if target is None or not target.is_file():
+                return "Error: base hash target missing"
+            import hashlib
+
+            actual = hashlib.sha256(target.read_bytes()).hexdigest()
+            if actual != str(value):
+                return f"Error: stale patch/base hash mismatch: {target}"
+    result = _tool_apply_patch_unchecked(context, args)
+    if result.startswith("Error:"):
+        _restore_patch_transaction(snapshot)
+        try:
+            from agent_runtime.metrics import get_registry
+
+            reason = "stale_patch" if "stale" in result.lower() else "apply_error"
+            metric = (
+                "fixloop_stale_patch_rejections_total"
+                if reason == "stale_patch"
+                else "fixloop_patch_rollbacks_total"
+            )
+            get_registry().counter_inc(metric, labels={"reason": reason})
+        except Exception:
+            pass
+    return result
+
+
+def _tool_apply_patch_unchecked(context, args: dict) -> str:
     """Codex 风格 apply_patch：*** Begin/End Patch；ACI 写后回显 + edit-time lint。"""
     from agent_runtime.apply_patch_format import parse_apply_patch_text
     from agent_runtime.atomic_io import atomic_write_text
@@ -891,6 +973,14 @@ def tool_patch_file(context, args: dict) -> str:
     from agent_runtime.atomic_io import atomic_write_text
     from agent_runtime.patch_engine import apply_plan, build_preview, parse_patch_input
 
+    expected_hash = args.get("base_sha256") or args.get("base_hash")
+    if expected_hash:
+        import hashlib
+
+        actual_hash = hashlib.sha256(target.read_bytes()).hexdigest()
+        if actual_hash != str(expected_hash):
+            return f"Error: stale patch/base hash mismatch: {raw_path}"
+
     try:
         plan = parse_patch_input(args)
     except ValueError as e:
@@ -947,7 +1037,7 @@ def tool_run_shell(context, args: dict) -> str:
     Args 必须包含 'command'，可选 'timeout'(默认20s)。
     环境变量经过白名单过滤；输出经 redact_text 脱敏。
     """
-    from agent_runtime.security import check_shell_command, redact_text
+    from agent_runtime.security import check_shell_command, parse_shell_argv, redact_text
     from agent_runtime.security import shell_env as _shell_env
 
     command = args.get("command", "")
@@ -964,6 +1054,27 @@ def tool_run_shell(context, args: dict) -> str:
     timeout = max(1, min(timeout, 120))  # 限制 1-120 秒
 
     root = context.root
+    try:
+        argv = parse_shell_argv(command)
+    except ValueError as exc:
+        return f"Error: Shell 命令被安全策略拒绝 ({exc})"
+    if os.name == "nt":
+        # Windows built-ins (echo/set) and Python shims are resolved by
+        # cmd.exe.  The command line is generated from parsed argv, never
+        # concatenated from raw user text, so shell operators cannot escape.
+        comspec = os.environ.get("COMSPEC", "cmd.exe")
+        if argv[0].lower() == "set":
+            argv = [comspec, "/d", "/s", "/c", "set"]
+        elif argv[0].lower().rsplit("\\", 1)[-1].removesuffix(".exe") in {
+            "python",
+            "python3",
+            "py",
+        }:
+            # Avoid a cmd.exe intermediary for Python probes so cancellation
+            # can terminate the process directly and deterministically.
+            argv = [sys.executable, *argv[1:]]
+        else:
+            argv = [comspec, "/d", "/s", "/c", subprocess.list2cmdline(argv)]
     provider = getattr(context, "shell_env_provider", None)
     if callable(provider):
         env = provider()
@@ -972,23 +1083,23 @@ def tool_run_shell(context, args: dict) -> str:
 
     cancel_token = getattr(context, "cancel_token", None)
     if cancel_token is not None:
-        return redact_text(_run_shell_cancellable(command, root, env, timeout, cancel_token))
-    return redact_text(_run_shell_blocking(command, root, env, timeout))
+        return redact_text(_run_shell_cancellable(argv, command, root, env, timeout, cancel_token))
+    return redact_text(_run_shell_blocking(argv, command, root, env, timeout))
 
 
-def _run_shell_blocking(command: str, root, env, timeout: int) -> str:
+def _run_shell_blocking(argv: list[str], display_command: str, root, env, timeout: int) -> str:
     try:
         result = subprocess.run(
-            command,
+            argv,
             cwd=root,
-            shell=True,
+            shell=False,
             capture_output=True,
             text=True,
             timeout=timeout,
             env=env,
         )
     except subprocess.TimeoutExpired:
-        return f"Error: 命令超时（{timeout} 秒）: {command[:100]}"
+        return f"Error: 命令超时（{timeout} 秒）: {display_command[:100]}"
 
     return _format_shell_result(result.returncode, result.stdout, result.stderr)
 
@@ -1016,22 +1127,13 @@ def _kill_process_tree(proc: subprocess.Popen) -> None:
         proc.kill()
 
 
-def _run_shell_cancellable(command: str, root, env, timeout: int, cancel_token) -> str:
-    import shlex
+def _run_shell_cancellable(argv: list[str], display_command: str, root, env, timeout: int, cancel_token) -> str:
     import time
 
     popen_kwargs = {}
-    popen_command = command
-    use_shell = True
+    popen_command = argv
+    use_shell = False
     if os.name == "nt":
-        cmd_name = command.strip().split()[0].split("/")[-1].split("\\")[-1].lower()
-        if cmd_name not in {"echo", "dir", "set"}:
-            try:
-                popen_command = shlex.split(command)
-                use_shell = False
-            except ValueError:
-                popen_command = command
-                use_shell = True
         popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     else:
         popen_kwargs["start_new_session"] = True
@@ -1051,10 +1153,10 @@ def _run_shell_cancellable(command: str, root, env, timeout: int, cancel_token) 
     while proc.poll() is None:
         if cancel_token.is_cancelled:
             _kill_process_tree(proc)
-            return f"Error: 命令已取消: {command[:100]}"
+            return f"Error: 命令已取消: {display_command[:100]}"
         if time.time() >= deadline:
             _kill_process_tree(proc)
-            return f"Error: 命令超时（{timeout} 秒）: {command[:100]}"
+            return f"Error: 命令超时（{timeout} 秒）: {display_command[:100]}"
         time.sleep(poll_s)
 
     stdout, stderr = proc.communicate(timeout=1)

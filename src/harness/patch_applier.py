@@ -6,6 +6,10 @@
 - 限制：单轮最多 5 个补丁、单补丁最多 50 行
 """
 
+import base64
+import posixpath
+import shlex
+
 from src.state import CandidatePatch
 
 MAX_PATCHES = 5
@@ -35,10 +39,18 @@ class PatchApplier:
                 results.append(False)
                 continue
 
+            rel_path = _safe_rel_path(patch.file_path)
+            if rel_path is None:
+                results.append(False)
+                self._revert_all(sandbox, applied)
+                results.extend([False] * (len(patches) - len(results)))
+                return results
+            encoded = base64.b64encode(patch.diff.encode("utf-8")).decode("ascii")
+
             cmd = (
-                f"echo {_escape(patch.diff)} > /tmp/patch_{i}.diff && "
-                f"/entrypoint.sh apply-patch /code/{patch.file_path} "
-                f"/tmp/patch_{i}.diff"
+                f"printf '%s' {shlex.quote(encoded)} | base64 -d > "
+                f"/tmp/patch_{i}.diff && /entrypoint.sh apply-patch "
+                f"{shlex.quote('/code/' + rel_path)} /tmp/patch_{i}.diff"
             )
             result = self.manager.execute(sandbox, cmd, timeout=30)
             ok = result.exit_code == 0
@@ -46,7 +58,9 @@ class PatchApplier:
             if ok:
                 applied.append(patch)
             else:
-                self._revert_all(sandbox, applied)
+                # Revert the current patch too: an entrypoint may have
+                # partially written before returning a non-zero status.
+                self._revert_all(sandbox, applied + [patch])
                 # 残余标记为失败
                 results.extend([False] * (len(patches) - len(results)))
                 return results
@@ -65,3 +79,14 @@ class PatchApplier:
 def _escape(text: str) -> str:
     """简单 shell 转义。"""
     return text.replace("'", "'\\''")
+
+
+def _safe_rel_path(path: str) -> str | None:
+    """Return a normalized relative POSIX path safe for the sandbox command."""
+    raw = str(path or "").replace("\\", "/")
+    if not raw or raw.startswith("/"):
+        return None
+    normalized = posixpath.normpath(raw)
+    if normalized in {".", ".."} or normalized.startswith("../"):
+        return None
+    return normalized

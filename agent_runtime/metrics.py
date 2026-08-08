@@ -41,6 +41,12 @@ _METRIC_HELP: dict[str, str] = {
     "fixloop_latency_slo_exceeded_total": "Latency SLO violations by kind.",
     "fixloop_degradation_total": "Adaptive degradation decisions by action.",
     "fixloop_observation_events_total": "Canonical Observation Store events by tool/status.",
+    "fixloop_security_denials_total": "Security policy denials by reason.",
+    "fixloop_patch_rollbacks_total": "Patch transaction rollbacks by reason.",
+    "fixloop_sandbox_policy_events_total": "Sandbox policy decisions by policy/action.",
+    "fixloop_worktree_events_total": "Worktree lifecycle and lease events.",
+    "fixloop_stale_patch_rejections_total": "Compare-and-swap stale patch rejections.",
+    "fixloop_workspace_policy_events_total": "Workspace policy events by action.",
     # Intent Router (online)
     "fixloop_intent_routed_total": (
         "Intent router invocations by channel/mode/primary/action/parser."
@@ -76,6 +82,12 @@ _METRIC_TYPE: dict[str, str] = {
     "fixloop_latency_slo_exceeded_total": "counter",
     "fixloop_degradation_total": "counter",
     "fixloop_observation_events_total": "counter",
+    "fixloop_security_denials_total": "counter",
+    "fixloop_patch_rollbacks_total": "counter",
+    "fixloop_sandbox_policy_events_total": "counter",
+    "fixloop_worktree_events_total": "counter",
+    "fixloop_stale_patch_rejections_total": "counter",
+    "fixloop_workspace_policy_events_total": "counter",
     "fixloop_intent_routed_total": "counter",
     "fixloop_intent_misroute_proxy_total": "counter",
     "fixloop_intent_clarify_total": "counter",

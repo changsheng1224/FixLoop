@@ -77,8 +77,14 @@ EVENT_CATALOG: dict[str, tuple[str, ...]] = {
     "artifact": ("baseline_verify_finished", "blackboard_snapshot"),
     "security": (
         "sandbox_violation",
+        "sandbox_policy",
+        "security_denied",
+        "patch_rollback",
+        "stale_patch_rejected",
+        "workspace_policy",
         "worktree_created",
         "worktree_removed",
+        "worktree_lease",
     ),
 }
 

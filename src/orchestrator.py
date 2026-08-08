@@ -4,6 +4,7 @@
 """
 
 import hashlib
+import os
 import re
 import time
 from collections import namedtuple
@@ -186,13 +187,18 @@ class Orchestrator(RepairPipelineMixin):
         *,
         use_pytest_verify: bool = False,
         require_sandbox: bool = False,
+        sandbox_policy: str = "",
         allow_static_verify_fallback: bool = False,
         l1_prompt_cache_key: str = "",
     ):
         self.patcher = patcher
         self.verifier = verifier
         self.use_pytest_verify = use_pytest_verify
-        self.require_sandbox = require_sandbox
+        configured_policy = str(sandbox_policy or os.environ.get("FIXLOOP_SANDBOX_POLICY", "preferred")).strip().lower()
+        if configured_policy not in {"required", "preferred", "disabled"}:
+            configured_policy = "preferred"
+        self.sandbox_policy = configured_policy
+        self.require_sandbox = bool(require_sandbox or configured_policy == "required")
         self.allow_static_verify_fallback = allow_static_verify_fallback
         self.l1_prompt_cache_key = l1_prompt_cache_key or self._resolve_l1_prompt_cache_key()
         self._repair_ctx: RepairRunContext | None = None
@@ -751,6 +757,8 @@ class Orchestrator(RepairPipelineMixin):
             state.node_timings["tokenizer_by_agent"] = tokenizer_by_agent
 
         self._maybe_enter_worktree(state, tracer)
+        if self._repair_ctx is not None and self._repair_ctx.worktree_handle is not None:
+            self._repair_ctx.worktree_initial_snapshot = self._snapshot_repo()
 
     def _maybe_enter_worktree(self, state: RepairState, tracer) -> None:
         """可选：FIXLOOP_USE_WORKTREE=1 时创建独立 worktree 并重定向 Agent 工具根。"""
@@ -775,6 +783,7 @@ class Orchestrator(RepairPipelineMixin):
             return
 
         originals: dict[str, str] = {}
+        ctx.original_repo_root = self._repo_root
         for name, agent in (
             ("patcher", self.patcher),
             ("verifier", self.verifier),
@@ -789,6 +798,7 @@ class Orchestrator(RepairPipelineMixin):
                 agent._cwd = str(handle.path)
         ctx.worktree_handle = handle
         ctx.worktree_original_roots = originals
+        self._repo_root = str(handle.path)
         if tracer is not None:
             tracer.emit(
                 "orchestrator",
@@ -832,6 +842,9 @@ class Orchestrator(RepairPipelineMixin):
                 )
         ctx.worktree_handle = None
         ctx.worktree_original_roots = {}
+        if ctx.original_repo_root:
+            self._repo_root = ctx.original_repo_root
+            ctx.original_repo_root = ""
 
     def _end_repair_trace(self, state: RepairState) -> None:
         from agent_runtime.log_context import reset_run_id
@@ -1202,7 +1215,10 @@ class Orchestrator(RepairPipelineMixin):
                         )
             patches = kept
         applier = self._patch_applier()
-        applied = applier.apply_patches(patches)
+        allowlist = None
+        if lock is not None and getattr(lock, "allowed_edit", None):
+            allowlist = set(lock.allowed_edit)
+        applied = applier.apply_patches(patches, allowed_paths=allowlist)
         self._last_sibling_warnings = list(applier.last_sibling_warnings or [])
         self._last_apply_errors = list(getattr(applier, "last_apply_errors", None) or [])
         return applied
@@ -1252,6 +1268,15 @@ class Orchestrator(RepairPipelineMixin):
         self, state: RepairState, *, cancel_token=None
     ) -> "VerificationResult":
         """Python 路径：Docker / host pytest / static（假定 test_patch 已在树上如需要）。"""
+        try:
+            from agent_runtime.metrics import get_registry
+
+            get_registry().counter_inc(
+                "fixloop_sandbox_policy_events_total",
+                labels={"action": "evaluate", "reason": self.sandbox_policy},
+            )
+        except Exception:
+            pass
         if self.verifier is not None:
             run = DockerVerifyStrategy().run(
                 self._repo_root,
@@ -1282,6 +1307,11 @@ class Orchestrator(RepairPipelineMixin):
                     return run.result
             record_verify_timings(state, run, log_sandbox=True)
             return run.result
+        if self.use_pytest_verify and self.require_sandbox:
+            return VerificationResult(
+                all_passed=False,
+                failure_logs=["verify_config: sandbox_required_but_verifier_unavailable"],
+            )
         if self.use_pytest_verify:
             run = PytestVerifyStrategy().run(self._repo_root, cancel_token=cancel_token)
             record_verify_timings(state, run)

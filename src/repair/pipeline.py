@@ -146,6 +146,14 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
     def _emit_repair_span(self, name: str, payload: dict | None = None) -> None:
         """Trace span（与 ProgressEmitter 阶段名对齐；primary 无 Loc/Ret）。"""
         try:
+            handle = getattr(self._repair_ctx, "worktree_handle", None)
+            if handle is not None:
+                from agent_runtime.worktree import refresh_worktree_lease
+
+                refresh_worktree_lease(handle)
+        except Exception:
+            pass
+        try:
             ctx = getattr(self, "_repair_ctx", None)
             tracer = getattr(ctx, "repair_tracer", None) if ctx is not None else None
             if tracer is not None:
@@ -363,6 +371,8 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         ctx.repair_started_at = t_start
         self._reset_token_tracking()
         self._begin_repair_trace(state)
+        if ctx.worktree_initial_snapshot:
+            initial_snapshot = ctx.worktree_initial_snapshot
         self._init_repair_blackboard()
         log.info("Orchestrator 开始")
         state.node_timings["repair_mode"] = "patcher_primary"
