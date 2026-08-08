@@ -7,6 +7,7 @@ L3 (持久化前): .env 不入索引
 """
 
 import os
+import shlex
 
 # Shell 子进程允许透传的环境变量白名单（严格固定，不可运行时扩展）
 SHELL_ENV_WHITELIST = frozenset(
@@ -91,6 +92,8 @@ SHELL_COMMAND_WHITELIST = frozenset(
         "tail",
         "wc",
         "echo",
+        "env",
+        "set",
         "test",
         "ruff",
         "mypy",
@@ -152,13 +155,56 @@ def check_shell_command(command: str) -> tuple[bool, str]:
     """
     if not command or not command.strip():
         return False, "空命令"
-    cmd_name = command.strip().split()[0].split("/")[-1].split("\\")[-1].lower()
+    try:
+        argv = parse_shell_argv(command)
+    except ValueError as exc:
+        return False, str(exc)
+    if not argv:
+        return False, "空命令"
+    cmd_name = argv[0].split("/")[-1].split("\\")[-1].lower()
     if cmd_name in SHELL_COMMAND_BLOCKLIST:
         return False, f"blocked: {cmd_name}"
     if cmd_name in SHELL_COMMAND_WHITELIST:
         return True, f"whitelist: {cmd_name}"
     # 不在任一列表中 → 保守拒绝
     return False, f"not in whitelist: {cmd_name}"
+
+
+def parse_shell_argv(command: str) -> list[str]:
+    """Parse a single executable command without invoking a shell.
+
+    Shell composition is deliberately rejected. Callers should pass the
+    returned argv to ``subprocess`` with ``shell=False``.
+    """
+    text = str(command or "").strip()
+    if not text or "\x00" in text:
+        raise ValueError("空命令或非法 NUL 字符")
+    # ``shell=False`` treats a plain semicolon as an argument (and common
+    # ``python -c`` snippets rely on it); reject operators that compose
+    # commands or redirect streams.
+    if any(operator in text for operator in ("&&", "||", "|", ">", "<", "`", "$(", "${")):
+        raise ValueError("禁止 Shell 运算符/命令替换；请使用单一 argv 命令")
+    try:
+        argv = shlex.split(text, posix=os.name != "nt")
+    except ValueError as exc:
+        raise ValueError(f"Shell 参数解析失败: {exc}") from exc
+    if not argv:
+        raise ValueError("空命令")
+    if os.name == "nt":
+        argv = [
+            token[1:-1]
+            if len(token) >= 2 and token[0] == token[-1] and token[0] in {"'", '"'}
+            else token
+            for token in argv
+        ]
+    # Python -c remains useful for deterministic probes, but it must not become
+    # a second shell or an unrestricted file/network side-effect escape hatch.
+    if argv[0].split("/")[-1].split("\\")[-1].lower() in {"python", "python3", "py"}:
+        if "-c" in argv:
+            code = argv[argv.index("-c") + 1] if argv.index("-c") + 1 < len(argv) else ""
+            if any(token in code for token in ("os.system", "subprocess", "shutil.rmtree", "socket.", "urllib.")):
+                raise ValueError("python -c 包含被禁止的进程/网络副作用")
+    return argv
 
 
 def redact_text(text: str, secret_values: list[str] | None = None) -> str:

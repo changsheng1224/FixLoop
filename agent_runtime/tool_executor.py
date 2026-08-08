@@ -15,6 +15,7 @@
 """
 
 import hashlib
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -230,6 +231,15 @@ class ToolExecutor:
         self, gate_id: int, tool_error_code: str, content: str, **extra
     ) -> ToolExecutionResult:
         """构造 Executor 闸口拒绝结果。"""
+        try:
+            from agent_runtime.metrics import get_registry
+
+            get_registry().counter_inc(
+                "fixloop_security_denials_total",
+                labels={"reason": str(tool_error_code)},
+            )
+        except Exception:
+            pass
         return ToolExecutionResult(
             content=content,
             metadata=build_executor_rejection_metadata(gate_id, tool_error_code, **extra),
@@ -717,22 +727,34 @@ class ToolExecutor:
                     pass
         return snapshot
 
-    def _capture_restore_snapshot(self) -> dict[str, str | None]:
-        """Gate 8 内容快照：用于 cancel 后回滚 write/patch 变更。"""
+    def _capture_restore_snapshot(self) -> dict[str, dict]:
+        """Gate 8 内容快照：支持二进制、权限位与符号链接回滚。"""
         root = Path(self.agent.tool_context.root)
         if not root.exists():
             return {}
-        snapshot: dict[str, str | None] = {}
+        snapshot: dict[str, dict] = {}
         for fpath in root.rglob("*"):
-            if fpath.is_file() and not self._is_ignored(fpath):
+            if (fpath.is_file() or fpath.is_symlink()) and not self._is_ignored(fpath):
                 try:
                     rel = str(fpath.relative_to(root))
-                    snapshot[rel] = fpath.read_text(encoding="utf-8")
-                except (OSError, ValueError, UnicodeDecodeError):
+                    stat = fpath.lstat()
+                    if fpath.is_symlink():
+                        snapshot[rel] = {
+                            "kind": "symlink",
+                            "target": os.readlink(fpath),
+                            "mode": stat.st_mode,
+                        }
+                    else:
+                        snapshot[rel] = {
+                            "kind": "file",
+                            "bytes": fpath.read_bytes(),
+                            "mode": stat.st_mode,
+                        }
+                except (OSError, ValueError):
                     pass
         return snapshot
 
-    def _restore_restore_snapshot(self, before: dict[str, str | None]) -> None:
+    def _restore_restore_snapshot(self, before: dict[str, dict]) -> None:
         """将 workspace 恢复到 Gate 8 内容快照。"""
         root = Path(self.agent.tool_context.root)
         if not root.exists():
@@ -740,19 +762,36 @@ class ToolExecutor:
         before_paths = set(before.keys())
         current_paths: set[str] = set()
         for fpath in root.rglob("*"):
-            if fpath.is_file() and not self._is_ignored(fpath):
+            if (fpath.is_file() or fpath.is_symlink()) and not self._is_ignored(fpath):
                 try:
                     current_paths.add(str(fpath.relative_to(root)))
                 except ValueError:
                     pass
-        for rel, content in before.items():
-            target = root / rel
-            if content is None:
-                if target.exists():
-                    target.unlink()
+        for rel, record in before.items():
+            try:
+                from agent_runtime.path_safety import resolve_under_root
+
+                target = resolve_under_root(root, rel)
+            except (ValueError, OSError):
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
+            try:
+                if target.exists() or target.is_symlink():
+                    target.unlink()
+                # Backwards compatibility for snapshots created by older
+                # runtimes/tests that stored plain UTF-8 strings.
+                if isinstance(record, str) or record is None:
+                    if record is not None:
+                        target.write_text(record, encoding="utf-8")
+                    continue
+                if record.get("kind") == "symlink":
+                    os.symlink(record.get("target", ""), target)
+                else:
+                    target.write_bytes(record.get("bytes", b""))
+                    if record.get("mode") is not None:
+                        target.chmod(record["mode"])
+            except OSError:
+                continue
         for rel in sorted(current_paths - before_paths):
             target = root / rel
             if target.is_file():

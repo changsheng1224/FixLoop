@@ -363,6 +363,7 @@ class CandidatePatch:
     patched_lines: str = ""
     diff: str = ""
     explanation: str = ""
+    base_sha256: str = ""
     schema_version: str = "1.0"
 
     def to_dict(self) -> dict:
@@ -373,6 +374,7 @@ class CandidatePatch:
             "patched_lines": self.patched_lines,
             "diff": self.diff,
             "explanation": self.explanation,
+            "base_sha256": self.base_sha256,
             "schema_version": self.schema_version,
         }
 
@@ -387,6 +389,7 @@ class CandidatePatch:
             patched_lines=normalize_patch_text_field(data.get("patched_lines", "")),
             diff=str(data.get("diff", "") or ""),
             explanation=str(data.get("explanation", "") or ""),
+            base_sha256=str(data.get("base_sha256", data.get("base_hash", "")) or ""),
             schema_version=str(data.get("schema_version", "1.0") or "1.0"),
         )
 

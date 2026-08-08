@@ -43,6 +43,7 @@ def _log_loop(msg: str) -> None:
 def _build_anthropic_tools(tools_registry: dict) -> list[dict]:
     """将内部工具注册表转换为 Anthropic tool_use 格式（仅 schema 字段）。"""
     from agent_runtime.tool_schema import schema_to_json, tool_schema_view
+
     result = []
     for name, spec in tool_schema_view(tools_registry).items():
         schema = spec.get("schema", {})
@@ -691,6 +692,12 @@ class AgentLoop:
             self.agent.session,
             root=str(getattr(self.agent, "_cwd", "") or ""),
         )
+        # A successful write invalidates observations derived from changed files
+        # before the new result is registered.
+        if observation.changed_files:
+            observation_store.invalidate_paths(
+                observation.changed_files, "tool_write_changed_dependency"
+            )
         raw_result = _meta.get("raw_result")
         if raw_result is not None:
             import json
@@ -714,10 +721,27 @@ class AgentLoop:
             summary=result_text[:500],
             source_version=str(_meta.get("source_version", "") or ""),
             structured_facts=structured_facts,
+            dependencies=list(observation.changed_files),
+            error_code=observation.failure_class,
+            evidence_refs=list(observation.evidence_ids),
+            redact=True,
         )
+        # The loop creates a short-lived Store per tool call; close the SQLite
+        # handle promptly so Windows can clean temporary workspaces reliably.
+        observation_store.close()
         observation_dict["observation_id"] = stored.observation_id
         observation_dict["raw_ref"] = stored.raw_ref
         _meta["observation_id"] = stored.observation_id
+        self._emit(
+            "observation_stored",
+            {
+                "observation_id": stored.observation_id,
+                "tool": tool_name,
+                "status": stored.status,
+                "deduplicated": stored.observation_id != observation_dict.get("observation_id", ""),
+                "redacted": stored.redacted,
+            },
+        )
         if _meta.get("provider") == "mcp":
             observation_dict["provider"] = "mcp"
             observation_dict["server"] = _meta.get("mcp_server", "")
@@ -726,8 +750,7 @@ class AgentLoop:
         self.agent.session["tool_observations"] = self.agent.session["tool_observations"][-50:]
         # 权限拒绝：立即回灌，避免反复试 run_shell/sandbox_test
         if _meta.get("rejection_reason") == "role_not_allowed" or (
-            _meta.get("tool_status") == "rejected"
-            and tool_name in ("run_shell", "sandbox_test")
+            _meta.get("tool_status") == "rejected" and tool_name in ("run_shell", "sandbox_test")
         ):
             if (
                 getattr(self.agent, "agent_name", None)
@@ -828,9 +851,7 @@ class AgentLoop:
         affected = meta.get("affected_paths", []) if isinstance(meta, dict) else []
         self._no_progress_steps = self._step_guard.stall_count
         is_patcher = (
-            getattr(self.agent, "agent_name", None)
-            or getattr(self.agent, "_agent_name", "")
-            or ""
+            getattr(self.agent, "agent_name", None) or getattr(self.agent, "_agent_name", "") or ""
         ) == "patcher"
         if is_patcher:
             guard_has_affected = bool(affected) or (
@@ -879,9 +900,7 @@ class AgentLoop:
                     self.agent.record(
                         {
                             "role": "tool",
-                            "content": (
-                                f"[{stored.observation_id}] {result_text[:800]}"
-                            ),
+                            "content": (f"[{stored.observation_id}] {result_text[:800]}"),
                             "tool_name": tool_name,
                             "observation_id": stored.observation_id,
                         }
@@ -1004,9 +1023,7 @@ class AgentLoop:
                 detail="unified budget llm_calls exhausted",
             )
             self.stop_reason = StopReason.BUDGET_EXHAUSTED
-            raise CancelledError(
-                "budget", answer="<final>统一预算已耗尽，任务终止。</final>"
-            )
+            raise CancelledError("budget", answer="<final>统一预算已耗尽，任务终止。</final>")
         self._llm_call_count += 1
         ts.record_attempt()
         t1 = _time.time()
@@ -1031,6 +1048,7 @@ class AgentLoop:
         for empty_try in range(self.MAX_EMPTY_RETRIES):
             try:
                 if self._stream_enabled and hasattr(self.agent.model_client, "complete_stream"):
+
                     def on_chunk(chunk: str) -> None:
                         self._emit_stream_event(
                             "token_delta", {"chars": len(chunk)}, phase="model", turn=step
@@ -1501,9 +1519,7 @@ class AgentLoop:
         if manager_snapshot:
             self._budget_manager.restore(manager_snapshot)
             self.agent.session["runtime_budget"] = self._budget_manager.snapshot()
-            self._budget_turns_seen = int(
-                (manager_snapshot.get("used") or {}).get("turns", 0) or 0
-            )
+            self._budget_turns_seen = int((manager_snapshot.get("used") or {}).get("turns", 0) or 0)
         deadline = control.get("deadline") or {}
         self._repair_deadline = ExecutionDeadline.from_remaining(deadline.get("remaining_s"))
         self.agent._repair_deadline = self._repair_deadline
@@ -1642,9 +1658,7 @@ class AgentLoop:
             except StepTimeoutError as e:
                 return self._finish_step_timeout(ts, e, clock=step_clock)
             except TimeoutError:
-                error = StepTimeoutError(
-                    self._step_timeout_limit_s(), step=turn, path="native"
-                )
+                error = StepTimeoutError(self._step_timeout_limit_s(), step=turn, path="native")
                 return self._finish_step_timeout(ts, error, clock=step_clock)
             except CancelledError as e:
                 if e.answer:
@@ -1664,12 +1678,10 @@ class AgentLoop:
                 usage_total[key] += int(result.usage.get(key, 0) or 0)
             usage_total["calls"] += 1
             self._apply_call_usage_meta(usage_total)
-            self._record_model_timings(
-                ts, collect_client_timings(client), default_attempt=turn
+            self._record_model_timings(ts, collect_client_timings(client), default_attempt=turn)
+            ts.node_timings["model_call_ms"] = (
+                int(ts.node_timings.get("model_call_ms", 0) or 0) + elapsed_ms
             )
-            ts.node_timings["model_call_ms"] = int(
-                ts.node_timings.get("model_call_ms", 0) or 0
-            ) + elapsed_ms
             finish = result.finish
             ts.node_timings["provider_finish_kind"] = finish.kind.value
             ts.node_timings["provider_finish_reason"] = finish.raw_reason
@@ -1768,9 +1780,7 @@ class AgentLoop:
                     "failed",
                     detail=f"provider_finish={finish.kind.value}",
                 )
-                return self._complete_run(
-                    ts, f"<final>模型输出无效：{finish.kind.value}</final>"
-                )
+                return self._complete_run(ts, f"<final>模型输出无效：{finish.kind.value}</final>")
 
             if finish.kind == FinishKind.CONTENT_FILTER:
                 ts.stop_with_reason(

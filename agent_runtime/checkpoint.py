@@ -97,10 +97,13 @@ def create_checkpoint(
         if freshness:
             key_files[path] = freshness
 
-    sequence = max(
-        int(agent.session.get("checkpoint_sequence", 0) or 0),
-        len(agent.session.get("checkpoints", []) or []),
-    ) + 1
+    sequence = (
+        max(
+            int(agent.session.get("checkpoint_sequence", 0) or 0),
+            len(agent.session.get("checkpoints", []) or []),
+        )
+        + 1
+    )
     previous = (agent.session.get("checkpoints", []) or [])[-1:]
     previous_id = str((previous[0] or {}).get("checkpoint_id", "")) if previous else ""
     scope = dict(agent.session.get("session_scope") or {})
@@ -118,9 +121,10 @@ def create_checkpoint(
     checkpoint = {
         "schema_version": CHECKPOINT_SCHEMA_VERSION,
         "checkpoint_envelope_version": "2.0",
-        "checkpoint_id": "cp-" + hashlib.sha256(
-            f"{identity.run_id}:{sequence}:{time.time_ns()}".encode()
-        ).hexdigest()[:16],
+        "checkpoint_id": "cp-"
+        + hashlib.sha256(f"{identity.run_id}:{sequence}:{time.time_ns()}".encode()).hexdigest()[
+            :16
+        ],
         "sequence": sequence,
         "parent_checkpoint_id": previous_id,
         "created_at": time.time(),
@@ -151,9 +155,7 @@ def create_checkpoint(
         "task_state": task_state.to_dict(),
         "side_effects": list(agent.session.get("side_effects", []) or []),
         "terminal_status": str(getattr(task_state, "status", "running") or "running"),
-        "config_snapshot": (
-            agent.config.snapshot() if hasattr(agent.config, "snapshot") else {}
-        ),
+        "config_snapshot": (agent.config.snapshot() if hasattr(agent.config, "snapshot") else {}),
     }
     from agent_runtime.context_runtime import build_context_manifest
 
@@ -162,14 +164,21 @@ def create_checkpoint(
         runtime_memory,
         workspace_fingerprint=checkpoint["workspace_fingerprint"],
     )
-    checkpoint["action_ledger"] = list(
-        agent.session.get("action_ledger", []) or []
-    )[-100:]
+    observations = agent.session.get("observations", {}) or {}
+    checkpoint["observation_manifest"] = [
+        {
+            "observation_id": str(oid),
+            "checksum": str((raw or {}).get("checksum", "")),
+            "raw_ref": str((raw or {}).get("raw_ref", "")),
+            "lifecycle": str((raw or {}).get("lifecycle", "active")),
+        }
+        for oid, raw in list(observations.items())[-100:]
+        if isinstance(raw, dict)
+    ]
+    checkpoint["action_ledger"] = list(agent.session.get("action_ledger", []) or [])[-100:]
     if trigger == "user_cancel" and in_flight_tool:
         checkpoint["in_flight_tool"] = in_flight_tool
-        checkpoint["in_flight_action"] = dict(
-            agent.session.get("_in_flight_action", {}) or {}
-        )
+        checkpoint["in_flight_action"] = dict(agent.session.get("_in_flight_action", {}) or {})
         checkpoint["side_effect_status"] = "uncertain"
     if step_payload:
         checkpoint.update(step_payload)
@@ -191,6 +200,7 @@ def create_checkpoint(
         workspace_manifest=manifest,
         action_ledger=checkpoint.get("action_ledger", []),
         side_effects=checkpoint.get("side_effects", []),
+        observation_manifest=checkpoint.get("observation_manifest", []),
         terminal_status=checkpoint["terminal_status"],
         parent_checkpoint_id=previous_id,
     ).seal()
@@ -225,9 +235,7 @@ def _runtime_control_snapshot(agent, task_state) -> dict:
     loop = getattr(agent, "_loop", None)
     return {
         "max_steps": int(
-            getattr(loop, "max_steps", 0)
-            or getattr(agent.config, "max_steps", 0)
-            or 0
+            getattr(loop, "max_steps", 0) or getattr(agent.config, "max_steps", 0) or 0
         ),
         "budget": budget.snapshot() if budget is not None else {},
         "budget_manager": (
@@ -267,6 +275,7 @@ def evaluate_resume_state(agent) -> dict:
                 "workspace_manifest",
                 "action_ledger",
                 "side_effects",
+                "observation_manifest",
             ):
                 if field in last and last.get(field) != getattr(envelope, field):
                     return _emit_resume_result(agent, _resume_result("integrity-failure", last))
@@ -292,6 +301,18 @@ def evaluate_resume_state(agent) -> dict:
         result["stale_files"].extend(manifest_diff["stale_files"])
         result["identity_diff"].extend(manifest_diff["identity_diff"])
 
+    observation_diff = []
+    current_observations = agent.session.get("observations", {}) or {}
+    for item in last.get("observation_manifest", []) or []:
+        current = current_observations.get(item.get("observation_id"), {})
+        if not current:
+            observation_diff.append(f"{item.get('observation_id')} (missing)")
+        elif item.get("checksum") and current.get("checksum") != item.get("checksum"):
+            observation_diff.append(f"{item.get('observation_id')} (checksum)")
+        elif current.get("lifecycle") in {"stale", "invalidated"}:
+            observation_diff.append(f"{item.get('observation_id')} (stale)")
+    result["observation_diff"] = observation_diff
+
     # 检查 key_files freshness
     for path, saved_hash in last.get("key_files", {}).items():
         current = _file_freshness(agent._cwd, path)
@@ -310,11 +331,7 @@ def evaluate_resume_state(agent) -> dict:
     session_scope = agent.session.get("session_scope") or {}
     for key in ("session_id", "user_id", "workspace_id"):
         expected = saved_identity.get(key, "")
-        current = (
-            agent.session.get("id", "")
-            if key == "session_id"
-            else session_scope.get(key, "")
-        )
+        current = agent.session.get("id", "") if key == "session_id" else session_scope.get(key, "")
         if expected and str(expected) != str(current):
             result["identity_diff"].append(key)
 
@@ -323,6 +340,8 @@ def evaluate_resume_state(agent) -> dict:
     # 判定状态
     if result["stale_files"] or result["identity_diff"]:
         result["status"] = "workspace-mismatch" if result["identity_diff"] else "partial-stale"
+    elif observation_diff:
+        result["status"] = "partial-stale"
     elif (
         last.get("trigger") == "step_end"
         and last.get("resume_kind") == "tool_step"

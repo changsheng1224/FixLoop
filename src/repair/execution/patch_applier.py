@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import sys
 from pathlib import Path
@@ -616,12 +617,34 @@ class PatchApplier:
 
         return _resolve(self.repo_root, file_path)
 
-    def apply_patches(self, patches: list[CandidatePatch]) -> list[CandidatePatch]:
+    def apply_patches(
+        self,
+        patches: list[CandidatePatch],
+        *,
+        allowed_paths: set[str] | None = None,
+    ) -> list[CandidatePatch]:
         from src.repair.path_resolve import resolve_repo_relpath
 
         applied: list[CandidatePatch] = []
         sibling_warnings: list[str] = []
         apply_errors: list[str] = []
+        normalized_allowed = {
+            str(path).replace("\\", "/").lstrip("./")
+            for path in (allowed_paths or set())
+        }
+        snapshots: dict[str, tuple[bytes, int]] = {}
+
+        def rollback() -> None:
+            for rel, (data, mode) in snapshots.items():
+                target = self.resolve_repo_file(rel)
+                if target is None:
+                    continue
+                try:
+                    target.write_bytes(data)
+                    target.chmod(mode)
+                except OSError:
+                    pass
+
         for p in patches:
             rel = resolve_repo_relpath(self.repo_root, p.file_path)
             file_path = self.resolve_repo_file(p.file_path)
@@ -634,9 +657,28 @@ class PatchApplier:
                     flush=True,
                 )
                 continue
+            if normalized_allowed and rel not in normalized_allowed:
+                apply_errors.append(f"path_not_allowlisted:{rel}")
+                continue
+            if rel not in snapshots:
+                try:
+                    snapshots[rel] = (file_path.read_bytes(), file_path.stat().st_mode)
+                except OSError as exc:
+                    apply_errors.append(f"snapshot_failed:{rel}:{exc}")
+                    continue
+            expected_hash = str(getattr(p, "base_sha256", "") or "").strip().lower()
+            if expected_hash:
+                actual_hash = hashlib.sha256(snapshots[rel][0]).hexdigest()
+                if actual_hash != expected_hash:
+                    apply_errors.append(f"stale_patch:{rel}")
+                    continue
             if rel != (p.file_path or "").replace("\\", "/").lstrip("./"):
                 p.file_path = rel
-            text = file_path.read_text(encoding="utf-8")
+            try:
+                text = file_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                apply_errors.append(f"read_failed:{rel}:{exc}")
+                continue
             new_text = apply_patch_to_text(text, p)
             if new_text is None:
                 reason = describe_hunk_mismatch(text, p)
@@ -655,10 +697,27 @@ class PatchApplier:
                 )
                 sibling_warnings.append(msg)
                 print(f"  [patcher] ⚠ {msg}", file=sys.stderr, flush=True)
-            file_path.write_text(new_text, encoding="utf-8")
+            from agent_runtime.atomic_io import atomic_write_text
+
+            atomic_write_text(file_path, new_text)
             applied.append(p)
         self.last_sibling_warnings = sibling_warnings
         self.last_apply_errors = apply_errors
+        if apply_errors:
+            rollback()
+            try:
+                from agent_runtime.metrics import get_registry
+
+                reason = "stale_patch" if any("stale_patch" in e for e in apply_errors) else "apply_error"
+                metric = (
+                    "fixloop_stale_patch_rejections_total"
+                    if reason == "stale_patch"
+                    else "fixloop_patch_rollbacks_total"
+                )
+                get_registry().counter_inc(metric, labels={"reason": reason})
+            except Exception:
+                pass
+            applied = []
         return applied
 
 
