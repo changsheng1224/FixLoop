@@ -85,6 +85,19 @@ class ExecutionDeadline:
         self.started_at = time.monotonic()
         self.deadline_at = self.started_at + float(timeout_s) if timeout_s > 0 else None
 
+    @classmethod
+    def from_remaining(cls, remaining_s: float | None) -> ExecutionDeadline:
+        deadline = cls(0)
+        if remaining_s is not None:
+            deadline.deadline_at = time.monotonic() + max(0.0, float(remaining_s))
+        return deadline
+
+    def snapshot(self) -> dict[str, float | None]:
+        return {
+            "remaining_s": self.remaining_s(),
+            "started_at_monotonic": self.started_at,
+        }
+
     def remaining_s(self) -> float | None:
         if self.deadline_at is None:
             return None
@@ -146,6 +159,33 @@ class RepairBudget:
             "verifies": self.verifies,
             "recoveries": self.recoveries,
         }
+
+    def snapshot(self) -> dict[str, int]:
+        return {
+            "max_turns": self.max_turns,
+            "max_tool_calls": self.max_tool_calls,
+            "max_write_calls": self.max_write_calls,
+            "max_verify_calls": self.max_verify_calls,
+            "max_recovery_attempts": self.max_recovery_attempts,
+            **self.summary(),
+        }
+
+    def restore(self, snapshot: dict[str, int] | None) -> None:
+        data = snapshot or {}
+        for key in (
+            "max_turns",
+            "max_tool_calls",
+            "max_write_calls",
+            "max_verify_calls",
+            "max_recovery_attempts",
+            "turns",
+            "tool_calls",
+            "writes",
+            "verifies",
+            "recoveries",
+        ):
+            if key in data:
+                setattr(self, key, max(0, int(data[key] or 0)))
 
 
 def observation_from_result(

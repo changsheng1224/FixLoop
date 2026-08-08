@@ -3,10 +3,14 @@
 基于 pydantic.BaseModel，启动时校验所有配置项。
 """
 
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import Field
+
+from agent_runtime.policy import RuntimePolicy
 
 
-class AgentConfig(BaseModel):
+class AgentConfig(RuntimePolicy):
     """Agent 运行时配置（Single Source of Truth）。
 
     配置来源优先级：CLI args > .env > 默认值。
@@ -35,7 +39,7 @@ class AgentConfig(BaseModel):
     prompt_budget: int = Field(
         default=100_000,
         ge=512,
-        le=100_000,
+        le=2_000_000,
         description="单次 prompt 总 token 预算（system + user / 五 section 合计）",
     )
     tail_protect_tokens: int = Field(
@@ -44,12 +48,14 @@ class AgentConfig(BaseModel):
         le=100_000,
         description="history 尾部保护区 token 数（L2–L4 豁免 assistant/tool 所在 turn）",
     )
-    approval: str = Field(default="ask", description="高风险工具审批策略: auto / ask / never")
+    approval: Literal["auto", "ask", "never"] = Field(
+        default="ask", description="高风险工具审批策略: auto / ask / never"
+    )
     temperature: float = Field(default=0.2, ge=0.0, le=2.0, description="模型温度")
     json_mode: bool = Field(default=False, description="启用 JSON 输出引导（repair agent 专用）")
     hard_cap: int = Field(
         default=8000,
-        ge=512,
+        ge=0,
         le=200_000,
         description="Prompt 上下文硬顶 token 数。超出时拒绝 ask，不静默裁剪。",
     )
@@ -94,3 +100,12 @@ class AgentConfig(BaseModel):
     max_write_calls: int = Field(default=0, ge=0, le=100)
     max_verify_calls: int = Field(default=0, ge=0, le=100)
     max_recovery_attempts: int = Field(default=0, ge=0, le=50)
+
+    def effective_deadline(self) -> dict[str, float | int]:
+        """Merge legacy scalar timeout fields with the canonical policy block."""
+        return {
+            "repair_s": int(self.repair_wall_timeout_s or self.deadline.repair_s),
+            "step_s": int(self.step_timeout_s or self.deadline.step_s),
+            "tool_s": int(self.tool_timeout_s or self.deadline.tool_s),
+            "retry_backoff_cap_s": float(self.deadline.retry_backoff_cap_s),
+        }

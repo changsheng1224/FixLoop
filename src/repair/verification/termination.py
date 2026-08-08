@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
-
-from src.state import RepairState
+from src.state import RepairState, RepairStatus
 
 __all__ = [
     "RepairTerminalStatus",
@@ -20,16 +18,12 @@ __all__ = [
 ]
 
 
-class RepairTerminalStatus(StrEnum):
-    FIXED = "fixed"
-    EXHAUSTED = "exhausted"
-    REGRESSION = "regression"
-    TIMEOUT = "timeout"
-    USER_CANCEL = "user_cancel"
-    FAILED = "failed"
-
-
-TERMINAL_STATUSES = frozenset(s.value for s in RepairTerminalStatus)
+RepairTerminalStatus = RepairStatus
+TERMINAL_STATUSES = frozenset(
+    status.value
+    for status in RepairStatus
+    if status is not RepairStatus.PENDING
+)
 
 
 def is_terminal(status: str) -> bool:
@@ -45,7 +39,7 @@ def is_repair_success(state: RepairState) -> bool:
 
 def mark_fixed_skip_verify(state: RepairState) -> None:
     """标记修复成功且跳过验证（--skip-verify / 无 Verifier）。"""
-    state.status = RepairTerminalStatus.FIXED
+    state.set_status(RepairTerminalStatus.FIXED, "verify_skipped")
     state.node_timings["verify_skipped"] = True
 
 
@@ -79,25 +73,25 @@ def introduced_regression(state: RepairState) -> bool:
 def apply_terminal_status(state: RepairState) -> None:
     """将 RepairState.status 规范为终态枚举值。"""
     if state.node_timings.get("user_cancel"):
-        state.status = RepairTerminalStatus.USER_CANCEL
+        state.set_status(RepairTerminalStatus.USER_CANCEL, "user_cancel")
         return
     if has_repair_timeout(state):
-        state.status = RepairTerminalStatus.TIMEOUT
+        state.set_status(RepairTerminalStatus.TIMEOUT, "repair_timeout")
         return
     if state.status == RepairTerminalStatus.FIXED:
         return
     if introduced_regression(state):
         state.node_timings["introduced_regression"] = True
-        state.status = RepairTerminalStatus.REGRESSION
+        state.set_status(RepairTerminalStatus.REGRESSION, "introduced_regression")
         return
     from src.repair.stop_loss import has_stop_loss
 
     if has_stop_loss(state) or state.retry_count >= state.max_retries:
-        state.status = RepairTerminalStatus.EXHAUSTED
+        state.set_status(RepairTerminalStatus.EXHAUSTED, "retry_or_stop_loss_exhausted")
         return
     if state.status in TERMINAL_STATUSES:
         return
-    state.status = RepairTerminalStatus.FAILED
+    state.set_status(RepairTerminalStatus.FAILED, "repair_failed")
 
 
 def finalize_repair_state(state: RepairState) -> None:

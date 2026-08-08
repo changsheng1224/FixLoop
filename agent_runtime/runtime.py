@@ -88,6 +88,8 @@ class Agent:
 
         # 会话状态 + 记忆
         self.session: dict = self._new_session()
+        if hasattr(self.config, "snapshot"):
+            self.session["config_snapshot"] = self.config.snapshot()
 
         # 缓存 prefix（工具不变时复用，支持自定义 prompt）
         self._prefix = self._build_prefix(system_prompt)
@@ -361,7 +363,13 @@ class Agent:
         Returns:
             恢复的 Agent 实例，如果 session 不存在则返回 None。
         """
-        session = session_store.load(session_id)
+        user_id = str(kwargs.pop("user_id", "") or "")
+        workspace_id = str(kwargs.pop("workspace_id", "") or "")
+        session = session_store.load(
+            session_id,
+            user_id=user_id,
+            workspace_id=workspace_id,
+        )
         if session is None:
             return None
 
@@ -435,12 +443,30 @@ class Agent:
 
     def _new_session(self) -> dict:
         """创建新会话（含记忆状态）。"""
+        import hashlib
+
         from agent_runtime.features.memory import default_memory_state
 
+        session_id = self._new_session_id()
+        workspace_id = hashlib.sha256(str(Path(self._cwd).resolve()).encode()).hexdigest()[:16]
         return {
-            "id": self._new_session_id(),
+            "id": session_id,
+            "schema_version": "2.0",
+            "revision": 0,
+            "session_scope": {
+                "session_id": session_id,
+                "user_id": "",
+                "workspace_id": workspace_id,
+            },
+            "session_identity": {
+                "session_id": session_id,
+                "workspace_id": workspace_id,
+            },
             "history": [],
             "memory": default_memory_state(),
+            "checkpoints": [],
+            "action_ledger": [],
+            "side_effects": [],
             "_turn_counter": 0,
         }
 

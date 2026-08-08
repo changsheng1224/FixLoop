@@ -25,8 +25,32 @@ STATUSES = frozenset({STATUS_OK, STATUS_ERROR, STATUS_CANCELLED, STATUS_UNSET})
 EVENT_CATALOG: dict[str, tuple[str, ...]] = {
     "model": ("model_request_start", "model_first_token", "model_complete"),
     "tool": ("tool_executed", "tool_preview", "tool_order_warning", "mcp_call"),
-    "skill": ("skill_matched", "skill_hint_rendered", "skill_routed"),
+    "skill": (
+        "skill_discovered",
+        "skill_matched",
+        "skill_hint_rendered",
+        "skill_routed",
+        "skill_decided",
+        "skill_admitted",
+        "skill_started",
+        "skill_tool_called",
+        "skill_completed",
+        "skill_failed",
+        "skill_fallback",
+        "skill_feedback_recorded",
+    ),
     "context": ("context_built", "compression_triggered"),
+    "budget": (
+        "budget_exhausted",
+        "budget_reserved",
+        "budget_committed",
+        "budget_released",
+    ),
+    "latency": (
+        "latency_observed",
+        "latency_degraded",
+        "latency_slo_exceeded",
+    ),
     "state": (
         "repair_started",
         "repair_finished",
@@ -36,7 +60,13 @@ EVENT_CATALOG: dict[str, tuple[str, ...]] = {
         "run_started",
         "run_finished",
         "run_cancelled",
+        "run_terminal",
+        "run_terminal_late",
         "span_closed",
+        "checkpoint_committed",
+        "resume_evaluated",
+        "session_saved",
+        "session_loaded",
     ),
     "artifact": ("baseline_verify_finished", "blackboard_snapshot"),
     "security": (
@@ -143,8 +173,32 @@ def infer_status(event: str, payload: dict[str, Any] | None = None) -> str:
     data = payload or {}
     if event in ("repair_cancelled", "run_cancelled"):
         return STATUS_CANCELLED
-    if event in ("repair_started", "run_started", "agent_ask_started"):
+    if event in (
+        "repair_started",
+        "run_started",
+        "agent_ask_started",
+        "skill_admitted",
+        "skill_started",
+        "skill_completed",
+        "skill_feedback_recorded",
+        "checkpoint_committed",
+        "resume_evaluated",
+        "session_saved",
+        "session_loaded",
+        "run_terminal",
+        "latency_degraded",
+        "latency_observed",
+        "budget_reserved",
+        "budget_committed",
+        "budget_released",
+    ):
         return STATUS_OK
+    if event == "skill_failed":
+        if str(data.get("status", "")).lower() == "cancelled":
+            return STATUS_CANCELLED
+        return STATUS_ERROR
+    if event in ("budget_exhausted", "latency_slo_exceeded"):
+        return STATUS_ERROR
     if event == "span_closed":
         reason = str(data.get("reason") or "")
         if reason == "abnormal":

@@ -361,7 +361,14 @@ class Orchestrator(RepairPipelineMixin):
         """Synchronize policy context and role set at a runtime phase boundary."""
         from src.collaboration_governance import CollaborationGovernance, RoleLifecycle
 
-        state.phase = phase
+        transition = state.transition_phase(
+            phase, reason, allow_recovery=phase == "recovery"
+        )
+        if not transition.valid:
+            state.node_timings.setdefault("phase_transition_rejections", []).append(
+                transition.to_dict()
+            )
+            return
         if phase == "patch":
             for role in ("verifier",):
                 if role in state.active_roles:

@@ -60,6 +60,7 @@ def finalize_agent_run(loop, ts) -> None:
                     getattr(agent.config, "max_llm_calls_per_repair", 0) or 0
                 ),
                 "repair_budget": loop._repair_budget.summary(),
+                "budget_manager": loop._budget_manager.summary(),
                 "tool_observations": tool_observation_summary(
                     agent.session.get("tool_observations", [])
                 ),
@@ -74,6 +75,9 @@ def finalize_agent_run(loop, ts) -> None:
             "plan_todos": list(loop._plan_todos),
             "memory_health": loop._build_memory_health(),
             "memory_feedback": dict(agent.session.get("memory_feedback", {}) or {}),
+            "config_snapshot": (
+                agent.config.snapshot() if hasattr(agent.config, "snapshot") else {}
+            ),
             "memory_usage_events": len(
                 agent.session.get("memory", {}).get("memory_usage_events", [])
             ),
@@ -108,7 +112,8 @@ def finalize_agent_run(loop, ts) -> None:
                     else ""
                 ),
             )
-            ts.checkpoint_id = cp.get("run_id", "") if cp else ""
+            ts.checkpoint_id = cp.get("checkpoint_id", "") if cp else ""
+            ts.checkpoint_sequence = int(cp.get("sequence", 0) or 0) if cp else 0
             store.write_task_state(ts)
             compress_stats = store.compress_trace_if_needed(ts.run_id)
             if compress_stats:
@@ -121,7 +126,7 @@ def finalize_agent_run(loop, ts) -> None:
             root=agent._cwd,
         )
         _promote_memory_candidates(agent, ts)
-        SessionStore(root=agent._cwd).save(agent.session)
+        SessionStore(root=agent._cwd, trace=loop._emit).save(agent.session)
     except Exception:
         pass
 

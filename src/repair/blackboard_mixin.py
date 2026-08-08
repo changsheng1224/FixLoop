@@ -32,7 +32,25 @@ class BlackboardMixin:
             tracer.emit("orchestrator", event, payload)
 
     def _init_repair_blackboard(self) -> None:
-        self._active_repair_ctx().blackboard = Blackboard()
+        board = Blackboard()
+        board.register_namespace(
+            "suspect:",
+            allowed_sources={"rule_seed", "localizer", "retriever", "orchestrator", "restored"},
+            validator=lambda value: isinstance(value, dict)
+            and bool(value.get("file_path"))
+            and int(value.get("start_line", 0) or 0) >= 0,
+        )
+        board.register_namespace(
+            "context:",
+            allowed_sources={"runtime_context", "retriever", "orchestrator", "restored"},
+            validator=lambda value: isinstance(value, list),
+        )
+        board.register_namespace(
+            "scratch:",
+            allowed_sources={"orchestrator", "verifier", "patcher", "restored"},
+            validator=lambda value: isinstance(value, str),
+        )
+        self._active_repair_ctx().blackboard = board
 
     def _write_seed_context_to_blackboard(
         self,

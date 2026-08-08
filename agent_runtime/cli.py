@@ -8,6 +8,7 @@ from pathlib import Path
 from agent_runtime.bootstrap import create_model_client
 from agent_runtime.bootstrap import load_dotenv as _load_dotenv
 from agent_runtime.config import AgentConfig
+from agent_runtime.config_loader import load_runtime_policy
 from agent_runtime.logging_setup import add_log_level_argument, setup_logging_from_args
 from agent_runtime.repl_input import read_repl_input
 from agent_runtime.runtime import Agent
@@ -35,39 +36,40 @@ def _ask_with_repl_cancel(
 
 def _make_parser() -> argparse.ArgumentParser:
     """构建 CLI 参数解析器。默认值来自 AgentConfig。"""
-    cfg = AgentConfig()
+    _load_dotenv()
+    cfg = load_runtime_policy()
     p = argparse.ArgumentParser(prog="agent_runtime", description="手写的 LLM Agent 运行时内核")
     p.add_argument("prompt", nargs="?", default=None, help="用户输入（缺省进入 REPL 模式）")
     p.add_argument("--cwd", default=".", help="工作目录")
     p.add_argument("--stream", action="store_true", help="启用流式输出（REPL 实时显示）")
-    p.add_argument("--provider", default=cfg.provider, help=f"模型 Provider（默认 {cfg.provider}）")
+    p.add_argument("--provider", default=None, help=f"模型 Provider（默认 {cfg.provider}）")
     p.add_argument("--model", default=None, help=f"模型名称（默认 {cfg.model}）")
     p.add_argument(
-        "--max-steps", type=int, default=cfg.max_steps, help=f"最大工具步数（默认 {cfg.max_steps}）"
+        "--max-steps", type=int, default=None, help=f"最大工具步数（默认 {cfg.max_steps}）"
     )
     p.add_argument(
         "--tool-timeout",
         type=int,
-        default=cfg.tool_timeout_s,
+        default=None,
         help=f"单工具执行超时秒数，0=禁用（默认 {cfg.tool_timeout_s}）",
     )
     p.add_argument(
         "--step-timeout",
         type=int,
-        default=cfg.step_timeout_s,
+        default=None,
         help=f"单步 wall-clock 超时秒数，0=禁用（默认 {cfg.step_timeout_s}）",
     )
     p.add_argument(
         "--temperature",
         type=float,
-        default=cfg.temperature,
+        default=None,
         help=f"模型温度（默认 {cfg.temperature}）",
     )
     p.add_argument("--api-key", default=None, help="API Key（覆盖 .env）")
     p.add_argument("--base-url", default=None, help="API Base URL（覆盖 .env）")
     p.add_argument(
         "--approval",
-        default=cfg.approval,
+        default=None,
         choices=["auto", "ask", "never"],
         help=f"审批策略（默认 {cfg.approval}）",
     )
@@ -94,21 +96,32 @@ def _make_parser() -> argparse.ArgumentParser:
 def _make_config(args) -> AgentConfig:
     """从 CLI args 构建 Config。"""
     cfg_kw = {
-        "provider": args.provider,
-        "model": args.model or os.environ.get("DEEPSEEK_MODEL", AgentConfig().model),
-        "max_steps": args.max_steps,
-        "tool_timeout_s": args.tool_timeout,
-        "step_timeout_s": args.step_timeout,
-        "temperature": args.temperature,
-        "approval": args.approval,
+        "provider": getattr(args, "provider", None),
+        "model": getattr(args, "model", None),
+        "max_steps": getattr(args, "max_steps", None),
+        "tool_timeout_s": getattr(args, "tool_timeout", None),
+        "step_timeout_s": getattr(args, "step_timeout", None),
+        "temperature": getattr(args, "temperature", None),
+        "approval": getattr(args, "approval", None),
+        "profile": getattr(args, "profile", None),
     }
-    return AgentConfig(**{k: v for k, v in cfg_kw.items() if v is not None})
+    return load_runtime_policy(
+        workspace_root=getattr(args, "cwd", None),
+        cli_overrides={k: v for k, v in cfg_kw.items() if v is not None},
+    )
 
 
 def _make_agent(args) -> Agent:
     """装配完整 Agent 管线：Config → Workspace → ModelClient → Agent。"""
     _load_dotenv()
     config = _make_config(args)
+    args.provider = config.provider
+    args.model = config.model
+    args.approval = config.approval
+    args.max_steps = config.max_steps
+    args.tool_timeout = config.tool_timeout_s
+    args.step_timeout = config.step_timeout_s
+    args.temperature = config.temperature
     workspace = WorkspaceContext.build(args.cwd)
     model_client = _build_model_client(args, config)
     return _build_agent(args, config, workspace, model_client)

@@ -7,6 +7,7 @@ state transitions; this module contains no case-specific repair decisions.
 from __future__ import annotations
 
 import time
+from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -70,8 +71,23 @@ def apply_state_patch(state, patch: dict[str, Any], *, actor: str, expected_revi
             "reason": "field_owner_mismatch",
             "fields": unauthorized,
         }
+    before = deepcopy(getattr(state, "__dict__", {}))
     for key, value in patch.items():
         setattr(state, key, value)
+    validator = getattr(state, "validate_invariants", None)
+    if callable(validator):
+        try:
+            validator(strict=True)
+        except (TypeError, ValueError) as exc:
+            state.__dict__.clear()
+            state.__dict__.update(before)
+            return {
+                "accepted": False,
+                "status": "rejected",
+                "reason": "state_invariant_violation",
+                "detail": str(exc),
+                "fields": list(patch),
+            }
     state.state_revision += 1
     return {
         "accepted": True,
@@ -79,6 +95,48 @@ def apply_state_patch(state, patch: dict[str, Any], *, actor: str, expected_revi
         "revision": state.state_revision,
         "fields": list(patch),
     }
+
+
+def atomic_collaboration_update(
+    state,
+    board,
+    patch: dict[str, Any],
+    *,
+    actor: str,
+    expected_revision: int,
+    writes: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Atomically apply a state patch and Blackboard writes.
+
+    The in-process transaction is deliberately small: it provides rollback
+    semantics for the runtime's state + board pair without introducing a
+    database dependency.  Callers receive a structured rejection result.
+    """
+    state_before = deepcopy(getattr(state, "__dict__", {}))
+    board_before = board.snapshot()
+    result = apply_state_patch(
+        state, patch, actor=actor, expected_revision=expected_revision
+    )
+    if not result.get("accepted"):
+        return result
+    for write in writes or []:
+        if not board.write(
+            write["key"],
+            write.get("value"),
+            source_agent=str(write.get("source_agent") or actor),
+            ttl=write.get("ttl"),
+            expected_revision=write.get("expected_revision"),
+        ):
+            state.__dict__.clear()
+            state.__dict__.update(state_before)
+            board.restore_snapshot(board_before)
+            return {
+                "accepted": False,
+                "status": "rejected",
+                "reason": "blackboard_write_conflict",
+                "key": write.get("key", ""),
+            }
+    return {**result, "blackboard_revision": board.revision}
 
 
 def sanitize_skill_policy(

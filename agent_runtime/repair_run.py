@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -73,19 +74,33 @@ class RunTerminalGuard:
     def __init__(self):
         self.status = ""
         self.event: StreamEvent | None = None
+        self.late_events: list[StreamEvent] = []
+        self._lock = threading.Lock()
 
     def try_finish(self, run_id: str, status: str, payload: dict[str, Any] | None = None) -> bool:
-        if self.status:
-            return False
-        self.status = status
-        self.event = StreamEvent(
-            run_id=run_id,
-            kind="run_terminal",
-            phase=RepairPhase.FINALIZATION.value,
-            payload=payload or {},
-            terminal=True,
-        )
-        return True
+        with self._lock:
+            if self.status:
+                self.late_events.append(
+                    StreamEvent(
+                        run_id=run_id,
+                        kind="run_terminal_late",
+                        phase=RepairPhase.FINALIZATION.value,
+                        payload={"status": status, **(payload or {})},
+                        terminal=False,
+                        replayable=False,
+                    )
+                )
+                self.late_events = self.late_events[-100:]
+                return False
+            self.status = status
+            self.event = StreamEvent(
+                run_id=run_id,
+                kind="run_terminal",
+                phase=RepairPhase.FINALIZATION.value,
+                payload=payload or {},
+                terminal=True,
+            )
+            return True
 
 
 _ATTRIBUTION_RULES = (
