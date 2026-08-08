@@ -11,6 +11,7 @@ from agent_runtime.cancellation import CancelledError, run_with_cancellation
 from agent_runtime.compression_pipeline import truncate_tool_result_for_agent
 from agent_runtime.context_metadata import build_trace_payload
 from agent_runtime.errors import ContextTooLargeError, EmptyModelResponse
+from agent_runtime.evidence_extractors import evidence_provenance, extract_evidence
 from agent_runtime.loop_limits import max_parse_attempts
 from agent_runtime.model_timing import (
     ModelCallTiming,
@@ -79,6 +80,10 @@ class AgentLoop:
         self._context_cut_count = 0
         self._last_cache_key = ""
         self._cache_key_changes = 0
+        self._context_selected_count = 0
+        self._context_dropped_count = 0
+        self._context_contract_failures = 0
+        self._context_policy_versions: dict[str, int] = {}
         self._plan_todos: list[dict] = []
         self._no_progress_steps = 0
         self._step_guard = StepGuard()
@@ -132,6 +137,16 @@ class AgentLoop:
                 pass
         cuts = meta.get("cuts") or []
         self._context_cut_count += len(cuts)
+        self._context_selected_count += len(meta.get("selected_context_ids", []) or [])
+        self._context_dropped_count += len(meta.get("dropped_context_ids", []) or [])
+        policy_version = str(meta.get("context_policy_version", "") or "")
+        if policy_version:
+            self._context_policy_versions[policy_version] = (
+                self._context_policy_versions.get(policy_version, 0) + 1
+            )
+        compression = meta.get("compression_pipeline", {}) or {}
+        if compression.get("contract_ok") is False:
+            self._context_contract_failures += 1
         cache_key = str(meta.get("prompt_cache_key", "") or "")
         if self._last_cache_key and cache_key != self._last_cache_key:
             self._cache_key_changes += 1
@@ -202,6 +217,10 @@ class AgentLoop:
             "build_count": build_count,
             "cut_count": self._context_cut_count,
             "cache_hit_rate": cache_hit_rate,
+            "selected_context_count": self._context_selected_count,
+            "dropped_context_count": self._context_dropped_count,
+            "compression_contract_failures": self._context_contract_failures,
+            "policy_versions": dict(self._context_policy_versions),
         }
 
     @property
@@ -769,6 +788,15 @@ class AgentLoop:
         else:
             raw_observation = result_text
         structured_facts = list(_meta.get("structured_facts") or [])
+        source_version = str(
+            _meta.get("source_version")
+            or ((self.agent.tools or {}).get(tool_name) or {}).get("version", "")
+            or ""
+        )
+        structured_facts.extend(
+            extract_evidence(tool_name, tool_args, result_text, source_version=source_version)
+        )
+        provenance = evidence_provenance(tool_name, tool_args, source_version=source_version)
         structured_facts.append(
             {
                 "status": observation.status,
@@ -782,12 +810,9 @@ class AgentLoop:
             tool_args,
             raw_observation,
             summary=result_text[:500],
-            source_version=str(
-                _meta.get("source_version")
-                or ((self.agent.tools or {}).get(tool_name) or {}).get("version", "")
-                or ""
-            ),
+            source_version=source_version,
             structured_facts=structured_facts,
+            provenance=provenance,
             dependencies=list(observation.changed_files),
             error_code=observation.failure_class,
             status=observation.status,

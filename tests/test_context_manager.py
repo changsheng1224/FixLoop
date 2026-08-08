@@ -71,6 +71,8 @@ class TestFitPromptToBudget:
         assert meta.get("request_preserved") is True
 
     def test_agent_fit_user_message_preserves_user(self, agent):
+        # AgentConfig validates hard_cap <= prompt_budget on assignment.
+        agent.config.hard_cap = 800
         agent.config.prompt_budget = 800
         original = "word " * 5000
         fitted, meta = agent.fit_user_message(original)

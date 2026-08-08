@@ -121,7 +121,18 @@ def retrieval_candidates(
             pass
 
     return [
-        {**note, "score": round(s, 2), "memory_role": "historical_candidate"}
+        {
+            **note,
+            "memory_id": str(note.get("memory_id") or f"EP-{note.get('note_index', '')}"),
+            "score": round(s, 2),
+            "memory_role": "historical_candidate",
+            "retrieval_reason": "keyword_or_tag_match",
+            "matched_tokens": sorted(
+                token for token in query_tokens
+                if token in str(note.get("text", "")).lower()
+                or token in {str(tag).lower() for tag in note.get("tags", [])}
+            ),
+        }
         for s, note in scored[:limit]
         if note.get("status") not in {"rejected", "stale", "conflicted", "demoted"}
     ]

@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 
 from agent_runtime.compression_pipeline import (
@@ -24,7 +26,13 @@ from agent_runtime.compression_pipeline import (
 # Re-export fit helpers for test / L2 import compatibility.
 from agent_runtime.context_fit import fit_prompt_to_budget, fit_repair_user_prompt  # noqa: F401
 from agent_runtime.context_projection import attach_context_projection
-from agent_runtime.context_runtime import ContextItem, ContextPolicyEngine, ContextRequest
+from agent_runtime.context_runtime import (
+    ContextItem,
+    ContextPolicyEngine,
+    ContextRequest,
+    ContextSelectionResult,
+    ContextViewPolicy,
+)
 from agent_runtime.errors import ContextTooLargeError
 from agent_runtime.message_projection import (
     get_sealed_history,
@@ -292,6 +300,7 @@ class ContextManager:
             total_limit=total,
             scaled_budget=scaled_section_budget,
         )
+        self._active_metadata = metadata
 
         if include_system:
             if native_tools:
@@ -360,10 +369,44 @@ class ContextManager:
         metadata["budget"] = self.budget.total_limit
         metadata["tokenizer_backend"] = self.budget.backend
         attach_context_projection(metadata, agent=self.agent, budget=self.budget)
+        self._record_context_manifest(metadata, sections)
         history = self.agent.read_history()  # JSONL 优先，build 不写回
         if history and history_text:
             seal_history_at_build(self.agent.session, len(history), history_text)
         return sections
+
+    def _record_context_manifest(self, metadata: dict, sections: dict[str, str]) -> None:
+        """Persist the exact dynamic selection needed for trace/checkpoint replay."""
+        selected = list(dict.fromkeys(metadata.get("_selected_context_ids", []) or []))
+        dropped = list(dict.fromkeys(metadata.get("_dropped_context_ids", []) or []))
+        selection = metadata.get("_context_selection", {}) or {}
+        canonical = {
+            "context_sections": metadata.get("context_sections", {}),
+            "selected_context_ids": selected,
+            "policy_version": selection.get("policy_version", ContextPolicyEngine.VERSION),
+            "sections": metadata.get("sections", {}),
+        }
+        projection_hash = hashlib.sha256(
+            json.dumps(canonical, sort_keys=True, ensure_ascii=True).encode("utf-8")
+        ).hexdigest()[:24]
+        manifest = {
+            "schema_version": "context-v2",
+            "projection_hash": projection_hash,
+            "policy_version": selection.get("policy_version", ContextPolicyEngine.VERSION),
+            "selected_context_ids": selected,
+            "dropped_context_ids": dropped,
+            "selection": selection,
+            "observation_refs": list(metadata.get("_observation_refs", []) or []),
+            "total_tokens": int(metadata.get("total_tokens", 0) or 0),
+            "budget": int(metadata.get("budget", self.budget.total_limit) or 0),
+        }
+        metadata["context_manifest"] = manifest
+        metadata["context_policy_version"] = manifest["policy_version"]
+        metadata["selected_context_ids"] = selected[-100:]
+        metadata["dropped_context_ids"] = dropped[-100:]
+        metadata["observation_refs"] = list(metadata.get("_observation_refs", []) or [])[-100:]
+        self.agent.session["context_manifest"] = manifest
+        self.agent.session.setdefault("memory", {})["context_manifest"] = manifest
 
     def _agent_repo_root(self) -> str | None:
         agent = self.agent
@@ -518,7 +561,9 @@ class ContextManager:
         request = ContextRequest(
             phase=str(getattr(self.agent, "_l2_phase", "repair") or "repair"),
             intent=query,
-            token_budget=BUDGET_KNOWLEDGE,
+            role=str(getattr(self.agent, "_l2_agent", "") or ""),
+            token_budget=scaled_section_budget(BUDGET_KNOWLEDGE, self.budget.total_limit),
+            min_kind_counts={"memory": 1},
         )
         policy = ContextPolicyEngine()
 
@@ -538,8 +583,13 @@ class ContextManager:
             user_id=str(identity.get("user_id", "") or ""),
             task_id=str(identity.get("task_id", "") or ""),
             limit=2,
+            record_event=False,
         )
         recalled_ids = [str(item.get("memory_id", "")) for item in governed_results]
+        turn_id = str(mem.get("_turn_counter") or self.agent.session.get("_turn_counter", ""))
+        prompt_id = hashlib.sha256(
+            f"{turn_id}|{query}".encode("utf-8", errors="replace")
+        ).hexdigest()[:16]
         if governed_results:
             governed_items = [
                 ContextItem(
@@ -547,7 +597,7 @@ class ContextManager:
                     kind="memory",
                     content=str(item.get("value", "")),
                     source_ref=item["memory_id"],
-                    token_cost=max(1, len(str(item.get("value", "")).split())),
+                    token_cost=max(1, self.budget.count(str(item.get("value", "")))),
                     relevance=float(item.get("score", 0.0)),
                     confidence=float(item.get("confidence", 0.0)),
                     freshness=1.0,
@@ -556,10 +606,30 @@ class ContextManager:
                 )
                 for item in governed_results
             ]
-            governed_items = policy.select(governed_items, request)
+            view = ContextViewPolicy.for_request(request)
+            governed_items = [item for item in governed_items if view.allows(item)]
+            governed_result = policy.select_with_result(governed_items, request)
+            governed_items = governed_result.selected
+            self._record_selection_result(metadata=None, result=governed_result)
             mem["recalled_memory_ids"] = [
                 item.source_ref for item in governed_items
             ]
+            for item in governed_items:
+                governed.record_usage_stage(
+                    item.source_ref,
+                    usage="projected",
+                    stage=str(getattr(self.agent, "_l2_phase", "repair") or "repair"),
+                    task_id=str(identity.get("task_id", "") or ""),
+                    turn_id=turn_id,
+                    prompt_id=prompt_id,
+                    context_item_id=item.item_id,
+                    evidence_refs=list(
+                        governed.inspect(item.source_ref).get("evidence_refs", [])
+                        if governed.inspect(item.source_ref)
+                        else []
+                    ),
+                    decision_reason="context_policy_selected",
+                )
             lines = ["治理记忆候选（必须由当前代码证据确认）:"]
             for item in governed_items:
                 lines.append(
@@ -600,8 +670,34 @@ class ContextManager:
         # eligible for automatic usage feedback.
         recalled_ids = list(dict.fromkeys(item for item in recalled_ids if item))
         mem["recalled_memory_ids"] = recalled_ids
-        governed.record_recall(recalled_ids, task_id=str(identity.get("task_id", "") or ""))
+        mem["memory_context_attribution"] = {
+            "turn_id": turn_id,
+            "prompt_id": prompt_id,
+            "phase": str(getattr(self.agent, "_l2_phase", "repair") or "repair"),
+        }
+        governed.record_recall(
+            recalled_ids,
+            task_id=str(identity.get("task_id", "") or ""),
+            stage=str(getattr(self.agent, "_l2_phase", "repair") or "repair"),
+            turn_id=turn_id,
+            prompt_id=prompt_id,
+            decisions=list(mem.get("memory_recall_decisions", [])),
+        )
         return "\n".join(parts) if parts else ""
+
+    def _record_selection_result(
+        self, metadata: dict | None, result: ContextSelectionResult
+    ) -> None:
+        """Accumulate selection decisions on session and current build metadata."""
+        target = metadata if metadata is not None else getattr(self, "_active_metadata", {})
+        selected = target.setdefault("_selected_context_ids", [])
+        dropped = target.setdefault("_dropped_context_ids", [])
+        selected.extend(result.selected_ids)
+        dropped.extend(result.dropped_ids)
+        target["_context_selection"] = result.to_dict()
+        session = self.agent.session
+        session.setdefault("context_selection_history", []).append(result.to_dict())
+        session["context_selection_history"] = session["context_selection_history"][-50:]
 
     def _get_compressed_history(self, metadata: dict | None = None) -> str:
         """获取压缩后的对话历史（L0–L5 管线；已封印段单调追加）。
@@ -644,6 +740,13 @@ class ContextManager:
             history_window=history_window_budget(self.budget.total_limit),
             tier_policy=self.tier_policy,
         )
+        observation_refs = [
+            str(item.get("observation_id"))
+            for item in projected
+            if item.get("observation_id")
+        ]
+        meta.setdefault("_selected_context_ids", []).extend(observation_refs)
+        meta["_observation_refs"] = list(dict.fromkeys(observation_refs))
 
         pipe = meta.get("compression_pipeline", {})
         if pipe.get("l5_triggered"):

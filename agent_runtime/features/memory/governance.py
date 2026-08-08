@@ -21,6 +21,29 @@ def _query_tokens(text: str) -> set[str]:
     return {token for token in re.findall(r"[a-zA-Z0-9_./:-]+", str(text).lower()) if token}
 
 
+def _redact_value(value: Any) -> str:
+    """Apply the repository redaction policy at the Memory write boundary."""
+    import re
+
+    text = str(value or "")
+    try:
+        from agent_runtime.security import redact_text
+
+        text = redact_text(text)
+    except Exception:
+        pass
+    text = re.sub(
+        r"(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*([^\s,;]+)",
+        lambda match: f"{match.group(1)}=<redacted>",
+        text,
+    )
+    return re.sub(
+        r"(?i)(authorization\s*:\s*bearer)\s+[^\s]+",
+        r"\1 <redacted>",
+        text,
+    )
+
+
 class MemoryScope(StrEnum):
     RUN = "run"
     TASK = "task"
@@ -143,6 +166,14 @@ class GovernedMemory:
     cross_confirmed: bool = False
     allow_multiple: bool = False
     pinned: bool = False
+    version: int = 0
+    parent_memory_id: str = ""
+    source_observation_ids: list[str] = field(default_factory=list)
+    source_run_id: str = ""
+    created_by: str = "runtime"
+    retention_days: int = 0
+    expires_at: float = 0.0
+    redaction_policy_version: str = "v1"
 
     def to_dict(self) -> dict[str, Any]:
         return self.__dict__.copy()
@@ -159,6 +190,11 @@ class MemoryUsageEvent:
     usage: str = "recalled"
     outcome: str = "inconclusive"
     evidence_refs: list[str] = field(default_factory=list)
+    turn_id: str = ""
+    prompt_id: str = ""
+    context_item_id: str = ""
+    cited: bool = False
+    decision_reason: str = ""
     created_at: float = field(default_factory=time.time)
 
     def to_dict(self) -> dict[str, Any]:
@@ -203,7 +239,8 @@ def normalize_candidate(
     if source_type == "user" and selected_scope == MemoryScope.TASK.value:
         selected_scope = MemoryScope.USER.value
     raw_key = str(getattr(candidate, "key", "") or "value")
-    memory_id = "M-" + hashlib.sha256(
+    explicit_id = str(getattr(candidate, "memory_id", "") or "").strip()
+    memory_id = explicit_id or "M-" + hashlib.sha256(
         f"{selected_scope}|{raw_key}|{getattr(candidate, 'value', '')}".encode()
     ).hexdigest()[:12]
     confidence = float(getattr(candidate, "confidence", 0.4) or 0.4)
@@ -235,6 +272,17 @@ def normalize_candidate(
         trust_domain="external" if tainted else "local",
         tainted=tainted,
         allow_multiple=bool(getattr(candidate, "allow_multiple", False)),
+        parent_memory_id=str(getattr(candidate, "parent_memory_id", "") or ""),
+        source_observation_ids=list(
+            dict.fromkeys(
+                str(item)
+                for item in (getattr(candidate, "source_observation_ids", None) or [])
+            )
+        ),
+        source_run_id=str(getattr(candidate, "source_run_id", "") or ""),
+        created_by=str(getattr(candidate, "created_by", "runtime") or "runtime"),
+        retention_days=max(0, int(getattr(candidate, "retention_days", 0) or 0)),
+        redaction_policy_version="v1",
     )
 
 
@@ -326,7 +374,12 @@ class MemoryGovernanceService:
 
     def _persist_memory(self, memory_id: str) -> None:
         if self.store and memory_id in self.registry:
-            self.store.upsert_memory(dict(self.registry[memory_id]))
+            raw = self.registry[memory_id]
+            expected = int(raw.get("version", 0) or 0) or None
+            version = self.store.upsert_memory(
+                dict(raw), expected_version=expected
+            )
+            raw["version"] = version
 
     def _persist_audit(self, action: str, object_id: str, payload: dict[str, Any]) -> None:
         if self.store:
@@ -339,6 +392,9 @@ class MemoryGovernanceService:
         task_id: str = "",
         trace_id: str = "",
         stage: str = "context",
+        decisions: list[dict[str, Any]] | None = None,
+        turn_id: str = "",
+        prompt_id: str = "",
     ) -> list[dict[str, Any]]:
         """Record recall without treating retrieval as verification."""
         events = self.state.setdefault("memory_usage_events", [])
@@ -353,7 +409,19 @@ class MemoryGovernanceService:
                 stage=str(stage or "context"),
                 usage="recalled",
                 outcome="inconclusive",
+                turn_id=str(turn_id or ""),
+                prompt_id=str(prompt_id or ""),
+                decision_reason="selected_by_recall" if not decisions else "",
             ).to_dict()
+            if decisions:
+                decision = next(
+                    (item for item in decisions if str(item.get("memory_id", "")) == memory_id),
+                    None,
+                )
+                if decision:
+                    event["decision_reason"] = str(
+                        decision.get("reason") or decision.get("selection_reason") or ""
+                    )
             events.append(event)
             created.append(event)
             if self.store:
@@ -369,6 +437,12 @@ class MemoryGovernanceService:
         stage: str,
         task_id: str = "",
         trace_id: str = "",
+        turn_id: str = "",
+        prompt_id: str = "",
+        context_item_id: str = "",
+        cited: bool = False,
+        evidence_refs: list[str] | None = None,
+        decision_reason: str = "",
     ) -> dict[str, Any]:
         """Record projected/cited/applied without changing trust scores."""
         event = MemoryUsageEvent(
@@ -378,6 +452,12 @@ class MemoryGovernanceService:
             stage=str(stage or "context"),
             usage=str(usage or "projected"),
             outcome="inconclusive",
+            evidence_refs=list(evidence_refs or []),
+            turn_id=str(turn_id or ""),
+            prompt_id=str(prompt_id or ""),
+            context_item_id=str(context_item_id or ""),
+            cited=bool(cited),
+            decision_reason=str(decision_reason or ""),
         ).to_dict()
         events = self.state.setdefault("memory_usage_events", [])
         events.append(event)
@@ -481,6 +561,12 @@ class MemoryGovernanceService:
             MemoryScope.RUN.value,
             MemoryScope.TASK.value,
         } else ""
+        memory.key = _redact_value(memory.key)
+        memory.value = _redact_value(memory.value)
+        memory.source = _redact_value(memory.source)
+        memory.evidence_refs = list(dict.fromkeys(str(ref) for ref in memory.evidence_refs))
+        if memory.retention_days:
+            memory.expires_at = memory.created_at + memory.retention_days * 86400
         self.registry[memory.memory_id] = memory.to_dict()
         self._persist_memory(memory.memory_id)
         self.stats["normalized"] += 1
@@ -499,6 +585,7 @@ class MemoryGovernanceService:
         if raw["evidence_refs"] and raw["status"] == MemoryStatus.CANDIDATE.value:
             raw["status"] = MemoryStatus.SUPPORTED.value
             self.stats["supported"] += 1
+        self._persist_memory(memory_id)
         self._audit("bind_evidence", GovernedMemory(**raw))
         return True
 
@@ -889,6 +976,7 @@ class MemoryGovernanceService:
         raw["cross_confirmed"] = True
         raw["verification_count"] = max(1, int(raw.get("verification_count", 0)))
         raw["status"] = MemoryStatus.VERIFIED.value
+        self._persist_memory(memory_id)
         self._audit("user_confirm", GovernedMemory(**raw))
         return True
 
@@ -898,6 +986,7 @@ class MemoryGovernanceService:
             return False
         raw["status"] = MemoryStatus.REJECTED.value
         self.stats["rejected"] += 1
+        self._persist_memory(memory_id)
         self._audit("user_reject", GovernedMemory(**raw), reason)
         return True
 
@@ -929,6 +1018,15 @@ class MemoryGovernanceService:
             for item in self.state.get("memory_revalidation_queue", [])
             if item.get("memory_id") != memory_id
         ]
+        if self.store:
+            self.store.delete_memory(memory_id)
+        if raw.get("kind") == "durable_projection" and self.repo_root:
+            try:
+                from agent_runtime.features.memory.durable import DurableMemoryStore
+
+                DurableMemoryStore(self.repo_root).forget(memory_id)
+            except Exception:
+                pass
         self._audit_control("memory_forget", memory_id)
         return True
 
@@ -937,6 +1035,7 @@ class MemoryGovernanceService:
         if not raw:
             return False
         raw["pinned"] = bool(pinned)
+        self._persist_memory(memory_id)
         self._audit("memory_pin" if pinned else "memory_unpin", GovernedMemory(**raw))
         return True
 
@@ -972,6 +1071,21 @@ class MemoryGovernanceService:
                 self._audit("demote_invalid", GovernedMemory(**raw), "stale_or_conflict")
         return count
 
+    def purge_expired(self, *, now: float | None = None) -> int:
+        """Forget records past their explicit retention deadline."""
+        current = time.time() if now is None else float(now)
+        expired = [
+            memory_id
+            for memory_id, raw in self.registry.items()
+            if float(raw.get("expires_at", 0.0) or 0.0) > 0
+            and float(raw.get("expires_at", 0.0)) <= current
+        ]
+        for memory_id in expired:
+            self.forget(memory_id)
+            self._audit_control("memory_expired", memory_id)
+        self.stats["expired"] = self.stats.get("expired", 0) + len(expired)
+        return len(expired)
+
     def recall(
         self,
         query: str,
@@ -980,6 +1094,8 @@ class MemoryGovernanceService:
         limit: int = 3,
         user_id: str | None = None,
         task_id: str | None = None,
+        min_score: float = 0.0,
+        record_event: bool = True,
     ) -> list[dict]:
         """Recall memories within the caller's identity boundary.
 
@@ -1042,6 +1158,8 @@ class MemoryGovernanceService:
                 + 0.05 * scope_weight.get(raw.get("scope", ""), 0.5)
             )
             score *= 1.0 if version_match else 0.1
+            if score < float(min_score):
+                continue
             item = dict(raw)
             item["score"] = round(score, 3)
             item["freshness"] = round(freshness, 3)
@@ -1051,6 +1169,17 @@ class MemoryGovernanceService:
                 * (1.0 if version_match else 0.1),
                 3,
             )
+            item["score_breakdown"] = {
+                "lexical": round(0.55 * lexical, 4),
+                "confidence": round(0.20 * float(raw.get("confidence", 0.0)), 4),
+                "freshness": round(0.10 * freshness, 4),
+                "usage_quality": round(0.10 * usage_quality, 4),
+                "scope": round(0.05 * scope_weight.get(raw.get("scope", ""), 0.5), 4),
+                "version_factor": 1.0 if version_match else 0.1,
+            }
+            item["matched_tokens"] = sorted(
+                token for token in tokens if token and token in text
+            )
             item["memory_role"] = (
                 "confirmed_fact"
                 if raw.get("status") in {"verified", "active", "durable"}
@@ -1058,7 +1187,7 @@ class MemoryGovernanceService:
                 else "historical_candidate"
             )
             scored.append(item)
-        scored.sort(key=lambda item: item["score"], reverse=True)
+        scored.sort(key=lambda item: (-item["score"], str(item.get("memory_id", ""))))
         self.stats["recall_hits"] += min(limit, len(scored))
         for item in scored[:limit]:
             item["retrieve_count"] = int(item.get("retrieve_count", 0)) + 1
@@ -1067,7 +1196,18 @@ class MemoryGovernanceService:
                 raw["retrieve_count"] = item["retrieve_count"]
         recalled_ids = [item["memory_id"] for item in scored[:limit]]
         self.state["recalled_memory_ids"] = recalled_ids
-        self.record_recall(recalled_ids, task_id=caller_task)
+        decisions = [
+            {
+                "memory_id": item["memory_id"],
+                "score": item["score"],
+                "reason": ";".join(item.get("matched_tokens", [])),
+                "score_breakdown": item.get("score_breakdown", {}),
+            }
+            for item in scored[:limit]
+        ]
+        self.state["memory_recall_decisions"] = decisions
+        if record_event:
+            self.record_recall(recalled_ids, task_id=caller_task, decisions=decisions)
         return scored[:limit]
 
     def record_usage(
@@ -1077,6 +1217,13 @@ class MemoryGovernanceService:
         outcome: str,
         evidence_refs: list[str] | None = None,
         task_id: str | None = None,
+        stage: str = "verification",
+        trace_id: str = "",
+        turn_id: str = "",
+        prompt_id: str = "",
+        context_item_id: str = "",
+        cited: bool = False,
+        decision_reason: str = "",
     ) -> bool:
         """Feed post-recall repair outcome back into memory quality."""
         raw = self.registry.get(memory_id)
@@ -1120,9 +1267,16 @@ class MemoryGovernanceService:
         event = MemoryUsageEvent(
             memory_id=memory_id,
             task_id=effective_task,
+            trace_id=str(trace_id or ""),
+            stage=str(stage or "verification"),
             usage="verified" if passed else "applied",
             outcome=normalized or "inconclusive",
             evidence_refs=list(evidence_refs or []),
+            turn_id=str(turn_id or ""),
+            prompt_id=str(prompt_id or ""),
+            context_item_id=str(context_item_id or ""),
+            cited=bool(cited),
+            decision_reason=str(decision_reason or ""),
         ).to_dict()
         self.state.setdefault("memory_usage_events", []).append(event)
         del self.state["memory_usage_events"][:-200]
@@ -1144,6 +1298,7 @@ class MemoryGovernanceService:
         return True
 
     def run(self, *, user_confirmed: bool = False) -> dict:
+        self.purge_expired()
         self.consolidate()
         self.refresh_versions()
         self.resolve_pending_conflicts()

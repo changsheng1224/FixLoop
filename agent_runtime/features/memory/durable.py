@@ -182,6 +182,50 @@ class DurableMemoryStore:
         self.memory_dir = Path(root) / ".agent" / "memory"
         self.topics_dir = self.memory_dir / "topics"
         self._topics_root = str(self.topics_dir.resolve())
+        from agent_runtime.features.memory.store import CanonicalMemoryStore
+
+        self._canonical = CanonicalMemoryStore(root)
+
+    @staticmethod
+    def _sanitize_text(text: str) -> str:
+        try:
+            from agent_runtime.features.memory.governance import _redact_value
+
+            return _redact_value(text)
+        except Exception:
+            return str(text or "")
+
+    @staticmethod
+    def _projection_id(topic: str, entry: str) -> str:
+        import hashlib
+
+        return "DUR-" + hashlib.sha256(f"{topic}\n{entry}".encode()).hexdigest()[:12]
+
+    def _sync_projection(self, topic: str, entry: str) -> str:
+        """Mirror a Markdown entry into the canonical fact index."""
+        entry = self._sanitize_text(entry)
+        memory_id = self._projection_id(topic, entry)
+        current = self._canonical.get_memory(memory_id) or {}
+        if current and current.get("value") == entry:
+            return memory_id
+        payload = {
+            "memory_id": memory_id,
+            "key": topic,
+            "value": entry,
+            "kind": "durable_projection",
+            "scope": "repository",
+            "source": "durable_markdown",
+            "source_type": "repo",
+            "status": "durable",
+            "confidence": 0.8,
+            "authority": "repo_policy",
+            "created_by": "durable_projection",
+            "created_at": float(current.get("created_at", 0.0) or 0.0) or time.time(),
+            "last_seen_at": time.time(),
+        }
+        expected = int(current.get("version", 0) or 0) or None
+        self._canonical.upsert_memory(payload, expected_version=expected)
+        return memory_id
 
     def _ensure_within(self, path: Path) -> None:
         """确保路径在 topics_dir 内（防止路径遍历攻击）。
@@ -311,11 +355,17 @@ class DurableMemoryStore:
                 continue  # 拒绝未知 topic
             by_topic.setdefault(topic, []).append(text)
         for topic, texts in by_topic.items():
+            texts = [self._sanitize_text(text) for text in texts]
             strategy = self._topic_strategy(topic)
-            existing = self._read_topic(topic, strategy=strategy)
+            existing = [
+                self._sanitize_text(text)
+                for text in self._read_topic(topic, strategy=strategy)
+            ]
             for text in texts:
                 existing = self._upsert_entry(existing, text, authority=authority)
             self._write_topic(topic, existing)
+            for entry in existing:
+                self._sync_projection(topic, entry)
         self._update_index()
 
     def retrieval(self, query: str, limit: int = 3) -> list[dict]:
@@ -340,19 +390,47 @@ class DurableMemoryStore:
                 entries = self._read_chunked_first(topic, max_chunks=2)
             else:
                 entries = self._read_topic(topic)
+            safe_entries = [self._sanitize_text(entry) for entry in entries]
+            if safe_entries != entries and strategy != "chunked":
+                self._write_topic(topic, safe_entries)
+            entries = safe_entries
             for entry in entries:
                 if query_lower in entry.lower():
-                    import hashlib
-
-                    memory_id = "DUR-" + hashlib.sha256(
-                        f"{topic}\n{entry}".encode()
-                    ).hexdigest()[:12]
+                    memory_id = self._sync_projection(topic, entry)
                     results.append(
-                        {"memory_id": memory_id, "topic": topic, "text": entry}
+                        {
+                            "memory_id": memory_id,
+                            "topic": topic,
+                            "text": entry,
+                            "scope": "repository",
+                            "source": "durable_markdown",
+                            "memory_role": "confirmed_fact",
+                            "score": 1.0,
+                            "retrieval_reason": f"substring_match:{topic}",
+                        }
                     )
                     if len(results) >= limit:
                         break
         return results
+
+    def forget(self, memory_id: str) -> bool:
+        """Remove a durable projection from Markdown and the canonical index."""
+        removed = False
+        for topic in sorted(DURABLE_TOPICS):
+            strategy = self._topic_strategy(topic)
+            entries = self._read_topic(topic, strategy=strategy)
+            kept = [
+                entry
+                for entry in entries
+                if self._projection_id(topic, self._sanitize_text(entry)) != str(memory_id)
+            ]
+            if len(kept) != len(entries):
+                self._write_topic(topic, kept)
+                removed = True
+        if removed:
+            self._update_index()
+        self._canonical.delete_memory(str(memory_id))
+        return removed
 
     def _read_chunked_first(self, topic: str, max_chunks: int = 2) -> list[str]:
         """读取 chunked topic 的前 N 个 chunk（semantic max-pool 优化）。"""

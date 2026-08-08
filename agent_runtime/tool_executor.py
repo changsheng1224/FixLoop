@@ -667,6 +667,7 @@ class ToolExecutor:
             "github_list_branches",
             "github_list_pull_requests",
             "github_get_pull_request",
+            "expand_observation",
             "github_list_workflow_runs",
         }
     )

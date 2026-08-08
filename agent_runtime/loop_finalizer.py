@@ -186,26 +186,41 @@ def _feedback_recalled_memories(agent, ts) -> None:
         )
         status = str(getattr(ts, "status", "") or "").lower()
         succeeded = status in {"success", "completed", "fixed", "passed"}
+        attribution = memory_state.get("memory_context_attribution") or {}
+        usage_events = memory_state.get("memory_usage_events", [])
         refs = []
         evidence = memory_state.get("working", {}).get("evidence_ledger", [])
         refs.extend(str(item.get("id", "")) for item in evidence if item.get("id"))
         refs.extend(str(item) for item in memory_state.get("recalled_observation_ids", []) if item)
         for memory_id in ids:
-            raw = governance.registry.get(str(memory_id), {})
-            outcome = (
-                "supported"
-                if succeeded and raw.get("evidence_refs")
-                else "inconclusive"
-            )
+            applied = [
+                event
+                for event in usage_events
+                if event.get("memory_id") == str(memory_id)
+                and event.get("usage") in {"applied", "verified"}
+            ]
+            outcome = "supported" if succeeded and applied else "inconclusive"
+            event_refs = [
+                ref for event in applied for ref in event.get("evidence_refs", [])
+            ]
             governance.record_usage(
                 str(memory_id),
                 outcome=outcome,
-                evidence_refs=list(dict.fromkeys(refs)),
+                evidence_refs=list(dict.fromkeys([*refs, *event_refs])),
                 task_id=str(identity.get("task_id", "") or ""),
+                trace_id=str(getattr(ts, "run_id", "") or ""),
+                stage="final_verification",
+                turn_id=str(attribution.get("turn_id", "") or ""),
+                prompt_id=str(attribution.get("prompt_id", "") or ""),
+                context_item_id=str(memory_id),
+                cited=bool(applied),
+                decision_reason="run_success_with_tool_application"
+                if outcome == "supported"
+                else "not_applied_or_inconclusive",
             )
         memory_state["memory_feedback"] = {
             "run_id": str(getattr(ts, "run_id", "") or ""),
-            "outcome": outcome,
+            "outcome": "supported" if succeeded else "inconclusive",
             "memory_ids": ids,
         }
     except Exception:

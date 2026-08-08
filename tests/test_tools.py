@@ -150,6 +150,7 @@ class TestToolRegistry:
             "expand_lock",
             "quick_test",
             "run_shell",
+            "expand_observation",
         }
         assert names == expected
 

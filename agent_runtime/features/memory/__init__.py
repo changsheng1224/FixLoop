@@ -44,7 +44,10 @@ from agent_runtime.features.memory.semantic import (  # noqa: F401
     SemanticMemory,
     retrieval_candidates_semantic,
 )
-from agent_runtime.features.memory.store import CanonicalMemoryStore  # noqa: F401
+from agent_runtime.features.memory.store import (  # noqa: F401
+    CanonicalMemoryStore,
+    MemoryVersionConflictError,
+)
 from agent_runtime.features.memory.working import (  # noqa: F401
     expand_evidence,
     invalidate_file_summary,

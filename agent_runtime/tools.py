@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agent_runtime.schema_utils import auto_schema
+from agent_runtime.tool_context import ToolContext
 
 # ============================================================================
 # 工具执行层级常量
@@ -115,6 +116,14 @@ class RunShellArgs:
 
     command: str = ""
     timeout: int = 20
+
+
+@dataclass
+class ExpandObservationArgs:
+    """Expand a previously referenced governed observation."""
+
+    observation_id: str = ""
+    max_tokens: int = 2000
 
 
 # ============================================================================
@@ -1127,7 +1136,9 @@ def _kill_process_tree(proc: subprocess.Popen) -> None:
         proc.kill()
 
 
-def _run_shell_cancellable(argv: list[str], display_command: str, root, env, timeout: int, cancel_token) -> str:
+def _run_shell_cancellable(
+    argv: list[str], display_command: str, root, env, timeout: int, cancel_token
+) -> str:
     import time
 
     popen_kwargs = {}
@@ -1180,6 +1191,33 @@ def _format_shell_result(returncode: int, stdout: str, stderr: str) -> str:
 # ============================================================================
 # 工具注册表
 # ============================================================================
+
+
+def tool_expand_observation(context: ToolContext, args: dict) -> str:
+    """Return a bounded, checksum-validated Observation payload."""
+    from agent_runtime.context_runtime import ObservationStore
+
+    state = context.observation_state
+    if not isinstance(state, dict):
+        return "Observation expansion unavailable: session state is not attached."
+    observation_id = str(args.get("observation_id", "") or "")
+    if not observation_id.startswith("OBS-"):
+        return "Observation expansion denied: invalid observation id."
+    store = ObservationStore(state, root=context.root)
+    try:
+        result = store.expand_for_context(
+            observation_id,
+            max_tokens=max(1, min(int(args.get("max_tokens", 2000) or 2000), 8000)),
+            actor="tool:expand_observation",
+        )
+    finally:
+        store.close()
+    if not result.get("ok"):
+        return f"Observation unavailable: {result.get('reason', 'unknown')}"
+    return (
+        f"[{result['observation_id']}] tool={result.get('tool', '')} "
+        f"source_version={result.get('source_version', '')}\n{result.get('content', '')}"
+    )
 
 
 def build_tool_registry(context) -> dict:
@@ -1307,6 +1345,15 @@ def build_tool_registry(context) -> dict:
         "execution_tier": TIER_HOST,
         "description": "执行 Shell 命令。参数: command, timeout(默认20s，最大120s)",
         "run": lambda args: tool_run_shell(context, args),
+    }
+
+    registry["expand_observation"] = {
+        "budget_group": "read",
+        "schema": auto_schema(ExpandObservationArgs),
+        "risky": False,
+        "execution_tier": TIER_HOST,
+        "description": "按 OBS-* 引用展开受治理 Tool 证据。参数: observation_id, max_tokens",
+        "run": lambda args: tool_expand_observation(context, args),
     }
 
     return registry

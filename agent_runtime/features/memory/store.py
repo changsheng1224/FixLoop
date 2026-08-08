@@ -14,7 +14,21 @@ from pathlib import Path
 from typing import Any
 
 
+class MemoryVersionConflictError(RuntimeError):
+    """Raised when a stale writer tries to overwrite a memory."""
+
+    def __init__(self, memory_id: str, expected: int, actual: int):
+        super().__init__(
+            f"memory {memory_id!r} version conflict: expected {expected}, actual {actual}"
+        )
+        self.memory_id = memory_id
+        self.expected = expected
+        self.actual = actual
+
+
 class CanonicalMemoryStore:
+    SCHEMA_VERSION = 2
+
     def __init__(self, root: str):
         base = Path(root) / ".agent" / "memory"
         base.mkdir(parents=True, exist_ok=True)
@@ -25,6 +39,8 @@ class CanonicalMemoryStore:
         conn = sqlite3.connect(str(self.path), timeout=5)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
         return conn
 
     def _initialize(self) -> None:
@@ -55,23 +71,46 @@ class CanonicalMemoryStore:
                     payload TEXT NOT NULL,
                     created_at REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS schema_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
                 """
             )
+            row = conn.execute(
+                "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+            ).fetchone()
+            current = int(row["value"]) if row else 1
+            if current < self.SCHEMA_VERSION:
+                # Payloads are self-describing; this migration records the
+                # store contract without rewriting user data.
+                conn.execute(
+                    "INSERT INTO schema_meta(key, value) VALUES ('schema_version', ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (str(self.SCHEMA_VERSION),),
+                )
 
     @staticmethod
     def _json(value: Any) -> str:
         return json.dumps(value, ensure_ascii=False, default=str, sort_keys=True)
 
-    def upsert_memory(self, memory: dict[str, Any]) -> None:
+    def upsert_memory(
+        self, memory: dict[str, Any], *, expected_version: int | None = None
+    ) -> int:
         memory_id = str(memory.get("memory_id", ""))
         if not memory_id:
-            return
+            return 0
         now = time.time()
         with closing(self._connect()) as conn, conn:
             row = conn.execute(
                 "SELECT version FROM memories WHERE memory_id = ?", (memory_id,)
             ).fetchone()
-            version = int(row["version"]) + 1 if row else 1
+            actual = int(row["version"]) if row else 0
+            if expected_version is not None and actual != int(expected_version):
+                raise MemoryVersionConflictError(memory_id, int(expected_version), actual)
+            version = actual + 1
+            payload = dict(memory)
+            payload["version"] = version
             conn.execute(
                 """INSERT INTO memories(memory_id, payload, version, updated_at)
                    VALUES (?, ?, ?, ?)
@@ -79,8 +118,16 @@ class CanonicalMemoryStore:
                      payload=excluded.payload,
                      version=excluded.version,
                      updated_at=excluded.updated_at""",
-                (memory_id, self._json(memory), version, now),
+                (memory_id, self._json(payload), version, now),
             )
+        return version
+
+    def get_memory_version(self, memory_id: str) -> int | None:
+        with closing(self._connect()) as conn, conn:
+            row = conn.execute(
+                "SELECT version FROM memories WHERE memory_id = ?", (str(memory_id),)
+            ).fetchone()
+        return int(row["version"]) if row else None
 
     def get_memory(self, memory_id: str) -> dict[str, Any] | None:
         with closing(self._connect()) as conn, conn:
@@ -97,7 +144,13 @@ class CanonicalMemoryStore:
     def delete_memory(self, memory_id: str) -> None:
         with closing(self._connect()) as conn, conn:
             conn.execute("DELETE FROM memories WHERE memory_id = ?", (str(memory_id),))
+            conn.execute("DELETE FROM usage_events WHERE memory_id = ?", (str(memory_id),))
             conn.execute("DELETE FROM revalidation_queue WHERE memory_id = ?", (str(memory_id),))
+
+    def integrity_check(self) -> str:
+        with closing(self._connect()) as conn, conn:
+            row = conn.execute("PRAGMA integrity_check").fetchone()
+        return str(row[0]) if row else "unknown"
 
     def append_usage_event(self, event: dict[str, Any]) -> None:
         with closing(self._connect()) as conn, conn:

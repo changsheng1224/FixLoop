@@ -88,6 +88,7 @@ class Agent:
 
         # 会话状态 + 记忆
         self.session: dict = self._new_session()
+        self.tool_context.observation_state = self.session
         if hasattr(self.config, "snapshot"):
             self.session["config_snapshot"] = self.config.snapshot()
 
@@ -179,6 +180,7 @@ class Agent:
         self.tool_context = ToolContext(root=current)
         # 清空 working memory（旧 workspace 的文件已失效）
         session = getattr(self, "session", {}) or {}
+        self.tool_context.observation_state = session
         mem = session.get("memory", {})
         working = mem.get("working", {})
         if isinstance(working, dict):
@@ -502,12 +504,18 @@ class Agent:
                 if name in {"write_file", "patch_file", "apply_patch"}
                 else "tool"
             )
+            attribution = mem.get("memory_context_attribution") or {}
             for memory_id in recalled_ids:
                 governance.record_usage_stage(
                     memory_id,
                     usage="applied",
                     stage=stage,
                     task_id=str(identity.get("task_id", "") or ""),
+                    turn_id=str(attribution.get("turn_id", "") or ""),
+                    prompt_id=str(attribution.get("prompt_id", "") or ""),
+                    context_item_id=str(memory_id),
+                    cited=True,
+                    decision_reason=f"tool:{name}",
                 )
         context = get_repair_context(mem)
         path = args.get("path", "")
