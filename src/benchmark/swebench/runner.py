@@ -206,6 +206,7 @@ class SweBenchAdapter:
         )
         meta = {
             "ok": hr.ok,
+            "status": "completed" if hr.ok else "failed",
             "returncode": hr.returncode,
             "error": hr.error,
             "report_path": str(hr.report_path) if hr.report_path else "",
@@ -214,7 +215,21 @@ class SweBenchAdapter:
             "predictions_used": str(eval_path),
             "instance_ids": eval_ids,
             "require_verified": require_verified,
+            "evaluation": {
+                "levels": ["contract", "regression", "benchmark", "official"],
+                "completed_level": "official" if hr.ok else "benchmark",
+                "gated": require_verified,
+            },
         }
+        try:
+            manifest_data = json.loads(
+                (cfg.output_dir / "manifest.json").read_text(encoding="utf-8")
+            )
+            meta["manifest_fingerprint"] = (
+                manifest_data.get("harness", {}) or {}
+            ).get("manifest_fingerprint", "")
+        except (OSError, TypeError, ValueError):
+            meta["manifest_fingerprint"] = ""
         resolved_set = set(hr.resolved_ids or [])
         evaluated = set(eval_ids)
         for r in results:

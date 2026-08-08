@@ -291,6 +291,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
     def _run_critic_gate(self, state: RepairState) -> bool:
         """提交 Verifier 前 Critic。返回 True 表示 reject（应 retry / 停）。"""
+        from src.collaboration.isolation import role_projection
         from src.repair.critic import resolve_critic_mode, review_patch
 
         mode = resolve_critic_mode()
@@ -302,6 +303,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             allowed = set(state.node_timings.get("allowed_edit") or [])
 
         self._emit_repair_span("critic_started", {"summary": f"mode={mode}"})
+        state.node_timings["critic_input_projection"] = role_projection(state, "critic")
         verdict = review_patch(
             state.candidate_patches,
             allowed_edit=allowed,
@@ -309,6 +311,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         )
         state.node_timings["critic_mode"] = verdict.mode
         state.node_timings["critic_reason"] = verdict.reason
+        state.node_timings["critic_verdict"] = verdict.to_dict()
         if verdict.skipped:
             state.node_timings["critic_skipped"] = True
 
@@ -764,6 +767,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             except Exception:
                 pass
         self._end_repair_trace(state)
+        # Harness finalization enriches state; persist once more so state,
+        # trace and report expose the same terminal control snapshot.
+        self._checkpoint_progress(state)
         self._push_repair_metrics(state)
         lock = getattr(self, "_edit_lock", None)
         if lock is not None:
@@ -1074,6 +1080,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             except Exception:
                 pass
         self._end_repair_trace(state)
+        # Harness finalization enriches state; persist once more so state,
+        # trace and report expose the same terminal control snapshot.
+        self._checkpoint_progress(state)
         self._push_repair_metrics(state)
         log.info("总耗时: %dms, status=%s", total_ms, state.status)
         return state

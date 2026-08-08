@@ -20,6 +20,8 @@ class ToolSpec:
     budget_group: str = "read"
     timeout_s: float = 30.0
     side_effect: str = "read"
+    risk_level: str = "low"
+    requires_approval: bool = False
     replay_policy: str = "revalidate"
     trust_level: str = "builtin"
     version: str = "1.0"
@@ -114,6 +116,8 @@ class ToolRegistry:
                         budget_group=str(legacy.get("budget_group") or "read"),
                         timeout_s=float(legacy.get("timeout_s") or 30.0),
                         side_effect=str(legacy.get("side_effect") or "read"),
+                        risk_level=str(legacy.get("risk_level") or "low"),
+                        requires_approval=bool(legacy.get("requires_approval", False)),
                         replay_policy=str(legacy.get("replay_policy") or "revalidate"),
                         trust_level=str(legacy.get("trust_level") or "workspace"),
                         version=str(legacy.get("version") or "1.0"),
@@ -144,6 +148,10 @@ class ToolRegistry:
                 budget_group=str(legacy.get("budget_group") or current.budget_group),
                 timeout_s=float(legacy.get("timeout_s") or current.timeout_s),
                 side_effect=str(legacy.get("side_effect") or current.side_effect),
+                risk_level=str(legacy.get("risk_level") or current.risk_level),
+                requires_approval=bool(
+                    legacy.get("requires_approval", current.requires_approval)
+                ),
                 replay_policy=str(legacy.get("replay_policy") or current.replay_policy),
                 trust_level=str(legacy.get("trust_level") or current.trust_level),
                 version=str(legacy.get("version") or current.version),
@@ -199,16 +207,19 @@ def default_repair_tool_registry() -> ToolRegistry:
         _spec("java_stack_parse", _PATCHER, capabilities=frozenset({"trace.parse"})),
         _spec(
             "write_file", _PATCHER, budget_group="write", side_effect="write",
+            risk_level="high", requires_approval=True,
             replay_policy="never_replay", capabilities=frozenset({"filesystem.write"}),
         ),
         _spec(
             "patch_file", _PATCHER, budget_group="write", side_effect="write",
+            risk_level="high", requires_approval=True,
             replay_policy="never_replay", capabilities=frozenset({"filesystem.write"}),
         ),
         ToolSpec(
             "apply_patch", roles=_PATCHER, phases=frozenset({"patch"}),
             modes=frozenset({"repair", "refactor"}), budget_group="write",
             side_effect="write", replay_policy="never_replay",
+            risk_level="high", requires_approval=True,
             capabilities=frozenset({"filesystem.write", "patch.apply"}),
             requires_evidence=True, requires_read_before_write=True,
         ),
@@ -266,6 +277,8 @@ def bind_execution_tools(tools: dict[str, dict], registry: ToolRegistry) -> dict
                 "budget_group": spec.budget_group,
                 "timeout_s": spec.timeout_s,
                 "side_effect": spec.side_effect,
+                "risk_level": spec.risk_level,
+                "requires_approval": spec.requires_approval,
                 "replay_policy": spec.replay_policy,
                 "trust_level": spec.trust_level,
                 "capabilities": sorted(spec.capabilities),
@@ -301,6 +314,8 @@ def project_tool_specs(specs: list[ToolSpec]) -> dict[str, dict]:
             "budget_group": spec.budget_group,
             "timeout_s": spec.timeout_s,
             "side_effect": spec.side_effect,
+            "risk_level": spec.risk_level,
+            "requires_approval": spec.requires_approval,
             "replay_policy": spec.replay_policy,
             "trust_level": spec.trust_level,
             "capabilities": sorted(spec.capabilities),

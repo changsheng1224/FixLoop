@@ -50,6 +50,8 @@ REPAIR_TRACE_EVENTS = frozenset(
         "session_loaded",
         "run_terminal",
         "run_terminal_late",
+        "harness_event",
+        "harness_manifest",
     }
 )
 
@@ -236,6 +238,15 @@ class RepairRunTracer:
                 "role_lifecycle": dict(getattr(state, "role_lifecycle", {}) or {}),
                 "attribution": dict(getattr(state, "collaboration_attribution", {}) or {}),
             },
+            "harness": {
+                "control": dict(getattr(state, "harness_control", {}) or {}),
+                "metrics": dict(getattr(state, "harness_metrics", {}) or {}),
+                "manifest": dict(getattr(state, "harness_manifest", {}) or {}),
+                "attribution": dict(getattr(state, "harness_attribution", {}) or {}),
+                "human_control": dict(getattr(state, "human_control", {}) or {}),
+                "events": list(getattr(state, "harness_events", []) or []),
+                "bad_cases": list(getattr(state, "bad_cases", []) or []),
+            },
             "context_waterfall": build_context_waterfall(reports),
             "runtime_metrics": {
                 "retry_count": state.retry_count,
@@ -269,6 +280,10 @@ class RepairRunTracer:
             "tool_usage_by_agent": tool_summary.get("tool_usage_by_agent", {}),
             "agents": list(by_agent.keys()),
             "agent_asks": [ref.to_dict() for ref in state.agent_asks],
+            "harness_status": (getattr(state, "harness_control", {}) or {}).get("status", ""),
+            "harness_manifest_fingerprint": (
+                getattr(state, "harness_manifest", {}) or {}
+            ).get("manifest_fingerprint", ""),
         }
         if state.repair_plan is not None:
             finished_payload["intent"] = repair_plan_intent_snapshot(state.repair_plan)

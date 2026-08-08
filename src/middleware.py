@@ -22,7 +22,7 @@ class ToolGateway:
             policy = CollaborationGovernance(registry=registry)
         self._registry = registry
         self._policy = policy
-        self._runtime_context: dict[str, dict[str, str]] = {}
+        self._runtime_context: dict[str, dict[str, object]] = {}
 
     def set_context(
         self,
@@ -32,12 +32,16 @@ class ToolGateway:
         phase: str = "",
         evidence: bool = True,
         read_before_write: bool = True,
+        control_mode: str = "auto",
+        approved_tools: set[str] | list[str] | None = None,
     ) -> None:
         self._runtime_context[agent_name] = {
             "mode": mode,
             "phase": phase,
             "evidence": evidence,
             "read_before_write": read_before_write,
+            "control_mode": control_mode,
+            "approved_tools": set(approved_tools or []),
         }
 
     def bind_tools(self, tools: dict[str, dict]) -> None:
@@ -83,6 +87,8 @@ class ToolGateway:
                 phase=context.get("phase", ""),
                 evidence=bool(context.get("evidence", False)),
                 read_before_write=bool(context.get("read_before_write", False)),
+                control_mode=context.get("control_mode", "auto"),
+                approved=tool_name in set(context.get("approved_tools") or []),
             )
             if not decision.allowed:
                 return ToolExecutionResult(
