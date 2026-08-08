@@ -925,7 +925,48 @@ def run_compression_pipeline(
     if events:
         pipe_meta["compression_events"] = events
 
+    contract = validate_compression_contract(history, projected)
+    pipe_meta["contract_version"] = "compression-v2"
+    pipe_meta["contract_ok"] = contract["ok"]
+    pipe_meta["contract_violations"] = contract["violations"]
+
     return projected
+
+
+def validate_compression_contract(
+    original: list[dict], projected: list[dict]
+) -> dict[str, Any]:
+    """Validate safety invariants after a history projection.
+
+    This is deliberately structural: it does not infer whether a repair is
+    correct, it only prevents the Context layer from manufacturing orphaned
+    references or dropping protected runtime state.
+    """
+    violations: list[str] = []
+    original_obs = {
+        str(item.get("observation_id"))
+        for item in original
+        if item.get("observation_id")
+    }
+    projected_obs = {
+        str(item.get("observation_id"))
+        for item in projected
+        if item.get("observation_id")
+    }
+    for item in projected:
+        if item.get("role") == "tool" and item.get("_compact_ref"):
+            if str(item.get("content", "")).startswith("[observation:") and not item.get(
+                "observation_id"
+            ):
+                violations.append("compact_tool_missing_reference")
+        if item.get("repair_state") and not str(item.get("content", "")).strip():
+            violations.append("empty_repair_state")
+    if original_obs and not projected_obs.intersection(original_obs):
+        # A projection may intentionally omit old observations, but it must
+        # retain the current tail or an explicit compact reference.
+        if not any(item.get("_compact_ref") for item in projected):
+            violations.append("observation_provenance_lost")
+    return {"ok": not violations, "violations": list(dict.fromkeys(violations))}
 
 
 def render_state_fallback(memory: dict) -> str:

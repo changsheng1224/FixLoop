@@ -33,6 +33,7 @@ class ToolContext:
     idempotency_key: str = ""
     # Patcher-primary：可选 EditLockState（未读不可写 / allowed_edit）
     edit_lock: object | None = None
+    observation_state: dict | None = None
 
     def __post_init__(self):
         if self.path_resolver is None:

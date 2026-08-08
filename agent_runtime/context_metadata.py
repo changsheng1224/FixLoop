@@ -24,6 +24,12 @@ CONTEXT_TRACE_KEYS = (
     "prefix_aligned",
     "prefix_monotonic",
     "prefix_fingerprint",
+    "context_manifest",
+    "context_policy_version",
+    "selected_context_ids",
+    "dropped_context_ids",
+    "observation_refs",
+    "compression_pipeline",
 )
 
 

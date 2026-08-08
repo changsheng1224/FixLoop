@@ -100,6 +100,7 @@ class TestRepairNativePromptSplit:
             cwd=str(temp_workspace),
             budget=TokenBudget(model="deepseek-v4-pro", provider="deepseek", total_limit=50_000),
         )
+        agent.config.prompt_budget = 100_000
         agent.config.hard_cap = 100_000
         role_snippet = agent._prefix.role_text[:30]
         agent.ask("fix bug")

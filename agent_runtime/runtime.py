@@ -88,6 +88,7 @@ class Agent:
 
         # 会话状态 + 记忆
         self.session: dict = self._new_session()
+        self.tool_context.observation_state = self.session
         if hasattr(self.config, "snapshot"):
             self.session["config_snapshot"] = self.config.snapshot()
 
@@ -179,6 +180,7 @@ class Agent:
         self.tool_context = ToolContext(root=current)
         # 清空 working memory（旧 workspace 的文件已失效）
         session = getattr(self, "session", {}) or {}
+        self.tool_context.observation_state = session
         mem = session.get("memory", {})
         working = mem.get("working", {})
         if isinstance(working, dict):

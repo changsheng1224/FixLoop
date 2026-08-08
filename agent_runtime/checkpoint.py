@@ -163,6 +163,7 @@ def create_checkpoint(
     checkpoint["context_manifest"] = build_context_manifest(
         runtime_memory,
         workspace_fingerprint=checkpoint["workspace_fingerprint"],
+        context_metadata=dict(agent.session.get("context_manifest", {}) or {}),
     )
     observations = agent.session.get("observations", {}) or {}
     checkpoint["observation_manifest"] = [
@@ -175,6 +176,14 @@ def create_checkpoint(
         for oid, raw in list(observations.items())[-100:]
         if isinstance(raw, dict)
     ]
+    checkpoint["context_contract"] = {
+        "schema_version": str(checkpoint["context_manifest"].get("schema_version", "")),
+        "policy_version": str(checkpoint["context_manifest"].get("policy_version", "")),
+        "projection_hash": str(checkpoint["context_manifest"].get("projection_hash", "")),
+        "selected_context_ids": list(
+            checkpoint["context_manifest"].get("selected_context_ids", [])
+        ),
+    }
     checkpoint["action_ledger"] = list(agent.session.get("action_ledger", []) or [])[-100:]
     if trigger == "user_cancel" and in_flight_tool:
         checkpoint["in_flight_tool"] = in_flight_tool
@@ -288,6 +297,19 @@ def evaluate_resume_state(agent) -> dict:
 
     result = _resume_result("full-valid", last)
 
+    saved_context = last.get("context_contract") or last.get("context_manifest") or {}
+    current_context = agent.session.get("context_manifest", {}) or {}
+    context_diff = []
+    if current_context:
+        for key in ("schema_version", "policy_version"):
+            if saved_context.get(key) and current_context.get(key) != saved_context.get(key):
+                context_diff.append(key)
+        saved_ids = set(saved_context.get("selected_context_ids", []) or [])
+        current_ids = set(current_context.get("selected_context_ids", []) or [])
+        if saved_ids and current_ids and saved_ids != current_ids:
+            context_diff.append("selected_context_ids")
+    result["context_diff"] = context_diff
+
     saved_manifest = last.get("workspace_manifest")
     if isinstance(saved_manifest, dict) and saved_manifest:
         manifest_diff = compare_workspace_manifest(
@@ -340,7 +362,7 @@ def evaluate_resume_state(agent) -> dict:
     # 判定状态
     if result["stale_files"] or result["identity_diff"]:
         result["status"] = "workspace-mismatch" if result["identity_diff"] else "partial-stale"
-    elif observation_diff:
+    elif observation_diff or context_diff:
         result["status"] = "partial-stale"
     elif (
         last.get("trigger") == "step_end"
@@ -371,6 +393,7 @@ def _emit_resume_result(agent, result: dict) -> dict:
                     "status": result.get("status", ""),
                     "stale_files": list(result.get("stale_files", []) or []),
                     "identity_diff": list(result.get("identity_diff", []) or []),
+                    "context_diff": list(result.get("context_diff", []) or []),
                 },
             )
         except Exception:
@@ -383,6 +406,7 @@ def _resume_result(status: str, checkpoint: dict | None = None) -> dict:
         "status": status,
         "stale_files": [],
         "identity_diff": [],
+        "context_diff": [],
         "last_checkpoint": checkpoint,
     }
 

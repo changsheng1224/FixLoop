@@ -27,6 +27,35 @@ class ContextRequest:
     failure_bucket: str = ""
     next_action: str = ""
     token_budget: int = 2000
+    role: str = ""
+    policy_version: str = "context-policy-v2"
+    required_kinds: tuple[str, ...] = ()
+    min_kind_counts: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ContextViewPolicy:
+    """Role/phase projection policy; it filters evidence, not repair decisions."""
+
+    role: str = ""
+    phase: str = "repair"
+    allowed_kinds: tuple[str, ...] = ()
+
+    @classmethod
+    def for_request(cls, request: ContextRequest) -> ContextViewPolicy:
+        role = (request.role or "").lower()
+        if role in {"localizer", "explorer"}:
+            kinds = ("memory", "observation", "source", "workspace", "history")
+        elif role in {"patcher", "editor"}:
+            kinds = ("memory", "observation", "source", "patch", "verification", "history")
+        elif role in {"critic", "verifier", "test"}:
+            kinds = ("observation", "patch", "verification", "source", "history")
+        else:
+            kinds = ()
+        return cls(role=role, phase=request.phase, allowed_kinds=kinds)
+
+    def allows(self, item: ContextItem) -> bool:
+        return not self.allowed_kinds or item.kind in self.allowed_kinds
 
 
 @dataclass
@@ -43,6 +72,10 @@ class ContextItem:
     hypothesis_ids: list[str] = field(default_factory=list)
     scope: str = "task"
     stale: bool = False
+    hard_pin: bool = False
+    source_version: str = ""
+    sensitivity: str = "internal"
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def utility(self, request: ContextRequest) -> float:
         phase_factor = {
@@ -66,19 +99,131 @@ class ContextItem:
 
 
 class ContextPolicyEngine:
-    """Select highest-value context items under a token budget."""
+    """Select governed context items under a token budget.
+
+    ``select`` remains the compatibility API.  New callers should use
+    ``select_with_result`` so dropped candidates and policy decisions are
+    persisted for trace and checkpoint replay.
+    """
+
+    VERSION = "context-policy-v2"
+
+    @staticmethod
+    def _sort_key(item: ContextItem, request: ContextRequest) -> tuple[float, str]:
+        return (-item.utility(request), item.item_id)
+
+    def select_with_result(
+        self, items: list[ContextItem], request: ContextRequest
+    ) -> ContextSelectionResult:
+        available = [item for item in items if not item.stale]
+        by_id: dict[str, ContextItem] = {}
+        for item in available:
+            by_id.setdefault(item.item_id, item)
+
+        selected: list[ContextItem] = []
+        dropped: list[ContextDecision] = []
+        used = 0
+
+        # Pins and required kinds are selected first, but still obey the hard
+        # budget.  A refusal is explicit rather than silently dropping data.
+        pinned = [
+            item
+            for item in by_id.values()
+            if item.hard_pin or item.kind in request.required_kinds
+        ]
+        for item in sorted(pinned, key=lambda value: value.item_id):
+            cost = max(int(item.token_cost), 0)
+            if used + cost <= request.token_budget:
+                selected.append(item)
+                used += cost
+            else:
+                dropped.append(ContextDecision(item.item_id, "budget", item.utility(request)))
+
+        for item in sorted(by_id.values(), key=lambda value: self._sort_key(value, request)):
+            if any(item.item_id == chosen.item_id for chosen in selected):
+                continue
+            required = int(request.min_kind_counts.get(item.kind, 0) or 0)
+            current = sum(1 for chosen in selected if chosen.kind == item.kind)
+            if current < required:
+                reason = "required_kind"
+            else:
+                reason = "budget"
+            cost = max(int(item.token_cost), 0)
+            if used + cost <= request.token_budget:
+                selected.append(item)
+                used += cost
+            else:
+                dropped.append(ContextDecision(item.item_id, reason, item.utility(request)))
+
+        selected_ids = {item.item_id for item in selected}
+        for item in by_id.values():
+            if item.item_id not in selected_ids and not any(
+                d.item_id == item.item_id for d in dropped
+            ):
+                dropped.append(ContextDecision(item.item_id, "policy", item.utility(request)))
+        return ContextSelectionResult(
+            selected=selected,
+            dropped=dropped,
+            token_budget=request.token_budget,
+            used_tokens=used,
+            phase=request.phase,
+            role=request.role,
+            policy_version=request.policy_version or self.VERSION,
+        )
 
     def select(self, items: list[ContextItem], request: ContextRequest) -> list[ContextItem]:
-        available = [item for item in items if not item.stale]
-        ranked = sorted(available, key=lambda item: item.utility(request), reverse=True)
-        selected: list[ContextItem] = []
-        used = 0
-        for item in ranked:
-            if used + max(item.token_cost, 0) > request.token_budget:
-                continue
-            selected.append(item)
-            used += max(item.token_cost, 0)
-        return selected
+        return self.select_with_result(items, request).selected
+
+
+@dataclass(frozen=True)
+class ContextDecision:
+    item_id: str
+    reason: str
+    utility: float = 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ContextSelectionResult:
+    selected: list[ContextItem] = field(default_factory=list)
+    dropped: list[ContextDecision] = field(default_factory=list)
+    token_budget: int = 0
+    used_tokens: int = 0
+    phase: str = ""
+    role: str = ""
+    policy_version: str = "context-policy-v2"
+
+    @property
+    def selected_ids(self) -> list[str]:
+        return [item.item_id for item in self.selected]
+
+    @property
+    def dropped_ids(self) -> list[str]:
+        return [item.item_id for item in self.dropped]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "selected_ids": self.selected_ids,
+            "selected_items": [
+                {
+                    "item_id": item.item_id,
+                    "kind": item.kind,
+                    "source_ref": item.source_ref,
+                    "token_cost": int(item.token_cost),
+                    "confidence": float(item.confidence),
+                    "freshness": float(item.freshness),
+                }
+                for item in self.selected
+            ],
+            "dropped": [item.to_dict() for item in self.dropped],
+            "token_budget": self.token_budget,
+            "used_tokens": self.used_tokens,
+            "phase": self.phase,
+            "role": self.role,
+            "policy_version": self.policy_version,
+        }
 
 
 @dataclass
@@ -527,6 +672,50 @@ class ObservationStore:
         except ValueError:
             return ""
 
+    def expand_for_context(
+        self,
+        observation_id: str,
+        *,
+        max_tokens: int = 2000,
+        budget=None,
+        actor: str = "context",
+    ) -> dict[str, Any]:
+        """Expand a referenced observation through the governed context path.
+
+        The raw blob is never returned without workspace/checksum validation.
+        The caller may pass the model tokenizer budget; otherwise a conservative
+        character bound is used.  Expansion is auditable and carries the source
+        metadata needed for provenance-aware prompts.
+        """
+        record = self.get(observation_id)
+        if record is None or record.stale or record.lifecycle != "active":
+            return {"ok": False, "observation_id": observation_id, "reason": "stale_or_missing"}
+        raw = self.expand(observation_id)
+        if not raw:
+            return {"ok": False, "observation_id": observation_id, "reason": "blob_unavailable"}
+        if budget is not None:
+            raw = budget.fit(raw, max(1, int(max_tokens)))
+        else:
+            raw = raw[: max(1, int(max_tokens)) * 4]
+        self.state.setdefault("observation_audit", []).append(
+            {
+                "event": "expanded",
+                "observation_id": observation_id,
+                "actor": actor,
+                "tokens": int(budget.count(raw) if budget is not None else len(raw.split())),
+                "at": time.time(),
+            }
+        )
+        self.state["observation_audit"] = self.state["observation_audit"][-500:]
+        return {
+            "ok": True,
+            "observation_id": observation_id,
+            "tool": record.tool,
+            "source_version": record.source_version,
+            "checksum": record.checksum,
+            "content": raw,
+        }
+
     def get(self, observation_id: str) -> Observation | None:
         raw = self.registry.get(str(observation_id))
         return self._from_record(raw) if raw else None
@@ -727,14 +916,27 @@ def transition_action(
 
 
 def build_context_manifest(
-    state: dict[str, Any], *, workspace_fingerprint: str = ""
+    state: dict[str, Any],
+    *,
+    workspace_fingerprint: str = "",
+    context_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    metadata = context_metadata or state.get("context_manifest", {}) or {}
     return {
+        "schema_version": str(metadata.get("schema_version", "context-v2")),
+        "projection_hash": str(metadata.get("projection_hash", "")),
+        "policy_version": str(metadata.get("policy_version", ContextPolicyEngine.VERSION)),
+        "selected_context_ids": list(
+            metadata.get("selected_context_ids", state.get("selected_context_ids", []))
+        ),
+        "dropped_context_ids": list(metadata.get("dropped_context_ids", [])),
+        "selection": dict(metadata.get("selection", {}) or {}),
         "state_revision": int(state.get("state_revision", 0) or 0),
         "workspace_fingerprint": workspace_fingerprint,
         "active_hypothesis_ids": list(state.get("active_hypothesis_ids", [])),
-        "selected_context_ids": list(state.get("selected_context_ids", [])),
-        "observation_refs": list(state.get("recalled_observation_ids", [])),
+        "observation_refs": list(
+            metadata.get("observation_refs", state.get("recalled_observation_ids", []))
+        ),
         "memory_refs": list(state.get("recalled_memory_ids", [])),
         "compressed_history_ref": str(state.get("compressed_history_ref", "") or ""),
         "file_versions": dict(state.get("file_versions", {}) or {}),

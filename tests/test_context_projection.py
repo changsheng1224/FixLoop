@@ -114,6 +114,9 @@ class TestAttachContextProjection:
         assert set(meta["context_sections"].keys()) == set(EIGHT_SECTIONS)
         assert meta["context_sections_total"] == sum(meta["context_sections"].values())
         assert "request" in meta["sections"]
+        assert meta["context_manifest"]["schema_version"] == "context-v2"
+        assert meta["context_manifest"]["projection_hash"]
+        assert meta["context_policy_version"] == "context-policy-v2"
 
     def test_fit_prompt_to_budget_has_context_sections(self):
         _, _, meta = fit_prompt_to_budget("sys", "user task", total_limit=6000)
