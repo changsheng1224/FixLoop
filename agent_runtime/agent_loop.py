@@ -301,24 +301,11 @@ class AgentLoop:
     ) -> str:
         """TaskState 已写入终态后：同步 stop_reason、可选 recording、落盘。"""
         self._sync_stop_reason(ts)
-        from agent_runtime.runtime_contracts import RuntimePhase, RuntimeStatus
-
-        terminal_phase = {
-            "completed": RuntimePhase.COMPLETED,
-            "stopped": RuntimePhase.CANCELLED,
-            "failed": RuntimePhase.FAILED,
-        }.get(str(ts.status), RuntimePhase.FAILED)
         runtime_snapshot = ts.runtime_contract or {}
         if not runtime_snapshot.get("terminal"):
             try:
-                ts.advance_runtime(RuntimePhase.FINALIZING)
-                ts.advance_runtime(
-                    terminal_phase,
-                    status={
-                        RuntimePhase.COMPLETED: RuntimeStatus.COMPLETED,
-                        RuntimePhase.CANCELLED: RuntimeStatus.CANCELLED,
-                        RuntimePhase.FAILED: RuntimeStatus.FAILED,
-                    }[terminal_phase],
+                ts.finalize_runtime(
+                    str(ts.status),
                     stop_reason=str(ts.stop_reason or self.stop_reason or "terminal"),
                 )
             except ValueError as exc:
@@ -2413,23 +2400,17 @@ class AgentLoop:
     def _record_tool_outcome(
         self, tool_name: str, result, ts, tool_args: dict | None = None
     ) -> None:
-        from agent_runtime.tool_result import build_tool_receipt, normalize_tool_result
+        from agent_runtime.tool_result import attach_tool_receipt
 
-        normalized = normalize_tool_result(result, tool_name=tool_name)
         call = self.agent.session.get("_last_canonical_tool_call", {}) or {}
-        args_hash = str(call.get("arguments_hash", "") or "")
-        receipt = build_tool_receipt(
+        normalized = attach_tool_receipt(
+            result,
             tool_name,
-            normalized,
-            args_hash=args_hash,
+            args_hash=str(call.get("arguments_hash", "") or ""),
             run_id=str(getattr(ts, "run_id", "") or ""),
             call_id=str(call.get("call_id", "") or ""),
         )
-        normalized.receipt = receipt
-        normalized.metadata["receipt"] = receipt
-        meta = getattr(result, "metadata", None) or {}
-        meta["receipt"] = receipt
-        ts.record_tool_rejection(tool_name, meta)
+        ts.record_tool_rejection(tool_name, normalized.metadata)
         self._emit_tool_trace(tool_name, normalized, tool_args)
 
     def _emit_tool_trace(self, tool_name: str, result, tool_args: dict | None = None) -> None:

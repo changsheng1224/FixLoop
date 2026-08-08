@@ -160,6 +160,32 @@ def build_tool_receipt(
     return body
 
 
+def attach_tool_receipt(
+    result: Any,
+    tool_name: str,
+    *,
+    args_hash: str = "",
+    run_id: str = "",
+    call_id: str = "",
+) -> ToolResult:
+    """Normalize a tool result and attach its canonical audit receipt.
+
+    Receipt assembly is deliberately kept at the result boundary so the
+    executor and loop cannot diverge in status, metadata, or receipt fields.
+    """
+    normalized = normalize_tool_result(result, tool_name=tool_name)
+    receipt = build_tool_receipt(
+        tool_name,
+        normalized,
+        args_hash=args_hash,
+        run_id=run_id,
+        call_id=call_id,
+    )
+    normalized.receipt = receipt
+    normalized.metadata["receipt"] = receipt
+    return normalized
+
+
 def result_metadata(result: Any) -> dict[str, Any]:
     """Compatibility helper for callers that only need a metadata projection."""
     return normalize_tool_result(result).metadata
@@ -170,6 +196,7 @@ __all__ = [
     "ToolResult",
     "ToolStatus",
     "RECEIPT_SCHEMA_VERSION",
+    "attach_tool_receipt",
     "build_tool_receipt",
     "normalize_tool_result",
     "result_metadata",
