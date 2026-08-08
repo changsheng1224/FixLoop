@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from agent_runtime.intent.graph import clarify_graph, recompute_root_ids, validate_graph
+from agent_runtime.intent.llm_runtime import IntentLlmRuntime
 from agent_runtime.intent.models import (
     PRIMARY_ACTIONS,
     IntentEdge,
@@ -22,6 +23,19 @@ from agent_runtime.intent.models import (
 
 _ALLOWED_KIND = frozenset({"sequence", "depends_on", "constrains"})
 _ALLOWED_ROLE = frozenset({"executable", "constraint", "clarify"})
+
+INTENT_LLM_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["mode", "nodes", "edges", "need_clarify"],
+    "properties": {
+        "mode": {"type": "string", "enum": ["single", "multi", "hybrid"]},
+        "nodes": {"type": "array", "maxItems": 4},
+        "edges": {"type": "array", "maxItems": 12},
+        "candidates": {"type": "array", "maxItems": 5},
+        "need_clarify": {"type": "boolean"},
+    },
+}
 
 
 @dataclass
@@ -49,6 +63,10 @@ class LlmRefineResult:
     need_clarify: bool | None = None
     applied: bool = False  # True when LLM JSON replaced the graph
     raw_parsed: dict[str, Any] | None = None
+    fallback_reason: str = ""
+    attempts: int = 0
+    latency_ms: float = 0.0
+    schema_errors: list[str] = field(default_factory=list)
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:
@@ -137,6 +155,10 @@ def maybe_refine(
     tau_llm: float = 0.55,
     segments: list[str] | None = None,
     force: bool = False,
+    runtime: IntentLlmRuntime | None = None,
+    cancel_token=None,
+    deadline=None,
+    budget=None,
 ) -> LlmRefineResult:
     """Ask light_client for graph correction **and** Top-k candidates.
 
@@ -167,19 +189,47 @@ def maybe_refine(
         f"Segments:\n{seg_blob}\n"
         "Reply with ONLY JSON."
     )
-    try:
-        raw = client.complete(prompt, max_new_tokens=384)
-    except TypeError:
-        try:
-            raw = client.complete(prompt)
-        except Exception:
-            return LlmRefineResult(graph=graph, applied=False)
-    except Exception:
-        return LlmRefineResult(graph=graph, applied=False)
+    runtime = runtime or IntentLlmRuntime()
+    call = runtime.complete(
+        client,
+        prompt,
+        cancel_token=cancel_token,
+        deadline=deadline,
+        budget=budget,
+        max_new_tokens=384,
+    )
+    if call.status != "success":
+        return LlmRefineResult(
+            graph=graph,
+            applied=False,
+            fallback_reason=call.reason or call.status,
+            attempts=call.attempts,
+            latency_ms=call.latency_ms,
+        )
+    raw = call.content
 
     data = _extract_json(raw if isinstance(raw, str) else str(raw))
     if not data:
-        return LlmRefineResult(graph=graph, applied=False)
+        return LlmRefineResult(
+            graph=graph,
+            applied=False,
+            fallback_reason="invalid_json",
+            attempts=call.attempts,
+            latency_ms=call.latency_ms,
+        )
+
+    schema_errors = validate_llm_payload(data)
+    if schema_errors:
+        return LlmRefineResult(
+            graph=clarify_graph("invalid llm schema"),
+            applied=True,
+            need_clarify=True,
+            raw_parsed=data,
+            fallback_reason="schema_rejected",
+            attempts=call.attempts,
+            latency_ms=call.latency_ms,
+            schema_errors=schema_errors,
+        )
 
     candidates = _parse_candidates(data)
     need_clarify = data.get("need_clarify")
@@ -195,6 +245,9 @@ def maybe_refine(
             need_clarify=True if need_clarify is None else need_clarify,
             applied=True,
             raw_parsed=data,
+            fallback_reason="invalid_graph",
+            attempts=call.attempts,
+            latency_ms=call.latency_ms,
         )
 
     return LlmRefineResult(
@@ -203,7 +256,88 @@ def maybe_refine(
         need_clarify=need_clarify,
         applied=True,
         raw_parsed=data,
+        attempts=call.attempts,
+        latency_ms=call.latency_ms,
     )
+
+
+def validate_llm_payload(data: dict[str, Any]) -> list[str]:
+    """Strict, dependency-free validation for the LLM graph envelope."""
+    if not isinstance(data, dict):
+        return ["payload_not_object"]
+    errors: list[str] = []
+    allowed_top = set(INTENT_LLM_SCHEMA["properties"])
+    unknown = sorted(set(data) - allowed_top)
+    if unknown:
+        errors.append("unknown_fields:" + ",".join(unknown))
+    for key in INTENT_LLM_SCHEMA["required"]:
+        if key not in data:
+            errors.append(f"missing:{key}")
+    if data.get("mode") not in {"single", "multi", "hybrid"}:
+        errors.append("invalid_mode")
+    if not isinstance(data.get("need_clarify"), bool):
+        errors.append("invalid_need_clarify")
+    nodes = data.get("nodes")
+    edges = data.get("edges")
+    if not isinstance(nodes, list) or not 1 <= len(nodes) <= 4:
+        errors.append("invalid_nodes")
+        nodes = []
+    if not isinstance(edges, list) or len(edges) > 12:
+        errors.append("invalid_edges")
+        edges = []
+    ids: set[str] = set()
+    for index, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            errors.append(f"node_{index}:not_object")
+            continue
+        extra = set(node) - {"id", "primary", "role", "segment_index"}
+        if extra:
+            errors.append(f"node_{index}:unknown_fields")
+        node_id = str(node.get("id") or "")
+        if not node_id or len(node_id) > 64 or node_id in ids:
+            errors.append(f"node_{index}:invalid_id")
+        ids.add(node_id)
+        if node.get("primary") not in PRIMARY_ACTIONS:
+            errors.append(f"node_{index}:invalid_primary")
+        if node.get("role", "executable") not in _ALLOWED_ROLE:
+            errors.append(f"node_{index}:invalid_role")
+        if not isinstance(node.get("segment_index", index), int):
+            errors.append(f"node_{index}:invalid_segment_index")
+    for index, edge in enumerate(edges):
+        if not isinstance(edge, dict):
+            errors.append(f"edge_{index}:not_object")
+            continue
+        if set(edge) - {"src", "dst", "kind"}:
+            errors.append(f"edge_{index}:unknown_fields")
+        src, dst = str(edge.get("src") or ""), str(edge.get("dst") or "")
+        if src not in ids or dst not in ids or src == dst:
+            errors.append(f"edge_{index}:invalid_endpoint")
+        if edge.get("kind") not in _ALLOWED_KIND:
+            errors.append(f"edge_{index}:invalid_kind")
+    candidates = data.get("candidates", [])
+    if not isinstance(candidates, list) or len(candidates) > 5:
+        errors.append("invalid_candidates")
+        candidates = []
+    for index, candidate in enumerate(candidates):
+        if not isinstance(candidate, dict):
+            errors.append(f"candidate_{index}:not_object")
+            continue
+        if set(candidate) - {"label", "confidence", "merge_into", "allow_new"}:
+            errors.append(f"candidate_{index}:unknown_fields")
+        label = str(candidate.get("label") or candidate.get("primary") or "")
+        if not label or len(label) > 64:
+            errors.append(f"candidate_{index}:invalid_label")
+        try:
+            confidence = float(candidate.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            errors.append(f"candidate_{index}:invalid_confidence")
+        else:
+            if not 0.0 <= confidence <= 1.0:
+                errors.append(f"candidate_{index}:invalid_confidence")
+        merge_into = candidate.get("merge_into")
+        if merge_into not in (None, "", "null") and merge_into not in PRIMARY_ACTIONS:
+            errors.append(f"candidate_{index}:invalid_merge_target")
+    return errors
 
 
 def _build_from_llm(

@@ -492,6 +492,7 @@ class Orchestrator(RepairPipelineMixin):
                 channel="repair",
                 light_client=getattr(self, "_light_client", None),
                 emit=_emit,
+                cancel_token=getattr(repair_ctx, "cancel_token", None),
             ),
         )
         self._last_intent_result = result

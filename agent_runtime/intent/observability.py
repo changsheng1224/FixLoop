@@ -101,6 +101,37 @@ def record_intent_route(
         )
 
     signals = result.raw_signals or {}
+    reg.counter_inc(
+        "fixloop_intent_router_version_total",
+        labels={
+            "router_version": str(signals.get("router_version") or "legacy")[:32],
+            "taxonomy_version": str(signals.get("taxonomy_version") or "legacy")[:32],
+        },
+    )
+    for stage, value in (signals.get("stage_latency_ms") or {}).items():
+        reg.gauge_set(
+            "fixloop_intent_stage_latency_ms",
+            float(value or 0.0),
+            labels={"channel": channel, "stage": str(stage)[:24]},
+        )
+
+    risk_decision = signals.get("risk_decision") or {}
+    if risk_decision:
+        reg.counter_inc(
+            "fixloop_intent_risk_decision_total",
+            labels={
+                "channel": channel,
+                "risk": str(risk_decision.get("risk") or "unknown")[:16],
+                "decision": "execute" if risk_decision.get("allow_execute") else "clarify",
+            },
+        )
+    llm_runtime = signals.get("llm_runtime") or {}
+    fallback_reason = str(llm_runtime.get("fallback_reason") or "")
+    if fallback_reason:
+        reg.counter_inc(
+            "fixloop_intent_llm_degraded_total",
+            labels={"channel": channel, "reason": fallback_reason[:32]},
+        )
     if primary == "clarify" or action == "clarify":
         from agent_runtime.intent.clarify import normalize_clarify_reason
 
@@ -178,3 +209,24 @@ def record_intent_route(
                 "fixloop_intent_candidate_source_total",
                 labels={"channel": channel, "source": str(ev["source"])[:32]},
             )
+
+    from agent_runtime.intent.slo import evaluate_route_slo
+
+    for violation in evaluate_route_slo(
+        latency_ms=latency_ms,
+        risk_decision=risk_decision,
+        llm_runtime=llm_runtime,
+        embed_skipped=embed_skipped,
+        action=result.action,
+    ):
+        reg.counter_inc(
+            "fixloop_intent_slo_violation_total",
+            labels={"channel": channel, "kind": violation},
+        )
+
+
+def record_feedback_write(*, status: str, strength: str = "weak") -> None:
+    get_registry().counter_inc(
+        "fixloop_intent_feedback_write_total",
+        labels={"status": str(status)[:16], "strength": str(strength)[:16]},
+    )
