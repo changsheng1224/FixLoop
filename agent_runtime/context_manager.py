@@ -535,6 +535,7 @@ class ContextManager:
             task_id=str(identity.get("task_id", "") or ""),
             limit=2,
         )
+        recalled_ids = [str(item.get("memory_id", "")) for item in governed_results]
         if governed_results:
             governed_items = [
                 ContextItem(
@@ -564,6 +565,7 @@ class ContextManager:
             parts.append("\n".join(lines))
         results = retrieval_candidates_semantic(mem, query, limit=2)
         results = filter_relevant_results(results, self.tier_policy)
+        recalled_ids.extend(str(item.get("memory_id", "")) for item in results)
         if results:
             lines = ["历史经验候选（必须由当前代码证据确认，不是当前事实）:"]
             for r in results:
@@ -579,13 +581,22 @@ class ContextManager:
             store = DurableMemoryStore(root=self.agent._cwd)
             durable_results = store.retrieval(query, limit=2)
             if durable_results:
+                recalled_ids.extend(
+                    str(item.get("memory_id", "")) for item in durable_results
+                )
                 lines = ["持久知识候选（仅项目/用户事实；冲突时不得采用）:"]
                 for r in durable_results:
-                    lines.append(f"  - {r[:150]}")
+                    lines.append(f"  - {str(r.get('text', ''))[:150]}")
                 parts.append("\n".join(lines))
         except Exception:
             pass
 
+        # Keep one stable recall projection for feedback attribution.  Durable
+        # markdown entries have no governed ID yet, so only governed IDs are
+        # eligible for automatic usage feedback.
+        recalled_ids = list(dict.fromkeys(item for item in recalled_ids if item))
+        mem["recalled_memory_ids"] = recalled_ids
+        governed.record_recall(recalled_ids, task_id=str(identity.get("task_id", "") or ""))
         return "\n".join(parts) if parts else ""
 
     def _get_compressed_history(self, metadata: dict | None = None) -> str:

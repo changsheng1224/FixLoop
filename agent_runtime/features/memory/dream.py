@@ -55,22 +55,41 @@ class MemoryDreamer:
             ttl_days: 笔记过期天数。0=不禁用过期，负值=跳过过期。
             max_durable: 每个 topic 文件最大条目数。0=不禁用。
         """
+        run_state = self._state.setdefault("memory_dream", {})
+        if run_state.get("status") == "running":
+            return {"skipped": 1, "skip_reason": "already_running"}
+        run_state.update({"status": "running", "started_at": time.time()})
         notes = self._state.get("episodic_notes", [])
         self.stats["total_before"] = len(notes)
-
-        self._deduplicate()
-        if ttl_days >= 0:
-            self._expire(ttl_days)
-        self._trim()
-        self._suggest_promotions(hit_min=PROMOTE_SUGGEST_HIT_MIN)
-        governance_stats = self.governance.run()
-        self.stats.update(governance_stats)
-        if max_durable > 0:
-            self._gc_durable(max_durable)
-        self._rebuild_routing_table()
-
-        self.stats["total_after"] = len(self._state.get("episodic_notes", []))
-        return dict(self.stats)
+        try:
+            self._deduplicate()
+            if ttl_days >= 0:
+                self._expire(ttl_days)
+            self._trim()
+            self._suggest_promotions(hit_min=PROMOTE_SUGGEST_HIT_MIN)
+            governance_stats = self.governance.run()
+            self.stats.update(governance_stats)
+            if max_durable > 0:
+                self._gc_durable(max_durable)
+            self._rebuild_routing_table()
+            self.stats["total_after"] = len(self._state.get("episodic_notes", []))
+            run_state.update(
+                {
+                    "status": "succeeded",
+                    "finished_at": time.time(),
+                    "stats": dict(self.stats),
+                }
+            )
+            return dict(self.stats)
+        except Exception as exc:
+            run_state.update(
+                {
+                    "status": "failed",
+                    "finished_at": time.time(),
+                    "error": str(exc)[:300],
+                }
+            )
+            raise
 
     def _deduplicate(self) -> int:
         """移除重复笔记（相同 text 只保留最新的，按 note_index）。"""
@@ -283,6 +302,11 @@ def dream_summary_to_trace(stats: dict, dreamer: MemoryDreamer | None = None) ->
         "demoted": stats.get("demoted", 0),
         "stale_marked": stats.get("stale_marked", 0),
         "conflicts_detected": stats.get("conflicts_detected", 0),
+        "conflicts_resolved": stats.get("conflicts_resolved", 0),
+        "conflicts_unresolved": stats.get("conflicts_unresolved", 0),
+        "policy_shadowed": stats.get("policy_shadowed", 0),
+        "probe_attempts": stats.get("probe_attempts", 0),
+        "revalidation_queued": stats.get("revalidation_queued", 0),
         "rejected": stats.get("rejected", 0),
         "recall_hits": stats.get("recall_hits", 0),
     }

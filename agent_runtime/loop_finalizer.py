@@ -22,6 +22,7 @@ def finalize_agent_run(loop, ts) -> None:
         report_latency = build_report_latency_fields(loop._call_timings)
         agent._last_run_node_timings = dict(ts.node_timings)
         agent._last_call_timings = list(loop._call_timings)
+        _feedback_recalled_memories(agent, ts)
         if report_token.get("prompt_budget") is None:
             report_token["prompt_budget"] = getattr(agent.config, "prompt_budget", 0)
         context_summary = loop._build_context_summary()
@@ -72,6 +73,10 @@ def finalize_agent_run(loop, ts) -> None:
             "quota_usage": (agent.quota.quota_summary() if getattr(agent, "quota", None) else {}),
             "plan_todos": list(loop._plan_todos),
             "memory_health": loop._build_memory_health(),
+            "memory_feedback": dict(agent.session.get("memory_feedback", {}) or {}),
+            "memory_usage_events": len(
+                agent.session.get("memory", {}).get("memory_usage_events", [])
+            ),
             **report_token,
             **report_latency,
             **ts.rejection_report_fields(),
@@ -151,3 +156,53 @@ def _promote_memory_candidates(agent, ts) -> None:
         agent.session.pop("_memory_candidates", None)
     except Exception:
         pass
+
+
+def _feedback_recalled_memories(agent, ts) -> None:
+    """Feed governed memories back using conservative run attribution.
+
+    A verification/environment failure is inconclusive: it must not punish
+    every recalled memory.  A successful repair supports recalled memories
+    only when the run reached a successful terminal state.
+    """
+    try:
+        from agent_runtime.features.memory.governance import MemoryGovernanceService
+
+        memory_state = agent.session.get("memory") or {}
+        identity = memory_state.get("memory_identity") or {}
+        ids = list(dict.fromkeys(memory_state.get("recalled_memory_ids") or []))
+        if not ids:
+            return
+        governance = MemoryGovernanceService(
+            memory_state,
+            repo_root=agent._cwd,
+            user_id=str(identity.get("user_id", "") or ""),
+            task_id=str(identity.get("task_id", "") or ""),
+        )
+        status = str(getattr(ts, "status", "") or "").lower()
+        succeeded = status in {"success", "completed", "fixed", "passed"}
+        refs = []
+        evidence = memory_state.get("working", {}).get("evidence_ledger", [])
+        refs.extend(str(item.get("id", "")) for item in evidence if item.get("id"))
+        refs.extend(str(item) for item in memory_state.get("recalled_observation_ids", []) if item)
+        for memory_id in ids:
+            raw = governance.registry.get(str(memory_id), {})
+            outcome = (
+                "supported"
+                if succeeded and raw.get("evidence_refs")
+                else "inconclusive"
+            )
+            governance.record_usage(
+                str(memory_id),
+                outcome=outcome,
+                evidence_refs=list(dict.fromkeys(refs)),
+                task_id=str(identity.get("task_id", "") or ""),
+            )
+        memory_state["memory_feedback"] = {
+            "run_id": str(getattr(ts, "run_id", "") or ""),
+            "outcome": outcome,
+            "memory_ids": ids,
+        }
+    except Exception:
+        # Memory feedback must never make run finalization fail.
+        return

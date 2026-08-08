@@ -342,7 +342,14 @@ class DurableMemoryStore:
                 entries = self._read_topic(topic)
             for entry in entries:
                 if query_lower in entry.lower():
-                    results.append({"topic": topic, "text": entry})
+                    import hashlib
+
+                    memory_id = "DUR-" + hashlib.sha256(
+                        f"{topic}\n{entry}".encode()
+                    ).hexdigest()[:12]
+                    results.append(
+                        {"memory_id": memory_id, "topic": topic, "text": entry}
+                    )
                     if len(results) >= limit:
                         break
         return results

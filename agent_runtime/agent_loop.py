@@ -162,6 +162,10 @@ class AgentLoop:
                         "demoted",
                         "stale_marked",
                         "conflicts_detected",
+                        "conflicts_resolved",
+                        "conflicts_unresolved",
+                        "policy_shadowed",
+                        "probe_attempts",
                         "rejected",
                         "recall_hits",
                     )

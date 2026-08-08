@@ -26,10 +26,16 @@ from agent_runtime.features.memory.episodic import (  # noqa: F401
     retrieval_candidates,
 )
 from agent_runtime.features.memory.governance import (  # noqa: F401
+    ConflictRecord,
+    ConflictStatus,
+    ConflictType,
     GovernedMemory,
+    MemoryAuthority,
     MemoryGovernanceService,
     MemoryScope,
     MemoryStatus,
+    MemoryUsageEvent,
+    PolicyRecord,
     can_promote,
     normalize_candidate,
     repository_fingerprint,
@@ -38,6 +44,7 @@ from agent_runtime.features.memory.semantic import (  # noqa: F401
     SemanticMemory,
     retrieval_candidates_semantic,
 )
+from agent_runtime.features.memory.store import CanonicalMemoryStore  # noqa: F401
 from agent_runtime.features.memory.working import (  # noqa: F401
     expand_evidence,
     invalidate_file_summary,
