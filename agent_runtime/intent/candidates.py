@@ -21,7 +21,12 @@ from pathlib import Path
 from typing import Any
 
 from agent_runtime.intent.clarify import ClarifyCandidate, candidates_from_hits
-from agent_runtime.intent.models import PRIMARY_ACTIONS, IntentResult
+from agent_runtime.intent.models import (
+    INTENT_ROUTER_VERSION,
+    INTENT_TAXONOMY_VERSION,
+    PRIMARY_ACTIONS,
+    IntentResult,
+)
 from agent_runtime.intent.rules import RuleHit
 
 DEFAULT_REL_PATH = Path(".agent") / "intent_candidates.jsonl"
@@ -61,6 +66,10 @@ class CandidateEvent:
     merge_into: str | None = None
     note: str = ""
     severity: str = "low"  # low | medium | high (mis-exec risk)
+    label_strength: str = "weak"  # weak | confirmed
+    confirmed_label: str | None = None
+    router_version: str = INTENT_ROUTER_VERSION
+    taxonomy_version: str = INTENT_TAXONOMY_VERSION
 
     def __post_init__(self) -> None:
         if not self.ts:
@@ -86,6 +95,10 @@ class CandidateEvent:
             merge_into=d.get("merge_into"),
             note=str(d.get("note") or ""),
             severity=str(d.get("severity") or "low"),
+            label_strength=str(d.get("label_strength") or "weak"),
+            confirmed_label=d.get("confirmed_label"),
+            router_version=str(d.get("router_version") or "legacy"),
+            taxonomy_version=str(d.get("taxonomy_version") or "legacy"),
         )
 
 
@@ -101,6 +114,8 @@ class CandidateIntentCard:
     closest_existing: str | None = None
     severity_max: str = "low"
     notes: list[str] = field(default_factory=list)
+    weak_count: int = 0
+    confirmed_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -120,10 +135,7 @@ def _severity_for(result: IntentResult, *, source: str) -> str:
 
 def _runners_from_hits(hits: list[tuple[Any, RuleHit]], *, limit: int = 5) -> list[RunnerUp]:
     cands = candidates_from_hits(hits, limit=limit)
-    return [
-        RunnerUp(primary=c.primary, confidence=c.confidence, reason=c.reason)
-        for c in cands
-    ]
+    return [RunnerUp(primary=c.primary, confidence=c.confidence, reason=c.reason) for c in cands]
 
 
 def _runners_from_clarify(result: IntentResult) -> list[RunnerUp]:
@@ -220,6 +232,8 @@ def collect_user_feedback(
         "cancel": "user_cancel",
         "rephrase": "user_rephrase",
         "clarify_choice": "clarify_choice",
+        "action_switch": "action_switch",
+        "ground_truth": "ground_truth",
     }.get(kind, f"user_{kind}")
     runners: list[RunnerUp] = []
     proposed = None
@@ -238,6 +252,16 @@ def collect_user_feedback(
         proposed_label=proposed,
         severity="high" if kind == "cancel" else "medium",
         note=note,
+        label_strength=(
+            "confirmed"
+            if chosen and kind in {"clarify_choice", "action_switch", "ground_truth"}
+            else "weak"
+        ),
+        confirmed_label=(
+            chosen
+            if chosen and kind in {"clarify_choice", "action_switch", "ground_truth"}
+            else None
+        ),
     )
 
 
@@ -309,10 +333,19 @@ class CandidateStore:
         events = event if isinstance(event, list) else [event]
         if not events:
             return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as f:
+        from agent_runtime.intent.observability import record_feedback_write
+
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a", encoding="utf-8") as f:
+                for ev in events:
+                    f.write(json.dumps(ev.to_dict(), ensure_ascii=False, default=str) + "\n")
+        except Exception:
             for ev in events:
-                f.write(json.dumps(ev.to_dict(), ensure_ascii=False, default=str) + "\n")
+                record_feedback_write(status="error", strength=ev.label_strength)
+            raise
+        for ev in events:
+            record_feedback_write(status="success", strength=ev.label_strength)
 
     def load(self) -> list[CandidateEvent]:
         if not self.path.is_file():
@@ -337,6 +370,8 @@ _SEV_RANK = {"low": 0, "medium": 1, "high": 2}
 
 
 def _card_key(ev: CandidateEvent) -> str:
+    if ev.confirmed_label:
+        return f"confirmed:{ev.confirmed_label}"
     if ev.proposed_label:
         return ev.proposed_label
     if ev.merge_into:
@@ -382,6 +417,8 @@ def aggregate_cards(
                 closest = ev.runners_up[0].primary
             if _SEV_RANK.get(ev.severity, 0) > _SEV_RANK.get(sev, 0):
                 sev = ev.severity
+        weak_count = sum(1 for ev in group if ev.label_strength != "confirmed")
+        confirmed_count = sum(1 for ev in group if ev.label_strength == "confirmed")
         label_hint = key
         if key.startswith("runner:"):
             label_hint = key.split(":", 1)[1]
@@ -389,6 +426,8 @@ def aggregate_cards(
             label_hint = key.split(":", 1)[1]
         elif key.startswith(GAP_PREFIX):
             label_hint = key
+        elif key.startswith("confirmed:"):
+            label_hint = key.split(":", 1)[1]
         cards.append(
             CandidateIntentCard(
                 key=key,
@@ -399,6 +438,8 @@ def aggregate_cards(
                 closest_existing=closest if closest in PRIMARY_ACTIONS else closest,
                 severity_max=sev,
                 notes=notes,
+                weak_count=weak_count,
+                confirmed_count=confirmed_count,
             )
         )
 
@@ -446,9 +487,7 @@ def events_from_llm_candidates(
                 runners_up=[
                     RunnerUp(
                         primary=(
-                            label
-                            if label in PRIMARY_ACTIONS
-                            else (str(merge) if merge else label)
+                            label if label in PRIMARY_ACTIONS else (str(merge) if merge else label)
                         ),
                         confidence=float(d.get("confidence") or 0.0),
                         reason="llm",
@@ -530,9 +569,7 @@ def discover_from_cases(
     all_events: list[CandidateEvent] = []
     for case in cases:
         proj = (
-            DialogueProjection.from_dict(case.dialogue)
-            if case.dialogue
-            else DialogueProjection()
+            DialogueProjection.from_dict(case.dialogue) if case.dialogue else DialogueProjection()
         )
         built: list[dict[str, Any]] = []
         for h in case.history:

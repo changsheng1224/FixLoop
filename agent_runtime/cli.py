@@ -406,6 +406,9 @@ def _repl_dispatch_intent(agent: Agent, user_input: str, args) -> bool:
             history=hist_for_resolve,
             dialogue=proj,
             candidate_root=str(agent._cwd),
+            cancel_token=getattr(agent, "cancel_token", None),
+            deadline=getattr(agent, "_repair_deadline", None),
+            budget=getattr(agent, "_budget_manager", None),
         ),
     )
 

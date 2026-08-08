@@ -10,7 +10,11 @@ from agent_runtime.intent.confidence import apply_breakdown_to_result, fuse_conf
 from agent_runtime.intent.embed_index import EmbedIndex, EmbedMatch
 from agent_runtime.intent.graph import merge_constraints, recompute_root_ids, validate_graph
 from agent_runtime.intent.llm_fallback import maybe_refine, maybe_refine_graph
+from agent_runtime.intent.llm_runtime import IntentLlmPolicy, IntentLlmRuntime
 from agent_runtime.intent.models import (
+    INTENT_ROUTER_VERSION,
+    INTENT_SCHEMA_VERSION,
+    INTENT_TAXONOMY_VERSION,
     PRIMARY_ACTIONS,
     IntentGraph,
     IntentNode,
@@ -20,6 +24,7 @@ from agent_runtime.intent.models import (
 )
 from agent_runtime.intent.observability import record_intent_route
 from agent_runtime.intent.planner import plan
+from agent_runtime.intent.policy import arbitrate_conflict, attach_risk_decision
 from agent_runtime.intent.rules import RuleHit, classify_rules, has_conflicting_leads
 from agent_runtime.intent.segmenter import segment
 
@@ -39,10 +44,20 @@ def _fuse(hit: RuleHit, emb: EmbedMatch | None) -> tuple[RuleHit, dict[str, floa
     if emb is None:
         return hit, breakdown
 
+    arbitration = arbitrate_conflict(
+        rule_primary=hit.primary,
+        rule_confidence=hit.confidence,
+        embed_primary=emb.primary,
+        embed_score=emb.score,
+        embed_margin=emb.margin,
+    )
+    breakdown["arbitrated"] = 1.0 if emb.primary != hit.primary else 0.0
+
     if hit.confidence >= 0.9:
         if emb.primary != hit.primary:
             slots = dict(hit.slots)
             slots["_embed_conflict"] = {"embed": emb.primary, "score": emb.score}
+            slots["_conflict_decision"] = arbitration.to_dict()
             return (
                 RuleHit(
                     hit.primary,
@@ -67,10 +82,25 @@ def _fuse(hit: RuleHit, emb: EmbedMatch | None) -> tuple[RuleHit, dict[str, floa
         )
 
     if emb.score >= 0.55 and emb.margin >= 0.08 and emb.primary != hit.primary:
+        if arbitration.requires_clarify:
+            slots = dict(hit.slots)
+            slots["_embed_conflict"] = {"embed": emb.primary, "score": emb.score}
+            slots["_conflict_decision"] = arbitration.to_dict()
+            return (
+                RuleHit(
+                    hit.primary,
+                    hit.action,
+                    min(fused_conf, hit.confidence),
+                    slots=slots,
+                    reason=hit.reason + "+ambiguous_conflict",
+                    parser=hit.parser,
+                ),
+                breakdown,
+            )
         return (
             RuleHit(
-                emb.primary,
-                PRIMARY_ACTIONS.get(emb.primary, emb.primary),
+                arbitration.winner,
+                PRIMARY_ACTIONS.get(arbitration.winner, arbitration.winner),
                 fused_conf,
                 slots=dict(hit.slots),
                 reason="embed",
@@ -92,6 +122,7 @@ def _fuse(hit: RuleHit, emb: EmbedMatch | None) -> tuple[RuleHit, dict[str, floa
         )
     slots = dict(hit.slots)
     slots["_embed_conflict"] = {"embed": emb.primary, "score": emb.score}
+    slots["_conflict_decision"] = arbitration.to_dict()
     return (
         RuleHit(
             hit.primary,
@@ -112,8 +143,10 @@ def _result_from_graph(
     execs = [n for n in graph.nodes if n.role == "executable"]
     # clarify-only
     if not execs:
-        node = graph.nodes[0] if graph.nodes else IntentNode(
-            id="n0", primary="clarify", action="clarify", role="clarify"
+        node = (
+            graph.nodes[0]
+            if graph.nodes
+            else IntentNode(id="n0", primary="clarify", action="clarify", role="clarify")
         )
         return IntentResult(
             primary=node.primary,
@@ -178,12 +211,16 @@ def _split_strategy(segs: list[Segment], graph: IntentGraph) -> str:
 class IntentRouter:
     def __init__(self, *, embed_index: EmbedIndex | None = None) -> None:
         self.embed_index = embed_index or EmbedIndex(embed_fn=None)
+        from agent_runtime.tool_resilience import ToolResilienceController
+
+        self._llm_resilience = ToolResilienceController()
 
     def route(self, text: str, context: RouteContext | None = None) -> IntentResult:
         ctx = context or RouteContext()
         original = (text or "").strip()
         signals: dict[str, Any] = {}
         t0 = time.perf_counter()
+        stage_timings: dict[str, float] = {}
         embed_skipped = self.embed_index.embed_fn is None and ctx.embed_fn is None
         llm_outcome: str | None = None
         segment_breakdowns: list[dict[str, float]] = []
@@ -199,6 +236,7 @@ class IntentRouter:
             projection=ctx.dialogue,
         )
         raw = resolved.text.strip()
+        stage_timings["dialogue"] = round((time.perf_counter() - t0) * 1000.0, 3)
         anaphora_outcome = resolved.outcome
         if resolved.outcome != "passthrough":
             signals["anaphora"] = {
@@ -218,6 +256,24 @@ class IntentRouter:
                 sig.setdefault("resolved_from", signals.get("resolved_from"))
                 result.raw_signals = sig
             latency_ms = (time.perf_counter() - t0) * 1000.0
+            sig = dict(result.raw_signals or {})
+            sig.setdefault("schema_version", INTENT_SCHEMA_VERSION)
+            sig.setdefault("router_version", INTENT_ROUTER_VERSION)
+            sig.setdefault("taxonomy_version", INTENT_TAXONOMY_VERSION)
+            stage_timings.setdefault(
+                "policy_and_feedback",
+                round(max(0.0, latency_ms - sum(stage_timings.values())), 3),
+            )
+            stage_timings["total"] = round(latency_ms, 3)
+            sig["stage_latency_ms"] = dict(stage_timings)
+            sig["thresholds"] = {
+                "tau_node": ctx.tau_node,
+                "tau_llm": ctx.tau_llm,
+                "tau_clarify": ctx.tau_clarify,
+                "tau_exec": ctx.tau_exec,
+                "risk": dict(ctx.risk_thresholds or {}),
+            }
+            result.raw_signals = sig
             self._emit(ctx, result)
             try:
                 record_intent_route(
@@ -314,6 +370,23 @@ class IntentRouter:
             fused, breakdown = _fuse(rule, emb)
             segment_breakdowns.append(breakdown)
             hits.append((seg, fused))
+        stage_timings["classification"] = round(
+            max(
+                0.0,
+                (time.perf_counter() - t0) * 1000.0 - stage_timings.get("dialogue", 0.0),
+            ),
+            3,
+        )
+
+        signal_conflicts = [
+            hit.slots.get("_conflict_decision")
+            for _, hit in hits
+            if isinstance(hit.slots.get("_conflict_decision"), dict)
+        ]
+        if signal_conflicts:
+            signals["signal_conflicts"] = signal_conflicts
+            if any(item.get("requires_clarify") for item in signal_conflicts):
+                force_conflict = True
 
         graph_before = plan(
             hits,
@@ -321,17 +394,34 @@ class IntentRouter:
             max_executable_nodes=ctx.max_executable_nodes,
             tau_node=ctx.tau_node,
         )
+        stage_timings["planner"] = round(
+            max(0.0, (time.perf_counter() - t0) * 1000.0 - sum(stage_timings.values())),
+            3,
+        )
 
         # weak graph → LLM once (graph + Top-k candidates side-channel)
         llm_candidates_payload: list[dict] = []
         llm_need_clarify: bool | None = None
         if ctx.light_client is not None:
+            llm_runtime = IntentLlmRuntime(
+                IntentLlmPolicy(
+                    timeout_s=ctx.llm_timeout_s,
+                    max_retries=ctx.llm_max_retries,
+                    rate_limit_per_minute=ctx.llm_rate_limit_per_minute,
+                    circuit_breaker_threshold=ctx.llm_circuit_breaker_threshold,
+                ),
+                resilience=self._llm_resilience,
+            )
             refine = maybe_refine(
                 graph_before,
                 raw,
                 ctx.light_client,
                 tau_llm=ctx.tau_llm,
                 segments=[s.text for s in segs],
+                runtime=llm_runtime,
+                cancel_token=ctx.cancel_token,
+                deadline=ctx.deadline,
+                budget=ctx.budget,
             )
             graph = refine.graph
             llm_candidates_payload = [c.to_dict() for c in refine.candidates]
@@ -339,7 +429,15 @@ class IntentRouter:
             if refine.applied and any(n.parser == "llm" for n in graph.nodes):
                 llm_outcome = "applied"
             else:
-                llm_outcome = "skipped"
+                llm_outcome = refine.fallback_reason or "skipped"
+            signals["llm_runtime"] = {
+                "outcome": llm_outcome,
+                "attempts": refine.attempts,
+                "latency_ms": refine.latency_ms,
+                "fallback_reason": refine.fallback_reason,
+                "schema_errors": list(refine.schema_errors),
+            }
+            stage_timings["llm"] = refine.latency_ms
         else:
             graph = maybe_refine_graph(
                 graph_before,
@@ -375,6 +473,9 @@ class IntentRouter:
             segment_breakdowns=segment_breakdowns,
             split_strategy=strategy,
         )
+        risk_decision = attach_risk_decision(result, ctx)
+        signals["risk_decision"] = risk_decision
+        result.raw_signals["risk_decision"] = risk_decision
 
         # Overlay stack-first slots from the *full* user text so fenced paste
         # noise in partial segments cannot pollute suspect_files.
@@ -497,6 +598,14 @@ class IntentRouter:
             "anaphora": (result.raw_signals or {}).get("anaphora"),
             "resolved_from": (result.raw_signals or {}).get("resolved_from"),
             "llm_candidates": (result.raw_signals or {}).get("llm_candidates"),
+            "schema_version": (result.raw_signals or {}).get("schema_version"),
+            "router_version": (result.raw_signals or {}).get("router_version"),
+            "taxonomy_version": (result.raw_signals or {}).get("taxonomy_version"),
+            "stage_latency_ms": (result.raw_signals or {}).get("stage_latency_ms", {}),
+            "thresholds": (result.raw_signals or {}).get("thresholds", {}),
+            "risk_decision": (result.raw_signals or {}).get("risk_decision", {}),
+            "signal_conflicts": (result.raw_signals or {}).get("signal_conflicts", []),
+            "llm_runtime": (result.raw_signals or {}).get("llm_runtime", {}),
             "nodes": [
                 {
                     "id": n.id,
@@ -506,9 +615,7 @@ class IntentRouter:
                 }
                 for n in g.nodes
             ],
-            "edges": [
-                {"src": e.src, "dst": e.dst, "kind": e.kind} for e in g.edges
-            ],
+            "edges": [{"src": e.src, "dst": e.dst, "kind": e.kind} for e in g.edges],
         }
         try:
             ctx.emit("intent_routed", payload)

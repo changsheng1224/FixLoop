@@ -96,6 +96,7 @@ def load_eval_cases(path: Path | None = None) -> list[IntentEvalCase]:
         "eval_cases_enterprise.yaml",
         "eval_cases_realistic_users.yaml",
         "eval_cases_heldout_gaps.yaml",
+        "eval_cases_ood_hardening.yaml",
     )
     if path is None:
         for name in companion_names:
@@ -121,9 +122,7 @@ def load_eval_cases(path: Path | None = None) -> list[IntentEvalCase]:
                     tags=list(item.get("tags") or []),
                     history=[
                         h
-                        for h in (
-                            _normalize_history_item(x) for x in (item.get("history") or [])
-                        )
+                        for h in (_normalize_history_item(x) for x in (item.get("history") or []))
                         if h
                     ],
                     dialogue=dict(item.get("dialogue") or {}),
@@ -477,9 +476,7 @@ def compute_intent_metrics(rows: list[IntentEvalRow]) -> dict[str, Any]:
     in_distribution_misroute_rate = _safe_div(
         sum(1 for r in in_dist if not r.primary_ok), len(in_dist)
     )
-    heldout_gap_misroute_rate = _safe_div(
-        sum(1 for r in heldout if not r.primary_ok), len(heldout)
-    )
+    heldout_gap_misroute_rate = _safe_div(sum(1 for r in heldout if not r.primary_ok), len(heldout))
 
     summary = {
         "total": total,
@@ -512,18 +509,10 @@ def compute_intent_metrics(rows: list[IntentEvalRow]) -> dict[str, Any]:
         "f1_macro": avg(f1s),
         "f1_micro": micro_f1,
         "precision_macro": avg(
-            [
-                per_class[lab]["precision"]
-                for lab in labels
-                if per_class[lab]["support"] > 0
-            ]
+            [per_class[lab]["precision"] for lab in labels if per_class[lab]["support"] > 0]
         ),
         "recall_macro": avg(
-            [
-                per_class[lab]["recall"]
-                for lab in labels
-                if per_class[lab]["support"] > 0
-            ]
+            [per_class[lab]["recall"] for lab in labels if per_class[lab]["support"] > 0]
         ),
         "false_split_rate": _safe_div(sum(1 for r in rows if r.false_split), total),
         "false_merge_rate": _safe_div(sum(1 for r in rows if r.false_merge), total),
@@ -559,6 +548,9 @@ def compute_intent_metrics(rows: list[IntentEvalRow]) -> dict[str, Any]:
             "unweighted misroute_rate mixes regression + held-out stress"
         ),
     }
+    from agent_runtime.intent.slo import evaluate_eval_slo
+
+    summary["slo"] = evaluate_eval_slo(summary)
 
     return {
         "summary": summary,

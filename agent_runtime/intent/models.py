@@ -27,6 +27,10 @@ PRIMARY_ACTIONS: dict[str, str] = {
     "plan": "make_plan",
 }
 
+INTENT_SCHEMA_VERSION = "2.0"
+INTENT_ROUTER_VERSION = "2.0"
+INTENT_TAXONOMY_VERSION = "2026-08"
+
 EdgeKind = Literal["sequence", "depends_on", "constrains"]
 NodeRole = Literal["executable", "constraint", "clarify"]
 GraphMode = Literal["single", "multi", "hybrid"]
@@ -144,3 +148,13 @@ class RouteContext:
     dialogue: Any | None = None  # DialogueProjection | None
     # Candidate discovery: if set, append events under {candidate_root}/.agent/
     candidate_root: str | None = None
+    # Production fallback controls. Objects are intentionally protocol-like
+    # so the router can share the Agent runtime's cancellation/deadline/budget.
+    cancel_token: Any | None = None
+    deadline: Any | None = None
+    budget: Any | None = None
+    llm_timeout_s: float = 8.0
+    llm_max_retries: int = 1
+    llm_rate_limit_per_minute: int = 30
+    llm_circuit_breaker_threshold: int = 3
+    risk_thresholds: dict[str, float] = field(default_factory=dict)

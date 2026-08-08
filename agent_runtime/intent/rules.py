@@ -8,6 +8,7 @@ from typing import Any
 
 from agent_runtime.features.memory.durable import _has_save_intent
 from agent_runtime.intent.models import PRIMARY_ACTIONS, Channel
+from agent_runtime.intent.policy import analyze_directives
 from agent_runtime.intent.stack_parse import extract_issue_slots, has_stack_signal
 
 ChannelName = Channel
@@ -25,7 +26,7 @@ class RuleHit:
 
 _SLASH = re.compile(r"^\s*/(help|cancel|quit|exit)\b", re.I)
 _HELP_WORDS = re.compile(r"(?i)\b(help|帮助|怎么用|有哪些命令)\b")
-_CANCEL_WORDS = re.compile(r"(?i)\b(cancel|取消|停下|停止)\b")
+_CANCEL_WORDS = re.compile(r"(?i)(?:\bcancel\b|取消|停下|停止)")
 _REPAIR_WORDS = re.compile(
     r"(?i)(帮我修|帮忙修|修一下|修这个|修好|请修复|帮忙修复|"
     r"修复(?!计划)|fix\s*(this|the|it|bug|error|crash)|please\s+fix)"
@@ -38,7 +39,7 @@ _TEST_WORDS = re.compile(
     r"add\s+(unit\s+)?tests?|run\s+(the\s+)?tests?|coverage|提高.*覆盖率)"
 )
 _REFACTOR_WORDS = re.compile(
-    r"(?i)(重构|抽成|抽取(成|为)?|rename\b|refactor\b|整理一下.*代码|"
+    r"(?i)(重构|抽成|抽取(成|为)?|rename\b|refactor\b|refacor\b|refacter\b|整理一下.*代码|"
     r"不改变行为)"
 )
 _IMPLEMENT_WORDS = re.compile(
@@ -72,9 +73,7 @@ _CONSTRAINT_HINT = re.compile(
 )
 
 # Same-sentence multi-intent / conflict detection.
-_REMEMBER_LEAD = re.compile(
-    r"(?i)(请记住|记住|remember(?:\s+to)?|don't\s+forget|永记|备忘)"
-)
+_REMEMBER_LEAD = re.compile(r"(?i)(请记住|记住|remember(?:\s+to)?|don't\s+forget|永记|备忘)")
 _SPLIT_JOIN = re.compile(
     r"(?:,|，|；|;|\s*然后\s*|\s*接着\s*|\s*之后\s*|"
     r"\s+and\s+then\s+|\s+then\s+|\s+also\s+|\s*并(?:且)?\s*|\s*同时\s*)"
@@ -255,6 +254,31 @@ def classify_rules(text: str, *, channel: ChannelName = "repl") -> RuleHit | Non
         if cmd in ("help",):
             return _hit("help", 0.99, "slash:help")
         return _hit("cancel", 0.99, f"slash:{cmd}")
+
+    # Resolve negative scope and quoted/meta instructions before positive
+    # keyword rules. An imperative inside a quote must not become an action.
+    directives = analyze_directives(raw)
+    if channel == "repl" and directives.preferred_primary:
+        if _CANCEL_WORDS.search(raw) and len(raw) < 40:
+            primary = "cancel"
+        elif _SEARCH_WORDS.search(raw):
+            primary = "search"
+        elif _PLAN_WORDS.search(raw):
+            primary = "plan"
+        elif _REVIEW_WORDS.search(raw):
+            primary = "review"
+        else:
+            primary = directives.preferred_primary
+        return RuleHit(
+            primary,
+            PRIMARY_ACTIONS[primary],
+            0.94 if directives.no_write or directives.explain_only else 0.9,
+            slots={
+                "constraints": list(directives.constraints),
+                "directive_analysis": directives.to_dict(),
+            },
+            reason="rule:directive_scope",
+        )
 
     stackish = has_stack_signal(raw)
     if channel == "repair" or (stackish and not _has_save_intent(raw)):

@@ -130,6 +130,12 @@ OBSERVATION_ERROR_CODES = frozenset(
         "concurrent_conflict",
         "execution_error",
         "tool_timeout",
+        "tool_cancelled",
+        "idempotency_conflict",
+        "policy_denied",
+        "stale_precondition",
+        "rate_limited",
+        "circuit_open",
         "validation_error",
         "unknown",
     }
@@ -689,6 +695,37 @@ class ActionRecord:
     uncertain_reason: str = ""
 
 
+ACTION_TRANSITIONS: dict[str, frozenset[str]] = {
+    "planned": frozenset({"dispatched", "cancelled"}),
+    "dispatched": frozenset({"acknowledged", "verified", "uncertain", "failed", "cancelled"}),
+    "acknowledged": frozenset({"verified", "uncertain", "failed"}),
+    "uncertain": frozenset({"reconciled", "retryable", "failed", "verified"}),
+    "reconciled": frozenset({"verified", "failed", "retryable"}),
+    "retryable": frozenset({"dispatched", "failed"}),
+    "verified": frozenset(),
+    "failed": frozenset(),
+    "cancelled": frozenset(),
+}
+
+
+def transition_action(
+    action: dict[str, Any], status: str, *, reason: str = "", receipt: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Apply a monotonic side-effect transition and preserve its audit data."""
+    current = str(action.get("status", "planned"))
+    allowed = ACTION_TRANSITIONS.get(current, frozenset())
+    if status != current and status not in allowed:
+        raise ValueError(f"invalid action transition: {current} -> {status}")
+    updated = dict(action)
+    updated["status"] = status
+    if reason:
+        updated["uncertain_reason"] = reason
+    if receipt:
+        updated["receipt"] = dict(receipt)
+    updated["updated_at"] = time.time()
+    return updated
+
+
 def build_context_manifest(
     state: dict[str, Any], *, workspace_fingerprint: str = ""
 ) -> dict[str, Any]:
@@ -748,6 +785,16 @@ def append_action(state: dict[str, Any], action: ActionRecord) -> dict[str, Any]
     return raw
 
 
+def find_action_by_idempotency(state: dict[str, Any], key: str) -> dict[str, Any] | None:
+    """Return the latest action for an idempotency key, if any."""
+    if not key:
+        return None
+    matches = [
+        item for item in state.get("action_ledger", []) if item.get("idempotency_key") == key
+    ]
+    return dict(matches[-1]) if matches else None
+
+
 def replay_policy(state: dict[str, Any], tool: str, args: dict[str, Any]) -> str:
     """Return reuse/revalidate/never_replay for a matching prior action."""
     raw = json.dumps(args or {}, sort_keys=True, ensure_ascii=True, default=str)
@@ -780,8 +827,14 @@ def action_recovery_decision(
     latest = matches[-1]
     status = str(latest.get("status", "planned"))
     policy = str(latest.get("replay_policy", "revalidate"))
-    if status in {"verified", "acknowledged", "succeeded"}:
+    if status in {"verified", "succeeded"}:
         return {"decision": "reuse", "reason": "already_verified", "action": latest}
+    if status == "acknowledged":
+        return {
+            "decision": "revalidate",
+            "reason": "acknowledged_needs_postcondition",
+            "action": latest,
+        }
     if status in {"dispatched", "uncertain"}:
         return {"decision": "revalidate", "reason": "side_effect_uncertain", "action": latest}
     if policy == "never_replay":

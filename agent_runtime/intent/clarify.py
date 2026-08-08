@@ -11,6 +11,7 @@ from typing import Any
 
 from agent_runtime.intent.graph import clarify_graph, validate_graph
 from agent_runtime.intent.models import IntentNode, IntentResult, RouteContext
+from agent_runtime.intent.policy import required_confidence
 from agent_runtime.intent.rules import RuleHit
 
 # Vague / underspecified repair or deixis without an object.
@@ -20,9 +21,11 @@ _DEIXIS = re.compile(
     r"怎么办|怎么弄|啥意思"
     r")[\s?？!！.。]*$"
 )
-_AMBIGUOUS_MARKERS = re.compile(
-    r"(?i)(这个|那个|它|somehow|随便|不知道|可能是|好像)"
+_AMBIGUOUS_MARKERS = re.compile(r"(?i)(这个|那个|它|somehow|随便|不知道|可能是|好像|咋办|又报错了)")
+_VAGUE_BROKEN = re.compile(
+    r"(?i)^[\w\u4e00-\u9fff]{1,12}(坏了|挂了|不行了|broken|is down)[\s!！.。]*$"
 )
+_VAGUE_ERROR = re.compile(r"(?i)(又报错了|咋办|又挂了|error\s+again)")
 
 # Prometheus / observability reason labels (stable set).
 CLARIFY_REASON_LABELS = frozenset(
@@ -80,13 +83,9 @@ _QUESTIONS = {
         "可以试试：「帮我修这个错误」「解释这段代码」「重构 xxx」「补单测」。"
     ),
     "ambiguous": (
-        "您的问题比较模糊（缺少对象或指代不清）。"
-        "请指明文件/函数/报错栈，或具体想做的动作。"
+        "您的问题比较模糊（缺少对象或指代不清）。请指明文件/函数/报错栈，或具体想做的动作。"
     ),
-    "conflict": (
-        "同一段话里检测到互相冲突的意图。"
-        "请拆成两句，或明确优先做哪一件。"
-    ),
+    "conflict": ("同一段话里检测到互相冲突的意图。请拆成两句，或明确优先做哪一件。"),
     "empty": "请输入具体问题或粘贴报错堆栈。",
     "below_tau_exec": (
         "意图置信度未达到自动执行门槛，我先跟您确认："
@@ -112,7 +111,15 @@ def is_ambiguous_utterance(text: str) -> bool:
         return True
     if _DEIXIS.match(raw):
         return True
+    if _VAGUE_BROKEN.match(raw):
+        return True
     if len(raw) < 8 and _AMBIGUOUS_MARKERS.search(raw):
+        return True
+    if (
+        len(raw) < 24
+        and _VAGUE_ERROR.search(raw)
+        and not re.search(r"(?i)(帮我修|fix|文件|函数|\.py|\.js|\.ts)", raw)
+    ):
         return True
     # "修一下" style without file/stack/error token
     if re.search(r"(?i)^(修一下|fix\s+it|帮我看看)\b", raw) and not re.search(
@@ -206,9 +213,7 @@ def should_clarify(
     if not (text or "").strip():
         return build_clarify_payload("empty", text=text or "", candidates=cands)
 
-    if force_conflict or (
-        breakdown_conflict and result.graph.mode == "single" and len(cands) >= 2
-    ):
+    if force_conflict or (breakdown_conflict and result.graph.mode == "single" and len(cands) >= 2):
         return build_clarify_payload("conflict", text=text, candidates=cands)
 
     if result.primary == "clarify" or result.action == "clarify":
@@ -232,7 +237,8 @@ def should_clarify(
     if conf < ctx.tau_clarify or min_node < ctx.tau_clarify:
         return build_clarify_payload("low_conf", text=text, candidates=cands)
 
-    if conf < ctx.tau_exec or min_node < ctx.tau_exec:
+    exec_threshold = required_confidence(result, ctx)
+    if conf < exec_threshold or min_node < exec_threshold:
         return build_clarify_payload("below_tau_exec", text=text, candidates=cands)
 
     return None
@@ -244,8 +250,10 @@ def apply_clarify(
 ) -> IntentResult:
     """Replace result with clarify graph; attach payload; block execution."""
     g = validate_graph(clarify_graph(payload.reason, confidence=min(result.confidence, 0.4)))
-    node = g.nodes[0] if g.nodes else IntentNode(
-        id="n0", primary="clarify", action="clarify", role="clarify"
+    node = (
+        g.nodes[0]
+        if g.nodes
+        else IntentNode(id="n0", primary="clarify", action="clarify", role="clarify")
     )
     signals = dict(result.raw_signals or {})
     signals["clarify_reason"] = payload.reason

@@ -4,26 +4,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Any
 
 from agent_runtime.json_recovery import repair_structured_output
 from agent_runtime.repair_runtime import CanonicalToolCall, ToolSource
 from agent_runtime.response import CanonicalResponse
-
-
-class ToolErrorCode(StrEnum):
-    INVALID_JSON = "invalid_json"
-    INVALID_ARGUMENTS = "invalid_arguments"
-    UNKNOWN_TOOL = "unknown_tool"
-    PERMISSION_DENIED = "permission_denied"
-    POLICY_DENIED = "policy_denied"
-    DEADLINE_EXCEEDED = "deadline_exceeded"
-    BUDGET_EXCEEDED = "budget_exceeded"
-    TOOL_TIMEOUT = "tool_timeout"
-    TOOL_EXECUTION_FAILED = "tool_execution_failed"
-    PROVIDER_PROTOCOL_ERROR = "provider_protocol_error"
-    MCP_UNAVAILABLE = "mcp_unavailable"
+from agent_runtime.tool_result import ToolErrorCode
 
 
 @dataclass(frozen=True)
@@ -45,7 +31,30 @@ _ERROR_POLICY = {
     ),
     ToolErrorCode.PERMISSION_DENIED.value: (False, 0, "Use an allowed alternative tool."),
     ToolErrorCode.POLICY_DENIED.value: (False, 0, "Satisfy the runtime precondition first."),
+    ToolErrorCode.BUDGET_EXCEEDED.value: (
+        False,
+        0,
+        "Choose an available budget group or reduce scope.",
+    ),
+    ToolErrorCode.DEADLINE_EXCEEDED.value: (
+        False,
+        0,
+        "Reduce scope or resume with a fresh deadline.",
+    ),
     ToolErrorCode.TOOL_TIMEOUT.value: (True, 1, "Retry once with a narrower request."),
+    ToolErrorCode.TOOL_CANCELLED.value: (False, 0, "Cancellation is terminal for this attempt."),
+    ToolErrorCode.IDEMPOTENCY_CONFLICT.value: (
+        False,
+        0,
+        "Reconcile the prior side effect before retrying.",
+    ),
+    ToolErrorCode.STALE_PRECONDITION.value: (False, 0, "Refresh observations before executing."),
+    ToolErrorCode.OUTPUT_TOO_LARGE.value: (True, 1, "Request a narrower or paginated output."),
+    ToolErrorCode.TOOL_EXECUTION_FAILED.value: (
+        True,
+        1,
+        "Retry once if the operation is idempotent.",
+    ),
     ToolErrorCode.MCP_UNAVAILABLE.value: (
         True,
         2,
@@ -93,9 +102,7 @@ def parse_tool_call(
             call = CanonicalToolCall.create(invoke.group(1), args, source=ToolSource.RECOVERED)
             return _call_response(call, expected_tools)
     inner = re.search(r"<tool>([\s\S]*?)</tool>", text, re.I)
-    attribute_tool = re.search(
-        r'<tool\s+name="([^"]+)"([^>]*)>([\s\S]*?)</tool>', text, re.I
-    )
+    attribute_tool = re.search(r'<tool\s+name="([^"]+)"([^>]*)>([\s\S]*?)</tool>', text, re.I)
     if attribute_tool:
         call = CanonicalToolCall.create(
             attribute_tool.group(1),
@@ -159,9 +166,7 @@ def parse_model_response(
     text = str(raw or "").strip()
     final_match = re.search(r"<final>([\s\S]*?)</final>", text, re.I)
     if final_match:
-        return CanonicalResponse.create(
-            "final", "success", {"text": final_match.group(1).strip()}
-        )
+        return CanonicalResponse.create("final", "success", {"text": final_match.group(1).strip()})
 
     response = parse_tool_call(text, expected_tools=expected_tools)
     if response.payload.get("error_code") == "invalid_tool_payload":

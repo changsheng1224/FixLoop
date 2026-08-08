@@ -33,6 +33,13 @@ class ToolRejectCode(StrEnum):
     DEADLINE_EXCEEDED = "deadline_exceeded"
     DUPLICATE_CALL = "duplicate_call"
     OUTPUT_TOO_LARGE = "output_too_large"
+    TOOL_TIMEOUT = "tool_timeout"
+    TOOL_CANCELLED = "tool_cancelled"
+    EXECUTION_FAILED = "tool_execution_failed"
+    UNCERTAIN = "uncertain"
+    RETRY_EXHAUSTED = "retry_exhausted"
+    CIRCUIT_OPEN = "circuit_open"
+    STALE_PRECONDITION = "stale_precondition"
 
 
 @dataclass(frozen=True)
@@ -203,6 +210,10 @@ def observation_from_result(
             if metadata.get("tool_error_code") == "tool_timeout"
             else "execution_error"
         )
+    elif status == "uncertain":
+        status = "uncertain"
+    elif status == "cancelled":
+        status = "cancelled"
     return ToolObservation(
         call_id=call.call_id,
         tool_name=call.name,

@@ -28,6 +28,9 @@ class ToolContext:
     path_resolver: Callable[[str], Path] = field(default=None)
     shell_env_provider: Callable[[], dict] | None = None
     cancel_token: CancellationToken | None = None
+    deadline: object | None = None
+    budget: object | None = None
+    idempotency_key: str = ""
     # Patcher-primary：可选 EditLockState（未读不可写 / allowed_edit）
     edit_lock: object | None = None
 
