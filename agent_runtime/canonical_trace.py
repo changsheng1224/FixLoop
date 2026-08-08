@@ -24,7 +24,13 @@ STATUSES = frozenset({STATUS_OK, STATUS_ERROR, STATUS_CANCELLED, STATUS_UNSET})
 # 文档化事件目录（既有名，不强制改名）
 EVENT_CATALOG: dict[str, tuple[str, ...]] = {
     "model": ("model_request_start", "model_first_token", "model_complete"),
-    "tool": ("tool_executed", "tool_preview", "tool_order_warning", "mcp_call"),
+    "tool": (
+        "tool_executed",
+        "tool_preview",
+        "tool_order_warning",
+        "mcp_call",
+        "observation_stored",
+    ),
     "skill": (
         "skill_discovered",
         "skill_matched",
@@ -188,6 +194,7 @@ def infer_status(event: str, payload: dict[str, Any] | None = None) -> str:
         "run_terminal",
         "latency_degraded",
         "latency_observed",
+        "observation_stored",
         "budget_reserved",
         "budget_committed",
         "budget_released",

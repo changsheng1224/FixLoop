@@ -40,6 +40,7 @@ ALLOWED_LABEL_KEYS: frozenset[str] = frozenset(
         "version",
         "tier",
         "event_category",
+        "tool",
         # Intent Router（既有）
         "channel",
         "mode",

@@ -86,6 +86,7 @@ class CheckpointEnvelope:
     workspace_manifest: dict[str, Any] = field(default_factory=dict)
     action_ledger: list[dict[str, Any]] = field(default_factory=list)
     side_effects: list[dict[str, Any]] = field(default_factory=list)
+    observation_manifest: list[dict[str, Any]] = field(default_factory=list)
     terminal_status: str = "running"
     parent_checkpoint_id: str = ""
     created_at: float = field(default_factory=time.time)
@@ -123,6 +124,7 @@ class CheckpointEnvelope:
             "workspace_manifest",
             "action_ledger",
             "side_effects",
+            "observation_manifest",
             "terminal_status",
             "parent_checkpoint_id",
             "created_at",
@@ -143,6 +145,7 @@ class CheckpointEnvelope:
             workspace_manifest=dict(data.get("workspace_manifest") or {}),
             action_ledger=list(data.get("action_ledger") or []),
             side_effects=list(data.get("side_effects") or []),
+            observation_manifest=list(data.get("observation_manifest") or []),
             terminal_status=str(data.get("terminal_status") or "running"),
             parent_checkpoint_id=str(data.get("parent_checkpoint_id") or ""),
             created_at=float(data.get("created_at", time.time()) or time.time()),

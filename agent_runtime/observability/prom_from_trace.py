@@ -65,6 +65,15 @@ def record_canonical_event(record: dict[str, Any], registry: Any | None = None) 
             ),
         )
 
+        if event == "observation_stored":
+            registry.counter_inc(
+                "fixloop_observation_events_total",
+                labels=low_cardinality_labels(
+                    tool=sanitize_label_value(payload.get("tool", "unknown")),
+                    status=status,
+                ),
+            )
+
         if event == "skill_matched":
             registry.counter_inc(
                 "fixloop_skill_matched_total",

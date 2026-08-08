@@ -40,6 +40,7 @@ _METRIC_HELP: dict[str, str] = {
     "fixloop_budget_exhausted_total": "Budget exhaustion events by resource/action.",
     "fixloop_latency_slo_exceeded_total": "Latency SLO violations by kind.",
     "fixloop_degradation_total": "Adaptive degradation decisions by action.",
+    "fixloop_observation_events_total": "Canonical Observation Store events by tool/status.",
     # Intent Router (online)
     "fixloop_intent_routed_total": (
         "Intent router invocations by channel/mode/primary/action/parser."
@@ -74,6 +75,7 @@ _METRIC_TYPE: dict[str, str] = {
     "fixloop_budget_exhausted_total": "counter",
     "fixloop_latency_slo_exceeded_total": "counter",
     "fixloop_degradation_total": "counter",
+    "fixloop_observation_events_total": "counter",
     "fixloop_intent_routed_total": "counter",
     "fixloop_intent_misroute_proxy_total": "counter",
     "fixloop_intent_clarify_total": "counter",

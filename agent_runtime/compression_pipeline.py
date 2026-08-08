@@ -307,8 +307,12 @@ def assign_tool_ref_ids(history: list[dict]) -> None:
         item["_ref_id"] = ref_id
 
 
-def make_compact_stub(tool_name: str, ref_id: int, original_tokens: int) -> str:
+def make_compact_stub(
+    tool_name: str, ref_id: int, original_tokens: int, observation_id: str = ""
+) -> str:
     name = tool_name or "tool"
+    if observation_id:
+        return f"[observation:{observation_id}] {name} ({original_tokens} tok compacted)"
     return f"[ref:#{ref_id}] {name} ({original_tokens} tok compacted)"
 
 
@@ -500,14 +504,16 @@ def l3_microcompact(
                 continue
             tool_name = str(item.get("tool_name", ""))
             ref_id = int(item.get("_ref_id", idx + 1))
+            observation_id = str(item.get("observation_id", "") or "")
             original_tokens = budget.count(original)
-            ref_key = f"#{ref_id}"
+            ref_key = observation_id or f"#{ref_id}"
             refs[ref_key] = {
                 "tool_name": tool_name,
                 "tokens_saved": original_tokens,
                 "preview": original[:80],
+                "observation_id": observation_id,
             }
-            item["content"] = make_compact_stub(tool_name, ref_id, original_tokens)
+            item["content"] = make_compact_stub(tool_name, ref_id, original_tokens, observation_id)
             item["_compact_ref"] = ref_id
             compacted += 1
             compacted_any = True
