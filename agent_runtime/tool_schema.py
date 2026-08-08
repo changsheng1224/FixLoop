@@ -16,9 +16,7 @@ TOOL_SPEC_PUBLIC_KEYS = frozenset({"schema", "json_schema", "description", "risk
 
 def schema_to_json(schema: dict) -> dict:
     """Convert the legacy compact schema to one provider-neutral JSON schema."""
-    if isinstance(schema, dict) and (
-        schema.get("type") == "object" or "properties" in schema
-    ):
+    if isinstance(schema, dict) and (schema.get("type") == "object" or "properties" in schema):
         result = dict(schema)
         result.setdefault("type", "object")
         result.setdefault("properties", {})
@@ -64,7 +62,11 @@ def validate_tool_arguments(schema: dict, arguments: dict) -> tuple[dict, list[d
         for name in schema.get("required", []) or []:
             if name not in normalized:
                 errors.append(
-                    {"code": "missing_required_argument", "field": name, "expected": properties.get(name, {})}
+                    {
+                        "code": "missing_required_argument",
+                        "field": name,
+                        "expected": properties.get(name, {}),
+                    }
                 )
         if schema.get("additionalProperties") is False:
             errors.extend(
@@ -86,9 +88,7 @@ def validate_tool_arguments(schema: dict, arguments: dict) -> tuple[dict, list[d
         if name not in normalized:
             if sep:
                 continue
-            errors.append(
-                {"code": "missing_required_argument", "field": name, "expected": kind}
-            )
+            errors.append({"code": "missing_required_argument", "field": name, "expected": kind})
             continue
         value = normalized[name]
         expected = {
@@ -136,7 +136,7 @@ def _validate_json_value(value, schema: dict, *, field: str) -> tuple[object, li
     valid = {
         "string": lambda v: isinstance(v, str),
         "integer": lambda v: isinstance(v, int) and not isinstance(v, bool),
-        "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+        "number": lambda v: isinstance(v, int | float) and not isinstance(v, bool),
         "boolean": lambda v: isinstance(v, bool),
         "array": lambda v: isinstance(v, list),
         "object": lambda v: isinstance(v, dict),
@@ -152,7 +152,7 @@ def _validate_json_value(value, schema: dict, *, field: str) -> tuple[object, li
             errors.append({"code": "min_length", "field": field})
         if "maxLength" in schema and len(value) > int(schema["maxLength"]):
             errors.append({"code": "max_length", "field": field})
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
+    if isinstance(value, int | float) and not isinstance(value, bool):
         if "minimum" in schema and value < schema["minimum"]:
             errors.append({"code": "minimum_violation", "field": field})
         if "maximum" in schema and value > schema["maximum"]:

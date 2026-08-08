@@ -194,7 +194,11 @@ class Orchestrator(RepairPipelineMixin):
         self.patcher = patcher
         self.verifier = verifier
         self.use_pytest_verify = use_pytest_verify
-        configured_policy = str(sandbox_policy or os.environ.get("FIXLOOP_SANDBOX_POLICY", "preferred")).strip().lower()
+        configured_policy = (
+            str(sandbox_policy or os.environ.get("FIXLOOP_SANDBOX_POLICY", "preferred"))
+            .strip()
+            .lower()
+        )
         if configured_policy not in {"required", "preferred", "disabled"}:
             configured_policy = "preferred"
         self.sandbox_policy = configured_policy
@@ -358,8 +362,7 @@ class Orchestrator(RepairPipelineMixin):
                     phase=str(state.phase),
                     evidence=bool(state.evidence or state.suspect_locations),
                     read_before_write=bool(
-                        state.node_timings.get("allowed_edit")
-                        or state.suspect_locations
+                        state.node_timings.get("allowed_edit") or state.suspect_locations
                     ),
                 )
 
@@ -367,9 +370,7 @@ class Orchestrator(RepairPipelineMixin):
         """Synchronize policy context and role set at a runtime phase boundary."""
         from src.collaboration_governance import CollaborationGovernance, RoleLifecycle
 
-        transition = state.transition_phase(
-            phase, reason, allow_recovery=phase == "recovery"
-        )
+        transition = state.transition_phase(phase, reason, allow_recovery=phase == "recovery")
         if not transition.valid:
             state.node_timings.setdefault("phase_transition_rejections", []).append(
                 transition.to_dict()
@@ -1024,8 +1025,7 @@ class Orchestrator(RepairPipelineMixin):
         state.node_timings["compact_count"] = result.compact_count
         if result.dropped_chars:
             state.node_timings["compact_dropped_chars"] = (
-                int(state.node_timings.get("compact_dropped_chars") or 0)
-                + result.dropped_chars
+                int(state.node_timings.get("compact_dropped_chars") or 0) + result.dropped_chars
             )
         if result.thrash:
             n = (
@@ -1051,13 +1051,12 @@ class Orchestrator(RepairPipelineMixin):
 
         t_start = time.time()
         compact_enabled = (
-            (os.environ.get("FIXLOOP_PATCHER_COMPACT") or "1").strip().lower()
-            not in (
-                "0",
-                "false",
-                "off",
-                "no",
-            )
+            os.environ.get("FIXLOOP_PATCHER_COMPACT") or "1"
+        ).strip().lower() not in (
+            "0",
+            "false",
+            "off",
+            "no",
         )
         if compact_enabled:
             self._compact_patcher_history(state)
@@ -1087,8 +1086,7 @@ class Orchestrator(RepairPipelineMixin):
             )
             if hasattr(self, "_progress_emitter"):
                 summary = (
-                    f"apply_ok={lock.apply_patch_ok_count} "
-                    f"lint_rej={lock.edit_lint_reject_count}"
+                    f"apply_ok={lock.apply_patch_ok_count} lint_rej={lock.edit_lint_reject_count}"
                 )
                 self._progress_emitter().emit("tool_progress", summary=summary)
                 if hasattr(self, "_emit_repair_span"):
@@ -1135,9 +1133,7 @@ class Orchestrator(RepairPipelineMixin):
 
             parsed = parse_patches_with_recover(answer or "")
             if parsed:
-                recovered = any(
-                    (p.explanation or "") == "loose_diff_recover" for p in parsed
-                )
+                recovered = any((p.explanation or "") == "loose_diff_recover" for p in parsed)
                 if recovered:
                     state.node_timings["patcher_loose_recovered"] = True
                 log.info(
@@ -1211,9 +1207,7 @@ class Orchestrator(RepairPipelineMixin):
                         state.node_timings["unread_write_reject_count"] = (
                             lock.unread_write_reject_count
                         )
-                        state.node_timings["apply_path_reject_count"] = (
-                            lock.apply_path_reject_count
-                        )
+                        state.node_timings["apply_path_reject_count"] = lock.apply_path_reject_count
             patches = kept
         applier = self._patch_applier()
         allowlist = None
@@ -1551,9 +1545,7 @@ class Orchestrator(RepairPipelineMixin):
             apply_verify_feedback_to_state(state, verify_payload)
             structured_block = render_verify_feedback_block(verify_payload)
             if structured_block:
-                sections.append(
-                    _FeedbackSection("结构化反馈", structured_block, 13, 1800)
-                )
+                sections.append(_FeedbackSection("结构化反馈", structured_block, 13, 1800))
 
         sections.append(
             _FeedbackSection(
@@ -1656,18 +1648,15 @@ class Orchestrator(RepairPipelineMixin):
             guide_parts.append(diagnosis.guidance)
         if diagnosis.bucket == VerifyBucket.LOGIC:
             guide_parts.append(
-                "使用 read_file / patch_file 先读失败测试再改实现，"
-                "最后输出 CandidatePatch JSON。"
+                "使用 read_file / patch_file 先读失败测试再改实现，最后输出 CandidatePatch JSON。"
             )
         elif diagnosis.bucket == VerifyBucket.ENV:
             guide_parts.append(
-                "环境未就绪时停止堆叠同类业务补丁；"
-                "若仍重试，只允许修正测试入口或导入路径相关改动。"
+                "环境未就绪时停止堆叠同类业务补丁；若仍重试，只允许修正测试入口或导入路径相关改动。"
             )
         if state is not None and state.retry_count > 0:
             guide_parts.append(
-                f"已尝试 {state.retry_count + 1} 次。"
-                "不要重复上轮相同 diff；只改失败相关文件。"
+                f"已尝试 {state.retry_count + 1} 次。不要重复上轮相同 diff；只改失败相关文件。"
             )
         elif not guide_parts:
             guide_parts.append(
@@ -1703,9 +1692,11 @@ class Orchestrator(RepairPipelineMixin):
             try:
                 from agent_runtime.features.memory import render_evidence_ledger
 
-                memory = self.patcher.session.get("memory", {}) if getattr(
-                    self.patcher, "session", None
-                ) else {}
+                memory = (
+                    self.patcher.session.get("memory", {})
+                    if getattr(self.patcher, "session", None)
+                    else {}
+                )
                 evidence_block = render_evidence_ledger(memory)
             except Exception:
                 evidence_block = ""

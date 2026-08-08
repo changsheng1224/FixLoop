@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 import multiprocessing as mp
 import queue
 import time
+from collections.abc import Callable
 from typing import TypeVar
 
 from agent_runtime.cancellation import BlockingDeadlineError, CancellationToken, run_blocking

@@ -16,8 +16,8 @@
 
 import hashlib
 import os
-from functools import partial
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 from agent_runtime.schema_utils import auto_validate
@@ -27,8 +27,8 @@ from agent_runtime.tool_rejection import (
     build_executor_rejection_metadata,
     build_gate7_pass_metadata,
 )
-from agent_runtime.tool_result import ToolResult, ToolStatus, normalize_tool_result
 from agent_runtime.tool_resilience import ToolResilienceController
+from agent_runtime.tool_result import ToolResult, ToolStatus, normalize_tool_result
 
 
 @dataclass
@@ -210,8 +210,6 @@ class ToolExecutor:
             result.metadata.update(gate7_meta)
         if patch_preview_meta:
             result.metadata["patch_preview"] = patch_preview_meta
-        result_text = result.content
-
         # ---- Gate 9 续: 执行后快照对比 ----
         metadata = self._build_success_metadata(
             name,
@@ -285,7 +283,7 @@ class ToolExecutor:
         """Gate 3：dataclass 参数校验与路径逃逸校验。"""
         from agent_runtime.tool_schema import validate_tool_arguments
 
-        tool_def = ((self.agent.tools or {}).get(name) or {})
+        tool_def = (self.agent.tools or {}).get(name) or {}
         raw_schema = tool_def.get("json_schema") or tool_def.get("schema", {})
         normalized, shape_errors = validate_tool_arguments(raw_schema, args)
         if shape_errors:
@@ -445,7 +443,9 @@ class ToolExecutor:
                 time.sleep(delay)
         return result
 
-    def _run_tool_once(self, name: str, args: dict, tool_spec: dict, token) -> str | ToolExecutionResult:
+    def _run_tool_once(
+        self, name: str, args: dict, tool_spec: dict, token
+    ) -> str | ToolExecutionResult:
         """Gate 9: execute one attempt and normalize exceptions."""
         if hasattr(self.agent.config, "effective_deadline"):
             timeout_s = int(self.agent.config.effective_deadline()["tool_s"] or 0)
@@ -458,8 +458,8 @@ class ToolExecutor:
         deadline = getattr(self.agent, "_repair_deadline", None)
         remaining = deadline.remaining_s() if deadline is not None else None
         if remaining is not None:
-            timeout_s = max(1, int(remaining)) if timeout_s <= 0 else max(
-                1, min(timeout_s, int(remaining))
+            timeout_s = (
+                max(1, int(remaining)) if timeout_s <= 0 else max(1, min(timeout_s, int(remaining)))
             )
         ctx = self.agent.tool_context
         prev_ctx_token = ctx.cancel_token
@@ -588,9 +588,7 @@ class ToolExecutor:
             sensitive_reject_message,
         )
 
-        sens = check_sensitive_access(name, raw_path) or check_sensitive_access(
-            name, resolved
-        )
+        sens = check_sensitive_access(name, raw_path) or check_sensitive_access(name, resolved)
         if sens:
             return self._rejected(
                 3,

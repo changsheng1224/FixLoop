@@ -31,8 +31,16 @@ _ERROR_POLICY = {
     ),
     ToolErrorCode.PERMISSION_DENIED.value: (False, 0, "Use an allowed alternative tool."),
     ToolErrorCode.POLICY_DENIED.value: (False, 0, "Satisfy the runtime precondition first."),
-    ToolErrorCode.BUDGET_EXCEEDED.value: (False, 0, "Choose an available budget group or reduce scope."),
-    ToolErrorCode.DEADLINE_EXCEEDED.value: (False, 0, "Reduce scope or resume with a fresh deadline."),
+    ToolErrorCode.BUDGET_EXCEEDED.value: (
+        False,
+        0,
+        "Choose an available budget group or reduce scope.",
+    ),
+    ToolErrorCode.DEADLINE_EXCEEDED.value: (
+        False,
+        0,
+        "Reduce scope or resume with a fresh deadline.",
+    ),
     ToolErrorCode.TOOL_TIMEOUT.value: (True, 1, "Retry once with a narrower request."),
     ToolErrorCode.TOOL_CANCELLED.value: (False, 0, "Cancellation is terminal for this attempt."),
     ToolErrorCode.IDEMPOTENCY_CONFLICT.value: (
@@ -42,7 +50,11 @@ _ERROR_POLICY = {
     ),
     ToolErrorCode.STALE_PRECONDITION.value: (False, 0, "Refresh observations before executing."),
     ToolErrorCode.OUTPUT_TOO_LARGE.value: (True, 1, "Request a narrower or paginated output."),
-    ToolErrorCode.TOOL_EXECUTION_FAILED.value: (True, 1, "Retry once if the operation is idempotent."),
+    ToolErrorCode.TOOL_EXECUTION_FAILED.value: (
+        True,
+        1,
+        "Retry once if the operation is idempotent.",
+    ),
     ToolErrorCode.MCP_UNAVAILABLE.value: (
         True,
         2,
@@ -90,9 +102,7 @@ def parse_tool_call(
             call = CanonicalToolCall.create(invoke.group(1), args, source=ToolSource.RECOVERED)
             return _call_response(call, expected_tools)
     inner = re.search(r"<tool>([\s\S]*?)</tool>", text, re.I)
-    attribute_tool = re.search(
-        r'<tool\s+name="([^"]+)"([^>]*)>([\s\S]*?)</tool>', text, re.I
-    )
+    attribute_tool = re.search(r'<tool\s+name="([^"]+)"([^>]*)>([\s\S]*?)</tool>', text, re.I)
     if attribute_tool:
         call = CanonicalToolCall.create(
             attribute_tool.group(1),
@@ -156,9 +166,7 @@ def parse_model_response(
     text = str(raw or "").strip()
     final_match = re.search(r"<final>([\s\S]*?)</final>", text, re.I)
     if final_match:
-        return CanonicalResponse.create(
-            "final", "success", {"text": final_match.group(1).strip()}
-        )
+        return CanonicalResponse.create("final", "success", {"text": final_match.group(1).strip()})
 
     response = parse_tool_call(text, expected_tools=expected_tools)
     if response.payload.get("error_code") == "invalid_tool_payload":
