@@ -411,16 +411,29 @@ def retrieval_candidates_semantic(state: dict, query: str, limit: int = 3) -> li
         kind = r.get("kind", "observation")
         base_score = r.get("score", 0.0)
         r["score"] = round(base_score * KIND_WEIGHTS.get(kind, 1.0), 3)
+        r["memory_id"] = str(
+            r.get("memory_id") or f"EP-{r.get('note_index', '')}"
+        )
+        r["retrieval_reason"] = "semantic_similarity"
+        r["score_breakdown"] = {
+            "semantic_similarity": round(float(base_score), 4),
+            "kind_weight": KIND_WEIGHTS.get(kind, 1.0),
+        }
 
     # 合并 + 去重
-    seen: set[int] = set()
+    seen: set[str] = set()
     merged: list[dict] = []
     for note in kw_results + sem_results:
-        idx = note.get("note_index")
-        if idx is not None and idx not in seen:
-            seen.add(idx)
+        item_id = str(
+            note.get("memory_id")
+            or f"EP-{note.get('note_index', len(merged))}"
+        )
+        if item_id not in seen:
+            seen.add(item_id)
             merged.append(note)
 
     # 按 score 降序重排（kind 权重已在各自路径应用）
-    merged.sort(key=lambda n: n.get("score", 0.0), reverse=True)
+    merged.sort(
+        key=lambda n: (-float(n.get("score", 0.0)), str(n.get("memory_id", "")))
+    )
     return merged[:limit]

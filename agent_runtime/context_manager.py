@@ -583,8 +583,13 @@ class ContextManager:
             user_id=str(identity.get("user_id", "") or ""),
             task_id=str(identity.get("task_id", "") or ""),
             limit=2,
+            record_event=False,
         )
         recalled_ids = [str(item.get("memory_id", "")) for item in governed_results]
+        turn_id = str(mem.get("_turn_counter") or self.agent.session.get("_turn_counter", ""))
+        prompt_id = hashlib.sha256(
+            f"{turn_id}|{query}".encode("utf-8", errors="replace")
+        ).hexdigest()[:16]
         if governed_results:
             governed_items = [
                 ContextItem(
@@ -609,6 +614,22 @@ class ContextManager:
             mem["recalled_memory_ids"] = [
                 item.source_ref for item in governed_items
             ]
+            for item in governed_items:
+                governed.record_usage_stage(
+                    item.source_ref,
+                    usage="projected",
+                    stage=str(getattr(self.agent, "_l2_phase", "repair") or "repair"),
+                    task_id=str(identity.get("task_id", "") or ""),
+                    turn_id=turn_id,
+                    prompt_id=prompt_id,
+                    context_item_id=item.item_id,
+                    evidence_refs=list(
+                        governed.inspect(item.source_ref).get("evidence_refs", [])
+                        if governed.inspect(item.source_ref)
+                        else []
+                    ),
+                    decision_reason="context_policy_selected",
+                )
             lines = ["治理记忆候选（必须由当前代码证据确认）:"]
             for item in governed_items:
                 lines.append(
@@ -649,7 +670,19 @@ class ContextManager:
         # eligible for automatic usage feedback.
         recalled_ids = list(dict.fromkeys(item for item in recalled_ids if item))
         mem["recalled_memory_ids"] = recalled_ids
-        governed.record_recall(recalled_ids, task_id=str(identity.get("task_id", "") or ""))
+        mem["memory_context_attribution"] = {
+            "turn_id": turn_id,
+            "prompt_id": prompt_id,
+            "phase": str(getattr(self.agent, "_l2_phase", "repair") or "repair"),
+        }
+        governed.record_recall(
+            recalled_ids,
+            task_id=str(identity.get("task_id", "") or ""),
+            stage=str(getattr(self.agent, "_l2_phase", "repair") or "repair"),
+            turn_id=turn_id,
+            prompt_id=prompt_id,
+            decisions=list(mem.get("memory_recall_decisions", [])),
+        )
         return "\n".join(parts) if parts else ""
 
     def _record_selection_result(

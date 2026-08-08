@@ -504,12 +504,18 @@ class Agent:
                 if name in {"write_file", "patch_file", "apply_patch"}
                 else "tool"
             )
+            attribution = mem.get("memory_context_attribution") or {}
             for memory_id in recalled_ids:
                 governance.record_usage_stage(
                     memory_id,
                     usage="applied",
                     stage=stage,
                     task_id=str(identity.get("task_id", "") or ""),
+                    turn_id=str(attribution.get("turn_id", "") or ""),
+                    prompt_id=str(attribution.get("prompt_id", "") or ""),
+                    context_item_id=str(memory_id),
+                    cited=True,
+                    decision_reason=f"tool:{name}",
                 )
         context = get_repair_context(mem)
         path = args.get("path", "")

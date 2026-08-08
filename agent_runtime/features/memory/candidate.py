@@ -79,10 +79,20 @@ class Candidate:
     scope: str = "task"
     evidence_refs: list[str] | None = None
     repo_fingerprint: str = ""
+    memory_id: str = ""
+    parent_memory_id: str = ""
+    source_observation_ids: list[str] | None = None
+    source_run_id: str = ""
+    created_by: str = "runtime"
+    retention_days: int = 0
 
     def __post_init__(self):
         if self.evidence_refs is None:
             self.evidence_refs = []
+        if self.source_observation_ids is None:
+            self.source_observation_ids = [
+                str(ref) for ref in self.evidence_refs if str(ref).startswith("OBS-")
+            ]
         if self.topic not in ALLOWED_TOPICS:
             raise ValueError(f"非法 topic '{self.topic}'，允许值: {sorted(ALLOWED_TOPICS)}")
         if self.kind not in CANDIDATE_KINDS:
