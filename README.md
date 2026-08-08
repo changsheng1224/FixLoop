@@ -5,7 +5,7 @@
 [![ruff](https://img.shields.io/badge/lint-ruff-261230.svg)](https://docs.astral.sh/ruff/)
 [![Docker](https://img.shields.io/badge/sandbox-Docker-2496ED.svg)](https://www.docker.com/)
 
-**从零构建的多 Agent 代码修复系统**：手写 Agent 运行时（Layer 1）+ 分工修复流水线（Layer 2），含 Docker 沙箱验证与 10 Case 消融评测。
+**从零构建的 Agent 代码修复系统**：手写 Agent 运行时（Layer 1）+ 受治理的修复流水线（Layer 2），覆盖工具执行、上下文与记忆、Docker 沙箱验证、Canonical Trace 和可复现评测。
 
 ## 目录
 
@@ -15,6 +15,7 @@
 - [Demo 脚本](#demo-脚本)
 - [使用示例](#使用示例)
 - [评测结果](#评测结果)
+- [代码规模](#代码规模)
 - [项目结构](#项目结构)
 - [依赖与环境](#依赖与环境)
 - [开发与测试](#开发与测试)
@@ -24,8 +25,8 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │ Layer 2  Multi-Agent Repair (src/)                          │
-│  Issue → Orchestrator → Localizer ∥ Retriever → Patcher     │
-│         → Verifier (pytest / Docker) → 失败则回滚重试        │
+│  Issue → Intent / Rule Seed → Patcher → Critic               │
+│         → Verifier (pytest / Docker) → 反馈、回滚、重试       │
 └───────────────────────────┬─────────────────────────────────┘
                             │ Agent.ask() / model_client
 ┌───────────────────────────▼─────────────────────────────────┐
@@ -35,16 +36,17 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Layer 1** 是通用 Agent 内核（~1900 行，零 LLM 框架依赖）。  
-**Layer 2** 在之上实现 Localizer / Retriever / Patcher / Verifier 分工与评测体系。
+**Layer 1** 是通用 Agent 内核，不依赖 LangChain/LangGraph 等 LLM 编排框架。
+
+**Layer 2** 当前主路径是 Patcher 工具环、轻量 Critic 和独立 Verifier；Localizer/Retriever 保留为规则种子、状态模型和历史兼容语义，不应描述为当前主路径中的两个独立 LLM Agent。
 
 ## 为什么与众不同
 
 与「LangChain 模板 + 一个 ReAct Agent」的常见做法相比：
 
-1. **真分工，非单 Agent 换皮**：定位、检索、补丁、验证由不同 Agent 与 Prompt 约束；Orchestrator 纯 Python 调度，不嵌 LLM。
+1. **执行与裁决分离**：Patcher 负责搜读改测，Critic 负责提交前廉价检查，Verifier 负责独立测试判定；Orchestrator 纯 Python 调度，不把编排决策交给 LLM。
 2. **运行时自己写**：控制循环、工具闸口、Token 预算、Checkpoint、Trace 均为标准库 + 少量依赖实现，可逐行审计。
-3. **可复现的评测闭环**：10 个微型 Case、Single-Agent 基线、消融实验、`regression_check` 回归门禁，Fix Rate 有数据支撑。
+3. **可诊断的评测闭环**：Case Runner、Single-Agent 基线、消融实验、Canonical Trace 和 `regression_check` 回归门禁共同记录修复结果与失败归因。
 
 ## 快速开始
 
@@ -85,7 +87,7 @@ python -m src.cli repair \
   --verbose
 ```
 
-预期：`stderr` 打印 Localizer / Patcher / Verifier 阶段日志；成功时 `status=fixed`，`demo/calculator` 下 pytest 通过。
+预期：`stderr` 打印 Patcher / Critic / Verifier 阶段日志；成功时 `status=fixed`，`demo/calculator` 下 pytest 通过。
 
 无 Docker 时仍可用本地 **pytest verify**（默认开启）；跳过验证：
 
@@ -155,21 +157,33 @@ python -m src.eval.regression_check \
 
 ## 评测结果
 
-M7 正式消融（`full` + `single` × 10 Case × 3 次 = **60 runs**，pytest verify 开启）：
+以下是历史 M7 消融快照（`full` + `single` × 10 Case × 3 次 = **60 runs**）。它用于说明评测格式，不代表当前提交的实时基线；更新简历或发布材料前应按当前配置重新运行。
 
 | 变体 | Fix Rate | 平均耗时 | 平均 Token | Patch 精度 |
 |------|----------|----------|------------|------------|
-| **full**（4-Agent） | **30/30 (100%)** | 31.8s | 5182 | 1.22 |
+| **full（多角色编排）** | **30/30 (100%)** | 31.8s | 5182 | 1.22 |
 | **single**（Baseline） | 29/30 (96.7%) | 19.7s | 2581 | 0.94 |
 | **合计** | 59/60 (98.3%) | 25.7s | 3882 | 1.08 |
 
 要点：
 
-- Multi-Agent **30/30 零失败**；Single 有 1 次偶发「未产出补丁」。
+- 历史数据中 full 变体 **30/30 零失败**；Single 有 1 次偶发「未产出补丁」。
 - full 用约 **2× Token** 换取更高通过率与更小补丁（Case 为 1–3 文件的微型 repo，差距未拉大到 15pp，详见本地 `eval_results/final_report.md`）。
 - **0%** 引入回归（`introduced_regression`）。
 
 Case 覆盖：TypeError、ImportError、AttributeError、logic_error、config_error、composite（见 `src/eval/cases/README.md`）。
+
+## 代码规模
+
+统计日期：**2026-08-09**。统计对象为 Python 源文件；物理行包含空行和注释，非注释代码行排除了空行及以 `#` 开头的注释行。
+
+| 范围 | 文件数 | 物理行 | 非空行 | 非注释代码行 |
+|---|---:|---:|---:|---:|
+| `agent_runtime/`（Layer 1） | 155 | 35,411 | 30,840 | 30,289 |
+| `src/`（Layer 2） | 168 | 29,737 | 25,838 | 25,543 |
+| **生产源码合计** | **323** | **65,148** | **56,678** | **55,832** |
+
+统计排除了 `src/eval/cases/**` 中的评测仓库快照、`__pycache__`、缓存、`artifacts/` 和临时目录。测试代码单独统计为 227 个 Python 文件、约 2,183 个 `test_*` 函数，不计入生产源码行数。
 
 ## 项目结构
 
@@ -177,14 +191,15 @@ Case 覆盖：TypeError、ImportError、AttributeError、logic_error、config_er
 FixLoop/
 ├── agent_runtime/          # Layer 1：Agent 内核（loop / tools / memory / providers）
 ├── src/
-│   ├── agents/             # Localizer / Retriever / Patcher / Verifier 工厂
-│   ├── orchestrator.py     # 修复流水线调度
+│   ├── agents/             # Patcher / Verifier 工厂
+│   ├── orchestrator.py     # Issue、规则种子与修复阶段调度
+│   ├── repair/             # Critic、反馈、回滚、验证和状态协作
 │   ├── eval/               # Case 库、Runner、Baseline、Ablation、Metrics
 │   ├── harness/            # Docker 沙箱 + pytest runner
 │   └── cli.py              # repair / eval / ablation 命令
 ├── sandbox/                # Docker 镜像定义
 ├── demo/                   # calculator / importer / logic_bug 演示项目
-├── tests/                  # 474+ pytest
+├── tests/                  # 227 个测试文件，约 2,183 个 test 函数
 └── docs/                   # 里程碑设计与日报
 ```
 
@@ -218,7 +233,7 @@ python -m src.eval.regression_check \
 
 GitHub Actions 配置在 [`.github/workflows/`](.github/workflows/)（**默认不自动触发**，仅 `workflow_dispatch` 或本地命令）。启用方法见 [`.github/workflows/README.md`](.github/workflows/README.md)。
 
-M8D4 代码终审见 [`docs/CODE_REVIEW.md`](docs/CODE_REVIEW.md)（覆盖率 80%，475 tests）。
+历史代码终审记录见 [`docs/CODE_REVIEW.md`](docs/CODE_REVIEW.md)。其中的测试数量和覆盖率是历史快照，不应直接作为当前版本指标；请以最近一次完整测试和 coverage 输出为准。
 
 分支与 PR 流程见 [`CLAUDE.md`](CLAUDE.md)。架构与设计决策见 [`ARCHITECTURE.md`](ARCHITECTURE.md)、[`docs/design-decisions.md`](docs/design-decisions.md)。Layer 1 模块导读见 [`LAYER1_GUIDE.md`](LAYER1_GUIDE.md)。
 
