@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from agent_runtime.canonical_trace import validate_trace
 from agent_runtime.react_phases import LoopPath
 
 __all__ = [
@@ -13,6 +14,7 @@ __all__ = [
     "normalize_event_name",
     "normalize_trace_events",
     "validate_loop_trace",
+    "validate_trace",
 ]
 
 # context_built payload 可选投影字段（message_projection）
@@ -156,7 +158,7 @@ def assert_subsequence(actual: list[str], expected: list[str]) -> None:
 def validate_loop_trace(events: list[dict], *, path: LoopPath) -> list[str]:
     """校验 trace 是否满足 Agentic Loop 相对顺序约束；返回错误消息列表。"""
     names = normalize_trace_events(events)
-    errors: list[str] = []
+    errors: list[str] = list(validate_trace(events, require_terminal=True))
 
     if "run_started" not in names:
         errors.append("missing run_started")

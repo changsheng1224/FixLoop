@@ -75,6 +75,23 @@ EVENT_CATALOG: dict[str, tuple[str, ...]] = {
         "session_loaded",
     ),
     "artifact": ("baseline_verify_finished", "blackboard_snapshot"),
+    "harness": (
+        "harness_event",
+        "harness_manifest",
+        "status_changed",
+        "phase_changed",
+        "budget_reserved",
+        "budget_released",
+        "budget_backpressure",
+    ),
+    "evaluation": (
+        "evaluation_started",
+        "evaluation_finished",
+        "evaluation_contract_checked",
+        "bad_case_created",
+        "replay_started",
+        "replay_finished",
+    ),
     "security": (
         "sandbox_violation",
         "sandbox_policy",
@@ -185,6 +202,10 @@ def infer_status(event: str, payload: dict[str, Any] | None = None) -> str:
     data = payload or {}
     if event in ("repair_cancelled", "run_cancelled"):
         return STATUS_CANCELLED
+    if event in {"run_terminal_late", "budget_backpressure", "evaluation_contract_checked"}:
+        if event == "evaluation_contract_checked" and data.get("passed"):
+            return STATUS_OK
+        return STATUS_ERROR
     if event in (
         "repair_started",
         "run_started",
@@ -217,7 +238,7 @@ def infer_status(event: str, payload: dict[str, Any] | None = None) -> str:
         if reason == "abnormal":
             return STATUS_ERROR
         return STATUS_OK
-    if event in ("repair_finished", "run_finished", "agent_ask_finished"):
+    if event in ("repair_finished", "run_finished", "agent_ask_finished", "evaluation_finished"):
         st = str(data.get("status") or data.get("stop_reason") or "").lower()
         if st in ("cancelled", "cancel"):
             return STATUS_CANCELLED
@@ -227,6 +248,13 @@ def infer_status(event: str, payload: dict[str, Any] | None = None) -> str:
     explicit = data.get("canonical_status")
     if explicit in STATUSES:
         return str(explicit)
+    nested = str(data.get("canonical_status") or data.get("status") or "").lower()
+    if nested in {"success", "ok", "running", "created", "paused", "degraded", "completed"}:
+        return STATUS_OK
+    if nested in {"cancelled", "cancelling"}:
+        return STATUS_CANCELLED
+    if nested in {"failed", "timed_out", "error"}:
+        return STATUS_ERROR
     return STATUS_UNSET
 
 
@@ -308,6 +336,45 @@ def order_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     indexed = list(enumerate(events))
     indexed.sort(key=key)
     return [ev for _, ev in indexed]
+
+
+def validate_trace(events: list[dict[str, Any]], *, require_terminal: bool = True) -> list[str]:
+    """Validate a complete trace, including envelope, sequence and span lineage."""
+    issues: list[str] = []
+    if not events:
+        return ["trace_empty"]
+    run_ids = {str(item.get("run_id", "")) for item in events}
+    if len(run_ids) != 1 or "" in run_ids:
+        issues.append("run_id_not_constant")
+    seen_seq: set[int] = set()
+    span_ids = {str(item.get("span_id", "")) for item in events if item.get("span_id")}
+    for index, event in enumerate(events):
+        issues.extend(f"event[{index}]:{issue}" for issue in validate_event(event))
+        try:
+            sequence = int(event.get("seq"))
+        except (TypeError, ValueError):
+            sequence = -1
+        if sequence in seen_seq:
+            issues.append(f"duplicate_seq:{sequence}")
+        seen_seq.add(sequence)
+        parent = event.get("parent_span_id")
+        if parent and str(parent) not in span_ids:
+            issues.append(f"orphan_parent_span:{parent}")
+        if event.get("event") == "span_closed":
+            closed = str((event.get("payload") or {}).get("closed_span_id", ""))
+            if closed and closed not in span_ids:
+                issues.append(f"unknown_closed_span:{closed}")
+    if require_terminal and not any(
+        item.get("event") in {
+            "run_finished",
+            "repair_finished",
+            "run_terminal",
+            "evaluation_finished",
+        }
+        for item in events
+    ):
+        issues.append("missing_terminal_event")
+    return list(dict.fromkeys(issues))
 
 
 def build_span_tree(events: list[dict[str, Any]]) -> dict[str, list[str]]:

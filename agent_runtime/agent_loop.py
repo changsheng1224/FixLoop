@@ -885,6 +885,7 @@ class AgentLoop:
                     f"observation_id={stored.observation_id}]"
                 )
         result_text = projected_result_text
+        _meta["duration_ms"] = te_ms
         ts.node_timings.setdefault("tool_exec_ms", 0)
         ts.node_timings["tool_exec_ms"] += te_ms
         _log_loop(f"  [loop] {tool_name} tool={te_ms}ms\n")
@@ -897,7 +898,7 @@ class AgentLoop:
                 callback=callback,
             )
         self.agent.update_memory_after_tool(tool_name, tool_args, result_text)
-        self._record_tool_outcome(tool_name, result, ts)
+        self._record_tool_outcome(tool_name, result, ts, tool_args)
         if emit_recording:
             self._notify_react_phase(
                 ReactPhase.RECORDING,
@@ -2371,12 +2372,14 @@ class AgentLoop:
         except Exception:
             pass
 
-    def _record_tool_outcome(self, tool_name: str, result, ts) -> None:
+    def _record_tool_outcome(
+        self, tool_name: str, result, ts, tool_args: dict | None = None
+    ) -> None:
         meta = getattr(result, "metadata", None) or {}
         ts.record_tool_rejection(tool_name, meta)
-        self._emit_tool_trace(tool_name, result)
+        self._emit_tool_trace(tool_name, result, tool_args)
 
-    def _emit_tool_trace(self, tool_name: str, result) -> None:
+    def _emit_tool_trace(self, tool_name: str, result, tool_args: dict | None = None) -> None:
         from agent_runtime.tool_rejection import tool_trace_payload
 
         meta = getattr(result, "metadata", None) or {}
@@ -2394,9 +2397,16 @@ class AgentLoop:
         preview = meta.get("patch_preview")
         if preview:
             self._emit("tool_preview", {"tool": tool_name, **preview})
+        content = str(getattr(result, "content", "") or "")
+        trace_payload = tool_trace_payload(
+            tool_name,
+            meta,
+            tool_args=tool_args,
+            result_content=content,
+        )
         if meta.get("provider") == "mcp":
-            self._emit("mcp_call", tool_trace_payload(tool_name, meta))
-        self._emit("tool_executed", tool_trace_payload(tool_name, meta))
+            self._emit("mcp_call", trace_payload)
+        self._emit("tool_executed", trace_payload)
 
     def _emit(self, event: str, payload: dict | None = None):
         try:

@@ -11,6 +11,7 @@ Usage::
 
 from __future__ import annotations
 
+import hashlib
 import json
 
 _JUDGE_PROMPT = """Evaluate the following code fix on a scale of 0-10.
@@ -32,8 +33,20 @@ Output ONLY a JSON object with "score" (0-10) and "reason" (one short sentence):
 class JudgeClient:
     """LLM-as-Judge：用 light_client 评分修复质量。"""
 
-    def __init__(self, model_client):
+    RUBRIC_VERSION = "1.0"
+
+    def __init__(self, model_client, *, model_name: str = "", rubric_version: str = RUBRIC_VERSION):
         self._client = model_client
+        self.model_name = model_name
+        self.rubric_version = rubric_version
+
+    @property
+    def metadata(self) -> dict[str, str]:
+        return {
+            "model": self.model_name,
+            "rubric_version": self.rubric_version,
+            "prompt_hash": hashlib.sha256(_JUDGE_PROMPT.encode("utf-8")).hexdigest()[:20],
+        }
 
     def evaluate(self, issue: str, patch: str) -> tuple[int, str]:
         """评估修复质量。

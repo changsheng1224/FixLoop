@@ -32,11 +32,16 @@ def _summary_metrics(results: list[CaseResult]) -> dict:
             "status_counts": {},
             "failure_tag_counts": {},
             "failure_reason_counts": {},
+            "fix_rate_ci95": [0.0, 0.0],
+            "regression_rate_ci95": [0.0, 0.0],
+            "duration_mean_ci95": [0.0, 0.0],
+            "cost_mean_ci95": [0.0, 0.0],
         }
 
     fixed_n = sum(1 for r in results if r.fixed)
     durations = [r.duration_ms for r in results]
     token_totals = [r.total_tokens for r in results if r.total_tokens > 0]
+    costs = [r.cost_usd for r in results if r.cost_usd >= 0]
     status_counts = Counter(_case_status(r) for r in results)
     failure_tag_counts = Counter(tag for r in results for tag in r.failure_tags)
     failure_reason_counts = Counter(
@@ -68,6 +73,13 @@ def _summary_metrics(results: list[CaseResult]) -> dict:
         "status_counts": dict(sorted(status_counts.items())),
         "failure_tag_counts": dict(sorted(failure_tag_counts.items())),
         "failure_reason_counts": dict(sorted(failure_reason_counts.items())),
+        "fix_rate_ci95": list(_wilson_interval(fixed_n, total)),
+        "regression_rate_ci95": list(
+            _wilson_interval(sum(1 for r in results if r.introduced_regression), total)
+        ),
+        "duration_mean_ci95": list(_mean_interval(durations)),
+        "cost_mean_usd": round(sum(costs) / len(costs), 6) if costs else 0.0,
+        "cost_mean_ci95": list(_mean_interval(costs)),
     }
     if token_totals:
         summary["total_tokens"] = sum(token_totals)
@@ -120,6 +132,11 @@ def compute_metrics(results: list[CaseResult]) -> EvalReport:
         pass_at_k=pk,
         performance=perf,
         judge_summary=judge,
+        by_language=_bucket_metrics(results, lambda r: r.language),
+        by_failure_class=_bucket_metrics(results, lambda r: r.failure_class),
+        by_permission_profile=_bucket_metrics(
+            results, lambda r: r.tool_permission_profile
+        ),
     )
     if by_variant:
         report.by_variant = by_variant
@@ -208,6 +225,33 @@ def _p50(values: list[int]) -> int:
     return s[n // 2]
 
 
+def _wilson_interval(successes: int, total: int, z: float = 1.96) -> tuple[float, float]:
+    """Wilson score interval for small evaluation samples."""
+    if total <= 0:
+        return 0.0, 0.0
+    p = successes / total
+    denominator = 1 + (z * z / total)
+    center = (p + z * z / (2 * total)) / denominator
+    margin = (
+        z
+        * math.sqrt((p * (1 - p) / total) + (z * z / (4 * total * total)))
+        / denominator
+    )
+    return round(max(0.0, center - margin), 4), round(min(1.0, center + margin), 4)
+
+
+def _mean_interval(values: list[float], z: float = 1.96) -> tuple[float, float]:
+    """Normal-approximation 95% interval for a sample mean."""
+    if not values:
+        return 0.0, 0.0
+    mean = sum(values) / len(values)
+    if len(values) == 1:
+        return round(mean, 4), round(mean, 4)
+    variance = sum((value - mean) ** 2 for value in values) / (len(values) - 1)
+    margin = z * math.sqrt(variance / len(values))
+    return round(max(0.0, mean - margin), 4), round(mean + margin, 4)
+
+
 def _percentile(values: list[int], percentile: int) -> int:
     """Nearest-rank percentile for small eval samples."""
     if not values:
@@ -244,7 +288,7 @@ def compute_judge_summary(results: list[CaseResult]) -> dict:
     }
 
 
-def compute_pass_at_k(results: list[CaseResult]) -> dict[str, float]:
+def compute_pass_at_k(results: list[CaseResult]) -> dict[str, object]:
     """计算 Pass@k 指标。
 
     对每个 case_id，收集所有 run_index 的结果。若任一 run 通过（fixed=True），
@@ -261,18 +305,38 @@ def compute_pass_at_k(results: list[CaseResult]) -> dict[str, float]:
     for r in results:
         by_case.setdefault(r.case_id, []).append(r)
 
-    total_cases = len(by_case)
-
-    def _pass_at(k: int) -> float:
-        passed = 0
-        for case_id, runs in by_case.items():
-            # 取前 k 个 run（或全部）
+    def _pass_at(k: int) -> tuple[float, int]:
+        estimates: list[float] = []
+        for runs in by_case.values():
             samples = runs[:k]
-            if any(r.fixed for r in samples):
-                passed += 1
-        return round(passed / total_cases, 4) if total_cases > 0 else 0.0
+            n = len(samples)
+            c = sum(1 for r in samples if r.fixed)
+            if n == 0:
+                continue
+            if n < k:
+                estimate = 1.0 if c else 0.0
+            elif c == 0:
+                estimate = 0.0
+            else:
+                # Standard unbiased Pass@k estimator.
+                denominator = math.comb(n, k)
+                estimate = 1.0 - (math.comb(n - c, k) / denominator if n - c >= k else 0.0)
+            estimates.append(estimate)
+        return (
+            round(sum(estimates) / len(estimates), 4) if estimates else 0.0,
+            len(estimates),
+        )
 
-    return {"pass@1": _pass_at(1), "pass@3": _pass_at(3)}
+    values: dict[str, float] = {}
+    for k in (1, 3):
+        estimate, sample_count = _pass_at(k)
+        values[f"pass@{k}"] = estimate
+        values[f"pass@{k}_sample_count"] = sample_count
+        values[f"pass@{k}_ci95"] = list(
+            _wilson_interval(round(estimate * sample_count), sample_count)
+        )
+    values["definition"] = "standard_unbiased_when_n_ge_k_else_empirical"
+    return values
 
 
 def _markdown_table(headers: list[str], rows: list[list[str]]) -> str:
@@ -324,6 +388,39 @@ def format_markdown(report: EvalReport) -> str:
         )
     )
     parts.append("")
+
+    parts.append("## Confidence & Cost")
+    parts.append(
+        _markdown_table(
+            ["metric", "value"],
+            [
+                ["fix_rate_ci95", str(summary.get("fix_rate_ci95", [0.0, 0.0]))],
+                [
+                    "regression_rate_ci95",
+                    str(summary.get("regression_rate_ci95", [0.0, 0.0])),
+                ],
+                ["duration_mean_ci95_ms", str(summary.get("duration_mean_ci95", [0.0, 0.0]))],
+                ["cost_mean_usd", str(summary.get("cost_mean_usd", 0.0))],
+                ["cost_mean_ci95_usd", str(summary.get("cost_mean_ci95", [0.0, 0.0]))],
+            ],
+        )
+    )
+    parts.append("")
+
+    if report.pass_at_k:
+        parts.append("## Pass@k")
+        parts.append(
+            _markdown_table(
+                ["metric", "value"],
+                [
+                    [name, str(value)]
+                    for name, value in sorted(report.pass_at_k.items())
+                    if name != "definition"
+                ]
+                + [["definition", str(report.pass_at_k.get("definition", ""))]],
+            )
+        )
+        parts.append("")
 
     parts.append("## Performance Detail")
     parts.append(
@@ -484,6 +581,7 @@ def case_result_from_dict(data: dict) -> CaseResult:
         actual_lines=int(data.get("actual_lines", 0)),
         minimal_lines=int(data.get("minimal_lines", 0)),
         duration_ms=int(data.get("duration_ms", 0)),
+        cost_usd=float(data.get("cost_usd", 0.0) or 0.0),
         agent_timings=dict(data.get("agent_timings") or {}),
         error=str(data.get("error", "")),
         introduced_regression=bool(data.get("introduced_regression", False)),
@@ -500,6 +598,23 @@ def case_result_from_dict(data: dict) -> CaseResult:
         judge_score=int(data.get("judge_score", 0) or 0),
         judge_reason=str(data.get("judge_reason", "")),
         equivalence=str(data.get("equivalence", "")),
+        language=str(data.get("language", "")),
+        tool_permission_profile=str(data.get("tool_permission_profile", "")),
+        run_id=str(data.get("run_id", "")),
+        trace_path=str(data.get("trace_path", "")),
+        manifest_fingerprint=str(data.get("manifest_fingerprint", "")),
+        eval_contract_version=str(data.get("eval_contract_version", "1.0")),
+        contract_required=bool(data.get("contract_required", True)),
+        baseline_failed=bool(data.get("baseline_failed", False)),
+        target_passed=bool(data.get("target_passed", False)),
+        regression_passed=bool(data.get("regression_passed", True)),
+        environment_ok=bool(data.get("environment_ok", True)),
+        failure_class=str(data.get("failure_class", "none")),
+        failure_code=str(data.get("failure_code", "none")),
+        bad_case_id=str(data.get("bad_case_id", "")),
+        replay=dict(data.get("replay") or {}),
+        judge_metadata=dict(data.get("judge_metadata") or {}),
+        eval_run_id=str(data.get("eval_run_id", "")),
     )
 
 
@@ -511,7 +626,10 @@ def load_results_from_json_report(path: str | Path) -> tuple[list[CaseResult], d
         meta = data.get("meta") or {}
         return results, meta
     results = [case_result_from_dict(item) for item in data.get("cases", [])]
-    return results, {}
+    return results, {
+        "eval_run_id": str(data.get("eval_run_id", "")),
+        "trace_path": str(data.get("trace_path", "")),
+    }
 
 
 def format_run_notes(
