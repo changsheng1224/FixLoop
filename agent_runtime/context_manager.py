@@ -316,16 +316,20 @@ class ContextManager:
             self._get_state(),
             200,  # state 段固定 200 token 预算
         )
-        filler.add_section(
-            "memory",
-            self._get_memory(),
-            scaled_section_budget(BUDGET_MEMORY, section_cap or total),
-        )
-        filler.add_section(
-            "knowledge",
-            self._get_knowledge(user_message),
-            scaled_section_budget(BUDGET_KNOWLEDGE, section_cap or total),
-        )
+        degradation = self.agent.session.get("runtime_degradation", {}) or {}
+        if degradation.get("skip_optional_context"):
+            metadata.setdefault("cuts", []).append("degradation:optional_context")
+        else:
+            filler.add_section(
+                "memory",
+                self._get_memory(),
+                scaled_section_budget(BUDGET_MEMORY, section_cap or total),
+            )
+            filler.add_section(
+                "knowledge",
+                self._get_knowledge(user_message),
+                scaled_section_budget(BUDGET_KNOWLEDGE, section_cap or total),
+            )
         history_text = self._get_compressed_history(metadata)
         metadata["_history_section_text"] = history_text
         filler.add_section(

@@ -86,8 +86,17 @@ def load_repair_checkpoint(repo_root: str, run_id: str) -> dict | None:
         envelope_raw = data.get("checkpoint_envelope")
         if isinstance(envelope_raw, dict):
             envelope = CheckpointEnvelope.from_dict(envelope_raw)
-            if not envelope.verify():
+            if not envelope.verify() or data.get("checkpoint_checksum") != envelope.checksum:
                 return None
+            # The envelope task_state is authoritative.  Reject a checkpoint
+            # whose duplicated top-level fields were modified independently.
+            task_state = envelope.task_state or {}
+            for key, value in task_state.items():
+                if key in data and json.dumps(data[key], sort_keys=True, default=str) != json.dumps(
+                    value, sort_keys=True, default=str
+                ):
+                    return None
+            data.update(task_state)
         return data
     except (json.JSONDecodeError, OSError, TypeError, ValueError):
         return None

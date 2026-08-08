@@ -81,7 +81,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             self._restore_repo_snapshot(initial_snapshot)
         else:
             state.node_timings["phase_timeout_kept_patches"] = True
-        state.status = RepairTerminalStatus.TIMEOUT
+        state.set_status(RepairTerminalStatus.TIMEOUT, "phase_timeout")
         state.node_timings["phase_timeout"] = exc.phase
         if ctx.phase_timeout_config is not None:
             state.node_timings["phase_timeout_budgets"] = ctx.phase_timeout_config.budget_dict()
@@ -639,7 +639,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     log.info("Verifier 完成: %dms", ms)
 
                     if state.verification_result.all_passed:
-                        state.status = RepairTerminalStatus.FIXED
+                        state.set_status(RepairTerminalStatus.FIXED, "verification_passed")
                         cooldown = getattr(self, "_verify_cooldown", None)
                         if cooldown is not None:
                             cooldown.record_success()
@@ -865,7 +865,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 set_phase_ms(state.node_timings, "verify", verify_ms)
 
                 if state.verification_result.all_passed:
-                    state.status = RepairTerminalStatus.FIXED
+                    state.set_status(RepairTerminalStatus.FIXED, "verification_passed")
                     break
 
                 _record_pytest_exit(state, self._repo_root, "post_patch_pytest_code")
@@ -949,11 +949,14 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     key_files=list((saved_manifest.get("files") or {}).keys()),
                 ),
             )
-            state.node_timings["resume_workspace_manifest"] = manifest_diff
-            if not manifest_diff["exact_match"]:
-                state.node_timings["resume_workspace_stale"] = True
+            resume_timings = {
+                "resume_workspace_manifest": manifest_diff,
+                "resume_workspace_stale": not manifest_diff["exact_match"],
+            }
+        else:
+            resume_timings = {}
 
-        state.node_timings = dict(checkpoint.get("node_timings") or {})
+        state.node_timings = {**dict(checkpoint.get("node_timings") or {}), **resume_timings}
         state.retry_count = checkpoint.get("retry_count", 0)
         state.max_retries = checkpoint.get("max_retries", state.max_retries)
         state.phase = checkpoint.get("phase", "patch")

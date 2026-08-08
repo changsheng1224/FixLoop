@@ -286,6 +286,17 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
         last_error = None
         max_retries = 3
 
+        def sleep_with_deadline(delay: float) -> None:
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("provider deadline exceeded during retry backoff")
+                delay = min(float(delay), remaining)
+            if delay > 0:
+                time.sleep(delay)
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError("provider deadline exceeded during retry backoff")
+
         for attempt in range(max_retries):
             try:
                 request_timeout = float(self.timeout)
@@ -336,7 +347,7 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
                             delay,
                             retry_after,
                         )
-                        time.sleep(delay)
+                        sleep_with_deadline(delay)
                         continue
                     raise RateLimitExceededError(
                         f"API 限流 (HTTP 429)，已重试 {max_retries} 次"
@@ -351,7 +362,7 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
                         delay,
                         e.code,
                     )
-                    time.sleep(delay)
+                    sleep_with_deadline(delay)
                     continue
 
             except (urllib.error.URLError, OSError) as e:
@@ -364,7 +375,7 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
                         delay,
                         e,
                     )
-                    time.sleep(delay)
+                    sleep_with_deadline(delay)
                     continue
 
         raise RuntimeError(f"API 请求失败，已重试 {max_retries} 次。最后错误: {last_error}")

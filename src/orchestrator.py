@@ -360,14 +360,9 @@ class Orchestrator(RepairPipelineMixin):
     def _on_collaboration_phase(self, state: RepairState, phase: str, reason: str = "") -> None:
         """Synchronize policy context and role set at a runtime phase boundary."""
         from src.collaboration_governance import CollaborationGovernance, RoleLifecycle
-        from src.repair.phase_fsm import RepairPhaseFSM
 
-        fsm = RepairPhaseFSM.from_state(state)
-        transition = fsm.apply(
-            state,
-            phase,
-            reason,
-            allow_recovery=phase == "recovery",
+        transition = state.transition_phase(
+            phase, reason, allow_recovery=phase == "recovery"
         )
         if not transition.valid:
             state.node_timings.setdefault("phase_transition_rejections", []).append(

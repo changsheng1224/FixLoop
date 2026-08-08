@@ -90,10 +90,17 @@ class AgentLoop:
 
         self._terminal_guard = RunTerminalGuard()
         self._stream_seq = 0
+        from agent_runtime.budget_manager import BudgetManager
+        from agent_runtime.latency_controller import LatencySLOController
         from agent_runtime.repair_runtime import ExecutionDeadline, RepairBudget
 
         self._repair_deadline = ExecutionDeadline(
-            getattr(agent.config, "repair_wall_timeout_s", 0) or 0
+            (
+                agent.config.effective_deadline()["repair_s"]
+                if hasattr(agent.config, "effective_deadline")
+                else getattr(agent.config, "repair_wall_timeout_s", 0)
+            )
+            or 0
         )
         agent._repair_deadline = self._repair_deadline
         self._repair_budget = RepairBudget(
@@ -103,6 +110,13 @@ class AgentLoop:
             max_verify_calls=getattr(agent.config, "max_verify_calls", 0) or 0,
             max_recovery_attempts=getattr(agent.config, "max_recovery_attempts", 0) or 0,
         )
+        self._budget_manager = BudgetManager.from_config(agent.config)
+        self._budget_turns_seen = 0
+        self._latency_controller = LatencySLOController(
+            getattr(agent.config, "slo", None),
+            getattr(agent.config, "degradation", None),
+        )
+        self.agent.session["runtime_budget"] = self._budget_manager.snapshot()
 
     def _accumulate_context_stats(self, meta: dict) -> None:
         """从 context_built metadata 累积 section 统计 + cache hit rate。"""
@@ -352,8 +366,21 @@ class AgentLoop:
         if not timings:
             return
         self._call_timings.extend(timings)
+        for timing in timings:
+            if isinstance(timing, dict):
+                total_ms = int(timing.get("total_ms", 0) or 0)
+                ttft_ms = int(timing.get("ttft_ms", 0) or 0)
+            else:
+                total_ms = int(getattr(timing, "total_ms", 0) or 0)
+                ttft_ms = int(getattr(timing, "ttft_ms", 0) or 0)
+            self._latency_controller.record("model", total_ms)
+            self._latency_controller.record("ttft", ttft_ms)
+            self._emit("latency_observed", {"kind": "model", "duration_ms": total_ms})
+            self._emit("latency_observed", {"kind": "ttft", "duration_ms": ttft_ms})
         ttft_total = emit_model_timing_events(
-            lambda event, payload: self._emit(event, payload),
+            lambda event, payload: self._emit(
+                event, {**payload, "model": getattr(self.agent.config, "model", "")}
+            ),
             timings,
             default_attempt=default_attempt,
         )
@@ -418,7 +445,105 @@ class AgentLoop:
         )
 
     def _step_timeout_limit_s(self) -> int:
+        if hasattr(self.agent.config, "effective_deadline"):
+            return int(self.agent.config.effective_deadline()["step_s"] or 0)
         return int(getattr(self.agent.config, "step_timeout_s", 0) or 0)
+
+    def _sleep_with_deadline(self, seconds: float) -> bool:
+        """Sleep only within the remaining repair deadline."""
+        remaining = self._repair_deadline.remaining_s()
+        if remaining is not None and remaining <= 0:
+            return False
+        delay = float(seconds) if remaining is None else min(float(seconds), remaining)
+        if delay > 0:
+            _time.sleep(delay)
+        return not self._repair_deadline.expired()
+
+    def _budget_payload(self) -> dict:
+        """Return the current unified budget view for prompts and trace."""
+        payload = self._budget_manager.decision_payload()
+        payload["legacy"] = self._repair_budget.summary()
+        payload["latency"] = self._latency_controller.summary()
+        self.agent.session["runtime_budget"] = self._budget_manager.snapshot()
+        return payload
+
+    def _apply_latency_decision(self, max_output_tokens: int) -> dict:
+        decision = self._latency_controller.decide(
+            remaining_s=self._repair_deadline.remaining_s(),
+            max_output_tokens=max_output_tokens,
+        )
+        self.agent.session["runtime_degradation"] = {
+            "skip_optional_context": "skip_optional_context" in decision["actions"],
+            "reasons": list(decision["reasons"]),
+            "max_output_tokens": int(decision["max_output_tokens"]),
+        }
+        for reason in decision["reasons"]:
+            if reason.endswith("_p95_exceeded"):
+                self._emit(
+                    "latency_slo_exceeded",
+                    {"kind": reason.removesuffix("_p95_exceeded"), "reason": reason},
+                )
+        if decision["degraded"]:
+            self._emit("latency_degraded", decision)
+        return decision
+
+    def _budget_check(self, resource: str, amount: float = 1.0) -> bool:
+        decision = self._budget_manager.check(resource, amount)
+        if decision.allowed:
+            return True
+        self._emit(
+            "budget_exhausted",
+            {
+                "resource": decision.resource,
+                "used": decision.used,
+                "limit": decision.limit,
+                "action": decision.action,
+                "reason": decision.reason,
+            },
+        )
+        return False
+
+    def _budget_reserve(self, resource: str, amount: float = 1.0) -> bool:
+        decision = self._budget_manager.reserve(resource, amount)
+        self.agent.session["runtime_budget"] = self._budget_manager.snapshot()
+        if decision.allowed:
+            self._emit(
+                "budget_reserved",
+                {
+                    "resource": decision.resource,
+                    "amount": float(amount),
+                    "used": decision.used,
+                    "limit": decision.limit,
+                    "remaining": decision.remaining,
+                },
+            )
+            return True
+        self._emit(
+            "budget_exhausted",
+            {
+                "resource": decision.resource,
+                "used": decision.used,
+                "limit": decision.limit,
+                "action": decision.action,
+                "reason": decision.reason,
+            },
+        )
+        return False
+
+    def _budget_allows_tool(self, group: str) -> bool:
+        if not self._budget_check("tool_calls"):
+            return False
+        mapping = {"write": "writes", "verify": "verifies", "recovery": "recoveries"}
+        specific = mapping.get(group)
+        return specific is None or self._budget_check(specific)
+
+    def _budget_reserve_turn(self, turn: int) -> bool:
+        if int(turn) <= self._budget_turns_seen:
+            return True
+        allowed = self._budget_reserve("turns")
+        if allowed:
+            self._budget_turns_seen = int(turn)
+        return allowed
 
     # ---- 工具执行（XML / Native 共用）----
 
@@ -454,7 +579,9 @@ class AgentLoop:
                     "retryable": False,
                 },
             )
-        elif not self._repair_budget.allow_tool(group.value):
+        elif not self._repair_budget.allow_tool(group.value) or not self._budget_allows_tool(
+            group.value
+        ):
             from agent_runtime.tool_executor import ToolExecutionResult
 
             result = ToolExecutionResult(
@@ -494,6 +621,11 @@ class AgentLoop:
             )
         t0 = _time.time()
         if not budget_rejected:
+            self._budget_reserve("tool_calls")
+            if group.value in {"write", "verify", "recovery"}:
+                self._budget_reserve(
+                    {"write": "writes", "verify": "verifies", "recovery": "recoveries"}[group.value]
+                )
             self._in_flight_tool = tool_name
             from agent_runtime.context_runtime import build_action_record
 
@@ -814,11 +946,12 @@ class AgentLoop:
         return None
 
     def _check_hard_cap(self, token_meta: dict) -> str | None:
-        """Prompt 超出硬顶 8000 tokens 时返回错误消息。"""
+        """Prompt 超出 configured hard cap 时返回错误消息。"""
         total = token_meta.get("total_tokens", 0) or token_meta.get("context_sections_total", 0)
-        if total > 8000:
+        hard_cap = int(getattr(self.agent.config, "hard_cap", 8_000) or 8_000)
+        if total > hard_cap:
             return (
-                f"<final>Prompt 大小 {total} tokens 超出硬顶限制 (8000)。"
+                f"<final>Prompt 大小 {total} tokens 超出硬顶限制 ({hard_cap})。"
                 "请缩短输入或使用 /reset 清空对话历史后重试。</final>"
             )
         return None
@@ -836,6 +969,8 @@ class AgentLoop:
         context_prefix = build_context_prefix(self.agent, token_meta)
         attach_projection_metadata(token_meta, self.agent.session, context_prefix=context_prefix)
         self._last_token_meta = token_meta
+        if not self._budget_reserve("prompt_tokens", token_meta.get("total_tokens", 0)):
+            return "<final>Prompt token 预算已耗尽。</final>"
         self._accumulate_context_stats(token_meta)
         self._emit("context_built", build_trace_payload(token_meta))
         self._begin_edit_lock_turn()
@@ -862,15 +997,37 @@ class AgentLoop:
             raise CancelledError(
                 "budget", answer=(f"<final>LLM 调用达到硬顶 ({max_calls})，任务终止。</final>")
             )
+        if not self._budget_reserve("llm_calls"):
+            ts.stop_with_reason(
+                StopReason.BUDGET_EXHAUSTED,
+                "stopped",
+                detail="unified budget llm_calls exhausted",
+            )
+            self.stop_reason = StopReason.BUDGET_EXHAUSTED
+            raise CancelledError(
+                "budget", answer="<final>统一预算已耗尽，任务终止。</final>"
+            )
         self._llm_call_count += 1
         ts.record_attempt()
         t1 = _time.time()
         self._emit(
             "model_request_start",
-            {"step": ts.tool_steps + 1, "attempt": ts.attempts},
+            {
+                "step": ts.tool_steps + 1,
+                "attempt": ts.attempts,
+                "model": getattr(self.agent.config, "model", ""),
+                "runtime_budget": self._budget_payload(),
+            },
         )
         meta = getattr(self, "_last_token_meta", None) or {}
         cache_key = str(meta.get("prompt_cache_key", "") or "")
+        effective_output_tokens = int(
+            (self.agent.session.get("runtime_degradation") or {}).get(
+                "max_output_tokens",
+                getattr(self.agent.config, "max_new_tokens", 4096),
+            )
+            or 4096
+        )
         for empty_try in range(self.MAX_EMPTY_RETRIES):
             try:
                 if self._stream_enabled and hasattr(self.agent.model_client, "complete_stream"):
@@ -885,7 +1042,7 @@ class AgentLoop:
                         lambda: self.agent.circuit_breaker.call(
                             self.agent.model_client.complete_stream,
                             prompt_text,
-                            max_new_tokens=self.agent.config.max_new_tokens,
+                            max_new_tokens=effective_output_tokens,
                             on_chunk=on_chunk,
                             cancel_token=self._cancel_token,
                         )
@@ -896,7 +1053,7 @@ class AgentLoop:
                             lambda: self.agent.circuit_breaker.call(
                                 self.agent.model_client.complete,
                                 prompt_text,
-                                max_new_tokens=self.agent.config.max_new_tokens,
+                                max_new_tokens=effective_output_tokens,
                                 prompt_cache_key=cache_key,
                             )
                         )
@@ -907,7 +1064,7 @@ class AgentLoop:
                             lambda: self.agent.circuit_breaker.call(
                                 self.agent.model_client.complete,
                                 prompt_text,
-                                max_new_tokens=self.agent.config.max_new_tokens,
+                                max_new_tokens=effective_output_tokens,
                             )
                         )
                 break  # 成功，退出重试循环
@@ -921,7 +1078,11 @@ class AgentLoop:
                     },
                 )
                 if empty_try < self.MAX_EMPTY_RETRIES - 1:
-                    _time.sleep(0.5 * (empty_try + 1))
+                    if not self._sleep_with_deadline(0.5 * (empty_try + 1)):
+                        raise CancelledError(
+                            "deadline",
+                            answer="<final>重试退避期间已达到全局 deadline。</final>",
+                        )
                 else:
                     ts.stop_with_reason(
                         StopReason.API_ERROR,
@@ -961,8 +1122,11 @@ class AgentLoop:
                 f.write(f"\n=== retry#{self._retry_count} ===\n{raw}\n")
         except Exception:
             pass
-        for _ in range(int(delay * 10)):
-            _time.sleep(0.1)
+        if not self._sleep_with_deadline(delay):
+            raise CancelledError(
+                "deadline",
+                answer="<final>解析重试退避期间已达到全局 deadline。</final>",
+            )
         prompt = str(payload)
         failure = payload.failure if isinstance(payload, ParseRetry) else None
         if failure is not None:
@@ -1168,6 +1332,8 @@ class AgentLoop:
     # ---- 入口 ----
 
     def run(self, user_message: str, callback=None, *, skip_plan: bool = False) -> str:
+        from agent_runtime.budget_manager import BudgetManager
+        from agent_runtime.latency_controller import LatencySLOController
         from agent_runtime.log_context import log_context
         from agent_runtime.task_state import TaskState
 
@@ -1203,11 +1369,22 @@ class AgentLoop:
         )
         self._task_state = ts
         self._call_timings = []
+        self._budget_manager = BudgetManager.from_config(self.agent.config)
+        self._budget_turns_seen = 0
+        self._latency_controller = LatencySLOController(
+            getattr(self.agent.config, "slo", None),
+            getattr(self.agent.config, "degradation", None),
+        )
         self._retry_count = 0
         from agent_runtime.repair_runtime import ExecutionDeadline
 
         self._repair_deadline = ExecutionDeadline(
-            getattr(self.agent.config, "repair_wall_timeout_s", 0) or 0
+            (
+                self.agent.config.effective_deadline()["repair_s"]
+                if hasattr(self.agent.config, "effective_deadline")
+                else getattr(self.agent.config, "repair_wall_timeout_s", 0)
+            )
+            or 0
         )
         self.agent._repair_deadline = self._repair_deadline
         self._repair_budget.turns = 0
@@ -1320,6 +1497,13 @@ class AgentLoop:
         budget = control.get("budget") or {}
         if budget:
             self._repair_budget.restore(budget)
+        manager_snapshot = control.get("budget_manager")
+        if manager_snapshot:
+            self._budget_manager.restore(manager_snapshot)
+            self.agent.session["runtime_budget"] = self._budget_manager.snapshot()
+            self._budget_turns_seen = int(
+                (manager_snapshot.get("used") or {}).get("turns", 0) or 0
+            )
         deadline = control.get("deadline") or {}
         self._repair_deadline = ExecutionDeadline.from_remaining(deadline.get("remaining_s"))
         self.agent._repair_deadline = self._repair_deadline
@@ -1359,12 +1543,21 @@ class AgentLoop:
                     ts,
                     "<final>已达到 repair 全局执行期限，当前任务停止。</final>",
                 )
+            configured_output = int(getattr(self.agent.config, "max_new_tokens", 0) or 4096)
+            latency_decision = self._apply_latency_decision(configured_output)
             if not self._repair_budget.allow_turn():
                 ts.stop_step_limit(self.max_steps)
                 return self._complete_run(
                     ts,
                     f"<final>已达到最大推理轮数限制({self.max_steps})。</final>",
                 )
+            if not self._budget_reserve_turn(turn):
+                ts.stop_with_reason(
+                    StopReason.BUDGET_EXHAUSTED,
+                    "stopped",
+                    detail="unified budget turns exhausted",
+                )
+                return self._complete_run(ts, "<final>统一推理轮次预算已耗尽。</final>")
             self._repair_budget.record_turn()
             if (msg := self._abort_if_cancelled(ts, phase="native_reasoning")) is not None:
                 return msg
@@ -1398,12 +1591,19 @@ class AgentLoop:
                 budget_meta, self.agent.session, context_prefix=context_prefix
             )
             self._last_budget_meta = budget_meta
+            budget_meta["runtime_budget"] = self._budget_payload()
+            if not self._budget_reserve("prompt_tokens", budget_meta.get("total_tokens", 0)):
+                ts.stop_with_reason(
+                    StopReason.CONTEXT_OVERFLOW,
+                    "stopped",
+                    detail="prompt token budget exhausted",
+                )
+                return self._complete_run(ts, "<final>Prompt token 预算已耗尽。</final>")
             self._accumulate_context_stats(budget_meta)
             self._emit("context_built", build_trace_payload(budget_meta))
 
             messages = [{"role": "user", "content": dynamic_user}, *native_tail[-6:]]
-            configured_output = int(getattr(self.agent.config, "max_new_tokens", 0) or 4096)
-            max_output = max(512, min(configured_output, 8192))
+            max_output = max(512, min(latency_decision["max_output_tokens"], 8192))
             deadline = getattr(step_clock, "_deadline", None)
             request = ModelTurnRequest(
                 system_prompt=system_prompt,
@@ -1412,7 +1612,22 @@ class AgentLoop:
                 max_output_tokens=max_output,
                 deadline=deadline,
             )
-            self._emit("model_request_start", {"step": turn, "attempt": turn})
+            if not self._budget_reserve("llm_calls"):
+                ts.stop_with_reason(
+                    StopReason.BUDGET_EXHAUSTED,
+                    "stopped",
+                    detail="unified budget llm_calls exhausted",
+                )
+                return self._complete_run(ts, "<final>统一 LLM 调用预算已耗尽。</final>")
+            self._emit(
+                "model_request_start",
+                {
+                    "step": turn,
+                    "attempt": turn,
+                    "model": getattr(self.agent.config, "model", ""),
+                    "runtime_budget": self._budget_payload(),
+                },
+            )
             self._notify(
                 "on_pre_model",
                 callback,
@@ -1603,6 +1818,16 @@ class AgentLoop:
                 return msg
 
             step = ts.tool_steps + 1
+            self._apply_latency_decision(
+                int(getattr(self.agent.config, "max_new_tokens", 0) or 4096)
+            )
+            if not self._budget_reserve_turn(step):
+                ts.stop_with_reason(
+                    StopReason.BUDGET_EXHAUSTED,
+                    "stopped",
+                    detail="unified budget turns exhausted",
+                )
+                return self._complete_run(ts, "<final>统一推理轮次预算已耗尽。</final>")
             step_clock = StepClock(self._step_timeout_limit_s())
             if (msg := self._maybe_step_timeout(ts, step_clock, step, "xml")) is not None:
                 return msg
@@ -1812,6 +2037,7 @@ class AgentLoop:
             meta["cuts"] = cuts
         if not meta.get("total_tokens"):
             meta["total_tokens"] = budget_meta.get("total_tokens", 0)
+        meta["runtime_budget"] = self._budget_payload()
 
     def _apply_call_usage_meta(self, call_usage: dict) -> None:
         inp = int(call_usage.get("input_tokens", 0) or 0)

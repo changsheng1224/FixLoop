@@ -376,7 +376,10 @@ class ToolExecutor:
 
     def _run_tool(self, name: str, args: dict, tool_spec: dict, token) -> str | ToolExecutionResult:
         """Gate 9：运行工具并把异常转换为结构化结果。"""
-        timeout_s = int(getattr(self.agent.config, "tool_timeout_s", 0) or 0)
+        if hasattr(self.agent.config, "effective_deadline"):
+            timeout_s = int(self.agent.config.effective_deadline()["tool_s"] or 0)
+        else:
+            timeout_s = int(getattr(self.agent.config, "tool_timeout_s", 0) or 0)
         deadline = getattr(self.agent, "_repair_deadline", None)
         remaining = deadline.remaining_s() if deadline is not None else None
         if remaining is not None:

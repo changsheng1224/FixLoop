@@ -88,6 +88,8 @@ class Agent:
 
         # 会话状态 + 记忆
         self.session: dict = self._new_session()
+        if hasattr(self.config, "snapshot"):
+            self.session["config_snapshot"] = self.config.snapshot()
 
         # 缓存 prefix（工具不变时复用，支持自定义 prompt）
         self._prefix = self._build_prefix(system_prompt)

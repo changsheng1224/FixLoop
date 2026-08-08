@@ -151,6 +151,9 @@ def create_checkpoint(
         "task_state": task_state.to_dict(),
         "side_effects": list(agent.session.get("side_effects", []) or []),
         "terminal_status": str(getattr(task_state, "status", "running") or "running"),
+        "config_snapshot": (
+            agent.config.snapshot() if hasattr(agent.config, "snapshot") else {}
+        ),
     }
     from agent_runtime.context_runtime import build_context_manifest
 
@@ -227,6 +230,11 @@ def _runtime_control_snapshot(agent, task_state) -> dict:
             or 0
         ),
         "budget": budget.snapshot() if budget is not None else {},
+        "budget_manager": (
+            getattr(loop, "_budget_manager").snapshot()
+            if loop is not None and getattr(loop, "_budget_manager", None) is not None
+            else {}
+        ),
         "deadline": deadline.snapshot() if deadline is not None else {"remaining_s": None},
         "retry_count": int(getattr(loop, "_retry_count", 0) or 0),
         "no_progress_steps": int(getattr(loop, "_no_progress_steps", 0) or 0),

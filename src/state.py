@@ -6,17 +6,77 @@ Agent 间通过结构化 dataclass 通信，不靠自然语言。
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from enum import StrEnum
+from typing import Any
 
 __all__ = [
     "AgentAskRef",
     "CandidatePatch",
     "RepairPlan",
     "RepairState",
+    "RepairPhase",
+    "RepairStatus",
+    "REPAIR_PHASES",
+    "REPAIR_STATUSES",
     "RetrievedContext",
     "SkillContext",
     "SuspectLocation",
     "VerificationResult",
 ]
+
+
+CURRENT_STATE_SCHEMA_VERSION = "1.1"
+
+
+class RepairPhase(StrEnum):
+    """Canonical repair lifecycle phases."""
+
+    INTENT = "intent"
+    SEED = "seed"
+    LOCALIZE = "localize"
+    RETRIEVE = "retrieve"  # legacy alias retained for persisted states
+    CONTEXT = "context"
+    PATCH = "patch"
+    VERIFY = "verify"
+    RECOVERY = "recovery"
+    DONE = "done"
+    FAILED = "failed"
+
+
+class RepairStatus(StrEnum):
+    PENDING = "pending"
+    FIXED = "fixed"
+    FAILED = "failed"
+    EXHAUSTED = "exhausted"
+    TIMEOUT = "timeout"
+    USER_CANCEL = "user_cancel"
+    REGRESSION = "regression"
+
+
+def _coerce_enum(value, enum_type, default):
+    if isinstance(value, enum_type):
+        return value
+    if enum_type is RepairStatus and str(value) == "patched":
+        return RepairStatus.FIXED
+    try:
+        return enum_type(str(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def migrate_state_payload(data: dict[str, Any] | None) -> dict[str, Any]:
+    """Migrate persisted RepairState payloads without guessing unknown versions."""
+    payload = dict(data or {})
+    version = str(payload.get("schema_version", "1.0") or "1.0")
+    if version not in {"1.0", CURRENT_STATE_SCHEMA_VERSION}:
+        raise ValueError(f"unsupported RepairState schema_version: {version}")
+    if version == "1.0":
+        # v1 used an absent ``attempt`` and did not persist collaboration
+        # attribution.  Keep the migration explicit and deterministic.
+        payload.setdefault("attempt", 0)
+        payload.setdefault("collaboration_attribution", {})
+        payload["schema_version"] = CURRENT_STATE_SCHEMA_VERSION
+    return payload
 
 
 @dataclass
@@ -387,7 +447,8 @@ class VerificationResult:
 
 
 # 修复阶段枚举（与终态 status 分离）
-REPAIR_PHASES = ("localize", "retrieve", "patch", "verify", "done", "failed")
+REPAIR_PHASES = tuple(phase.value for phase in RepairPhase)
+REPAIR_STATUSES = tuple(status.value for status in RepairStatus)
 
 
 @dataclass
@@ -407,8 +468,8 @@ class RepairState:
     feedback: str = ""
     retry_count: int = 0
     max_retries: int = 3
-    phase: str = "localize"  # 当前阶段: localize|retrieve|patch|verify|done|failed
-    status: str = "pending"  # 终态: pending|fixed|failed|exhausted|timeout|user_cancel
+    phase: RepairPhase | str = RepairPhase.LOCALIZE
+    status: RepairStatus | str = RepairStatus.PENDING
     failure_tags: list[str] = field(default_factory=list)
     node_timings: dict = field(default_factory=dict)
     agent_errors: dict = field(default_factory=dict)
@@ -416,7 +477,7 @@ class RepairState:
     agent_asks: list[AgentAskRef] = field(default_factory=list)
     blackboard_snapshot: dict = field(default_factory=dict)
     degraded_mode: bool = False
-    schema_version: str = "1.0"
+    schema_version: str = CURRENT_STATE_SCHEMA_VERSION
     state_revision: int = 0
     attempt: int = 0
     intent: dict = field(default_factory=dict)
@@ -435,6 +496,101 @@ class RepairState:
     side_effects: list[dict] = field(default_factory=list)
     checkpoint_id: str = ""
     checkpoint_sequence: int = 0
+
+    def __post_init__(self) -> None:
+        """Normalize legacy strings while keeping the dataclass API compatible."""
+        self.phase = _coerce_enum(self.phase, RepairPhase, RepairPhase.LOCALIZE)
+        self.status = _coerce_enum(self.status, RepairStatus, RepairStatus.PENDING)
+        self.retry_count = max(0, int(self.retry_count or 0))
+        self.max_retries = max(0, int(self.max_retries or 0))
+        self.state_revision = max(0, int(self.state_revision or 0))
+        self.blackboard_revision = max(0, int(self.blackboard_revision or 0))
+        self.checkpoint_sequence = max(0, int(self.checkpoint_sequence or 0))
+
+    def validate_invariants(self, *, strict: bool = False) -> list[str]:
+        """Validate cross-field state invariants before a runtime commit."""
+        errors: list[str] = []
+        if self.retry_count > self.max_retries:
+            errors.append("retry_count must be <= max_retries")
+        if self.state_revision < 0 or self.blackboard_revision < 0:
+            errors.append("revisions must be non-negative")
+        if self.status == RepairStatus.FIXED:
+            has_patch = bool(self.candidate_patches)
+            skipped = bool(
+                (self.node_timings or {}).get("verify_skipped_reason")
+                or (self.node_timings or {}).get("verify_skipped")
+            )
+            if strict and not has_patch and not skipped:
+                errors.append("fixed state requires candidate_patches or verify_skipped_reason")
+        if self.verification_result and self.verification_result.all_passed:
+            result = self.verification_result
+            if result.failed or result.error:
+                errors.append("all_passed cannot coexist with failed/error tests")
+        for suspect in self.suspect_locations:
+            if suspect.start_line < 0 or suspect.end_line < suspect.start_line:
+                errors.append("suspect location line range is invalid")
+        if strict and self.status in {
+            RepairStatus.FIXED,
+            RepairStatus.FAILED,
+            RepairStatus.EXHAUSTED,
+            RepairStatus.TIMEOUT,
+            RepairStatus.USER_CANCEL,
+            RepairStatus.REGRESSION,
+        } and self.phase not in {RepairPhase.DONE, RepairPhase.FAILED}:
+            errors.append("terminal status requires done or failed phase")
+        if errors and strict:
+            raise ValueError("invalid RepairState: " + "; ".join(errors))
+        return errors
+
+    def apply_patch(self, patch: dict[str, Any], *, actor: str, expected_revision: int) -> dict:
+        """Single-writer state update facade used by orchestration code."""
+        from src.collaboration_governance import apply_state_patch
+
+        return apply_state_patch(
+            self, patch, actor=actor, expected_revision=expected_revision
+        )
+
+    def set_status(self, status: str | RepairStatus, reason: str = "") -> RepairStatus:
+        """Commit a status change through the state governance path."""
+        normalized = _coerce_enum(status, RepairStatus, RepairStatus.FAILED)
+        previous = self.status
+        if previous != normalized:
+            self.status = normalized
+            self.state_revision += 1
+            self.phase_history.append(
+                {
+                    "kind": "status",
+                    "from": str(previous),
+                    "to": normalized.value,
+                    "reason": reason,
+                    "revision": self.state_revision,
+                }
+            )
+            self.phase_history = self.phase_history[-100:]
+        return normalized
+
+    def transition_phase(
+        self,
+        to_phase: str | RepairPhase,
+        reason: str = "",
+        *,
+        allow_recovery: bool = False,
+        actor: str = "runtime",
+        correlation_id: str = "",
+    ):
+        """Apply one canonical FSM transition and persist its audit history."""
+        from src.repair.phase_fsm import RepairPhaseFSM
+
+        fsm = RepairPhaseFSM.from_state(self)
+        transition = fsm.apply(
+            self,
+            str(to_phase),
+            reason,
+            allow_recovery=allow_recovery,
+            actor=actor,
+            correlation_id=correlation_id,
+        )
+        return transition
 
     def to_dict(self) -> dict:
         """序列化为 JSON 可写 dict。"""
@@ -485,6 +641,7 @@ class RepairState:
     @classmethod
     def from_dict(cls, data: dict) -> RepairState:
         """从 dict 反序列化。"""
+        data = migrate_state_payload(data)
         return cls(
             issue_input=data.get("issue_input", ""),
             repair_plan=(
@@ -518,7 +675,7 @@ class RepairState:
             agent_asks=[AgentAskRef.from_dict(item) for item in data.get("agent_asks", [])],
             blackboard_snapshot=dict(data.get("blackboard_snapshot") or {}),
             degraded_mode=data.get("degraded_mode", False),
-            schema_version=data.get("schema_version", "1.0"),
+            schema_version=data.get("schema_version", CURRENT_STATE_SCHEMA_VERSION),
             state_revision=int(data.get("state_revision", 0) or 0),
             attempt=int(data.get("attempt", 0) or 0),
             intent=dict(data.get("intent") or {}),

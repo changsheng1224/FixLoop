@@ -60,6 +60,7 @@ def finalize_agent_run(loop, ts) -> None:
                     getattr(agent.config, "max_llm_calls_per_repair", 0) or 0
                 ),
                 "repair_budget": loop._repair_budget.summary(),
+                "budget_manager": loop._budget_manager.summary(),
                 "tool_observations": tool_observation_summary(
                     agent.session.get("tool_observations", [])
                 ),
@@ -74,6 +75,9 @@ def finalize_agent_run(loop, ts) -> None:
             "plan_todos": list(loop._plan_todos),
             "memory_health": loop._build_memory_health(),
             "memory_feedback": dict(agent.session.get("memory_feedback", {}) or {}),
+            "config_snapshot": (
+                agent.config.snapshot() if hasattr(agent.config, "snapshot") else {}
+            ),
             "memory_usage_events": len(
                 agent.session.get("memory", {}).get("memory_usage_events", [])
             ),

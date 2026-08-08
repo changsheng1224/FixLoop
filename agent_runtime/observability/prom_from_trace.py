@@ -103,5 +103,27 @@ def record_canonical_event(record: dict[str, Any], registry: Any | None = None) 
                     phase=_phase_label(payload),
                 ),
             )
+
+        if event == "budget_exhausted":
+            registry.counter_inc(
+                "fixloop_budget_exhausted_total",
+                labels=low_cardinality_labels(
+                    resource=sanitize_label_value(payload.get("resource", "unknown")),
+                    action=sanitize_label_value(payload.get("action", "stop")),
+                ),
+            )
+        if event == "latency_slo_exceeded":
+            registry.counter_inc(
+                "fixloop_latency_slo_exceeded_total",
+                labels=low_cardinality_labels(
+                    kind=sanitize_label_value(payload.get("kind", "unknown")),
+                ),
+            )
+        if event == "latency_degraded":
+            for action in payload.get("actions", []) or []:
+                registry.counter_inc(
+                    "fixloop_degradation_total",
+                    labels=low_cardinality_labels(action=sanitize_label_value(action)),
+                )
     except Exception:
         pass

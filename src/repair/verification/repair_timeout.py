@@ -70,7 +70,7 @@ def handle_repair_wall_timeout(
         except Exception as e:
             log.warning("[timeout] restore failed: %s", e)
 
-    state.status = RepairTerminalStatus.TIMEOUT
+    state.set_status(RepairTerminalStatus.TIMEOUT, "repair_wall_timeout")
     state.agent_errors["orchestrator"] = f"repair timeout ({repair_timeout_s}s)"
     state.node_timings["repair_timeout"] = repair_timeout_s
     # overshoot：相对「timeout 触发时刻」的额外耗时（grace + salvage），目标 ≤ MAX_WALL_OVERSHOOT_S

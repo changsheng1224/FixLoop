@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from src.blackboard import BLACKBOARD_SCHEMA_VERSION as _BLACKBOARD_SCHEMA_VERSION
 from src.blackboard import Blackboard
 from src.state import RepairState, RetrievedContext, SuspectLocation
+
+BLACKBOARD_SCHEMA_VERSION = _BLACKBOARD_SCHEMA_VERSION
 
 SUSPECT_PREFIX = "suspect:"
 CONTEXT_PREFIX = "context:"
@@ -11,8 +14,6 @@ SCRATCH_PREFIX = "scratch:"
 RULE_SEED_SOURCE = "rule_seed"
 RUNTIME_CONTEXT_SOURCE = "runtime_context"
 ORCHESTRATOR_SOURCE = "orchestrator"
-BLACKBOARD_SCHEMA_VERSION = 1
-
 _CONTEXT_FIELDS = (
     "related_tests",
     "similar_snippets",
@@ -146,6 +147,30 @@ def _pick_conflict_winner(
                 best_source = source
                 best_value = value
         return best_source, best_value
+    if strategy == "trusted_source_priority":
+        priority = {
+            "orchestrator": 100,
+            "verifier": 90,
+            "localizer": 80,
+            "retriever": 70,
+            "rule_seed": 60,
+            "patcher": 50,
+        }
+        index = max(range(len(sources)), key=lambda i: priority.get(sources[i], 0))
+        return sources[index], values[index]
+    if strategy == "latest_valid":
+        for source, value in reversed(list(source_to_value.items())):
+            if value is not None:
+                return source, value
+    if strategy == "merge_list":
+        merged: list = []
+        for value in values:
+            if isinstance(value, list):
+                for item in value:
+                    if item not in merged:
+                        merged.append(item)
+        if merged:
+            return "merge", merged
     return sources[0], values[0]
 
 
@@ -161,9 +186,17 @@ def resolve_blackboard_conflicts(
         # them pending for an explicit retry or model-mediated decision.
         if conflict.get("status") in {"stale", "conflicted"}:
             continue
-        key = conflict["key"]
-        sources = conflict["sources"]
-        values = conflict["values"]
+        key = conflict.get("key", "")
+        sources = conflict.get("sources") or []
+        values = conflict.get("values") or []
+        if not key or not sources or len(sources) != len(values):
+            # Rejected/CAS conflicts require a retry or explicit operator
+            # action; they cannot be resolved by value arbitration.
+            continue
+        if strategy == "reject_all":
+            bb.reject_conflict(key, reason="reject_all")
+            resolved.append({"key": key, "strategy": strategy, "winner_source": ""})
+            continue
         winner_source, winner_value = _pick_conflict_winner(key, sources, values, strategy)
         bb.apply_conflict_winner(key, winner_value, winner_source)
         resolved.append(
@@ -226,5 +259,4 @@ def restore_blackboard_from_snapshot(bb: Blackboard, snapshot: dict | None) -> N
     """Restore blackboard entries from a prior snapshot (checkpoint resume)."""
     if not snapshot:
         return
-    for key, value in (snapshot.get("entries") or {}).items():
-        bb.write(key, value, source_agent="restored")
+    bb.restore_snapshot(snapshot)
