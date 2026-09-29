@@ -15,6 +15,8 @@ RepairAgentRole = Literal["patcher", "verifier"]
 REPAIR_CANONICAL_TOOL_NAMES: tuple[str, ...] = (
     "apply_patch",
     "ast_parse",
+    "code_lookup",
+    "code_relations",
     "expand_lock",
     "find_test",
     "finish_repair",

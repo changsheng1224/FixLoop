@@ -5,9 +5,14 @@
 
 from typing import Literal
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from agent_runtime.policy import RuntimePolicy
+
+
+class CodeExplorationConfig(BaseModel):
+    mode: Literal["text", "lsp", "relations"] = "text"
+    server_argv: tuple[str, ...] | None = None
 
 
 class AgentConfig(RuntimePolicy):
@@ -15,6 +20,8 @@ class AgentConfig(RuntimePolicy):
 
     配置来源优先级：CLI args > .env > 默认值。
     """
+
+    code_exploration: CodeExplorationConfig = Field(default_factory=CodeExplorationConfig)
 
     provider: str = Field(
         default="deepseek", description="模型 Provider: deepseek / openai / ollama"

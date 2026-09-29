@@ -41,6 +41,8 @@ _FILE_TOOLS = frozenset(
         "write_file",
         "patch_file",
         "ast_parse",
+        "code_lookup",
+        "code_relations",
         "inspect_file",
     }
 )

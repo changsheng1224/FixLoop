@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
 from agent_runtime.compression_pipeline import (
@@ -58,6 +59,7 @@ BUDGET_TOOLS = 900
 BUDGET_SKILLS = 400
 BUDGET_MEMORY = 800
 BUDGET_KNOWLEDGE = 600  # 持久知识检索（episodic notes + durable facts）
+BUDGET_SOURCE = 1500
 BUDGET_HISTORY = 2600
 KEEP_RECENT_HISTORY = 6  # 最近 N 条历史完整保留
 HARD_CAP = 8000  # 硬顶 token 数，超出拒绝 ask
@@ -169,11 +171,12 @@ class ContextManager:
         "workspace",
         "memory",
         "knowledge",  # 持久知识检索（episodic notes + durable facts）
+        "source",
         "history",
         "state",
     )
     NATIVE_SYSTEM_ORDER = ("system", "tools")
-    DYNAMIC_ORDER = ("skills", "workspace", "memory", "knowledge", "history", "state")
+    DYNAMIC_ORDER = ("skills", "workspace", "memory", "knowledge", "source", "history", "state")
 
     def __init__(
         self,
@@ -368,12 +371,26 @@ class ContextManager:
                 self._get_knowledge(user_message),
                 scaled_section_budget(BUDGET_KNOWLEDGE, section_cap or total),
             )
+            available = max(0, min(BUDGET_SOURCE, section_cap - filler.used))
+            filler.add_section(
+                "source", self._get_source(metadata, available), BUDGET_SOURCE
+            )
         # Keep the current request available to the integrity check.  The
         # request is intentionally not part of projected history, so checking
         # the goal against history alone incorrectly reports goal loss on every
         # native build.
         metadata["_context_issue"] = user_message
         history_text = self._get_compressed_history(metadata)
+        for observation_id in metadata.get("_source_observation_refs", []):
+            pattern = (
+                rf"(?ms)^\*\*tool\*\*: \[{re.escape(observation_id)}\].*?"
+                r"(?=^\*\*(?:user|assistant|tool|system)\*\*:|\Z)"
+            )
+            history_text = re.sub(
+                pattern,
+                f"**tool**: [source selected in current context: {observation_id}]\n",
+                history_text,
+            )
         metadata["_history_section_text"] = history_text
         filler.add_section(
             "history",
@@ -408,6 +425,28 @@ class ContextManager:
         if history and history_text:
             seal_history_at_build(self.agent.session, len(history), history_text)
         return sections
+
+    def _get_source(self, metadata: dict, token_limit: int) -> str:
+        context = getattr(self.agent, "tool_context", None)
+        service = getattr(context, "exploration_service", None)
+        if service is None or getattr(service, "mode", "") != "relations":
+            return ""
+        from agent_runtime.code_exploration.context import select_source_context
+
+        text, selection = select_source_context(
+            service, self.budget,
+            role=str(getattr(self.agent, "agent_name", "") or ""),
+            phase=str(getattr(self.agent, "_l2_phase", "repair") or "repair"),
+            token_limit=max(0, token_limit - 16),
+        )
+        if selection is not None:
+            self._record_selection_result(metadata, selection)
+            metadata["source_selection"] = selection.to_dict()
+            metadata["_source_observation_refs"] = [
+                item.source_ref for item in selection.selected
+            ]
+            metadata["source_epoch"] = service.epoch
+        return text
 
     def _compact_oversized_request(self, text: str, target_tokens: int) -> str:
         """Keep the issue head and runtime/feedback tail in one deterministic pass."""
@@ -798,6 +837,24 @@ class ContextManager:
             history_window=history_window_budget(self.budget.total_limit),
             tier_policy=self.tier_policy,
         )
+        source_refs = set(meta.get("_source_observation_refs", []))
+        if source_refs:
+            redacted = []
+            for item in projected:
+                if item.get("role") != "tool":
+                    redacted.append(item)
+                    continue
+                content = str(item.get("content", ""))
+                reference = next(
+                    (oid for oid in source_refs if item.get("observation_id") == oid
+                     or content.startswith(f"[{oid}]")),
+                    "",
+                )
+                redacted.append(
+                    {**item, "content": f"[source selected in current context: {reference}]"}
+                    if reference else item
+                )
+            projected = redacted
         observation_refs = [
             str(item.get("observation_id"))
             for item in projected

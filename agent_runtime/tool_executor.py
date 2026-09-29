@@ -145,8 +145,7 @@ class ToolExecutor:
         if self._quota is not None and hasattr(self._quota, "matching_read_reserve"):
             active_reserve = self._quota.matching_read_reserve(name, tool_spec, args)
         bypass_duplicate = bool(
-            isinstance(active_reserve, dict)
-            and active_reserve.get("kind") == "post_lock"
+            isinstance(active_reserve, dict) and active_reserve.get("kind") == "post_lock"
         )
 
         # ---- Gate 5: 重复调用检测 ----
@@ -700,27 +699,7 @@ class ToolExecutor:
                 sandbox_violation=True,
             )
 
-        # read_file：体量与二进制护栏（文件存在时）
-        if name == "read_file" and resolved.is_file():
-            from agent_runtime.io_limits import is_likely_binary, read_max_bytes
-
-            try:
-                size = resolved.stat().st_size
-            except OSError:
-                size = 0
-            limit = read_max_bytes()
-            if size > limit:
-                return self._rejected(
-                    3,
-                    "oversized_read",
-                    f"Error: 文件过大 ({size} bytes > {limit})，拒绝读取: {raw_path}",
-                )
-            if is_likely_binary(resolved):
-                return self._rejected(
-                    3,
-                    "binary_file",
-                    f"Error: 疑似二进制文件，拒绝读取: {raw_path}",
-                )
+        # 有界读取器计量实际字节；整文件大小不能阻止合法的小范围读取。
         return None
 
     def _validate_shell_args(self, name: str, args) -> ToolExecutionResult | None:
@@ -757,6 +736,8 @@ class ToolExecutor:
             "search",
             "grep",
             "ast_parse",
+            "code_lookup",
+            "code_relations",
             "inspect_file",
             "find_test",
             "finish_repair",
@@ -775,9 +756,7 @@ class ToolExecutor:
             "github_list_workflow_runs",
         }
     )
-    _ASK_TOOLS = frozenset(
-        {"write_file", "patch_file", "apply_patch", "github_create_draft_pr"}
-    )
+    _ASK_TOOLS = frozenset({"write_file", "patch_file", "apply_patch", "github_create_draft_pr"})
     _DENY_TOOLS = frozenset({"run_shell"})
 
     @classmethod
@@ -807,6 +786,8 @@ class ToolExecutor:
             "read_file": tools_module.ReadFileArgs,
             "search": tools_module.SearchArgs,
             "grep": tools_module.GrepArgs,
+            "code_lookup": tools_module.CodeLookupArgs,
+            "code_relations": tools_module.CodeRelationsArgs,
             "write_file": tools_module.WriteFileArgs,
             "patch_file": tools_module.PatchFileArgs,
             "run_shell": tools_module.RunShellArgs,
@@ -821,6 +802,8 @@ class ToolExecutor:
             "search",
             "grep",
             "ast_parse",
+            "code_lookup",
+            "code_relations",
             "inspect_file",
             "find_test",
             "git_blame",
@@ -851,6 +834,12 @@ class ToolExecutor:
             return False
 
         if name in self._READ_TOOLS:
+            if name == "code_lookup":
+                return all(
+                    item.get("tool_name") == name
+                    and item.get("tool_args", {}) == args
+                    for item in recent
+                )
             same_name = recent[0].get("tool_name") == recent[1].get("tool_name") == name
             same_path = (
                 recent[0].get("tool_args", {}).get("path", "")
@@ -1136,8 +1125,7 @@ class QuotaEnforcer:
             (
                 item
                 for item in self._read_reserves
-                if item["kind"] != "post_lock"
-                and self._paths_match(path, item["path"])
+                if item["kind"] != "post_lock" and self._paths_match(path, item["path"])
             ),
             None,
         )
@@ -1145,16 +1133,11 @@ class QuotaEnforcer:
             return exact
         # Once a recovery has an exact targeted path, do not let the older
         # wildcard convergence reserve authorize a different file.
-        if any(
-            item["kind"] == "targeted" and item["path"] != "*"
-            for item in self._read_reserves
-        ):
+        if any(item["kind"] == "targeted" and item["path"] != "*" for item in self._read_reserves):
             return None
         return next((item for item in self._read_reserves if item["path"] == "*"), None)
 
-    def grant_read_reserve(
-        self, path: str = "*", *, kind: str, generation: int = 0
-    ) -> bool:
+    def grant_read_reserve(self, path: str = "*", *, kind: str, generation: int = 0) -> bool:
         """Grant one read outside the normal read quota, optionally scoped to a path."""
         normalized = "*" if path == "*" else str(path or "").replace("\\", "/")
         if not normalized:

@@ -1,0 +1,70 @@
+{
+  "schema_version": "1",
+  "kind": "pre_io_change_baseline",
+  "head": "45c60d6977b3bc2b5db0f3676ff1ffc2c2e7f3ec",
+  "dirty": true,
+  "tracked_dirty_count": 0,
+  "untracked_entry_count": 42,
+  "source_hashes": {
+    "agent_runtime/tools.py": "7ca1c3bdaac70168359b086ebe282953286d0942a1cda8786ab40d8a3e4e0860",
+    "agent_runtime/file_listing.py": "5a2054e30b34ef7487a5a5f4ab41c75ba8b60ee19aaf3ee7a9009fd8a934ce70",
+    "agent_runtime/io_limits.py": "2a152ca602744d9d94c110f82c38ddbead2157f3b3322f9f870775a8ea5e6ac0",
+    "agent_runtime/tool_context.py": "9ea3d72c60235ee3e305ebb8c92079e023bb71be21e184f098f323f985deca51",
+    "agent_runtime/tool_result.py": "49f553e671043e747df800b1cac7ea1b6ba52511df02033d157c31672faa930c",
+    "src/eval/runner.py": "56e02e0a7a0a46d02312a9e2772b98241e8eee2b2e3371b4d2829dad0cb65f17"
+  },
+  "suite_hash": "8556f6bd2570f57b90abadfd00c91fa6c46355edc1501aa64e34da6d730a3bee",
+  "fixture_hashes": {
+    "error_definition": "4c771370e3690da02aa9baf498ddacafe95631eb69b31249340dda203f2f9819",
+    "same_name": "bbcbdd9d0789c1a063fd3cc69ea4c3a06c0555071220af3f31dfb62a1aec8762",
+    "alias_reference": "7e94845a364f53aa2dde7ad6add8e370783283c1013268df8ac66649682a4893",
+    "cross_file_import": "e8200e720aa23c93657d2a21ae8887089cceb3844b39175cb25bd10537f011b9",
+    "test_relation": "01adeaa962212fb085a092902831f582fa8f49d7f42741326422566c665d436a",
+    "dynamic_unknown": "613846ca90e1cc4d17687dfbba05ece82cd138913956b5dcc00f3a12caf693d8",
+    "repeat_exploration": "ff90a138eb57a0c9f75fea08d73c165734fbf92fde175ef83b75168b42c7840a",
+    "repair_import": "e2cd285aff1df006b0e6df8c312472b68a4f40f1c78d28ee6c1ac6b5acd0d1e9"
+  },
+  "runtime_versions": {
+    "python": "3.14.3",
+    "pytest": "9.1.1",
+    "ruff": {
+      "path": "C:\\Users\\haoyu\\anaconda3\\Scripts\\ruff.EXE",
+      "version": "ruff 0.12.0"
+    },
+    "pylsp": {
+      "path": "C:\\Users\\haoyu\\anaconda3\\Scripts\\pylsp.EXE",
+      "version": "pylsp v1.13.1",
+      "interpreter": "C:\\Users\\haoyu\\anaconda3\\python.exe",
+      "python": "3.13.9",
+      "python_lsp_server": "1.13.1",
+      "jedi": "0.19.2"
+    }
+  },
+  "budget_defaults": {
+    "range_scan_bytes": 262144,
+    "range_return_lines": 200,
+    "range_return_bytes": 32768,
+    "search_files": 300,
+    "search_read_bytes": 2097152,
+    "file_ast_lsp_bytes": 262144,
+    "retrieval_hits": 50,
+    "tool_visible_bytes": 65536,
+    "lsp_initialize_seconds": 5,
+    "lsp_request_seconds": 3,
+    "lsp_message_bytes": 1048576,
+    "relation_files": 8,
+    "relation_nodes": 64,
+    "relation_edges": 128,
+    "context_top_k": 6,
+    "context_tokens": 1500
+  },
+  "comparison_design": {
+    "text": "bounded_text_after_P1",
+    "lsp": "bounded_text_plus_python_lsp",
+    "relations": "bounded_text_plus_lsp_plus_task_view",
+    "agent_repetitions_per_task": 3,
+    "model": "pending_authorization",
+    "sampling": "pending_authorization"
+  },
+  "agent_experiment": "pending_authorization"
+}

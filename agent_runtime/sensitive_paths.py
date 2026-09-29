@@ -61,7 +61,7 @@ SENSITIVE_PATH_GLOBS: tuple[str, ...] = (
 )
 
 _WRITE_TOOLS = frozenset({"write_file", "patch_file"})
-_READ_TOOLS = frozenset({"read_file", "grep", "search", "inspect_file", "ast_parse"})
+_READ_TOOLS = frozenset({"read_file", "grep", "search", "inspect_file", "ast_parse", "code_lookup"})
 
 
 def is_sensitive_path(path: str | Path) -> bool:

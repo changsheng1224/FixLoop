@@ -34,6 +34,7 @@ def test_successful_tool_step_is_persisted_as_resumable_checkpoint(temp_workspac
     agent = _agent(temp_workspace, [])
     loop = AgentLoop(agent)
     ts = TaskState.create(user_request="list files")
+    ts.advance_runtime("reasoning")
     loop._task_state = ts
 
     next_message = loop._run_tool_step(
@@ -63,6 +64,7 @@ def test_resume_continues_after_last_successful_tool_step(temp_workspace):
     first = _agent(temp_workspace, [])
     loop = AgentLoop(first)
     ts = TaskState.create(user_request="list files")
+    ts.advance_runtime("reasoning")
     loop._task_state = ts
     loop._run_tool_step(ts, "list_files", {"path": "."}, step=1, path="xml")
 
@@ -96,6 +98,7 @@ def test_write_step_resume_rejected_when_affected_file_changed(temp_workspace):
     agent = _agent(temp_workspace, [])
     loop = AgentLoop(agent)
     ts = TaskState.create(user_request="write file")
+    ts.advance_runtime("reasoning")
     loop._task_state = ts
     loop._run_tool_step(
         ts,

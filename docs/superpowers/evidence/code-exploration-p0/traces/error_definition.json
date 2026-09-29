@@ -1,0 +1,28 @@
+[
+  {
+    "tool": "list_files",
+    "args": {
+      "path": ".",
+      "depth": 0,
+      "glob": "*.py"
+    },
+    "result": "[F] app.py\n[F] normalize.py"
+  },
+  {
+    "tool": "grep",
+    "args": {
+      "pattern": "def normalize",
+      "path": "normalize.py"
+    },
+    "result": "1:def normalize(value: str) -> str:"
+  },
+  {
+    "tool": "read_file",
+    "args": {
+      "path": "normalize.py",
+      "start": 1,
+      "end": 4
+    },
+    "result": "# normalize.py  (1-2/2 行)\n   1 | def normalize(value: str) -> str:\n   2 |     return value.strip().lower()"
+  }
+]

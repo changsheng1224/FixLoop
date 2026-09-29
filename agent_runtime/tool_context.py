@@ -34,6 +34,10 @@ class ToolContext:
     # Patcher-primary：可选 EditLockState（未读不可写 / allowed_edit）
     edit_lock: object | None = None
     observation_state: dict | None = None
+    exploration_mode: str = "text"
+    exploration_service: object | None = None
+    lsp_argv: tuple[str, ...] | None = None
+    exploration_event_sink: Callable[[str, dict], None] | None = None
 
     def __post_init__(self):
         if self.path_resolver is None:

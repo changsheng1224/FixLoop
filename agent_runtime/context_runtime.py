@@ -127,9 +127,7 @@ class ContextPolicyEngine:
         # Pins and required kinds are selected first, but still obey the hard
         # budget.  A refusal is explicit rather than silently dropping data.
         pinned = [
-            item
-            for item in by_id.values()
-            if item.hard_pin or item.kind in request.required_kinds
+            item for item in by_id.values() if item.hard_pin or item.kind in request.required_kinds
         ]
         for item in sorted(pinned, key=lambda value: value.item_id):
             cost = max(int(item.token_cost), 0)
@@ -409,11 +407,20 @@ class ObservationStore:
         sensitivity: str = "internal",
         error_code: str = "",
         evidence_refs: list[str] | None = None,
+        source_dependencies: dict[str, str] | None = None,
+        retrieval_query_id: str = "",
     ) -> Observation:
         with self._lock:
             args = dict(args or {})
             args_hash = self._args_hash(args)
-            key = self._dedup_key(tool, args_hash, source_version, args)
+            key = self._dedup_key(
+                tool,
+                args_hash,
+                source_version,
+                args,
+                source_dependencies=source_dependencies,
+                retrieval_query_id=retrieval_query_id,
+            )
             existing_id = self.state.setdefault("observation_index", {}).get(key)
             if existing_id and existing_id in self.registry:
                 existing = self._from_record(self.registry[existing_id])
@@ -435,7 +442,14 @@ class ObservationStore:
             raw_ref, checksum, blob_size = self._persist_raw(
                 observation_id, safe_raw, result_digest
             )
-            deps = list(dependencies or self._infer_dependencies(tool, args))
+            deps = list(
+                dict.fromkeys(
+                    [
+                        *(dependencies or self._infer_dependencies(tool, args)),
+                        *(source_dependencies or {}).keys(),
+                    ]
+                )
+            )
             observation = Observation(
                 observation_id=observation_id,
                 tool=str(tool),
@@ -479,22 +493,63 @@ class ObservationStore:
         return Observation(**{key: value for key, value in raw.items() if key in fields})
 
     def _dedup_key(
-        self, tool: str, args_hash: str, source_version: str, args: dict[str, Any]
+        self,
+        tool: str,
+        args_hash: str,
+        source_version: str,
+        args: dict[str, Any],
+        *,
+        source_dependencies: dict[str, str] | None = None,
+        retrieval_query_id: str = "",
     ) -> str:
         dependency = ",".join(sorted(self._infer_dependencies(tool, args)))
         scope = f"{self.workspace_id}:{self.session_id}"
-        fingerprint = self._source_fingerprint(args, source_version)
+        fingerprint = self._source_fingerprint(
+            args,
+            source_version,
+            source_dependencies=source_dependencies,
+            retrieval_query_id=retrieval_query_id,
+        )
         return f"{scope}:{tool}:{args_hash}:{fingerprint}:{dependency}"
 
-    def _source_fingerprint(self, args: dict[str, Any], source_version: str) -> str:
+    def _source_fingerprint(
+        self,
+        args: dict[str, Any],
+        source_version: str,
+        *,
+        source_dependencies: dict[str, str] | None = None,
+        retrieval_query_id: str = "",
+    ) -> str:
         payload: dict[str, Any] = {"source_version": str(source_version or "")}
+        if source_dependencies is not None:
+            # Retrieval already paid for these hashes. Never reread its files
+            # while inserting an Observation, including large partial reads.
+            payload["files"] = dict(source_dependencies)
+            payload["retrieval_query_id"] = retrieval_query_id
+            return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:20]
         if self.root is not None:
             files = {}
             for relative in self._infer_dependencies("read_file", args):
                 path = (self.root / relative).resolve()
                 try:
                     path.relative_to(self.root.resolve())
-                    files[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+                    if path.stat().st_size > 256 * 1024:
+                        files[relative] = f"unversioned:{time.time_ns()}"
+                        continue
+                    digest = hashlib.sha256()
+                    read_bytes = 0
+                    with path.open("rb") as stream:
+                        while read_bytes <= 256 * 1024:
+                            chunk = stream.read(min(65536, 256 * 1024 + 1 - read_bytes))
+                            if not chunk:
+                                break
+                            read_bytes += len(chunk)
+                            digest.update(chunk)
+                    files[relative] = (
+                        digest.hexdigest()
+                        if read_bytes <= 256 * 1024
+                        else f"unversioned:{time.time_ns()}"
+                    )
                 except (OSError, ValueError):
                     files[relative] = "missing"
             payload["files"] = files
@@ -653,7 +708,18 @@ class ObservationStore:
         path = Path(raw["raw_ref"])
         try:
             if raw["raw_ref"].startswith("memory:"):
-                return str(self.blobs.get(observation_id, ""))
+                text = str(self.blobs.get(observation_id, ""))
+                if (
+                    raw.get("checksum")
+                    and hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
+                    != raw["checksum"]
+                ):
+                    self.invalidate(
+                        lambda item: item.get("observation_id") == observation_id,
+                        "blob_checksum_mismatch",
+                    )
+                    return ""
+                return text
             if self.root is not None:
                 path.resolve().relative_to((self.root / ".agent" / "observations").resolve())
             text = path.read_text(encoding="utf-8") if path.is_file() else ""

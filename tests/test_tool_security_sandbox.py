@@ -65,12 +65,13 @@ class TestSensitivePaths:
 
 
 class TestIoLimits:
-    def test_oversized_read_gate3(self, executor, workspace, monkeypatch):
+    def test_large_file_range_read_is_allowed(self, executor, workspace, monkeypatch):
         monkeypatch.setenv("FIXLOOP_READ_MAX_BYTES", "64")
         big = Path(workspace.repo_root) / "big.txt"
         big.write_text("x" * 200, encoding="utf-8")
         result = executor.execute("read_file", {"path": "big.txt"})
-        assert result.metadata["tool_error_code"] == "oversized_read"
+        assert result.metadata["tool_status"] == "success"
+        assert "x" * 200 in result.content
 
     def test_binary_rejected(self, executor, workspace):
         blob = Path(workspace.repo_root) / "a.bin"

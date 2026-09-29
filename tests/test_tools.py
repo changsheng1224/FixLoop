@@ -134,7 +134,8 @@ class TestToolRegistry:
         """验证工具可以被调用。"""
         registry = build_tool_registry(ctx)
         result = registry["list_files"]["run"]({"path": "."})
-        assert "README.md" in result
+        assert "README.md" in result.content
+        assert result.metadata["retrieval_result"]["query_type"] == "file_listing"
 
     def test_legal_tool_names(self, ctx):
         registry = build_tool_registry(ctx)
@@ -144,6 +145,8 @@ class TestToolRegistry:
             "read_file",
             "search",
             "grep",
+            "code_lookup",
+            "code_relations",
             "write_file",
             "patch_file",
             "apply_patch",
@@ -198,9 +201,7 @@ class TestGrep:
         from agent_runtime.tools import tool_grep
 
         ctx = ToolContext(root=str(temp_workspace))
-        assert "0 matches" in tool_grep(
-            ctx, {"pattern": "noSuchPattern", "path": "."}
-        )
+        assert "0 matches" in tool_grep(ctx, {"pattern": "noSuchPattern", "path": "."})
 
     def test_grep_missing_pattern(self):
         from agent_runtime.tool_context import ToolContext
