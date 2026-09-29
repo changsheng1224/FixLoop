@@ -3,7 +3,9 @@
 纯 urllib 实现，零第三方 HTTP 库依赖。
 """
 
+import hashlib
 import json
+import re
 import time
 import urllib.error
 import urllib.request
@@ -12,6 +14,146 @@ from agent_runtime.errors import EmptyModelResponse
 from agent_runtime.model_timing import ModelCallTiming
 from agent_runtime.providers.http_timing import read_http_body_with_timing
 from agent_runtime.providers.session_usage import SessionUsageMixin
+
+_HTTP_ERROR_BODY_LIMIT = 64 * 1024
+_HTTP_ERROR_MESSAGE_LIMIT = 512
+_SECRET_PATTERNS = (
+    re.compile(r"(?i)\b(?:sk|key|token)-[A-Za-z0-9._-]{8,}\b"),
+    re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+"),
+    re.compile(r"(?i)(api[_-]?key\s*[:=]\s*)[^\s,;]+"),
+)
+
+
+def _sanitize_provider_error_message(value: object) -> str:
+    text = " ".join(str(value or "").split())
+    for pattern in _SECRET_PATTERNS:
+        text = pattern.sub(
+            lambda match: (
+                match.group(1) + "<redacted>" if match.lastindex else "<redacted>"
+            ),
+            text,
+        )
+    if len(text) > _HTTP_ERROR_MESSAGE_LIMIT:
+        text = text[:_HTTP_ERROR_MESSAGE_LIMIT] + "...<truncated>"
+    return text
+
+
+def _request_protocol_summary(body: bytes) -> dict:
+    """Describe an Anthropic request without retaining prompt or source content."""
+    summary: dict[str, object] = {"body_bytes": len(body), "json_valid": False}
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return summary
+    if not isinstance(payload, dict):
+        return summary
+
+    summary["json_valid"] = True
+    messages = payload.get("messages")
+    messages = messages if isinstance(messages, list) else []
+    role_counts: dict[str, int] = {}
+    block_counts: dict[str, int] = {}
+    tool_use_ids: set[str] = set()
+    tool_result_ids: set[str] = set()
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "unknown")
+        role_counts[role] = role_counts.get(role, 0) + 1
+        content = message.get("content")
+        blocks = content if isinstance(content, list) else []
+        if not blocks and isinstance(content, str):
+            block_counts["text"] = block_counts.get("text", 0) + 1
+        for block in blocks:
+            if not isinstance(block, dict):
+                block_counts["invalid"] = block_counts.get("invalid", 0) + 1
+                continue
+            block_type = str(block.get("type") or "unknown")
+            block_counts[block_type] = block_counts.get(block_type, 0) + 1
+            if block_type == "tool_use" and block.get("id"):
+                tool_use_ids.add(str(block["id"]))
+            elif block_type == "tool_result" and block.get("tool_use_id"):
+                tool_result_ids.add(str(block["tool_use_id"]))
+
+    tools = payload.get("tools")
+    summary.update(
+        {
+            "message_count": len(messages),
+            "model": str(payload.get("model") or "")[:128],
+            "role_counts": role_counts,
+            "content_block_counts": block_counts,
+            "tool_schema_count": len(tools) if isinstance(tools, list) else 0,
+            "tool_use_count": len(tool_use_ids),
+            "tool_result_count": len(tool_result_ids),
+            "unmatched_tool_use_count": len(tool_use_ids - tool_result_ids),
+            "orphan_tool_result_count": len(tool_result_ids - tool_use_ids),
+            "max_tokens": payload.get("max_tokens"),
+            "has_system": bool(payload.get("system")),
+        }
+    )
+    return summary
+
+
+def _http_error_diagnostics(
+    error: urllib.error.HTTPError,
+    *,
+    request_body: bytes,
+    attempt: int,
+    max_retries: int,
+    deadline: float | None,
+) -> dict:
+    try:
+        captured = error.read(_HTTP_ERROR_BODY_LIMIT + 1)
+    except OSError:
+        captured = b""
+    truncated = len(captured) > _HTTP_ERROR_BODY_LIMIT
+    captured = captured[:_HTTP_ERROR_BODY_LIMIT]
+    headers = error.headers or {}
+
+    response: dict[str, object] = {
+        "captured_body_bytes": len(captured),
+        "body_truncated": truncated,
+        "captured_body_sha256": hashlib.sha256(captured).hexdigest(),
+    }
+    content_type = str(headers.get("Content-Type") or "")
+    if content_type:
+        response["content_type"] = content_type[:128]
+    retry_after = headers.get("Retry-After")
+    if retry_after:
+        response["retry_after"] = _sanitize_provider_error_message(retry_after)
+    try:
+        payload = json.loads(captured.decode("utf-8")) if captured else {}
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        payload = {}
+    if isinstance(payload, dict):
+        error_obj = payload.get("error")
+        if isinstance(error_obj, dict):
+            response["error_type"] = _sanitize_provider_error_message(error_obj.get("type"))
+            response["error_message"] = _sanitize_provider_error_message(
+                error_obj.get("message")
+            )
+        elif error_obj:
+            response["error_message"] = _sanitize_provider_error_message(error_obj)
+        request_id = payload.get("request_id") or payload.get("id")
+        if request_id:
+            response["request_id"] = _sanitize_provider_error_message(request_id)
+    header_request_id = headers.get("request-id") or headers.get("x-request-id")
+    if header_request_id and "request_id" not in response:
+        response["request_id"] = _sanitize_provider_error_message(header_request_id)
+
+    remaining_ms = None
+    if deadline is not None:
+        remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+    return {
+        "http_status": int(error.code),
+        "http_reason": _sanitize_provider_error_message(error.reason),
+        "endpoint": "/messages",
+        "attempt": attempt + 1,
+        "max_attempts": max_retries,
+        "deadline_remaining_ms": remaining_ms,
+        "request": _request_protocol_summary(request_body),
+        "response": response,
+    }
 
 
 def _usage_dict(usage: dict | None) -> dict[str, int]:
@@ -245,6 +387,7 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
             ModelTurnResult,
             ProviderFinish,
             ToolCall,
+            ToolChoiceMode,
             normalize_anthropic_finish,
         )
 
@@ -259,6 +402,16 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
             payload["system"] = request.system_prompt
         if request.tools:
             payload["tools"] = request.tools
+        if request.tool_choice is not None:
+            if request.tool_choice.mode == ToolChoiceMode.REQUIRED:
+                payload["tool_choice"] = {"type": "any"}
+            elif request.tool_choice.mode == ToolChoiceMode.NAMED:
+                payload["tool_choice"] = {
+                    "type": "tool",
+                    "name": request.tool_choice.name,
+                }
+            elif request.tool_choice.mode == ToolChoiceMode.AUTO:
+                payload["tool_choice"] = {"type": "auto"}
         data, timing = self._post_messages(
             json.dumps(payload).encode("utf-8"), deadline=request.deadline
         )
@@ -380,7 +533,37 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
                         f"API 限流 (HTTP 429)，已重试 {max_retries} 次"
                     ) from e
                 if e.code < 500:
-                    raise RuntimeError(f"API 请求失败 (HTTP {e.code}): {e.reason}") from e
+                    from agent_runtime.providers.contracts import (
+                        ProviderError,
+                        ProviderErrorCode,
+                    )
+
+                    diagnostics = _http_error_diagnostics(
+                        e,
+                        request_body=body,
+                        attempt=attempt,
+                        max_retries=max_retries,
+                        deadline=deadline,
+                    )
+                    error_code = (
+                        ProviderErrorCode.AUTHENTICATION
+                        if e.code in (401, 403)
+                        else ProviderErrorCode.PROTOCOL
+                    )
+                    provider_message = str(
+                        (diagnostics.get("response") or {}).get("error_message") or ""
+                    )
+                    message = f"API 请求失败 (HTTP {e.code}): {e.reason}"
+                    if provider_message:
+                        message += f"; provider={provider_message}"
+                    raise ProviderError(
+                        error_code,
+                        message,
+                        retryable=False,
+                        provider="anthropic-compatible",
+                        cause=e,
+                        metadata=diagnostics,
+                    ) from e
                 if attempt < max_retries - 1:
                     delay = compute_server_error_delay(attempt)
                     log.debug(

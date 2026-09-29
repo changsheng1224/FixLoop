@@ -25,34 +25,33 @@ _UNITTEST_STYLE = re.compile(
 
 
 
-def instance_to_issue(instance: SweInstance) -> str:
+def instance_to_issue(
+    instance: SweInstance,
+    *,
+    include_evaluation_metadata: bool = False,
+) -> str:
+    """Convert the public problem statement into a FixLoop repair request.
 
-    """将 SWE-bench problem_statement 转为 FixLoop ``repair(issue)`` 文本。"""
+    Evaluation-only metadata is excluded by default so localization and patch
+    generation cannot consume answer-bearing SWE-bench fields. The opt-in form
+    exists only for explicitly assisted adapter diagnostics.
+    """
+    statement = instance.problem_statement.strip() or "(empty problem_statement)"
+    if not include_evaluation_metadata:
+        return statement
 
     parts = [
-
         f"[SWE-bench] instance_id={instance.instance_id}",
-
         f"repo={instance.repo}",
-
         f"base_commit={instance.base_commit}",
-
         "",
-
-        instance.problem_statement.strip() or "(empty problem_statement)",
-
+        statement,
     ]
-
     if instance.FAIL_TO_PASS:
-
         parts.append("")
-
         parts.append(_FAIL_TO_PASS_HEADER)
-
-        for t in instance.FAIL_TO_PASS[:20]:
-
-            parts.append(f"- {t}")
-
+        for test_ref in instance.FAIL_TO_PASS[:20]:
+            parts.append(f"- {test_ref}")
     return "\n".join(parts)
 
 

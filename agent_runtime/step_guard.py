@@ -23,6 +23,7 @@ Usage::
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 
@@ -43,6 +44,26 @@ _FILE_TOOLS = frozenset(
         "inspect_file",
     }
 )
+
+_READ_TOOLS = frozenset(
+    {
+        "read_file",
+        "list_files",
+        "search",
+        "grep",
+        "ast_parse",
+        "inspect_file",
+        "find_test",
+        "git_blame",
+        "git_diff",
+        "java_ast_parse",
+        "stack_parse",
+        "java_stack_parse",
+        "expand_observation",
+    }
+)
+_WRITE_TOOLS = frozenset({"write_file", "patch_file", "apply_patch"})
+DEFAULT_READS_BEFORE_CONVERGE = 6
 
 
 def _extract_filenames(text: str) -> set[str]:
@@ -95,20 +116,37 @@ class StepGuard:
         stall_threshold: int = DEFAULT_STALL_THRESHOLD,
         drift_warn: int = DEFAULT_DRIFT_WARN,
         drift_terminate: int = DEFAULT_DRIFT_TERMINATE,
+        reads_before_converge: int = DEFAULT_READS_BEFORE_CONVERGE,
     ):
         self._stall_threshold = stall_threshold
         self._drift_warn = drift_warn
         self._drift_terminate = drift_terminate
+        self._reads_before_converge = reads_before_converge
 
         self._stall_count = 0
         self._drift_count = 0
         self._suspect_files: set[str] = set()
         self._task_summary = ""
         self._drift_warned = False
+        self._phase = "explore"
+        self._read_keys: set[str] = set()
+        self._read_ranges: dict[str, list[tuple[int, int]]] = {}
+        self._reads_since_write = 0
+        self._targeted_read_used = False
+        self._convergence_novel_reads = 0
+        self._localization_mode = False
+        self._localization_window_closed = False
+        self._convergence_reason = ""
 
     # ---- 公开 API ----
 
-    def reset(self, task_summary: str = "", suspect_files: set[str] | None = None) -> None:
+    def reset(
+        self,
+        task_summary: str = "",
+        suspect_files: set[str] | None = None,
+        *,
+        localization_mode: bool = False,
+    ) -> None:
         """重置计数器，注入当前任务上下文。
 
         Args:
@@ -119,6 +157,15 @@ class StepGuard:
         self._drift_count = 0
         self._drift_warned = False
         self._task_summary = task_summary
+        self._phase = "explore"
+        self._read_keys.clear()
+        self._read_ranges.clear()
+        self._reads_since_write = 0
+        self._targeted_read_used = False
+        self._convergence_novel_reads = 0
+        self._localization_mode = bool(localization_mode)
+        self._localization_window_closed = False
+        self._convergence_reason = ""
         if suspect_files is not None:
             self._suspect_files = set(suspect_files)
         else:
@@ -129,10 +176,79 @@ class StepGuard:
 
         调用顺序：先检查 stall，再检查 drift。首个命中即返回。
         """
-        result = self._evaluate_stall(ctx)
+        novel_evidence = bool(ctx.progress_key and ctx.progress_key not in self._read_keys)
+        result = self._evaluate_stall(ctx, novel_evidence=novel_evidence)
         if result is not None:
             return result
-        return self._evaluate_drift(ctx)
+        progress_result = self._record_progress(ctx, novel_evidence=novel_evidence)
+        drift_result = self._evaluate_drift(ctx)
+        return drift_result or progress_result
+
+    def preflight(
+        self,
+        tool_name: str,
+        tool_args: dict,
+        *,
+        read_reservation: dict | None = None,
+    ) -> StepVerdict | None:
+        """Gate repeated reads and require a patch decision after exploration."""
+        if tool_name not in _READ_TOOLS:
+            return None
+        # A successful lock expansion creates a narrowly scoped capability.  It
+        # must run before duplicate/convergence checks so the subsequent read can
+        # refresh EditLock evidence for the new lock generation.
+        if (
+            tool_name == "read_file"
+            and isinstance(read_reservation, dict)
+            and read_reservation.get("kind") == "post_lock"
+            and read_reservation.get("path")
+            == str(tool_args.get("path") or "").replace("\\", "/")
+        ):
+            return StepVerdict(
+                reason="",
+                detail="扩锁后精确路径读取",
+                action="allow_reserved_read",
+            )
+        if self._is_duplicate_read(tool_name, tool_args):
+            if self._localization_mode and self._phase == "converge":
+                self._localization_window_closed = True
+            self.enter_convergence("duplicate_read")
+            return StepVerdict(
+                reason="",
+                detail="读取范围与已有证据重复",
+                action="block_duplicate_read",
+                replan_hint="使用已有证据生成补丁，或只读取一个尚未覆盖的精确范围。",
+            )
+        if self._phase == "converge":
+            if self._localization_mode and self._convergence_novel_reads < 3:
+                self._convergence_novel_reads += 1
+                return StepVerdict(
+                    reason="",
+                    detail="定位阶段允许新的证据读取",
+                    action="allow_localization_read",
+                )
+            if not self._targeted_read_used:
+                self._targeted_read_used = True
+                return StepVerdict(
+                    reason="",
+                    detail="收敛阶段一次性定向读取",
+                    action="allow_targeted_read",
+                )
+            return StepVerdict(
+                reason="",
+                detail="收敛阶段的定向读取额度已使用",
+                action="block_convergence_read",
+                replan_hint="现在应 apply_patch，或明确终止为需要更多上下文。",
+            )
+        return None
+
+    def enter_convergence(self, reason: str) -> bool:
+        """Enter convergence once; return True only for the transition."""
+        if self._phase != "explore":
+            return False
+        self._phase = "converge"
+        self._convergence_reason = reason
+        return True
 
     @property
     def stall_count(self) -> int:
@@ -149,11 +265,56 @@ class StepGuard:
         """当前疑似文件集。"""
         return set(self._suspect_files)
 
+    @property
+    def phase(self) -> str:
+        return self._phase
+
+    @property
+    def localization_mode(self) -> bool:
+        """Whether the active agent owns implementation localization."""
+        return self._localization_mode
+
+    @property
+    def localization_reads_available(self) -> bool:
+        """Bounded novel-read budget retained after convergence for Patcher."""
+        return (
+            self._localization_mode
+            and self._phase == "converge"
+            and not self._localization_window_closed
+            and self._convergence_novel_reads < 3
+        )
+
+    @property
+    def convergence_reason(self) -> str:
+        return self._convergence_reason
+
+    @property
+    def reads_since_write(self) -> int:
+        return self._reads_since_write
+
+    @property
+    def targeted_read_available(self) -> bool:
+        return self._phase == "converge" and not self._targeted_read_used
+
+    def request_targeted_reread(self, reason: str = "") -> bool:
+        """Open one bounded reread after a stale write precondition."""
+        # A stale write can be discovered after the normal convergence read
+        # was already consumed.  It is a new recovery event, so reopen exactly
+        # one targeted read instead of falling back to the same stale write.
+        if self._targeted_read_used and reason not in {"stale_preimage", "no_change"}:
+            return False
+        self._targeted_read_used = False
+        self._phase = "converge"
+        self._convergence_reason = reason or "targeted_reread"
+        return True
+
     # ---- 内部检测器 ----
 
-    def _evaluate_stall(self, ctx: StepContext) -> StepVerdict | None:
+    def _evaluate_stall(
+        self, ctx: StepContext, *, novel_evidence: bool = False
+    ) -> StepVerdict | None:
         """StallDetector：连续 K 步无 affected_paths → 终止。"""
-        if ctx.has_affected:
+        if ctx.has_affected or novel_evidence:
             self._stall_count = 0
             return None
         self._stall_count += 1
@@ -170,6 +331,64 @@ class StepGuard:
                 action="replan_then_terminate",
             )
         return None
+
+    def _record_progress(self, ctx: StepContext, *, novel_evidence: bool) -> StepVerdict | None:
+        if ctx.tool_name in _WRITE_TOOLS and ctx.has_affected:
+            self._phase = "patch"
+            self._reads_since_write = 0
+            return None
+        if ctx.tool_name not in _READ_TOOLS or not ctx.progress_key:
+            return None
+        if novel_evidence:
+            self._read_keys.add(ctx.progress_key)
+            self._remember_read_range(ctx.tool_name, ctx.tool_args)
+        self._reads_since_write += 1
+        if self._phase == "explore" and self._reads_since_write >= self._reads_before_converge:
+            self.enter_convergence("read_limit_without_write")
+            return StepVerdict(
+                reason="",
+                detail=f"已读取 {self._reads_since_write} 次但尚未修改实现",
+                action="enter_convergence",
+                replan_hint="仅再允许一次定向读取，随后必须写入或明确终止。",
+            )
+        return None
+
+    @staticmethod
+    def read_progress_key(tool_name: str, tool_args: dict) -> str:
+        if tool_name not in _READ_TOOLS:
+            return ""
+        normalized = {str(k): tool_args[k] for k in sorted(tool_args)}
+        if "path" in normalized:
+            normalized["path"] = str(normalized["path"] or ".").replace("\\", "/")
+        return f"{tool_name}:{json.dumps(normalized, sort_keys=True, default=str)}"
+
+    def _is_duplicate_read(self, tool_name: str, tool_args: dict) -> bool:
+        key = self.read_progress_key(tool_name, tool_args)
+        if key in self._read_keys:
+            return True
+        if tool_name != "read_file":
+            return False
+        path = str(tool_args.get("path") or "").replace("\\", "/")
+        if not path:
+            return False
+        start = max(1, int(tool_args.get("start", 1) or 1))
+        end = max(start, int(tool_args.get("end", 200) or 200))
+        for old_start, old_end in self._read_ranges.get(path, []):
+            overlap = max(0, min(end, old_end) - max(start, old_start) + 1)
+            shorter = min(end - start + 1, old_end - old_start + 1)
+            if shorter > 0 and overlap / shorter >= 0.7:
+                return True
+        return False
+
+    def _remember_read_range(self, tool_name: str, tool_args: dict) -> None:
+        if tool_name != "read_file":
+            return
+        path = str(tool_args.get("path") or "").replace("\\", "/")
+        if not path:
+            return
+        start = max(1, int(tool_args.get("start", 1) or 1))
+        end = max(start, int(tool_args.get("end", 200) or 200))
+        self._read_ranges.setdefault(path, []).append((start, end))
 
     def _evaluate_drift(self, ctx: StepContext) -> StepVerdict | None:
         """DriftDetector：连续 M 步操作无关文件 → 渐进式响应。"""

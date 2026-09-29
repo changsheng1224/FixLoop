@@ -20,7 +20,7 @@ from src.eval.cli_helpers import (
     run_skill_eval_cmd,
 )
 from src.eval.runner import DEFAULT_CASES_DIR
-from src.repair.verification.termination import is_repair_success
+from src.repair.verification.termination import has_actionable_patch
 from src.repair_factory import make_orchestrator_factory
 
 
@@ -457,11 +457,13 @@ def _print_repair_result(state, verbose: bool) -> None:
         if state.repair_run_id:
             print(f"--- Trace: .agent/runs/{state.repair_run_id}/trace.jsonl ---", file=sys.stderr)
 
-    if is_repair_success(state):
+    if has_actionable_patch(state):
         skipped = state.node_timings.get("verify_skipped")
         suffix = " (未验证)" if skipped else ""
-        emoji = "⚠" if state.status == "patched" else "✅"
-        print(f"\n{emoji} 修复完成! 状态={state.status}{suffix}")
+        pending = state.status == "pending_verify"
+        emoji = "⚠" if pending or state.status == "patched" else "✅"
+        label = "补丁已生成，等待验证" if pending else "修复完成"
+        print(f"\n{emoji} {label}! 状态={state.status}{suffix}")
         for patch in state.candidate_patches:
             print(f"\n--- {patch.file_path} ---")
             if patch.diff:

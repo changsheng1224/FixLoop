@@ -60,6 +60,7 @@ def assemble_patcher_variables(
     read_line_range: Callable[[str, int, int], str] | None = None,
     evidence_block: str = "",
     runtime_contract_block: str = "",
+    allowed_edit: list[str] | set[str] | tuple[str, ...] | None = None,
 ) -> tuple[dict[str, str], SkillBlockRender, dict | None]:
     subscribe_meta: dict | None = None
     effective_suspects: list[SuspectLocation]
@@ -70,6 +71,8 @@ def assemble_patcher_variables(
             read_snippet=read_snippet,
             read_test_context=read_test_context,
             plan=plan,
+            diff_only=diff_only,
+            read_line_range=read_line_range,
         )
         effective_suspects = read_suspects_from_blackboard(blackboard)
         if not effective_suspects and plan:
@@ -110,9 +113,15 @@ def assemble_patcher_variables(
         if test_blocks:
             test_text = "相关测试文件（补丁必须通过这些 assert）:\n" + "\n".join(test_blocks)
 
+    effective_allowed = (
+        list(allowed_edit)
+        if allowed_edit is not None
+        else list(plan.suspect_files or []) if plan else []
+    )
+    effective_allowed = list(dict.fromkeys(path for path in effective_allowed if path))
     allowed_files_line = ""
-    if plan and plan.suspect_files:
-        allowed_files_line = f"只允许修改以下文件: {', '.join(plan.suspect_files)}"
+    if effective_allowed:
+        allowed_files_line = f"只允许修改以下文件: {', '.join(effective_allowed)}"
 
     extra_lines: list[str] = []
     if is_composite_multi_file(plan):
@@ -129,10 +138,9 @@ def assemble_patcher_variables(
 
     disk_grounding_block = ""
     if read_line_range is not None:
-        plan_files = list(plan.suspect_files) if plan and plan.suspect_files else []
         targets = collect_grounding_targets(
             effective_suspects,
-            plan_files=plan_files,
+            plan_files=effective_allowed,
         )
         disk_grounding_block = build_disk_grounding_block(targets, read_line_range)
 

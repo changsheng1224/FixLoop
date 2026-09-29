@@ -15,9 +15,10 @@ class EmptyModelResponse(Exception):  # noqa: N818 - public API name kept stable
 class ContextTooLargeError(Exception):
     """Prompt 上下文超出 HARD_CAP 硬顶限制，拒绝执行。"""
 
-    def __init__(self, actual: int, limit: int):
+    def __init__(self, actual: int, limit: int, *, metadata: dict | None = None):
         self.actual = actual
         self.limit = limit
+        self.metadata = dict(metadata or {})
         detail = f"Prompt {actual} tokens 超出硬顶限制 ({limit})"
         super().__init__(detail)
 

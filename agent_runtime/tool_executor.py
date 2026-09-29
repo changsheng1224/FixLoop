@@ -122,7 +122,7 @@ class ToolExecutor:
         args = validated_args
 
         # ---- Gate 4: 配额检查 ----
-        shell_slot_acquired, quota_reject = self._check_quota(name, tool_spec)
+        shell_slot_acquired, quota_reject = self._check_quota(name, args, tool_spec)
         if quota_reject is not None:
             return quota_reject
 
@@ -141,8 +141,16 @@ class ToolExecutor:
     ) -> ToolExecutionResult:
         """执行 Gate 5–9；调用方负责释放 Gate 4 获取的资源。"""
 
+        active_reserve = None
+        if self._quota is not None and hasattr(self._quota, "matching_read_reserve"):
+            active_reserve = self._quota.matching_read_reserve(name, tool_spec, args)
+        bypass_duplicate = bool(
+            isinstance(active_reserve, dict)
+            and active_reserve.get("kind") == "post_lock"
+        )
+
         # ---- Gate 5: 重复调用检测 ----
-        if self._is_duplicate(name, args):
+        if not bypass_duplicate and self._is_duplicate(name, args):
             return self._rejected(
                 5,
                 "duplicate",
@@ -152,7 +160,7 @@ class ToolExecutor:
 
         # ---- Gate 5.5: 死循环检测（滑动窗口内相同 tool+args_hash ≥ K） ----
         threshold = int(getattr(self.agent.config, "loop_detect_threshold", 0) or 0)
-        if threshold > 0:
+        if threshold > 0 and not bypass_duplicate:
             call_hash = _canonical_args_hash(name, args)
             self._call_window.append(call_hash)
             if len(self._call_window) > threshold:
@@ -199,6 +207,22 @@ class ToolExecutor:
         execution_result = normalize_tool_result(
             self._run_tool(name, args, tool_spec, token), tool_name=name
         )
+        if (
+            name in {"write_file", "patch_file", "apply_patch"}
+            and execution_result.status == ToolStatus.ERROR.value
+            and execution_result.error_code in {"", "tool_execution_failed"}
+        ):
+            # Editing-time syntax rejection is a distinct recovery class.  It
+            # must not look like an opaque tool failure to the patcher.
+            lowered = str(execution_result.content or "").lower()
+            if "未落盘" in str(execution_result.content or "") and (
+                "语法" in str(execution_result.content or "")
+                or "lint" in lowered
+                or "syntax" in lowered
+            ):
+                execution_result.error_code = "edit_lint_reject"
+                execution_result.metadata["tool_error_code"] = "edit_lint_reject"
+                execution_result.metadata["recovery_action"] = "apply_patch_with_corrected_syntax"
         result = ToolExecutionResult(
             content=execution_result.content,
             metadata=dict(execution_result.metadata),
@@ -240,7 +264,29 @@ class ToolExecutor:
             else:
                 after_snapshot = self._capture_snapshot()
             result.metadata.update(self._diff_snapshots(before_snapshot, after_snapshot))
-        result.metadata.setdefault("tool_status", result.status)
+            affected_paths = result.metadata.get("affected_paths") or []
+            if result.ok and not affected_paths:
+                result.status = ToolStatus.NO_CHANGE.value
+                result.error_code = "no_change"
+                result.retryable = True
+                result.content = (
+                    "Error: 写工具执行后工作区无变化（no_change）。"
+                    "请基于当前内容重新读取并提交不同补丁，或调用 finish_repair。"
+                )
+                result.metadata.update(
+                    {
+                        "tool_status": ToolStatus.NO_CHANGE.value,
+                        "tool_error_code": "no_change",
+                        "retryable": True,
+                        "postcondition": "workspace_diff_required",
+                        "recovery_action": "reread_then_retry_or_finish",
+                    }
+                )
+            elif result.error_code == "stale_preimage":
+                self._attach_stale_preimage_metadata(result, name, args)
+        result.metadata["tool_status"] = result.status
+        if result.error_code:
+            result.metadata["tool_error_code"] = result.error_code
         result.metadata.setdefault("retryable", result.retryable)
         result = attach_tool_receipt(
             result,
@@ -260,7 +306,14 @@ class ToolExecutor:
             }
         )
         if self._quota is not None:
-            self._quota.record(name, tool_spec)
+            consumed = self._quota.record(
+                name,
+                tool_spec,
+                args,
+                succeeded=result.metadata.get("tool_status") == "success",
+            )
+            if consumed is not None:
+                result.metadata["read_reserve_consumed"] = consumed
         return result
 
     def execute(self, name: str, args: dict) -> ToolExecutionResult:
@@ -319,6 +372,19 @@ class ToolExecutor:
             except ValueError as e:
                 return args, self._rejected(3, "invalid_args", f"Error: 参数校验失败: {e}")
 
+        if name == "patch_file" and not str(args.get("diff") or "").strip():
+            # An empty preimage is never a safe patch request: it either
+            # becomes a no-op or loses the grounding needed for a precise edit.
+            if not str(args.get("old_text") or ""):
+                return args, self._rejected(
+                    3,
+                    "invalid_args",
+                    "Error: patch_file 的 old_text 不能为空。"
+                    "请先 read_file，再使用带上下文的 apply_patch。",
+                    recovery_action="apply_patch_with_context",
+                    required_next_action="read_file_then_apply_patch",
+                )
+
         path_reject = self._validate_path_args(name, args)
         if path_reject is not None:
             return args, path_reject
@@ -328,13 +394,13 @@ class ToolExecutor:
         return args, None
 
     def _check_quota(
-        self, name: str, tool_spec: dict | None = None
+        self, name: str, args: dict, tool_spec: dict | None = None
     ) -> tuple[bool, ToolExecutionResult | None]:
         """Gate 4：检查调用配额，并返回是否获取了 shell 并发槽。"""
         if self._quota is None:
             return False, None
-        decision = self._quota.decision(name, tool_spec)
-        if not self._quota.check(name, tool_spec):
+        decision = self._quota.decision(name, tool_spec, args)
+        if not self._quota.check(name, tool_spec, args):
             extra = {}
             if decision is not None:
                 self._quota.record_rejection(name, tool_spec)
@@ -385,6 +451,16 @@ class ToolExecutor:
         if name == "patch_file":
             patch_preview_meta, preview_err = self._build_patch_preview(args)
             if preview_err:
+                # A preimage mismatch is a recoverable workspace race.  Let
+                # the tool execute so the canonical result can carry the
+                # current hash and targeted-reread instruction; malformed
+                # patch syntax remains a Gate 3 rejection.
+                if any(marker in preview_err for marker in ("未找到", "无法应用")):
+                    return {
+                        "path": args.get("path", ""),
+                        "preview_text": f"[stale preimage] {preview_err}",
+                        "preview_error": preview_err,
+                    }, None
                 return None, self._rejected(
                     3,
                     "invalid_args",
@@ -683,6 +759,7 @@ class ToolExecutor:
             "ast_parse",
             "inspect_file",
             "find_test",
+            "finish_repair",
             "git_blame",
             "git_diff",
             "github_list_issues",
@@ -698,7 +775,9 @@ class ToolExecutor:
             "github_list_workflow_runs",
         }
     )
-    _ASK_TOOLS = frozenset({"write_file", "patch_file", "github_create_draft_pr"})
+    _ASK_TOOLS = frozenset(
+        {"write_file", "patch_file", "apply_patch", "github_create_draft_pr"}
+    )
     _DENY_TOOLS = frozenset({"run_shell"})
 
     @classmethod
@@ -957,6 +1036,26 @@ class ToolExecutor:
             "diff_summary": "\n".join(summary_parts) if summary_parts else "(无变更)",
         }
 
+    def _attach_stale_preimage_metadata(
+        self, result: ToolExecutionResult, name: str, args: dict
+    ) -> None:
+        """Expose current file identity so a stale patch can be repaired once."""
+        raw_path = str(args.get("path") or "")
+        result.metadata.update(
+            {
+                "recovery_action": "targeted_reread_then_retry",
+                "preimage_path": raw_path,
+            }
+        )
+        if not raw_path:
+            return
+        try:
+            target = self.agent.tool_context.resolve(raw_path)
+            if target.is_file():
+                result.metadata["current_sha256"] = _sha256_file(target)
+        except (OSError, ValueError):
+            return
+
 
 class QuotaEnforcer:
     """工具执行配额控制。
@@ -981,15 +1080,120 @@ class QuotaEnforcer:
         self._counts = {"write": 0, "shell": 0, "total": 0}
         self._shell_semaphore = threading.Semaphore(max_concurrent_shell)
         self._group_ledger = ToolBudgetLedger(group_limits) if group_limits is not None else None
+        self._read_reserves: list[dict] = []
+        self._terminal_reserve_used = False
 
     def _group_for(self, tool_name: str, tool_spec: dict | None = None):
         from agent_runtime.tool_budget import infer_tool_budget_group
 
         return infer_tool_budget_group(tool_name, tool_spec)
 
-    def decision(self, tool_name: str, tool_spec: dict | None = None):
+    @staticmethod
+    def _normalized_path(args: dict | None) -> str:
+        return str((args or {}).get("path") or "").replace("\\", "/")
+
+    @staticmethod
+    def _paths_match(requested: str, reserved: str) -> bool:
+        """Match a tool path to a reserve without widening it to a wildcard.
+
+        Models may return either workspace-relative paths or absolute paths.
+        A boundary-aware suffix match preserves the exact reserved target in
+        both forms while preventing ``foo.py`` from matching ``notfoo.py``.
+        """
+        left = str(requested or "").replace("\\", "/").strip().lstrip("./")
+        right = str(reserved or "").replace("\\", "/").strip().lstrip("./")
+        if not left or not right:
+            return False
+        # Keep slash normalization after case normalization as Windows
+        # ``normcase`` converts separators back to ``\\``.
+        left = os.path.normcase(left).replace("\\", "/")
+        right = os.path.normcase(right).replace("\\", "/")
+        return left == right or left.endswith("/" + right) or right.endswith("/" + left)
+
+    def _matching_read_reserve(
+        self, tool_name: str, tool_spec: dict | None, args: dict | None
+    ) -> dict | None:
+        from agent_runtime.tool_budget import ToolBudgetGroup
+
+        if self._group_for(tool_name, tool_spec) != ToolBudgetGroup.READ:
+            return None
+        path = self._normalized_path(args)
+        # post_lock is intentionally narrower than a normal read budget: only
+        # read_file on the exact expanded path may consume it.
+        exact = next(
+            (
+                item
+                for item in self._read_reserves
+                if item["kind"] == "post_lock"
+                and tool_name == "read_file"
+                and self._paths_match(path, item["path"])
+            ),
+            None,
+        )
+        if exact is not None:
+            return exact
+        exact = next(
+            (
+                item
+                for item in self._read_reserves
+                if item["kind"] != "post_lock"
+                and self._paths_match(path, item["path"])
+            ),
+            None,
+        )
+        if exact is not None:
+            return exact
+        # Once a recovery has an exact targeted path, do not let the older
+        # wildcard convergence reserve authorize a different file.
+        if any(
+            item["kind"] == "targeted" and item["path"] != "*"
+            for item in self._read_reserves
+        ):
+            return None
+        return next((item for item in self._read_reserves if item["path"] == "*"), None)
+
+    def grant_read_reserve(
+        self, path: str = "*", *, kind: str, generation: int = 0
+    ) -> bool:
+        """Grant one read outside the normal read quota, optionally scoped to a path."""
+        normalized = "*" if path == "*" else str(path or "").replace("\\", "/")
+        if not normalized:
+            return False
+        item = {
+            "path": normalized,
+            "kind": str(kind),
+            "generation": max(0, int(generation or 0)),
+        }
+        if item in self._read_reserves:
+            return False
+        self._read_reserves.append(item)
+        return True
+
+    def decision(self, tool_name: str, tool_spec: dict | None = None, args: dict | None = None):
+        if tool_name == "finish_repair" and not self._terminal_reserve_used:
+            from agent_runtime.tool_budget import BudgetDecision, ToolBudgetGroup
+
+            return BudgetDecision(
+                allowed=True,
+                group=ToolBudgetGroup.RECOVERY,
+                used=0,
+                limit=1,
+                reason="reserved_terminal",
+            )
         if self._group_ledger is None:
             return None
+        reserve = self._matching_read_reserve(tool_name, tool_spec, args)
+        if reserve is not None:
+            from agent_runtime.tool_budget import BudgetDecision, ToolBudgetGroup
+
+            normal = self._group_ledger.check(ToolBudgetGroup.READ)
+            return BudgetDecision(
+                allowed=True,
+                group=ToolBudgetGroup.READ,
+                used=normal.used,
+                limit=max(normal.limit, normal.used + 1),
+                reason=f"reserved_read:{reserve['kind']}",
+            )
         return self._group_ledger.check(self._group_for(tool_name, tool_spec))
 
     def record_rejection(self, tool_name: str, tool_spec: dict | None = None) -> None:
@@ -1002,7 +1206,9 @@ class QuotaEnforcer:
     def release_shell(self):
         self._shell_semaphore.release()
 
-    def check(self, tool_name: str, tool_spec: dict | None = None) -> bool:
+    def check(
+        self, tool_name: str, tool_spec: dict | None = None, args: dict | None = None
+    ) -> bool:
         """检查工具是否在配额内。
 
         Args:
@@ -1011,7 +1217,7 @@ class QuotaEnforcer:
         Returns:
             True 如果允许执行。
         """
-        decision = self.decision(tool_name, tool_spec)
+        decision = self.decision(tool_name, tool_spec, args)
         if decision is not None:
             return decision.allowed
         if self._counts["total"] >= self._limits["total"]:
@@ -1022,15 +1228,36 @@ class QuotaEnforcer:
             return self._counts["shell"] < self._limits["shell"]
         return True  # 只读工具不受限
 
-    def record(self, tool_name: str, tool_spec: dict | None = None):
+    def matching_read_reserve(
+        self, tool_name: str, tool_spec: dict | None = None, args: dict | None = None
+    ) -> dict | None:
+        reserve = self._matching_read_reserve(tool_name, tool_spec, args)
+        return dict(reserve) if reserve is not None else None
+
+    def record(
+        self,
+        tool_name: str,
+        tool_spec: dict | None = None,
+        args: dict | None = None,
+        *,
+        succeeded: bool = True,
+    ) -> dict | None:
         """记录一次工具调用。"""
-        if self._group_ledger is not None:
+        reserve = self._matching_read_reserve(tool_name, tool_spec, args)
+        consumed = None
+        if tool_name == "finish_repair" and succeeded:
+            self._terminal_reserve_used = True
+        elif reserve is not None and succeeded:
+            self._read_reserves.remove(reserve)
+            consumed = dict(reserve)
+        elif self._group_ledger is not None:
             self._group_ledger.record(self._group_for(tool_name, tool_spec))
         self._counts["total"] += 1
         if tool_name in ("write_file", "patch_file", "apply_patch"):
             self._counts["write"] += 1
         elif tool_name == "run_shell":
             self._counts["shell"] += 1
+        return consumed
 
     def status(self) -> str:
         """返回当前配额使用情况。"""
@@ -1058,6 +1285,12 @@ class QuotaEnforcer:
         }
         if self._group_ledger is not None:
             summary["groups"] = self._group_ledger.summary()
+        summary["read_reserves"] = [dict(item) for item in self._read_reserves]
+        summary["terminal_reserve"] = {
+            "used": self._terminal_reserve_used,
+            "limit": 1,
+            "remaining": 0 if self._terminal_reserve_used else 1,
+        }
         return summary
 
 

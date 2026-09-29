@@ -16,6 +16,7 @@ RECEIPT_SCHEMA_VERSION = "1"
 
 class ToolStatus(StrEnum):
     SUCCESS = "success"
+    NO_CHANGE = "no_change"
     REJECTED = "rejected"
     ERROR = "error"
     CANCELLED = "cancelled"
@@ -39,6 +40,8 @@ class ToolErrorCode(StrEnum):
     IDEMPOTENCY_CONFLICT = "idempotency_conflict"
     OUTPUT_TOO_LARGE = "output_too_large"
     STALE_PRECONDITION = "stale_precondition"
+    STALE_PREIMAGE = "stale_preimage"
+    NO_CHANGE = "no_change"
     MCP_UNAVAILABLE = "mcp_unavailable"
     TOOL_EXECUTION_FAILED = "tool_execution_failed"
     PROVIDER_PROTOCOL_ERROR = "provider_protocol_error"
@@ -119,10 +122,24 @@ def normalize_tool_result(result: Any, *, tool_name: str = "") -> ToolResult:
         )
     text = str(result if result is not None else "")
     if text.lstrip().startswith("Error"):
+        lowered = text.lower()
+        stale_markers = (
+            "stale",
+            "未找到（出现 0 次）",
+            "未匹配",
+            "内容不匹配",
+            "hunk 与文件",
+            "base hash mismatch",
+        )
+        error_code = (
+            ToolErrorCode.STALE_PREIMAGE.value
+            if any(marker.lower() in lowered for marker in stale_markers)
+            else ToolErrorCode.TOOL_EXECUTION_FAILED.value
+        )
         return ToolResult(
             content=text,
             status=ToolStatus.ERROR.value,
-            error_code=ToolErrorCode.TOOL_EXECUTION_FAILED.value,
+            error_code=error_code,
             retryable=True,
         )
     return ToolResult(content=text, status=ToolStatus.SUCCESS.value)

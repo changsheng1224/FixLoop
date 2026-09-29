@@ -148,6 +148,7 @@ class TestToolRegistry:
             "patch_file",
             "apply_patch",
             "expand_lock",
+            "finish_repair",
             "quick_test",
             "run_shell",
             "expand_observation",

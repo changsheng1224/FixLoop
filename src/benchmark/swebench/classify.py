@@ -40,6 +40,7 @@ def classify_post_repair(
     repair_status: str,
     verified: bool,
     skip_verify: bool = False,
+    terminal_status: str = "",
 ) -> tuple[FailureClass, str]:
     """repair 结束后、harness 前的归因。
 
@@ -52,12 +53,19 @@ def classify_post_repair(
 
     patch = (model_patch or "").strip()
     status = (repair_status or "").strip().lower()
+    terminal = (terminal_status or "").strip().lower()
     if not patch:
+        # Preserve the patcher's durable terminal cause.  Falling back to the
+        # legacy label is useful only when no cause was recorded at all.
+        if terminal and terminal != "patch_produced":
+            return FailureClass.AGENT, terminal
         return FailureClass.AGENT, "empty_model_patch"
     if not looks_like_unified_diff(patch):
         return FailureClass.AGENT, "invalid_patch_format"
     if verified and status == "fixed":
         return FailureClass.NONE, "pending_harness"
+    if status == "pending_verify":
+        return FailureClass.NONE, "pending_verify"
     if status == "fixed" and (skip_verify or not verified):
         # E15: 主动跳过 verify 时记 pending，不进笼统 agent
         return FailureClass.NONE, "pending_verify"

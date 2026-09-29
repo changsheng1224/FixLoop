@@ -12,6 +12,7 @@ from src.harness.sandbox_manager import (
     ExecResult,
     Sandbox,
     SandboxManager,
+    SandboxRuntimeProbeError,
     sandbox_pip_install_command,
     sandbox_pythonpath_prefix,
 )
@@ -87,6 +88,8 @@ def run_sandbox_verification_flow(
                 sandbox = mgr.create(repo)
             except SandboxArchiveError as exc:
                 return verification_result_for_tar_error(exc), timings_for_tar_error(exc)
+            except SandboxRuntimeProbeError as exc:
+                return verification_result_for_sandbox_runtime_error(exc), exc.to_dict()
             except RuntimeError as exc:
                 # upload / tmpfs 权限等：结构化 ENV，避免裸异常串
                 return verification_result_for_sandbox_error(exc), {
@@ -211,6 +214,22 @@ def verification_result_for_sandbox_error(exc: BaseException) -> VerificationRes
         failure_logs=[
             f"verify_config: {tag}",
             msg[:800],
+        ],
+    )
+
+
+def verification_result_for_sandbox_runtime_error(
+    exc: SandboxRuntimeProbeError,
+) -> VerificationResult:
+    """Image contract failure is an environment error, not a patch/test failure."""
+    return VerificationResult(
+        all_passed=False,
+        total_tests=0,
+        passed=0,
+        failed=0,
+        failure_logs=[
+            "verify_config: sandbox verifier runtime unavailable",
+            str(exc),
         ],
     )
 

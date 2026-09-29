@@ -896,7 +896,11 @@ def run_compression_pipeline(
         else metadata.get("_memory_state")
     )
     if isinstance(memory, dict):
-        integrity = context_integrity(memory, projected_history=projected)
+        integrity = context_integrity(
+            memory,
+            issue=str(meta.get("_context_issue") or ""),
+            projected_history=projected,
+        )
         pipe_meta["context_integrity"] = integrity
         if not integrity.get("ok"):
             state_text = render_state_fallback(memory)

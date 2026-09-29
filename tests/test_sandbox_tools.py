@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from agent_runtime.tool_context import ToolContext
-from src.harness.sandbox_manager import ExecResult, Sandbox
+from src.harness.sandbox_manager import ExecResult, Sandbox, SandboxRuntimeProbeError
 from src.state import VerificationResult
 from src.tools.sandbox_tools import (
     run_sandbox_verification,
@@ -114,6 +114,30 @@ class TestSandboxToolsMocked:
             assert "tar 打包超限" in result.failure_logs[0]
         finally:
             sandbox_tar_mod.sandbox_tar_max_bytes = original_max
+
+    def test_runtime_probe_failure_is_structured_environment_error(
+        self, monkeypatch, temp_workspace
+    ):
+        _patch_sandbox_available(monkeypatch)
+        fake_mgr = MagicMock()
+        fake_mgr.create.side_effect = SandboxRuntimeProbeError(
+            exit_code=127,
+            output="/bin/sh: /entrypoint.sh: not found",
+        )
+        monkeypatch.setattr(
+            "src.harness.sandbox_verify.SandboxManager",
+            lambda: fake_mgr,
+        )
+
+        result, timings = run_sandbox_verification(str(temp_workspace))
+
+        assert not result.all_passed
+        assert result.total_tests == 0
+        assert result.failed == 0
+        assert timings["error_code"] == "sandbox_runtime_unavailable"
+        assert timings["entrypoint"] == "/entrypoint.sh"
+        assert timings["exit_code"] == 127
+        assert "verifier runtime unavailable" in result.failure_logs[0]
 
 
 class TestSandboxExecutionTier:

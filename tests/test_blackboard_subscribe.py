@@ -110,3 +110,18 @@ class TestAssemblePatcherWithBlackboard:
         text, _ = render_repair_task("patcher", variables)
         assert "[PATCHER RUNTIME CONTRACT]" in text
         assert "contract ok" in text
+
+    def test_effective_edit_lock_overrides_plan_files(self):
+        variables, _render, _meta = assemble_patcher_variables(
+            suspects=[],
+            context=None,
+            feedback="",
+            plan=RepairPlan(suspect_files=["tests/test_wrong.py"]),
+            issue="public issue",
+            read_snippet=lambda *_: "",
+            read_test_context=lambda *_: [],
+            fallback_suspects=lambda *_: [],
+            allowed_edit=["pkg/core.py"],
+        )
+        assert variables["allowed_files_line"] == "只允许修改以下文件: pkg/core.py"
+        assert "tests/test_wrong.py" not in variables["allowed_files_line"]

@@ -5,6 +5,7 @@ import io
 import json
 import tarfile
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -17,6 +18,7 @@ from src.harness.sandbox_manager import (
     ExecResult,
     Sandbox,
     SandboxManager,
+    SandboxRuntimeProbeError,
     sandbox_container_run_kwargs,
     sandbox_pip_install_command,
     sandbox_tmpfs_mounts,
@@ -68,6 +70,7 @@ class FakeUploadSocket:
 
 def _successful_upload_results(sock: FakeUploadSocket):
     return [
+        SimpleNamespace(exit_code=0, output=b"/usr/local/bin/python\n"),
         SimpleNamespace(output=sock),
         SimpleNamespace(exit_code=0, output=b""),
     ]
@@ -78,6 +81,11 @@ class TestSandboxManager:
         mgr = SandboxManager()
         # _docker 未初始化时不应报错
         assert mgr.IMAGE == "repair-agent/python-repair"
+
+    def test_python_image_normalizes_entrypoint_line_endings(self):
+        path = Path(__file__).parents[1] / "sandbox" / "Dockerfile.python"
+        dockerfile = path.read_text(encoding="utf-8")
+        assert "sed -i 's/\\r$//' /entrypoint.sh" in dockerfile
 
     def test_tmpfs_mounts_include_code_and_tmp(self):
         mounts = sandbox_tmpfs_mounts()
@@ -163,13 +171,41 @@ class TestSandboxManager:
         assert "/code" in captured["tmpfs"]
         assert "/tmp" in captured["tmpfs"]
         fake_container.put_archive.assert_not_called()
-        upload_call = fake_container.exec_run.call_args_list[0]
+        probe_call = fake_container.exec_run.call_args_list[0]
+        assert probe_call.args[0][:3] == ["/entrypoint.sh", "test", "python"]
+        upload_call = fake_container.exec_run.call_args_list[1]
         assert upload_call.kwargs == {"stdin": True, "socket": True, "tty": True}
         assert "base64 -d | tar -C /code -xf -" in upload_call.args[0][2]
         assert fake_sock.data.endswith(b"\x04")
         assert fake_sock.closed
         assert sandbox.timings["tar_file_count"] == 1
         assert sandbox.timings["tar_bytes"] > 0
+        assert sandbox.timings["runtime_probe"] == "ok"
+
+    def test_create_rejects_image_with_broken_entrypoint(self, tmp_path):
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "main.py").write_text("x = 1\n", encoding="utf-8")
+
+        fake_container = MagicMock()
+        fake_container.id = "container-broken-runtime"
+        fake_container.exec_run.return_value = SimpleNamespace(
+            exit_code=127,
+            output=b"/bin/sh: 1: /entrypoint.sh: not found",
+        )
+
+        mgr = SandboxManager()
+        mgr._docker = MagicMock()
+        mgr._docker.containers.run.return_value = fake_container
+
+        with pytest.raises(SandboxRuntimeProbeError) as raised:
+            mgr.create(str(repo))
+
+        assert raised.value.code == "sandbox_runtime_unavailable"
+        assert raised.value.entrypoint == "/entrypoint.sh"
+        assert raised.value.exit_code == 127
+        assert "not found" in raised.value.output
+        fake_container.kill.assert_called_once()
 
     def test_create_uploads_repo_contents_into_code_tmpfs(self, tmp_path):
         repo = tmp_path / "proj"
@@ -294,6 +330,26 @@ class TestPythonRunner:
         assert result.passed == 2
         assert result.failed == 1
         assert not result.all_passed
+
+    def test_django_runner_preserves_success_exit_code(self):
+        output = "Ran 22 tests in 0.3s\n\nOK\n"
+        mgr = FakeManager({"tests/runtests.py": ExecResult(0, output, "")})
+        profile = SimpleNamespace(
+            kind="django_runtests",
+            runtests_path="tests/runtests.py",
+            settings_module="tests.test_sqlite",
+        )
+
+        result = PythonTestRunner(mgr).run(
+            FakeSandbox(),
+            "auth_tests.test_validators",
+            profile=profile,
+        )
+
+        assert result.all_passed
+        assert result.total_tests == 22
+        assert result.passed == 22
+        assert result.failed == 0
 
     def test_pytest_timeout_not_passed(self):
         """exec 超时时不应误判为通过，且 failure_logs 含明确超时文案。"""

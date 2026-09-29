@@ -27,7 +27,26 @@
 
 ## 2. 安装与资源检查
 
-### 2.0 P0：Windows → WSL Harness
+### 2.0 固定 Dev5 协议（R16 口径）
+
+后续 Dev5 补丁生成实验只使用一个入口：
+
+```powershell
+scripts/run_swebench_lite_dev5.ps1 -RunId r18
+```
+
+脚本读取 `configs/swebench/lite_dev5_r16_protocol.json`，校验公开输入 JSONL 的
+SHA-256，从 `artifacts/swebench_repos_r16` 为五题创建全新的指定 commit 工作副本，
+并固定 provider、model、顺序、重试、超时、Critic 和 Docker Verifier。调用方只提供
+唯一 `RunId`；如输出目录已存在、Git 基线不干净、Docker daemon/镜像不可用，运行会
+在模型调用前失败。该协议不运行官方 SWE-bench Harness。
+
+每轮固定保存 `protocol.json`、`instances.jsonl`、`command.txt`、`run.log`、
+`progress.jsonl`、`manifest.json`、`adapter_report.json` 和 `predictions.jsonl`。
+每题结果还包含结构化 `critic` 与 `verifier` 字段，完整 Trace 与 Repair State 位于对应
+工作副本的 `.agent/runs` 和 `.agent/repairs` 目录。
+
+### 2.1 P0：Windows → WSL Harness
 
 官方 harness **不能**在 Windows 本机 Python 跑。Adapter 支持：
 
@@ -37,7 +56,7 @@
 | `wsl` | Windows 下经 `wsl -d <Ubuntu>` 调 `python3 -m swebench.harness.run_evaluation` |
 | `auto` | 优先 native，否则 WSL |
 
-### 2.1 预构建评测镜像（推荐，可复用）
+### 2.2 预构建评测镜像（推荐，可复用）
 
 官方 harness 会为每个 instance 构建/拉取 Docker 镜像；首次很慢。先预构建，后续 `run_evaluation` **自动跳过已有镜像**。
 
@@ -95,7 +114,7 @@ python -m src.benchmark.swebench --harness-only \
 
 环境变量：`FIXLOOP_WSL_DISTRO=Ubuntu`。
 
-### 2.1 可选依赖
+### 2.3 可选依赖
 
 ```bash
 pip install datasets          # 从 HuggingFace 拉 Lite
@@ -105,7 +124,7 @@ pip install swebench          # 官方 Harness（或 git clone + pip install -e 
 
 `pyproject.toml` extras：`swebench = ["datasets", "swebench"]`（若已声明）。
 
-### 2.2 冒烟（不装 harness）
+### 2.4 冒烟（不装 harness）
 
 仓库已带本地 fixture（5 条）：
 
@@ -115,7 +134,7 @@ python -m src.benchmark.swebench --dry-run \
   --output-dir artifacts/swebench_lite_dev
 ```
 
-### 2.3 Fake 端到端（无 API，需本地预置 repo 目录）
+### 2.5 Fake 端到端（无 API，需本地预置 repo 目录）
 
 ```bash
 # 为每个 instance_id 在 work-root 下准备 git 仓库后：
@@ -125,7 +144,7 @@ python -m src.benchmark.swebench --fake --skip-clone \
   --output-dir artifacts/swebench_lite_dev
 ```
 
-### 2.4 真跑 Agent + 官方判分
+### 2.6 真跑 Agent + 官方判分
 
 ```bash
 # 需 API Key + 能 clone GitHub

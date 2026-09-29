@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import time
@@ -47,6 +48,8 @@ class AdapterConfig:
     wsl_distro: str | None = None
     harness_only_with_patch: bool = True
     allow_gold_patch_injection: bool = False
+    instances_sha256: str = ""
+    require_verifier_sandbox: bool = False
 
 
 class SweBenchAdapter:
@@ -81,9 +84,22 @@ class SweBenchAdapter:
                 "gold_patch_visibility": "assisted"
                 if cfg.allow_gold_patch_injection
                 else "strict",
+                "instances_sha256": cfg.instances_sha256,
+                "require_verifier_sandbox": cfg.require_verifier_sandbox,
             },
         )
         write_manifest(cfg.output_dir / "manifest.json", manifest)
+
+        environment_error = self._validate_fixed_environment()
+        if environment_error:
+            report = {
+                "ok": False,
+                "error": environment_error,
+                "failure_summary": {FailureClass.ENV.value: len(cfg.instance_ids)},
+                "results": [],
+            }
+            self._write_report(report)
+            return report
 
         try:
             instances = load_instances(
@@ -148,6 +164,32 @@ class SweBenchAdapter:
                 (case_dir / "model_patch.diff").write_text(r.model_patch, encoding="utf-8")
         return report
 
+    def _validate_fixed_environment(self) -> str:
+        """Fail before model calls when a frozen benchmark contract is not reproducible."""
+        cfg = self.config
+        if cfg.instances_sha256:
+            path = cfg.instances_jsonl
+            if path is None or not path.is_file():
+                return "fixed instances JSONL is missing"
+            actual = hashlib.sha256(path.read_bytes()).hexdigest()
+            expected = cfg.instances_sha256.strip().lower()
+            if actual != expected:
+                return f"instances_sha256_mismatch expected={expected} actual={actual}"
+
+        if cfg.require_verifier_sandbox:
+            if cfg.skip_verify:
+                return "require_verifier_sandbox conflicts with skip_verify"
+            try:
+                from src.harness.sandbox_health import probe_sandbox_health
+
+                health = probe_sandbox_health(run_smoke=True)
+            except Exception as exc:  # noqa: BLE001
+                return f"verifier_sandbox_probe_failed: {exc}"
+            if not health.ready:
+                detail = "; ".join(health.errors) or "sandbox not ready"
+                return f"verifier_sandbox_unavailable: {detail}"
+        return ""
+
     def _apply_harness(self, results: list[InstanceResult], preds_path: Path) -> dict:
         """仅对 verifier 通过的 patch 调用官方/WSL harness，回写 results。"""
         from src.benchmark.swebench.harness import filter_predictions_with_patch
@@ -206,11 +248,18 @@ class SweBenchAdapter:
         )
         meta = {
             "ok": hr.ok,
-            "status": "completed" if hr.ok else "failed",
+            "status": (
+                "completed_with_errors"
+                if hr.ok and hr.error_ids
+                else ("completed" if hr.ok else "failed")
+            ),
             "returncode": hr.returncode,
             "error": hr.error,
             "report_path": str(hr.report_path) if hr.report_path else "",
             "resolved_ids": hr.resolved_ids or [],
+            "completed_ids": hr.completed_ids or [],
+            "unresolved_ids": hr.unresolved_ids or [],
+            "error_ids": hr.error_ids or [],
             "backend": hr.backend,
             "predictions_used": str(eval_path),
             "instance_ids": eval_ids,
@@ -231,13 +280,30 @@ class SweBenchAdapter:
         except (OSError, TypeError, ValueError):
             meta["manifest_fingerprint"] = ""
         resolved_set = set(hr.resolved_ids or [])
+        error_set = set(hr.error_ids or [])
         evaluated = set(eval_ids)
         for r in results:
             if r.instance_id not in evaluated:
                 continue
             if r.failure_class == FailureClass.AGENT and not r.model_patch.strip():
                 continue
-            if hr.error and not hr.ok and not resolved_set:
+            if r.instance_id in error_set:
+                r.resolved = False
+                diagnostic = "\n".join((hr.error, hr.stderr, hr.stdout))
+                env_hints = (
+                    "not installed",
+                    "network is unreachable",
+                    "proxyerror",
+                    "403 forbidden",
+                    "pull access denied",
+                    "missing swebench",
+                    "no suitable wsl",
+                )
+                is_env = any(hint in diagnostic.lower() for hint in env_hints)
+                r.failure_class = FailureClass.ENV if is_env else FailureClass.EVAL
+                r.failure_detail = "harness_instance_error"
+                r.harness_log = diagnostic[-8000:] or "harness_instance_error"
+            elif hr.error and not hr.ok and not resolved_set:
                 r.resolved = False
                 env_hints = (
                     "not installed",
@@ -406,6 +472,9 @@ class SweBenchAdapter:
                 result.trace_hint = f".agent/runs or repairs/{result.repair_run_id}"
             vr = getattr(state, "verification_result", None)
             result.verified = bool(vr is not None and getattr(vr, "all_passed", False))
+            timings = getattr(state, "node_timings", None) or {}
+            result.critic = dict(timings.get("critic_verdict") or {})
+            result.verifier = vr.to_dict() if vr is not None else {}
             result.model_patch = export_model_patch(
                 state=state,
                 original_repo=original_snap,
@@ -416,6 +485,7 @@ class SweBenchAdapter:
                 repair_status=result.repair_status,
                 verified=result.verified,
                 skip_verify=cfg.skip_verify,
+                terminal_status=str(timings.get("patcher_terminal_status") or ""),
             )
             result.failure_class = fc
             result.failure_detail = detail
@@ -424,12 +494,16 @@ class SweBenchAdapter:
                 "unverified_patch",
                 "patch_without_fixed_status",
                 "invalid_patch_format",
-            ):
+            ) or (not result.model_patch.strip() and detail):
                 result.error = detail
             elif not result.model_patch.strip():
                 result.error = "empty_model_patch"
         except Exception as e:  # noqa: BLE001
-            result.failure_class = FailureClass.AGENT
+            from src.repair_factory import RequiredVerifierError
+
+            result.failure_class = (
+                FailureClass.ENV if isinstance(e, RequiredVerifierError) else FailureClass.AGENT
+            )
             result.error = str(e)
             result.failure_detail = str(e)
 

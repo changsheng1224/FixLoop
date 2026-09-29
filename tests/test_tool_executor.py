@@ -92,6 +92,31 @@ class TestToolExecutorGates:
         # 最近 2 次不是相同调用 → 允许
         assert result.metadata["tool_status"] == "success"
 
+    def test_post_lock_reserve_bypasses_duplicate_gate_once(
+        self, agent, temp_workspace
+    ):
+        executor = ToolExecutor(agent=agent, approval_policy="auto", quota=agent.quota)
+        (temp_workspace / "locked.py").write_text("value = 1\n", encoding="utf-8")
+        args = {"path": "locked.py", "start": 1, "end": 20}
+        for _ in range(2):
+            agent.record(
+                {
+                    "role": "assistant",
+                    "content": "calling tool",
+                    "tool_name": "read_file",
+                    "tool_args": args,
+                }
+            )
+        assert agent.quota.grant_read_reserve(
+            "locked.py", kind="post_lock", generation=1
+        )
+
+        result = executor.execute("read_file", args)
+
+        assert result.metadata["tool_status"] == "success", result.metadata
+        assert result.metadata["read_reserve_consumed"]["generation"] == 1
+        assert executor.execute("read_file", args).metadata["tool_error_code"] == "duplicate"
+
     # Gate 5: approval
     def test_approval_auto_allows(self, agent):
         executor_auto = ToolExecutor(agent=agent, approval_policy="auto")
@@ -113,6 +138,44 @@ class TestToolExecutorGates:
         assert result.metadata["tool_status"] == "success"
         assert "affected_paths" in result.metadata
         assert "new.txt" in result.metadata["affected_paths"]
+
+    def test_write_without_workspace_diff_is_no_change(self, agent, temp_workspace):
+        target = temp_workspace / "same.txt"
+        target.write_text("same", encoding="utf-8")
+        executor = ToolExecutor(agent=agent, approval_policy="auto")
+
+        result = executor.execute("write_file", {"path": "same.txt", "content": "same"})
+
+        assert result.metadata["tool_status"] == "no_change"
+        assert result.metadata["tool_error_code"] == "no_change"
+        assert result.metadata["affected_paths"] == []
+        assert target.read_text(encoding="utf-8") == "same"
+
+    def test_stale_patch_exposes_current_preimage(self, agent, temp_workspace):
+        target = temp_workspace / "stale.py"
+        target.write_text("value = 2\n", encoding="utf-8")
+        executor = ToolExecutor(agent=agent, approval_policy="auto")
+
+        result = executor.execute(
+            "patch_file",
+            {"path": "stale.py", "old_text": "value = 1", "new_text": "value = 3"},
+        )
+
+        assert result.metadata["tool_error_code"] == "stale_preimage"
+        assert result.metadata["preimage_path"] == "stale.py"
+        assert result.metadata["current_sha256"]
+
+    def test_empty_patch_preimage_is_rejected_with_recovery(self, agent, temp_workspace):
+        (temp_workspace / "empty.py").write_text("value = 1\n", encoding="utf-8")
+        executor = ToolExecutor(agent=agent, approval_policy="auto")
+
+        result = executor.execute(
+            "patch_file", {"path": "empty.py", "old_text": "", "new_text": ""}
+        )
+
+        assert result.metadata["tool_status"] == "rejected"
+        assert result.metadata["tool_error_code"] == "invalid_args"
+        assert result.metadata["recovery_action"] == "apply_patch_with_context"
 
     def test_gate3_path_escape_rejected(self, executor):
         result = executor.execute("read_file", {"path": "../outside.txt"})

@@ -13,7 +13,10 @@ from src.repair.blackboard_merge import (
     read_context_from_blackboard,
     read_suspects_from_blackboard,
 )
-from src.repair.localization.suspect_blocks import render_suspects_with_snippets
+from src.repair.localization.suspect_blocks import (
+    render_suspects_diff_only,
+    render_suspects_with_snippets,
+)
 from src.state import RepairPlan, RetrievedContext, SuspectLocation
 
 __all__ = [
@@ -124,16 +127,26 @@ def render_patcher_prefix_blocks(
     ],
     plan: RepairPlan | None = None,
     subscriptions: tuple[PrefixSubscription, ...] = PATCHER_PREFIX_SUBSCRIPTIONS,
+    diff_only: bool = False,
+    read_line_range: Callable[[str, int, int], str] | None = None,
 ) -> PatcherPrefixBlocks:
     """Render Patcher prompt blocks from blackboard prefix subscriptions."""
     subscribed = subscribe_prefixes(bb, [sub.prefix for sub in subscriptions])
     entry_counts = {prefix: len(entries) for prefix, entries in subscribed.items()}
 
     suspect_entries = subscribed.get(SUSPECT_PREFIX, {})
-    suspects_block, suspects = _render_suspects_block(
-        suspect_entries,
-        read_snippet=read_snippet,
-    )
+    if diff_only and read_line_range is not None:
+        suspects = [
+            SuspectLocation.from_dict(value)
+            for value in suspect_entries.values()
+            if isinstance(value, dict)
+        ]
+        suspects_block = render_suspects_diff_only(suspects, read_line_range)
+    else:
+        suspects_block, suspects = _render_suspects_block(
+            suspect_entries,
+            read_snippet=read_snippet,
+        )
 
     context_entries = subscribed.get(CONTEXT_PREFIX, {})
     test_blocks = _render_context_test_block(

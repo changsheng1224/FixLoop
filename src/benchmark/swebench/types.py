@@ -82,6 +82,8 @@ class InstanceResult:
     harness_log: str = ""
     error: str = ""
     verified: bool = False
+    critic: dict = field(default_factory=dict)
+    verifier: dict = field(default_factory=dict)
     baseline_preflight: dict = field(default_factory=dict)
 
     def to_prediction(self) -> dict:

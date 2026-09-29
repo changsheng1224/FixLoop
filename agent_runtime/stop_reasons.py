@@ -30,6 +30,7 @@ class StopReason(StrEnum):
     CONTEXT_OVERFLOW = "context_overflow"
     BUDGET_EXHAUSTED = "budget_exhausted"
     DEADLINE_EXCEEDED = "deadline_exceeded"
+    MODEL_OUTPUT_TRUNCATED = "model_output_truncated"
 
 
 CANONICAL_STOP_REASONS = frozenset(member.value for member in StopReason)

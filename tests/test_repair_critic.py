@@ -68,8 +68,7 @@ def test_verdict_fields():
     assert v.accepted and v.reason == "ok"
 
 
-def test_junk_diff_not_rule_filtered():
-    """质量问题交给模型与 Verifier，critic 不做 junk 细则。"""
+def test_adjacent_duplicate_addition_rejected():
     patches = [
         CandidatePatch(
             file_path="pkg/mod.py",
@@ -82,5 +81,20 @@ def test_junk_diff_not_rule_filtered():
         )
     ]
     v = review_patch(patches, allowed_edit={"pkg/mod.py"}, mode="rules_first")
-    assert v.accepted is True
-    assert v.reason == "ok"
+    assert v.accepted is False
+    assert v.reason == "redundant_duplicate_addition"
+
+
+def test_existing_duplicate_not_rejected_when_patch_changes_another_line():
+    patches = [
+        CandidatePatch(
+            file_path="pkg/mod.py",
+            original_lines="value = 1\nvalue = 1\nresult = 2",
+            patched_lines="value = 1\nvalue = 1\nresult = 3",
+            diff=(
+                "--- a/pkg/mod.py\n+++ b/pkg/mod.py\n@@ -1,3 +1,3 @@\n"
+                " value = 1\n value = 1\n-result = 2\n+result = 3\n"
+            ),
+        )
+    ]
+    assert review_patch(patches, mode="rules_first").accepted is True

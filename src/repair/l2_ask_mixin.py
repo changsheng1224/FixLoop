@@ -48,6 +48,7 @@ class L2AskMixin:
             phase=phase,
             attempt=attempt,
             started_ms=started_ms,
+            repair_state=state,
         )
         tracer = self._active_repair_ctx().repair_tracer
         if tracer is not None:

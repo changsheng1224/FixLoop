@@ -48,6 +48,37 @@ SANDBOX_TAR_UPLOAD_COMMAND = [
     "stty -echo 2>/dev/null || true; "
     f"base64 -d | tar -C /code -xf - && touch {SANDBOX_UPLOAD_DONE_MARKER}",
 ]
+SANDBOX_RUNTIME_PROBE_COMMAND = [
+    "/entrypoint.sh",
+    "test",
+    "python",
+    "-c",
+    "import sys; print(sys.executable)",
+]
+
+
+class SandboxRuntimeProbeError(RuntimeError):
+    """The sandbox image exists but cannot execute the verifier runtime."""
+
+    code = "sandbox_runtime_unavailable"
+
+    def __init__(self, *, exit_code: int, output: str = ""):
+        self.entrypoint = "/entrypoint.sh"
+        self.exit_code = int(exit_code)
+        self.output = str(output or "")[-800:]
+        detail = self.output.strip() or "no probe output"
+        super().__init__(
+            f"{self.code}: entrypoint={self.entrypoint} "
+            f"exit_code={self.exit_code}: {detail}"
+        )
+
+    def to_dict(self) -> dict[str, str | int]:
+        return {
+            "error_code": self.code,
+            "entrypoint": self.entrypoint,
+            "exit_code": self.exit_code,
+            "output_tail": self.output,
+        }
 
 
 def sandbox_tmpfs_mounts() -> dict[str, str]:
@@ -235,6 +266,19 @@ def _close_exec_socket(sock) -> None:
         pass
 
 
+def _probe_sandbox_runtime(container) -> str:
+    """Execute the image contract instead of only checking that its file exists."""
+    result = container.exec_run(SANDBOX_RUNTIME_PROBE_COMMAND)
+    exit_code = _exec_exit_code(result)
+    output = result[1] if isinstance(result, tuple) else getattr(result, "output", b"")
+    if isinstance(output, bytes):
+        output = output.decode("utf-8", errors="replace")
+    output = str(output or "")
+    if exit_code != 0:
+        raise SandboxRuntimeProbeError(exit_code=exit_code, output=output)
+    return output.strip()
+
+
 def _copy_tar_to_code_tmpfs(container, tar_stream) -> None:
     """通过 exec stdin 将 tar 解包到 /code tmpfs。
 
@@ -329,7 +373,7 @@ class SandboxManager:
 
         repo = Path(repo_path).resolve()
         image = self.IMAGE
-        timings: dict[str, int] = {}
+        timings: dict[str, int | str] = {}
 
         t_pack = time.time()
         tar_stream, stats = build_sandbox_tar(repo, ".")
@@ -356,6 +400,11 @@ class SandboxManager:
             # 导致 put_archive 报 RWLayer nil。保持容器存活用 bare sleep，exec 仍走 entrypoint。
             container = self.docker.containers.run(**sandbox_container_run_kwargs(image))
             timings["container_create_ms"] = int((time.time() - t0) * 1000)
+
+            t_probe = time.time()
+            _probe_sandbox_runtime(container)
+            timings["runtime_probe_ms"] = int((time.time() - t_probe) * 1000)
+            timings["runtime_probe"] = "ok"
 
             t1 = time.time()
             tar_stream.seek(0)

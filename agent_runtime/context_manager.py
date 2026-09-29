@@ -201,10 +201,21 @@ class ContextManager:
         self._summary_cache: dict[str, str] = _DiskCache(cache_dir)
         self.tier_policy = TierPolicy.from_agent(agent)
 
-    def _check_hard_cap(self, used: int) -> None:
+    def _check_hard_cap(self, used: int, metadata: dict | None = None) -> None:
         """检查总 token 数是否超出硬顶；超出则抛 ContextTooLargeError。"""
         if used > self.hard_cap:
-            raise ContextTooLargeError(actual=used, limit=self.hard_cap)
+            meta = dict(metadata or {})
+            sections = dict(meta.get("sections") or {})
+            offenders = sorted(sections.items(), key=lambda item: int(item[1] or 0), reverse=True)
+            raise ContextTooLargeError(
+                actual=used,
+                limit=self.hard_cap,
+                metadata={
+                    "sections": sections,
+                    "largest_sections": offenders[:5],
+                    "cuts": list(meta.get("cuts") or [])[-12:],
+                },
+            )
 
     def build(self, user_message: str) -> tuple[str, dict]:
         """组装完整 prompt，返回 (prompt_text, metadata)。
@@ -216,7 +227,7 @@ class ContextManager:
         """
         metadata = self._base_metadata()
         sections = self._fill_sections(user_message, metadata)
-        self._check_hard_cap(metadata.get("total_tokens", 0))
+        self._check_hard_cap(metadata.get("total_tokens", 0), metadata)
         result_parts = [sections[name] for name in self.SECTION_ORDER if sections.get(name)]
         if sections.get("request"):
             result_parts.append(sections["request"])
@@ -232,7 +243,7 @@ class ContextManager:
         sections = self._fill_sections(
             user_message, metadata, include_system=False, include_request=False
         )
-        self._check_hard_cap(metadata.get("total_tokens", 0))
+        self._check_hard_cap(metadata.get("total_tokens", 0), metadata)
         parts = [sections[name] for name in self.DYNAMIC_ORDER if sections.get(name)]
         return "\n\n".join(parts), metadata
 
@@ -246,7 +257,7 @@ class ContextManager:
         """
         metadata = self._base_metadata()
         sections = self._fill_sections(user_message, metadata, native_tools=True)
-        self._check_hard_cap(metadata.get("total_tokens", 0))
+        self._check_hard_cap(metadata.get("total_tokens", 0), metadata)
         system_parts = [sections[name] for name in self.NATIVE_SYSTEM_ORDER if sections.get(name)]
         system_prompt = "\n\n".join(system_parts)
         user_parts = [sections[name] for name in self.DYNAMIC_ORDER if sections.get(name)]
@@ -289,8 +300,26 @@ class ContextManager:
             )
             metadata.update(tpl_meta)
             request_tokens = self.budget.count(request_text)
+            if request_tokens > total:
+                original_tokens = request_tokens
+                target = max(256, int(total * 0.60))
+                request_text = self._compact_oversized_request(request_text, target)
+                request_tokens = self.budget.count(request_text)
+                metadata["emergency_compaction"] = {
+                    "reason": "request_exceeds_prompt_budget",
+                    "original_request_tokens": original_tokens,
+                    "compacted_request_tokens": request_tokens,
+                    "target_tokens": target,
+                    "preserved": ["request_head", "request_tail"],
+                }
+                metadata["cuts"].append(
+                    f"紧急压缩 request: {original_tokens} -> {request_tokens} tokens"
+                )
             metadata["sections"]["request"] = request_tokens
             metadata.update(task_preservation_metadata(request_tokens, total))
+            if metadata.get("emergency_compaction"):
+                metadata["request_preserved"] = False
+                metadata["task_budget_overflow"] = True
             section_cap = reserve_section_budget(total, request_tokens)
 
         filler = SectionFiller(
@@ -339,6 +368,11 @@ class ContextManager:
                 self._get_knowledge(user_message),
                 scaled_section_budget(BUDGET_KNOWLEDGE, section_cap or total),
             )
+        # Keep the current request available to the integrity check.  The
+        # request is intentionally not part of projected history, so checking
+        # the goal against history alone incorrectly reports goal loss on every
+        # native build.
+        metadata["_context_issue"] = user_message
         history_text = self._get_compressed_history(metadata)
         metadata["_history_section_text"] = history_text
         filler.add_section(
@@ -374,6 +408,30 @@ class ContextManager:
         if history and history_text:
             seal_history_at_build(self.agent.session, len(history), history_text)
         return sections
+
+    def _compact_oversized_request(self, text: str, target_tokens: int) -> str:
+        """Keep the issue head and runtime/feedback tail in one deterministic pass."""
+        marker = "\n\n[... oversized request compacted ...]\n\n"
+        marker_tokens = self.budget.count(marker)
+        available = max(1, target_tokens - marker_tokens)
+        head_budget = max(1, int(available * 0.75))
+        tail_budget = max(1, available - head_budget)
+        head = self.budget.fit(text, head_budget).rstrip()
+
+        # TokenBudget.fit is prefix-oriented. Binary search the shortest suffix
+        # boundary that fits the reserved tail budget.
+        lo, hi = 0, len(text)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if self.budget.count(text[mid:]) <= tail_budget:
+                hi = mid
+            else:
+                lo = mid + 1
+        tail = text[lo:].lstrip()
+        compacted = f"{head}{marker}{tail}"
+        if self.budget.count(compacted) > target_tokens:
+            compacted = self.budget.fit(compacted, target_tokens)
+        return compacted
 
     def _record_context_manifest(self, metadata: dict, sections: dict[str, str]) -> None:
         """Persist the exact dynamic selection needed for trace/checkpoint replay."""
