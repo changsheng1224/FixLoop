@@ -85,9 +85,7 @@ def _patch_recovery_anchors(text: str, *, max_chars: int = 6000) -> str:
         "[PATCHER RUNTIME CONTRACT]",
     )
     starts = [
-        index
-        for index, line in enumerate(lines)
-        if any(marker in line for marker in markers)
+        index for index, line in enumerate(lines) if any(marker in line for marker in markers)
     ]
     chunks: list[str] = []
     used = 0
@@ -699,9 +697,7 @@ class AgentLoop:
         reserves = (quota.quota_summary() or {}).get("read_reserves") or []
         return any(str(item.get("kind", "")) == "targeted" for item in reserves)
 
-    def _set_patch_recovery(
-        self, kind: str, directive: str, allowed_tools: set[str]
-    ) -> None:
+    def _set_patch_recovery(self, kind: str, directive: str, allowed_tools: set[str]) -> None:
         self._patch_recovery_kind = str(kind)
         self._patch_recovery_directive = str(directive)
         self._patch_recovery_allowed_tools = set(allowed_tools)
@@ -720,9 +716,7 @@ class AgentLoop:
             if lock is None:
                 return False
             return any(
-                path in lock.read_set
-                and path in lock.allowed_edit
-                and not _is_test_path(path)
+                path in lock.read_set and path in lock.allowed_edit and not _is_test_path(path)
                 for path in lock.allowed_edit
             )
         except Exception:
@@ -822,10 +816,7 @@ class AgentLoop:
             # Patcher owns localization.  Once convergence has requested a
             # write, retain a small bounded read window so a newly discovered
             # implementation path is not made unreachable by schema gating.
-            if (
-                not patch_only_recovery
-                and self._step_guard.localization_reads_available
-            ):
+            if not patch_only_recovery and self._step_guard.localization_reads_available:
                 names.update(
                     {
                         "read_file",
@@ -833,16 +824,15 @@ class AgentLoop:
                         "list_files",
                         "search",
                         "ast_parse",
+                        "code_lookup",
+                        "code_relations",
                         "inspect_file",
                         "find_test",
                     }
                 )
             # A truncated response is an action boundary.  Only stale
             # preimage recovery may open one explicitly bounded reread.
-            elif (
-                not patch_only_recovery
-                and self._has_targeted_read_reserve()
-            ):
+            elif not patch_only_recovery and self._has_targeted_read_reserve():
                 names.update({"read_file", "ast_parse", "inspect_file"})
             return names
         if not is_patcher or self._step_guard.phase != "converge":
@@ -946,9 +936,7 @@ class AgentLoop:
                 )
                 replay_blocked = True
         is_patcher = (
-            getattr(self.agent, "agent_name", None)
-            or getattr(self.agent, "_agent_name", "")
-            or ""
+            getattr(self.agent, "agent_name", None) or getattr(self.agent, "_agent_name", "") or ""
         ) == "patcher"
         convergence_blocked = False
         if is_patcher and not replayed and not replay_blocked:
@@ -957,7 +945,7 @@ class AgentLoop:
                 if hasattr(getattr(self.agent, "quota", None), "quota_summary")
                 else {}
             )
-            read_budget = ((quota_summary.get("groups") or {}).get("read") or {})
+            read_budget = (quota_summary.get("groups") or {}).get("read") or {}
             remaining = read_budget.get("remaining")
             if remaining is not None and int(remaining) <= 2:
                 if self._step_guard.enter_convergence("read_budget_low"):
@@ -1042,9 +1030,13 @@ class AgentLoop:
                     "retryable": False,
                 },
             )
-        elif not replayed and not replay_blocked and not convergence_blocked and (
-            not self._repair_budget.allow_tool(group.value) or not self._budget_allows_tool(
-            group.value
+        elif (
+            not replayed
+            and not replay_blocked
+            and not convergence_blocked
+            and (
+                not self._repair_budget.allow_tool(group.value)
+                or not self._budget_allows_tool(group.value)
             )
         ):
             from agent_runtime.tool_executor import ToolExecutionResult
@@ -1167,9 +1159,7 @@ class AgentLoop:
             if error_code == "stale_preimage":
                 if self._step_guard.request_targeted_reread("stale_preimage"):
                     for target_path in target_paths:
-                        self._grant_read_reserve(
-                            target_path, kind="targeted", step=step
-                        )
+                        self._grant_read_reserve(target_path, kind="targeted", step=step)
                 self._set_patch_recovery(
                     "stale_preimage",
                     f"补丁的旧文本已失效。先对 {', '.join(target_paths) or '目标文件'} "
@@ -1258,6 +1248,12 @@ class AgentLoop:
             observation_store.invalidate_paths(
                 observation.changed_files, "tool_write_changed_dependency"
             )
+        if observation.changed_files and tool_name not in {
+            "write_file", "patch_file", "apply_patch"
+        }:
+            service = self.agent.tool_context.exploration_service
+            if service is not None:
+                service.invalidate("tool_write")
         raw_result = _meta.get("raw_result")
         if raw_result is not None:
             import json
@@ -1295,6 +1291,11 @@ class AgentLoop:
             error_code=observation.failure_class,
             status=observation.status,
             evidence_refs=list(observation.evidence_ids),
+            source_dependencies=(
+                dict(_meta.get("source_dependencies") or {})
+                if "source_dependencies" in _meta else None
+            ),
+            retrieval_query_id=str((_meta.get("retrieval_result") or {}).get("query_id", "")),
             redact=True,
         )
         # The loop creates a short-lived Store per tool call; close the SQLite
@@ -1304,6 +1305,17 @@ class AgentLoop:
         observation_dict["raw_ref"] = stored.raw_ref
         _meta["observation_id"] = stored.observation_id
         _meta["artifact_ref"] = stored.raw_ref
+        self._last_tool_observation_id = stored.observation_id
+        retrieval = _meta.get("retrieval_result")
+        if (
+            self.agent.tool_context.exploration_mode == "relations"
+            and isinstance(retrieval, dict)
+        ):
+            from agent_runtime.tools import _exploration_service
+
+            _exploration_service(self.agent.tool_context).observe(
+                tool_name, tool_args, retrieval, stored.observation_id
+            )
         # Complete the action receipt after the observation has been durably
         # stored. This makes idempotent resume able to point at the exact
         # persisted result instead of replaying an opaque success message.
@@ -2007,7 +2019,11 @@ class AgentLoop:
 
         resume_state = self._consume_step_resume_state()
         if resume_state is not None:
+            self._reset_exploration_on_resume()
             return self._run_from_step_resume(resume_state, callback=callback)
+
+        if self.agent.tool_context.exploration_mode == "relations":
+            self.agent.session["exploration_epoch"] = uuid.uuid4().hex
 
         shared = getattr(self.agent, "shared_run_id", None)
         agent_name = getattr(self.agent, "_agent_name", "") or "agent"
@@ -2096,6 +2112,10 @@ class AgentLoop:
                 return answer
         finally:
             cb.remove_listener(self._circuit_trace_listener)
+            service = self.agent.tool_context.exploration_service
+            if service is not None:
+                service.close()
+                self.agent.tool_context.exploration_service = None
 
     def _consume_step_resume_state(self) -> dict | None:
         """取出一次性 step resume 状态；不满足条件时保持普通 ask 行为。"""
@@ -2110,6 +2130,20 @@ class AgentLoop:
         self.agent.session.pop("resume_state", None)
         return resume_state
 
+    def _reset_exploration_on_resume(self) -> None:
+        if self.agent.tool_context.exploration_mode != "relations":
+            return
+        service = self.agent.tool_context.exploration_service
+        if service is not None:
+            service.invalidate("resume")
+            service.close()
+            self.agent.tool_context.exploration_service = None
+        self.agent.session["exploration_epoch"] = uuid.uuid4().hex
+        self.agent.session.pop("context_manifest", None)
+        memory = self.agent.session.get("memory") or {}
+        if isinstance(memory, dict):
+            memory.pop("context_manifest", None)
+
     def _run_from_step_resume(self, resume_state: dict, callback=None) -> str:
         """从最后一个成功 tool step 后继续 XML ReAct 循环。"""
         from agent_runtime.log_context import log_context
@@ -2122,6 +2156,11 @@ class AgentLoop:
         ts.stop_reason = ""
         ts.final_answer = ""
         self._task_state = ts
+        if self.agent.tool_context.exploration_mode == "relations":
+            self._emit(
+                "exploration_reset_on_resume",
+                {"epoch": self.agent.session.get("exploration_epoch")},
+            )
         if checkpoint.get("action_ledger") is not None:
             self.agent.session["action_ledger"] = list(checkpoint.get("action_ledger") or [])[-100:]
         if checkpoint.get("side_effects") is not None:
@@ -2201,6 +2240,7 @@ class AgentLoop:
         )
 
         native_tail: list[dict] = []
+        native_tail_refs: dict[str, str] = {}
         usage_total = {
             "input_tokens": 0,
             "output_tokens": 0,
@@ -2309,8 +2349,7 @@ class AgentLoop:
                 )
             if self._patch_recovery_directive:
                 dynamic_user = (
-                    f"{dynamic_user}\n\n[PATCH RECOVERY]\n"
-                    f"{self._patch_recovery_directive}"
+                    f"{dynamic_user}\n\n[PATCH RECOVERY]\n{self._patch_recovery_directive}"
                 )
             if hard_limit := self._check_hard_cap(budget_meta):
                 return self._complete_run(ts, hard_limit)
@@ -2337,9 +2376,23 @@ class AgentLoop:
             # Do not replay stale assistant tool calls during a forced action
             # turn.  Providers may continue emitting a read call from the
             # prior tail even after that tool is removed from the schema.
+            selected_source_refs = set(budget_meta.get("_source_observation_refs", []))
+            projected_tail = []
+            for message in native_tail[-6:]:
+                if message.get("role") != "user" or not isinstance(message.get("content"), list):
+                    projected_tail.append(message)
+                    continue
+                blocks = []
+                for block in message["content"]:
+                    source_ref = native_tail_refs.get(str(block.get("tool_use_id", "")), "")
+                    if source_ref and source_ref in selected_source_refs:
+                        blocks.append({**block, "content": f"[source selected: {source_ref}]"})
+                    else:
+                        blocks.append(block)
+                projected_tail.append({**message, "content": blocks})
             messages = [
                 {"role": "user", "content": dynamic_user},
-                *([] if action_required else native_tail[-6:]),
+                *([] if action_required else projected_tail),
             ]
             allowed_tool_names = self._native_tool_names(
                 action_required=action_required,
@@ -2365,9 +2418,7 @@ class AgentLoop:
                 system_prompt=system_prompt,
                 messages=messages,
                 tools=tools_def,
-                tool_choice=(
-                    ToolChoice(ToolChoiceMode.REQUIRED) if action_required else None
-                ),
+                tool_choice=(ToolChoice(ToolChoiceMode.REQUIRED) if action_required else None),
                 max_output_tokens=max_output,
                 deadline=deadline,
             )
@@ -2488,6 +2539,9 @@ class AgentLoop:
                                 "content": observation,
                             }
                         )
+                        native_tail_refs[call.call_id] = str(
+                            getattr(self, "_last_tool_observation_id", "") or ""
+                        )
                 except TerminalToolAcceptedError as e:
                     self._emit(
                         "terminal_tool_accepted",
@@ -2528,9 +2582,7 @@ class AgentLoop:
                         {
                             "step": turn,
                             "requested_max_output_tokens": max_output,
-                            "actual_output_tokens": int(
-                                result.usage.get("output_tokens", 0) or 0
-                            ),
+                            "actual_output_tokens": int(result.usage.get("output_tokens", 0) or 0),
                             "recovery_attempt": output_recovery + 1,
                         },
                     )
@@ -3135,4 +3187,10 @@ class AgentLoop:
     def _finalize_run(self, ts):
         from agent_runtime import loop_finalizer
 
-        loop_finalizer.finalize_agent_run(self, ts)
+        try:
+            loop_finalizer.finalize_agent_run(self, ts)
+        finally:
+            service = self.agent.tool_context.exploration_service
+            if service is not None:
+                service.close()
+                self.agent.tool_context.exploration_service = None

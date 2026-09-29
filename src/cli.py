@@ -85,6 +85,14 @@ def main() -> int:
     p_repair.add_argument("--dry-run", action="store_true", help="演习模式")
     p_repair.add_argument("--skip-verify", action="store_true", help="跳过 Docker 验证")
     p_repair.add_argument(
+        "--code-exploration-mode", choices=["text", "lsp", "relations"],
+        default="text", help="代码探索模式（默认 text）",
+    )
+    p_repair.add_argument(
+        "--pylsp-path", default=None,
+        help="受信任的 pylsp 可执行文件绝对路径（LSP 模式可选）",
+    )
+    p_repair.add_argument(
         "--execution-tier",
         choices=["auto", "container", "host", "static"],
         default="auto",
@@ -248,6 +256,8 @@ def _repair(args) -> int:
             dry_run=args.dry_run,
             execution_tier=args.execution_tier,
             require_sandbox=args.require_sandbox,
+            code_exploration_mode=args.code_exploration_mode,
+            code_exploration_server_argv=(args.pylsp_path,) if args.pylsp_path else None,
         )
         orch = factory(repo)
     except Exception as exc:

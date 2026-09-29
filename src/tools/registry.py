@@ -3,8 +3,9 @@
 遵循 M1 的注册表模式：{name: {schema, risky, description, run}}。
 """
 
+from agent_runtime.code_exploration.io import grep_result
 from agent_runtime.schema_utils import auto_schema
-from agent_runtime.tools import TIER_HOST, GrepArgs, tool_grep
+from agent_runtime.tools import TIER_HOST, GrepArgs
 from src.tools.ast_parser import AstParseArgs, ast_parse
 from src.tools.find_test import FindTestArgs, find_test_for_function
 from src.tools.git_tools import (
@@ -38,7 +39,7 @@ def build_repair_tools(context) -> dict:
             "内容搜索（rg 优先，Python fallback）。"
             "参数: pattern, path, glob, ignore_case, context_lines, max_results"
         ),
-        "run": lambda args: tool_grep(context, args),
+        "run": lambda args: grep_result(context, args),
     }
 
     # ---- ast_parse ----

@@ -134,7 +134,14 @@ def load_runtime_policy(
     _merge(values, PROFILE_PRESETS.get(profile, {}), "", provenance, "profile")
     _merge(values, user_values, "", provenance, "user_file")
     for workspace_value in workspace_values:
-        _merge(values, workspace_value, "", provenance, "workspace_file")
+        # Semantic server activation is a host/user decision, not a repository setting.
+        _merge(
+            values,
+            {key: value for key, value in workspace_value.items() if key != "code_exploration"},
+            "",
+            provenance,
+            "workspace_file",
+        )
     _merge(values, _env_overrides(actual_env), "", provenance, "environment")
     if profile in PROFILE_PRESETS and "profile" not in values:
         values["profile"] = profile

@@ -62,6 +62,7 @@ class Agent:
         prefix_mode: PrefixMode = "default",
         l1_prefix=None,
         warm_context=None,
+        tool_context: ToolContext | None = None,
     ):
         self.config = config
         self.model_client = model_client
@@ -82,7 +83,9 @@ class Agent:
         self._active_cancel_token = None
 
         # 构建工具上下文和注册表（允许外部注入）
-        self.tool_context = ToolContext(root=self._cwd)
+        self.tool_context = tool_context or ToolContext(root=self._cwd)
+        self.tool_context.exploration_mode = config.code_exploration.mode
+        self.tool_context.lsp_argv = config.code_exploration.server_argv
         self.tools = tools if tools is not None else build_tool_registry(self.tool_context)
         self._tool_names = tuple(sorted(self.tools.keys()))
 
@@ -156,7 +159,11 @@ class Agent:
         self._active_cancel_token = self.cancel_token
 
         loop = AgentLoop(agent=self, stream=stream)
-        return loop.run(user_message, callback=callback, skip_plan=skip_plan)
+        self.tool_context.exploration_event_sink = loop._emit
+        try:
+            return loop.run(user_message, callback=callback, skip_plan=skip_plan)
+        finally:
+            self.tool_context.exploration_event_sink = None
 
     def _detect_workspace_switch(self) -> None:
         """检测 cwd/root_hash 是否变更；变更则重建 workspace、prefix、清空 working memory。
@@ -190,7 +197,14 @@ class Agent:
         self._last_root_hash = current_hash
         self._cwd = current
         self.workspace = WorkspaceContext.build(current)
-        self.tool_context = ToolContext(root=current)
+        old_service = self.tool_context.exploration_service
+        if old_service is not None:
+            old_service.close()
+        # Registered tool closures already hold this context; preserve its identity.
+        self.tool_context.root = current
+        self.tool_context.exploration_service = None
+        self.tool_context.exploration_mode = self.config.code_exploration.mode
+        self.tool_context.lsp_argv = self.config.code_exploration.server_argv
         # 清空 working memory（旧 workspace 的文件已失效）
         session = getattr(self, "session", {}) or {}
         self.tool_context.observation_state = session

@@ -42,6 +42,8 @@ def create_repair_agent(
     warm_context=None,
     budget=None,
     gateway: ToolGateway | None = None,
+    code_exploration_mode: str = "text",
+    code_exploration_server_argv: tuple[str, ...] | None = None,
 ) -> Agent:
     """创建 Patcher 或 Verifier Agent。
 
@@ -51,7 +53,11 @@ def create_repair_agent(
             交互式 CLI 可传 ``ask`` 启用双层拦截。
     """
     root = cwd or workspace.repo_root
-    ctx = ToolContext(root=root)
+    ctx = ToolContext(
+        root=root,
+        exploration_mode=code_exploration_mode,
+        lsp_argv=code_exploration_server_argv,
+    )
     tools = build_repair_agent_tools(ctx, role)
 
     defaults = _AGENT_DEFAULTS[role]
@@ -70,7 +76,16 @@ def create_repair_agent(
     elif json_mode:
         system_prompt += "\n\n【输出格式】只输出合法 JSON（不要包裹在 ```json 或 <final> 中）。"
     agent = Agent(
-        config=AgentConfig(provider="deepseek", approval=approval, json_mode=json_mode, **defaults),
+        config=AgentConfig(
+            provider="deepseek",
+            approval=approval,
+            json_mode=json_mode,
+            code_exploration={
+                "mode": code_exploration_mode,
+                "server_argv": code_exploration_server_argv,
+            },
+            **defaults,
+        ),
         model_client=model_client,
         workspace=workspace,
         cwd=root,
@@ -82,6 +97,7 @@ def create_repair_agent(
         dry_run=dry_run,
         l1_prefix=l1_prefix,
         warm_context=warm_context,
+        tool_context=ctx,
     )
     agent._repair_gateway = gw
     if budget is not None:

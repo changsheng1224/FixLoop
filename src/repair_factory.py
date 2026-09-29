@@ -51,9 +51,7 @@ def try_create_verifier(client, ws, repo: str, *, required: bool = False, **agen
         return create_verifier(client, ws, cwd=repo, **agent_kw)
     except Exception as exc:
         if required:
-            raise RequiredVerifierError(
-                f"required verifier creation failed: {exc}"
-            ) from exc
+            raise RequiredVerifierError(f"required verifier creation failed: {exc}") from exc
         return None
 
 
@@ -66,11 +64,15 @@ def wire_orchestrator(
     dry_run: bool = False,
     execution_tier: str = "auto",
     require_sandbox: bool = False,
+    code_exploration_mode: str = "text",
+    code_exploration_server_argv: tuple[str, ...] | None = None,
 ) -> O:
     """装配唯一的 Patcher-primary runtime 与可选 Verifier。"""
     ws = WorkspaceContext.build(repo_path)
     repo = str(Path(repo_path).resolve())
-    ctx = ToolContext(root=repo)
+    ctx = ToolContext(
+        root=repo, exploration_mode=code_exploration_mode, lsp_argv=code_exploration_server_argv
+    )
     tools = build_repair_canonical_tools(ctx)
     l1 = build_repair_l1_prefix(
         ws,
@@ -90,6 +92,8 @@ def wire_orchestrator(
         "dry_run": dry_run,
         "warm_context": wc,
         "gateway": gateway,
+        "code_exploration_mode": code_exploration_mode,
+        "code_exploration_server_argv": code_exploration_server_argv,
     }
 
     def _agent_kw(role: str) -> dict:
@@ -134,6 +138,8 @@ def make_orchestrator_factory(
     dry_run: bool = False,
     execution_tier: str = "auto",
     require_sandbox: bool = False,
+    code_exploration_mode: str = "text",
+    code_exploration_server_argv: tuple[str, ...] | None = None,
     model_client=None,
 ) -> Callable[[str], Orchestrator]:
     """返回 `(repo_path) -> Orchestrator` 工厂。"""
@@ -148,6 +154,8 @@ def make_orchestrator_factory(
             dry_run=dry_run,
             execution_tier=execution_tier,
             require_sandbox=require_sandbox,
+            code_exploration_mode=code_exploration_mode,
+            code_exploration_server_argv=code_exploration_server_argv,
         )
 
     return factory

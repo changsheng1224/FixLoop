@@ -70,6 +70,26 @@ class GrepArgs:
 
 
 @dataclass
+class CodeLookupArgs:
+    """Find definitions or references for an exact source position."""
+
+    path: str
+    line: int
+    column: int
+    operation: str = "definition"
+    max_results: int = 50
+
+
+@dataclass
+class CodeRelationsArgs:
+    """Summarize only source evidence observed in the current task."""
+
+    max_files: int = 8
+    top_k: int = 6
+    token_budget: int = 1500
+
+
+@dataclass
 class WriteFileArgs:
     """创建或覆盖文件。"""
 
@@ -163,107 +183,75 @@ IGNORED_PATH_NAMES = {
 
 
 def tool_list_files(context, args: dict) -> str:
-    """列出目录内容。
+    """Legacy string surface for bounded file enumeration."""
+    from agent_runtime.code_exploration.io import list_files_result
 
-    遍历目录，输出 [F] 文件 / [D] 目录。depth=1 仅直接子项；更大 depth 递归列文件路径。
-    glob 过滤（如 ``*.py``）；depth=0 表示不限层数，受 max_results 限制。
-    """
-    raw_path = args.get("path", ".")
-    glob_pattern = args.get("glob", "") or ""
-    try:
-        depth = int(args.get("depth", 1))
-    except (TypeError, ValueError):
-        depth = 1
-    try:
-        max_results = int(args.get("max_results", 200))
-    except (TypeError, ValueError):
-        max_results = 200
+    return list_files_result(context, args).content
 
-    try:
-        target = context.resolve(raw_path)
-    except ValueError as e:
-        return f"Error: {e}"
 
-    if not target.exists():
-        return f"Error: 目录不存在: {raw_path}"
-    if not target.is_dir():
-        return f"Error: 不是目录: {raw_path}"
+def _list_files_structured(context, args: dict):
+    from agent_runtime.code_exploration.io import list_files_result
 
-    from agent_runtime.file_listing import list_directory_entries
+    return list_files_result(context, args)
 
-    lines, total = list_directory_entries(
-        target,
-        depth=depth,
-        glob_pattern=glob_pattern,
-        max_results=max_results,
-        ignored_names=IGNORED_PATH_NAMES,
-    )
 
-    if not lines:
-        if glob_pattern:
-            return f"(无匹配) {raw_path} glob={glob_pattern!r}"
-        return f"(空目录) {raw_path}"
+def _code_lookup_structured(context, args: dict):
+    service = _exploration_service(context)
+    service.emit("query_start", {"query_type": "code_lookup",
+                                 "operation": args.get("operation", "definition")})
+    result = service.lookup(args)
+    retrieval = result.metadata.get("retrieval_result", {})
+    service.emit("query_end", {
+        "query_type": "code_lookup", "query_id": retrieval.get("query_id", ""),
+        "hits": len(retrieval.get("hits", [])),
+        "completeness": retrieval.get("completeness", "unknown"),
+        "truncation_reasons": retrieval.get("truncation_reasons", []),
+    })
+    if retrieval.get("degradation_reason") not in {None, "disabled"}:
+        service.emit("lsp_degraded", {"query_id": retrieval.get("query_id", ""),
+                                      "reason": retrieval["degradation_reason"]})
+    return result
 
-    if total > len(lines):
-        lines.append(f"(另有 {total - len(lines)} 项未显示，可缩小 glob/depth 或提高 max_results)")
-    return "\n".join(lines)
+
+def _exploration_service(context):
+    from agent_runtime.code_exploration.service import CodeExplorationService
+
+    service = context.exploration_service
+    if service is None:
+        service = CodeExplorationService(
+            context, mode=context.exploration_mode, server_argv=context.lsp_argv
+        )
+        context.exploration_service = service
+    return service
+
+
+def _code_relations_structured(context, args: dict):
+    service = _exploration_service(context)
+    service.emit("query_start", {"query_type": "code_relations"})
+    result = service.relations(args)
+    view = result.metadata.get("relation_view", {})
+    service.emit("query_end", {"query_type": "code_relations",
+                               "view_revision": view.get("view_revision", 0),
+                               "coverage": view.get("coverage", {})})
+    return result
 
 
 def tool_read_file(context, args: dict) -> str:
-    """按行号范围读取文件，输出带行号前缀。
+    """Legacy string surface for bounded range reads."""
+    from agent_runtime.code_exploration.io import read_file_result
 
-    Args 必须包含 'path'，可选 'start'(默认1) 和 'end'(默认200)。
-    """
-    raw_path = args.get("path", "")
-    if not raw_path:
-        return "Error: 缺少必填参数 path"
-    start = int(args.get("start", 1))
-    end = int(args.get("end", 200))
+    result = read_file_result(context, args)
+    if result.ok:
+        _mark_edit_lock_read(context, str(args.get("path", "")))
+    return result.content
 
-    try:
-        target = context.resolve(raw_path)
-    except ValueError as e:
-        return f"Error: {e}"
 
-    if not target.exists():
-        return f"Error: 文件不存在: {raw_path}"
-    if not target.is_file():
-        return f"Error: 不是文件: {raw_path}"
+def _read_file_structured(context, args: dict):
+    from agent_runtime.code_exploration.io import read_file_result
 
-    from agent_runtime.io_limits import is_likely_binary, read_max_bytes
-    from agent_runtime.sensitive_paths import is_sensitive_path, sensitive_reject_message
-
-    if is_sensitive_path(raw_path) or is_sensitive_path(target):
-        return sensitive_reject_message(raw_path)
-    try:
-        size = target.stat().st_size
-    except OSError as e:
-        return f"Error: 无法读取文件: {e}"
-    limit = read_max_bytes()
-    if size > limit:
-        return f"Error: 文件过大 ({size} bytes > {limit})，拒绝读取: {raw_path}"
-    if is_likely_binary(target):
-        return f"Error: 疑似二进制文件，拒绝读取: {raw_path}"
-
-    try:
-        lines = target.read_text(encoding="utf-8").splitlines()
-    except UnicodeDecodeError:
-        return f"Error: 无法以 UTF-8 编码读取: {raw_path}"
-
-    total = len(lines)
-    start = max(1, start)
-    end = min(end, total)
-
-    if start > total:
-        return f"Error: start({start}) 超出文件行数({total})"
-
-    output = []
-    for i in range(start - 1, end):
-        output.append(f"{i + 1:4d} | {lines[i]}")
-
-    header = f"# {raw_path}  ({start}-{end}/{total} 行)\n"
-    result = header + "\n".join(output)
-    _mark_edit_lock_read(context, raw_path)
+    result = read_file_result(context, args)
+    if result.ok:
+        _mark_edit_lock_read(context, str(args.get("path", "")))
     return result
 
 
@@ -321,6 +309,9 @@ def _reject_if_write_serial(context) -> str | None:
 
 
 def _mark_write_done(context) -> None:
+    service = getattr(context, "exploration_service", None)
+    if service is not None:
+        service.invalidate("tool_write")
     if getattr(context, "write_serial", False):
         context._write_done_this_turn = True
     lock = _resolve_edit_lock(context)
@@ -340,10 +331,10 @@ def _near_snippet(text: str, needle: str, *, radius: int = 2) -> str:
             if key[:40] and key[:40] in ln:
                 lo = max(0, i - radius)
                 hi = min(len(lines), i + radius + 1)
-                chunk = "\n".join(f"{j+1}:{lines[j]}" for j in range(lo, hi))
+                chunk = "\n".join(f"{j + 1}:{lines[j]}" for j in range(lo, hi))
                 return f"near=\n{chunk}"
     # 回退文件头
-    head = "\n".join(f"{j+1}:{lines[j]}" for j in range(min(5, len(lines))))
+    head = "\n".join(f"{j + 1}:{lines[j]}" for j in range(min(5, len(lines))))
     return f"near=\n{head}"
 
 
@@ -364,7 +355,7 @@ def _check_diff_preimage(file_text: str, plan) -> str | None:
                 if idx >= len(lines):
                     return "past_eof"
                 if lines[idx] != text:
-                    return f"line_{idx+1}_mismatch"
+                    return f"line_{idx + 1}_mismatch"
                 idx += 1
             # '+' 不前进 old idx
     return None
@@ -395,8 +386,7 @@ def _normalize_hunk_headers(diff: str, file_text: str) -> str:
             (
                 index
                 for index, line in enumerate(lines)
-                if line.startswith(" ")
-                or (line.startswith("-") and not line.startswith("---"))
+                if line.startswith(" ") or (line.startswith("-") and not line.startswith("---"))
             ),
             0,
         )
@@ -410,11 +400,7 @@ def _normalize_hunk_headers(diff: str, file_text: str) -> str:
         )
         anchor_index = first_removed if first_removed is not None else first_preimage
         needle = next(
-            (
-                x[1:]
-                for x in lines
-                if x.startswith("-") and not x.startswith("---")
-            ),
+            (x[1:] for x in lines if x.startswith("-") and not x.startswith("---")),
             lines[first_preimage][1:] if lines and lines[first_preimage].startswith(" ") else "",
         )
         start = max(1, minimum_line)
@@ -431,17 +417,22 @@ def _normalize_hunk_headers(diff: str, file_text: str) -> str:
                     )
                     start = max(1, i - prefix)
                     break
-        old_n = sum(
-            1
-            for x in lines
-            if x.startswith(" ")
-            or (x.startswith("-") and not x.startswith("---"))
-        ) or 1
-        new_n = sum(
-            1
-            for x in lines
-            if x.startswith(" ") or (x.startswith("+") and not x.startswith("+++"))
-        ) or 1
+        old_n = (
+            sum(
+                1
+                for x in lines
+                if x.startswith(" ") or (x.startswith("-") and not x.startswith("---"))
+            )
+            or 1
+        )
+        new_n = (
+            sum(
+                1
+                for x in lines
+                if x.startswith(" ") or (x.startswith("+") and not x.startswith("+++"))
+            )
+            or 1
+        )
         return start, old_n, new_n
 
     if "@@" not in d:
@@ -460,9 +451,7 @@ def _normalize_hunk_headers(diff: str, file_text: str) -> str:
             return
         header = current_header.strip()
         if not hunk_re.match(header):
-            start, old_n, new_n = _locate(
-                "\n".join(current_body), minimum_line=search_from
-            )
+            start, old_n, new_n = _locate("\n".join(current_body), minimum_line=search_from)
             header = f"@@ -{start},{old_n} +{start},{new_n} @@"
             consumed = sum(
                 1
@@ -681,8 +670,7 @@ def _tool_apply_patch_unchecked(context, args: dict) -> str:
             )
             near = _near_snippet(text, removed)
             return (
-                f"Error: apply_patch stale/未匹配（{pre_err}）。"
-                f"先 read_file 再 apply_patch。{near}"
+                f"Error: apply_patch stale/未匹配（{pre_err}）。先 read_file 再 apply_patch。{near}"
             )
 
         new_text = apply_plan(text, plan)
@@ -713,7 +701,7 @@ def _tool_apply_patch_unchecked(context, args: dict) -> str:
 
         # 写后窗口回显（ACI）
         lines = new_text.splitlines()
-        window = "\n".join(f"{i+1:4d} | {lines[i]}" for i in range(min(40, len(lines))))
+        window = "\n".join(f"{i + 1:4d} | {lines[i]}" for i in range(min(40, len(lines))))
         summaries.append(
             f"ok apply_patch {raw_path} ({len(text.splitlines())}→{len(lines)} lines)\n"
             f"--- 写后窗口 ---\n{window}"
@@ -765,202 +753,16 @@ def tool_search(context, args: dict) -> str:
 
 
 def tool_grep(context, args: dict) -> str:
-    """内容搜索：rg 优先，不可用时 Python re + rglob fallback。
+    """Legacy string surface for budgeted text search."""
+    from agent_runtime.code_exploration.io import grep_result
 
-    Args 必须包含 'pattern'，可选 'path'、'glob'、'ignore_case'、'context_lines'、'max_results'。
-    输出格式: path:line:text，超 max_results 附截断提示。
-    """
-    pattern = args.get("pattern", "")
-    if not pattern:
-        return "Error: 缺少必填参数 pattern"
-    raw_path = args.get("path", ".")
-    glob_filter = args.get("glob", "") or ""
-    ignore_case = bool(args.get("ignore_case", False))
-    ctx = int(args.get("context_lines", 0) or 0)
-    max_results = int(args.get("max_results", 50) or 50)
-
-    try:
-        target = context.resolve(raw_path)
-    except ValueError as e:
-        return f"Error: {e}"
-
-    from agent_runtime.sensitive_paths import is_sensitive_path, sensitive_reject_message
-
-    if is_sensitive_path(raw_path) or is_sensitive_path(target):
-        return sensitive_reject_message(raw_path)
-
-    if not target.exists():
-        return f"Error: 路径不存在: {raw_path}"
-
-    # rg 优先
-    result, total = _grep_rg(pattern, target, glob_filter, ignore_case, ctx, max_results)
-    if result is not None:
-        return _format_grep_result(result, total, max_results)
-
-    # Fallback: Python re + rglob
-    result, total = _grep_python(pattern, target, glob_filter, ignore_case, ctx, max_results)
-    return _format_grep_result(result, total, max_results)
+    return grep_result(context, args).content
 
 
-def _grep_rg(
-    pattern: str,
-    target: Path,
-    glob_filter: str,
-    ignore_case: bool,
-    context_lines: int,
-    max_results: int,
-) -> tuple[list[str] | None, int]:
-    """rg 搜索，失败返回 None。"""
-    try:
-        cmd = ["rg", "-n", "--no-heading"]
-        if ignore_case:
-            cmd.append("-i")
-        if context_lines > 0:
-            cmd.extend(["-C", str(context_lines)])
-        if glob_filter:
-            cmd.extend(["-g", glob_filter])
-        cmd.extend([pattern, str(target)])
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        if result.returncode == 0:
-            lines = [line for line in result.stdout.splitlines() if line.strip()]
-            return lines, len(lines)
-        elif result.returncode == 1:
-            return [], 0
-        return None, 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return None, 0
+def _grep_structured(context, args: dict):
+    from agent_runtime.code_exploration.io import grep_result
 
-
-def _grep_python(
-    pattern: str,
-    target: Path,
-    glob_filter: str,
-    ignore_case: bool,
-    context_lines: int,
-    max_results: int,
-) -> tuple[list[str], int]:
-    """Python re + rglob fallback 搜索。"""
-    import re
-
-    flags = re.IGNORECASE if ignore_case else 0
-    try:
-        regex = re.compile(pattern, flags)
-    except re.error:
-        # 非正则字面量 → escape
-        regex = re.compile(re.escape(pattern), flags)
-
-    matches: list[str] = []
-    total = 0
-    target.rglob if glob_filter else lambda: target.rglob("*")
-
-    for filepath in target.rglob(glob_filter) if glob_filter else target.rglob("*"):
-        if filepath.is_dir():
-            continue
-        if any(ign in filepath.parts for ign in IGNORED_PATH_NAMES):
-            continue
-        from agent_runtime.sensitive_paths import is_sensitive_path
-
-        if is_sensitive_path(filepath):
-            continue
-        if filepath.suffix not in (
-            ".py",
-            ".txt",
-            ".md",
-            ".toml",
-            ".yaml",
-            ".yml",
-            ".cfg",
-            ".ini",
-            ".json",
-            ".sh",
-        ):
-            continue
-        try:
-            text = filepath.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
-            continue
-        lines_list = text.splitlines()
-        for i, line in enumerate(lines_list, 1):
-            if regex.search(line):
-                rel = filepath.relative_to(target)
-                if context_lines > 0:
-                    ctx_start = max(1, i - context_lines)
-                    ctx_end = min(len(lines_list), i + context_lines)
-                    for j in range(ctx_start, ctx_end + 1):
-                        prefix = ">" if j == i else " "
-                        matches.append(f"{rel}:{j}:{prefix} {lines_list[j - 1].strip()[:200]}")
-                        total += 1
-                else:
-                    matches.append(f"{rel}:{i}: {line.strip()[:200]}")
-                    total += 1
-                if len(matches) >= max_results * 2:  # 含上下文会有更多行
-                    break
-        if len(matches) >= max_results * 2:
-            break
-
-    return matches[:max_results], total
-
-
-def _merge_adjacent_lines(lines: list[str]) -> list[str]:
-    """合并同文件连续行号为范围（file:start-end:），去重降噪。"""
-    import re
-
-    if not lines:
-        return []
-    merged: list[str] = []
-    # 解析为 (file, line, text) 三元组
-    parsed: list[tuple[str, int, str]] = []
-    for ln in lines:
-        m = re.match(r"^(.+?):(\d+):(.+)$", ln)
-        if m:
-            parsed.append((m.group(1), int(m.group(2)), m.group(3).strip()))
-        else:
-            parsed.append((ln, -1, ""))
-
-    i = 0
-    while i < len(parsed):
-        fname, lnum, text = parsed[i]
-        if lnum < 0:
-            merged.append(fname)
-            i += 1
-            continue
-        # 找连续同文件行
-        j = i + 1
-        while (
-            j < len(parsed)
-            and parsed[j][1] >= 0
-            and parsed[j][0] == fname
-            and parsed[j][1] == parsed[j - 1][1] + 1
-        ):
-            j += 1
-        if j - i >= 3:
-            # 3 行及以上合并为范围
-            merged.append(f"{fname}:{parsed[i][1]}-{parsed[j - 1][1]}:")
-            for k in range(i, j):
-                merged.append(f"  {parsed[k][1]}: {parsed[k][2]}")
-        else:
-            for k in range(i, j):
-                merged.append(f"{parsed[k][0]}:{parsed[k][1]}: {parsed[k][2]}")
-        i = j
-
-    return merged
-
-
-def _format_grep_result(lines: list[str], total: int, max_results: int) -> str:
-    if not lines:
-        return "(无匹配 / 0 matches — command succeeded with no output)"
-    merged = _merge_adjacent_lines(lines)
-    result = "\n".join(merged)
-    if total > len(lines):
-        result += (
-            f"\n... 另有 {total - len(lines)} 条匹配未显示（可缩小 path/glob 或提高 max_results）"
-        )
-    from agent_runtime.io_limits import grep_max_bytes, truncate_text
-
-    result, truncated = truncate_text(result, grep_max_bytes(), label="grep")
-    if truncated:
-        result += "\n[oversized_grep]"
-    return result
+    return grep_result(context, args)
 
 
 # ============================================================================
@@ -1079,8 +881,7 @@ def tool_patch_file(context, args: dict) -> str:
         if count == 0:
             near = _near_snippet(text, plan.old_text)
             return (
-                "Error: old_text 在文件中未找到（出现 0 次）。"
-                f"old_text 必须恰好出现 1 次。{near}"
+                f"Error: old_text 在文件中未找到（出现 0 次）。old_text 必须恰好出现 1 次。{near}"
             )
         if count > 1:
             return f"Error: old_text 出现 {count} 次，必须恰好出现 1 次。请提供更多上下文使其唯一。"
@@ -1106,12 +907,9 @@ def tool_patch_file(context, args: dict) -> str:
     preview = build_preview(raw_path, plan)
     delta = preview.lines_added - preview.lines_removed
     lines = new_text.splitlines()
-    window = "\n".join(f"{i+1:4d} | {lines[i]}" for i in range(min(20, len(lines))))
+    window = "\n".join(f"{i + 1:4d} | {lines[i]}" for i in range(min(20, len(lines))))
     if preview.hunk_count == 1 and plan.mode == "legacy":
-        return (
-            f"已修补 {raw_path}（替换 1 处，{delta:+d} 字符）\n"
-            f"--- 写后窗口 ---\n{window}"
-        )
+        return f"已修补 {raw_path}（替换 1 处，{delta:+d} 字符）\n--- 写后窗口 ---\n{window}"
     return (
         f"已修补 {raw_path}（{preview.hunk_count} 个 hunk，"
         f"-{preview.lines_removed}/+{preview.lines_added} 行）\n"
@@ -1332,7 +1130,7 @@ def build_tool_registry(context) -> dict:
         "risky": False,
         "execution_tier": TIER_HOST,
         "description": "列出目录内容。参数: path（默认 '.'）",
-        "run": lambda args: tool_list_files(context, args),
+        "run": lambda args: _list_files_structured(context, args),
     }
 
     # ---- read_file ----
@@ -1342,7 +1140,7 @@ def build_tool_registry(context) -> dict:
         "risky": False,
         "execution_tier": TIER_HOST,
         "description": "按行号范围读取 UTF-8 文件。参数: path, start(默认1), end(默认200)",
-        "run": lambda args: tool_read_file(context, args),
+        "run": lambda args: _read_file_structured(context, args),
     }
 
     # ---- grep ----
@@ -1355,7 +1153,7 @@ def build_tool_registry(context) -> dict:
             "内容搜索（rg 优先，Python fallback）。"
             "参数: pattern, path, glob, ignore_case, context_lines, max_results"
         ),
-        "run": lambda args: tool_grep(context, args),
+        "run": lambda args: _grep_structured(context, args),
     }
 
     # ---- search ----
@@ -1365,7 +1163,28 @@ def build_tool_registry(context) -> dict:
         "risky": False,
         "execution_tier": TIER_HOST,
         "description": "代码搜索（rg 优先，Python fallback）。参数: pattern, path（默认 '.'）",
-        "run": lambda args: tool_search(context, args),
+        "run": lambda args: _grep_structured(context, args),
+    }
+
+    registry["code_lookup"] = {
+        "budget_group": "read",
+        "schema": auto_schema(CodeLookupArgs),
+        "risky": False,
+        "execution_tier": TIER_HOST,
+        "description": (
+            "查询 Python 符号定义或引用。"
+            "path、line、column 为已落盘文件的 1 起始精确位置。"
+        ),
+        "run": lambda args: _code_lookup_structured(context, args),
+    }
+
+    registry["code_relations"] = {
+        "budget_group": "read",
+        "schema": auto_schema(CodeRelationsArgs),
+        "risky": False,
+        "execution_tier": TIER_HOST,
+        "description": "整理本次任务已观察的 Python 文件、符号与导入/引用关系。",
+        "run": lambda args: _code_relations_structured(context, args),
     }
 
     # ---- write_file ----
@@ -1374,10 +1193,7 @@ def build_tool_registry(context) -> dict:
         "schema": auto_schema(WriteFileArgs),
         "risky": True,
         "execution_tier": TIER_HOST,
-        "description": (
-            "【最后手段】整文件覆盖创建；修复优先用 apply_patch。"
-            "参数: path, content"
-        ),
+        "description": ("【最后手段】整文件覆盖创建；修复优先用 apply_patch。参数: path, content"),
         "run": lambda args: tool_write_file(context, args),
     }
 

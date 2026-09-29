@@ -199,6 +199,8 @@ def default_repair_tool_registry() -> ToolRegistry:
         _spec("read_file", _READERS, capabilities=frozenset({"filesystem.read"})),
         _spec("search", _READERS, capabilities=frozenset({"code.search"})),
         _spec("grep", _READERS, capabilities=frozenset({"code.search"})),
+        _spec("code_lookup", _READERS, capabilities=frozenset({"code.lsp"})),
+        _spec("code_relations", _READERS, capabilities=frozenset({"code.relations"})),
         _spec("list_files", _READERS, capabilities=frozenset({"filesystem.list"})),
         _spec("inspect_file", _PATCHER, capabilities=frozenset({"filesystem.read", "code.ast"})),
         _spec("find_test", _PATCHER, capabilities=frozenset({"test.discover"})),
