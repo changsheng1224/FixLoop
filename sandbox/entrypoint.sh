@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 set -e
 
 # Prefer container env (SandboxManager sets HOME/PYTHONUSERBASE under /tmp).

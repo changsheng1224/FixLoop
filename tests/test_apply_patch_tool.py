@@ -7,7 +7,7 @@ from pathlib import Path
 
 from agent_runtime.apply_patch_format import parse_apply_patch_text, strip_fences
 from agent_runtime.tool_context import ToolContext
-from agent_runtime.tools import tool_apply_patch
+from agent_runtime.tools import _normalize_hunk_headers, tool_apply_patch
 from src.repair.execution.edit_lock import EditLockState, set_active_edit_lock
 
 SAMPLE = """\
@@ -47,6 +47,61 @@ def test_tool_apply_patch_ok_with_echo_and_lint():
         assert "new" in (root / "a.py").read_text(encoding="utf-8")
         assert "写后窗口" in out or "after:" in out.lower() or "|" in out
         assert lock.apply_patch_ok_count >= 1
+    finally:
+        set_active_edit_lock(root, None)
+
+
+def test_bare_multi_hunk_headers_are_located_independently():
+    text = "first = 1\nmiddle = 2\nlast = 3\n"
+    diff = """@@
+-first = 1
++first = 10
+@@
+-last = 3
++last = 30"""
+    normalized = _normalize_hunk_headers(diff, text)
+    assert "@@ -1,1 +1,1 @@" in normalized
+    assert "@@ -3,1 +3,1 @@" in normalized
+
+
+def test_bare_multi_hunk_headers_advance_past_duplicate_preimage():
+    text = "value = 1\nother = 2\nvalue = 1\n"
+    diff = """@@
+-value = 1
++value = 10
+@@
+-value = 1
++value = 11"""
+    normalized = _normalize_hunk_headers(diff, text)
+    assert "@@ -1,1 +1,1 @@" in normalized
+    assert "@@ -3,1 +3,1 @@" in normalized
+
+
+def test_tool_applies_duplicate_preimage_hunks_with_context():
+    raw = tempfile.mkdtemp(prefix="fixloop-ap-dupe-")
+    root = Path(raw)
+    (root / "a.py").write_text("header = 0\nvalue = 1\nmiddle = 2\nvalue = 1\n", encoding="utf-8")
+    patch = """*** Begin Patch
+*** Update File: a.py
+@@
+ header = 0
+-value = 1
++value = 10
+@@
+ middle = 2
+-value = 1
++value = 11
+*** End Patch"""
+    ctx = ToolContext(root=str(root))
+    lock = EditLockState(repo_root=root, allowed_edit={"a.py"})
+    lock.mark_read("a.py")
+    set_active_edit_lock(root, lock)
+    try:
+        out = tool_apply_patch(ctx, {"patch": patch})
+        assert out.startswith("ok apply_patch")
+        assert (root / "a.py").read_text(encoding="utf-8") == (
+            "header = 0\nvalue = 10\nmiddle = 2\nvalue = 11\n"
+        )
     finally:
         set_active_edit_lock(root, None)
 

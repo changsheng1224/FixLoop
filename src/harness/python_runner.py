@@ -99,7 +99,7 @@ class PythonTestRunner:
 
         return parse_django_runtests_output(
             test.stdout or "",
-            exit_code=int(test.exit_code or 1),
+            exit_code=int(test.exit_code),
             labels=labels,
         )
 

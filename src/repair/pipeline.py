@@ -20,7 +20,7 @@ from src.repair.timing_schema import (
 from src.repair.verification.termination import (
     RepairTerminalStatus,
     finalize_repair_state,
-    mark_fixed_skip_verify,
+    mark_pending_verify,
 )
 from src.state import RepairState, RetrievedContext, SuspectLocation
 
@@ -181,15 +181,10 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
         RepairPhaseFSM.from_state(state).apply(state, "seed", "primary localization seed")
 
-        test_patch = ""
-        if self._repair_ctx is not None:
-            test_patch = getattr(self._repair_ctx, "verify_test_patch", "") or ""
-
         suspects = seed_rule_first_suspects(
             state,
             self._repo_root,
             fallback_from_plan=self._fallback_suspects_from_plan,
-            test_patch=test_patch,
             max_keep=5,
             enable_semantic_expand=False,
         )
@@ -344,6 +339,69 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         )
         return False
 
+    @staticmethod
+    def _record_patcher_terminal(state: RepairState) -> str:
+        """规范空输出归因，避免把明确终态误报成 JSON 解析失败。"""
+        from src.repair.execution.patcher_contract import PATCHER_TERMINAL_STATUSES
+
+        terminal = str(state.node_timings.get("patcher_terminal_status") or "")
+        explicit = terminal in PATCHER_TERMINAL_STATUSES
+        if (
+            not state.candidate_patches
+            and not state.agent_errors.get("patcher_apply")
+            and not explicit
+        ):
+            state.node_timings["patcher_parse_failed"] = True
+        elif explicit:
+            state.node_timings.pop("patcher_parse_failed", None)
+            state.agent_errors.pop("patcher_parse", None)
+        return terminal
+
+    def _handle_empty_patch(self, state: RepairState, stop_loss) -> bool:
+        """记录空补丁并决定是否重试；True 表示继续下一轮。"""
+        from src.repair.stop_loss import apply_stop_loss
+
+        terminal = self._record_patcher_terminal(state)
+        if terminal in {"cannot_patch", "insufficient_evidence"}:
+            state.feedback = "Patcher 已给出明确终态：" + terminal
+            self._write_feedback_to_blackboard(state.feedback)
+            self._checkpoint_progress(state)
+            return False
+
+        apply_err = state.agent_errors.get("patcher_apply")
+        if apply_err:
+            state.node_timings["patcher_apply_failed"] = True
+            state.feedback = (
+                "补丁 JSON 解析成功但未能写入文件。"
+                f" 原因: {apply_err}。"
+                "original_lines 必须与预读代码尽量一致（允许缩进/空白差）；"
+                "对照 near= 中的真实文件行修正 pre-image；"
+                "优先使用 diff 字段；路径必须是仓库内已存在文件。"
+            )
+        elif terminal == "model_output_truncated":
+            state.feedback = (
+                "上一轮模型输出在执行写工具前被截断。请停止继续分析，"
+                "基于现有证据直接调用一次 apply_patch；若证据确实不足，"
+                "请用简短终态明确说明。"
+            )
+        else:
+            state.agent_errors.pop("patcher_apply", None)
+            state.node_timings.pop("patcher_apply_failed", None)
+            state.feedback = "补丁生成失败；请基于现有证据直接生成并应用补丁。"
+
+        self._write_feedback_to_blackboard(state.feedback)
+        sl = stop_loss.record_empty_patch(apply_failed=bool(apply_err))
+        state.node_timings["stop_loss_snapshot"] = stop_loss.snapshot()
+        state.retry_count += 1
+        if sl.stop:
+            apply_stop_loss(state, sl)
+            self._write_feedback_to_blackboard(state.feedback)
+            self._checkpoint_progress(state)
+            log.warning("[stop_loss] %s", sl.reason)
+            return False
+        self._checkpoint_progress(state)
+        return True
+
     def _repair_impl(
         self,
         state: RepairState,
@@ -497,7 +555,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                         cancelled = True
                         break
 
-                    repo_snapshot = self._snapshot_repo() if self._verification_enabled() else None
+                    # Critic 与 Verifier 都可能拒绝已落盘补丁；复用 repair 起始快照，
+                    # 避免在大型仓库的每次重试前重新遍历全部文件。
+                    repo_snapshot = initial_snapshot
                     log.info("Patcher 开始 (retry=%d)...", state.retry_count)
                     self._progress_emitter().emit(
                         "patcher_turn",
@@ -529,50 +589,22 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     n = len(state.candidate_patches)
                     log.info("Patcher 完成: %dms, %d个补丁", ms, n)
 
-                    if not state.candidate_patches and not state.agent_errors.get("patcher_apply"):
-                        state.node_timings["patcher_parse_failed"] = True
-
-                    if not self._verification_enabled():
-                        if state.candidate_patches:
-                            mark_fixed_skip_verify(state)
+                    if not state.candidate_patches:
+                        if self._handle_empty_patch(state, stop_loss):
+                            continue
                         break
 
-                    if not state.candidate_patches:
-                        apply_err = state.agent_errors.get("patcher_apply")
-                        if apply_err:
-                            state.node_timings["patcher_apply_failed"] = True
-                            state.feedback = (
-                                "补丁 JSON 解析成功但未能写入文件。"
-                                f" 原因: {apply_err}。"
-                                "original_lines 必须与预读代码尽量一致（允许缩进/空白差）；"
-                                "对照 near= 中的真实文件行修正 pre-image；"
-                                "优先使用 diff 字段；路径必须是仓库内已存在文件。"
-                            )
-                        else:
-                            state.agent_errors.pop("patcher_apply", None)
-                            state.node_timings.pop("patcher_apply_failed", None)
-                            state.feedback = "补丁生成失败（模型返回无法解析的 JSON）。请重新生成。"
-                        self._write_feedback_to_blackboard(state.feedback)
-                        from src.repair.stop_loss import apply_stop_loss
-
-                        sl = stop_loss.record_empty_patch(apply_failed=bool(apply_err))
-                        state.node_timings["stop_loss_snapshot"] = stop_loss.snapshot()
-                        state.retry_count += 1
-                        if sl.stop:
-                            apply_stop_loss(state, sl)
-                            self._write_feedback_to_blackboard(state.feedback)
-                            self._checkpoint_progress(state)
-                            log.warning("[stop_loss] %s (primary)", sl.reason)
-                            break
-                        self._checkpoint_progress(state)
-                        continue
-
-                    # Critic：空/越锁/仅测试 → 回灌，不进沙箱
+                    # Critic 必须先于 skip-verify 分支；否则未验证运行会绕过廉价质量闸。
                     if self._run_critic_gate(state):
+                        self._restore_repo_snapshot(repo_snapshot)
                         state.candidate_patches = []
                         state.retry_count += 1
                         self._checkpoint_progress(state)
                         continue
+
+                    if not self._verification_enabled():
+                        mark_pending_verify(state)
+                        break
 
                     # ── AST 语义等价检查（V1.5-Bonus9）──
                     # 仅检测函数/类签名变更（语法错误不算 drift）
@@ -611,7 +643,10 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                             f"AST 语义漂移检测拒绝补丁: {state.agent_errors['semantic_drift']}。"
                             "补丁不得删除或新增函数/类定义。"
                         )
+                        self._restore_repo_snapshot(repo_snapshot)
+                        state.candidate_patches = []
                         state.retry_count += 1
+                        self._checkpoint_progress(state)
                         continue
 
                     log.info("Verifier 开始...")
@@ -736,7 +771,12 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         finalize_repair_state(state)
         self._on_collaboration_phase(
             state,
-            "done" if state.status == "fixed" else "failed",
+            (
+                "done"
+                if state.status
+                in {RepairTerminalStatus.FIXED, RepairTerminalStatus.PENDING_VERIFY}
+                else "failed"
+            ),
             "repair finalized",
         )
 
@@ -826,7 +866,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     cancelled = True
                     break
 
-                repo_snapshot = self._snapshot_repo() if self._verification_enabled() else None
+                repo_snapshot = initial_snapshot
                 self._on_collaboration_phase(state, "patch", "resume patch attempt")
                 t0 = time.time()
                 state.candidate_patches, patch_timing = self._run_patcher(state)
@@ -847,24 +887,21 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     cancelled = True
                     break
 
-                if not self._verification_enabled():
-                    if state.candidate_patches:
-                        mark_fixed_skip_verify(state)
+                if not state.candidate_patches:
+                    if self._handle_empty_patch(state, stop_loss):
+                        continue
                     break
 
-                if not state.candidate_patches:
-                    state.feedback = "补丁生成失败（模型返回无法解析的 JSON）。请重新生成。"
-                    self._write_feedback_to_blackboard(state.feedback)
-                    sl = stop_loss.record_empty_patch(apply_failed=False)
-                    state.node_timings["stop_loss_snapshot"] = stop_loss.snapshot()
+                if self._run_critic_gate(state):
+                    self._restore_repo_snapshot(repo_snapshot)
+                    state.candidate_patches = []
                     state.retry_count += 1
-                    if sl.stop:
-                        apply_stop_loss(state, sl)
-                        self._write_feedback_to_blackboard(state.feedback)
-                        self._checkpoint_progress(state)
-                        break
                     self._checkpoint_progress(state)
                     continue
+
+                if not self._verification_enabled():
+                    mark_pending_verify(state)
+                    break
 
                 self._on_collaboration_phase(state, "verify", "resume verification attempt")
                 t0 = time.time()

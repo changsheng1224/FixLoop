@@ -31,6 +31,7 @@ def bind_l2_context(
     phase: str,
     attempt: int,
     started_ms: int = 0,
+    repair_state=None,
 ) -> str:
     """在 Agent.ask 前写入 L2 上下文，返回 task_id。"""
     task_id = make_repair_task_id(repair_run_id, agent_name, attempt)
@@ -40,6 +41,8 @@ def bind_l2_context(
     agent._l2_attempt = int(attempt)
     agent._l2_task_id = task_id
     agent._l2_ask_started_ms = int(started_ms)
+    if repair_state is not None:
+        agent._l2_repair_state = repair_state
     return task_id
 
 
@@ -54,6 +57,7 @@ def clear_l2_context(agent) -> None:
         "_l2_attempt",
         "_l2_task_id",
         "_l2_ask_started_ms",
+        "_l2_repair_state",
     ):
         if hasattr(agent, attr):
             delattr(agent, attr)

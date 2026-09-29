@@ -21,6 +21,7 @@ from src.tools.composite import build_repair_canonical_tools
 O = TypeVar("O", bound=Orchestrator)
 
 __all__ = [
+    "RequiredVerifierError",
     "create_model_client",
     "load_dotenv",
     "make_orchestrator_factory",
@@ -29,7 +30,11 @@ __all__ = [
 ]
 
 
-def try_create_verifier(client, ws, repo: str, **agent_kw):
+class RequiredVerifierError(RuntimeError):
+    """The requested Verifier sandbox could not be created safely."""
+
+
+def try_create_verifier(client, ws, repo: str, *, required: bool = False, **agent_kw):
     """Docker 探针就绪时创建 Verifier Agent，否则返回 None。"""
     import sys
 
@@ -39,10 +44,16 @@ def try_create_verifier(client, ws, repo: str, **agent_kw):
     if not report.ready:
         detail = "; ".join(report.errors) or "sandbox not ready"
         print(f"[repair_factory] sandbox health probe failed: {detail}", file=sys.stderr)
+        if required:
+            raise RequiredVerifierError(f"required verifier sandbox unavailable: {detail}")
         return None
     try:
         return create_verifier(client, ws, cwd=repo, **agent_kw)
-    except Exception:
+    except Exception as exc:
+        if required:
+            raise RequiredVerifierError(
+                f"required verifier creation failed: {exc}"
+            ) from exc
         return None
 
 
@@ -104,7 +115,13 @@ def wire_orchestrator(
     )
     orch._budget_ctx = budget_ctx
     if should_try_verifier:
-        verifier = try_create_verifier(client, ws, repo, **_agent_kw("verifier"))
+        verifier = try_create_verifier(
+            client,
+            ws,
+            repo,
+            required=require_sandbox or normalized_tier == "container",
+            **_agent_kw("verifier"),
+        )
         if verifier:
             orch.verifier = verifier
             orch._repair_gateways = orch._collect_repair_gateways(patcher, verifier)

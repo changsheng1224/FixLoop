@@ -18,7 +18,7 @@ RepairAgentRole = Literal["patcher", "verifier"]
 _AGENT_DEFAULTS: dict[RepairAgentRole, dict] = {
     "patcher": {
         "max_steps": 10,
-        "max_new_tokens": 4096,
+        "max_new_tokens": 8192,
         "prompt_budget": _DEFAULT_ALLOCATIONS["patcher"],
         "max_json_retries": 0,
     },

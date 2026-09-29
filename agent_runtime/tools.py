@@ -7,6 +7,7 @@
 auto_schema() 从 dataclass 自动推导参数字典，新增工具无需手写 schema。
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -99,6 +100,14 @@ class ExpandLockArgs:
     """显式扩锁。"""
 
     path: str = ""
+
+
+@dataclass
+class FinishRepairArgs:
+    """End a repair attempt without claiming that a patch was produced."""
+
+    status: str = ""
+    reason: str = ""
 
 
 @dataclass
@@ -380,20 +389,59 @@ def _normalize_hunk_headers(diff: str, file_text: str) -> str:
     if not d:
         return d
 
-    def _locate(body: str) -> tuple[int, int, int]:
+    def _locate(body: str, *, minimum_line: int = 1) -> tuple[int, int, int]:
         lines = body.splitlines()
-        needle = next(
-            (x[1:] for x in lines if x.startswith("-") and not x.startswith("---")),
-            "",
+        first_preimage = next(
+            (
+                index
+                for index, line in enumerate(lines)
+                if line.startswith(" ")
+                or (line.startswith("-") and not line.startswith("---"))
+            ),
+            0,
         )
-        start = 1
+        first_removed = next(
+            (
+                index
+                for index, line in enumerate(lines)
+                if line.startswith("-") and not line.startswith("---")
+            ),
+            None,
+        )
+        anchor_index = first_removed if first_removed is not None else first_preimage
+        needle = next(
+            (
+                x[1:]
+                for x in lines
+                if x.startswith("-") and not x.startswith("---")
+            ),
+            lines[first_preimage][1:] if lines and lines[first_preimage].startswith(" ") else "",
+        )
+        start = max(1, minimum_line)
         if needle:
             for i, fl in enumerate(file_text.splitlines(), 1):
+                if i < start:
+                    continue
                 if fl == needle or needle in fl:
-                    start = i
+                    prefix = sum(
+                        1
+                        for line in lines[:anchor_index]
+                        if line.startswith(" ")
+                        or (line.startswith("-") and not line.startswith("---"))
+                    )
+                    start = max(1, i - prefix)
                     break
-        old_n = sum(1 for x in lines if x.startswith("-") and not x.startswith("---")) or 1
-        new_n = sum(1 for x in lines if x.startswith("+") and not x.startswith("+++")) or 1
+        old_n = sum(
+            1
+            for x in lines
+            if x.startswith(" ")
+            or (x.startswith("-") and not x.startswith("---"))
+        ) or 1
+        new_n = sum(
+            1
+            for x in lines
+            if x.startswith(" ") or (x.startswith("+") and not x.startswith("+++"))
+        ) or 1
         return start, old_n, new_n
 
     if "@@" not in d:
@@ -402,12 +450,43 @@ def _normalize_hunk_headers(diff: str, file_text: str) -> str:
 
     hunk_re = re.compile(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@")
     out_lines: list[str] = []
+    current_header = ""
+    current_body: list[str] = []
+    search_from = 1
+
+    def _flush_hunk() -> None:
+        nonlocal search_from
+        if not current_header:
+            return
+        header = current_header.strip()
+        if not hunk_re.match(header):
+            start, old_n, new_n = _locate(
+                "\n".join(current_body), minimum_line=search_from
+            )
+            header = f"@@ -{start},{old_n} +{start},{new_n} @@"
+            consumed = sum(
+                1
+                for line in current_body
+                if line.startswith((" ", "-")) and not line.startswith("---")
+            )
+            search_from = start + max(1, consumed)
+        else:
+            match = re.match(r"^@@ -(\d+)(?:,(\d+))? \+", header)
+            if match:
+                search_from = int(match.group(1)) + int(match.group(2) or 1)
+        out_lines.append(header)
+        out_lines.extend(current_body)
+
     for ln in d.splitlines():
-        if ln.strip().startswith("@@") and not hunk_re.match(ln.strip()):
-            start, old_n, new_n = _locate(d)
-            out_lines.append(f"@@ -{start},{old_n} +{start},{new_n} @@")
+        if ln.strip().startswith("@@"):
+            _flush_hunk()
+            current_header = ln
+            current_body = []
+        elif current_header:
+            current_body.append(ln)
         else:
             out_lines.append(ln)
+    _flush_hunk()
     return "\n".join(out_lines)
 
 
@@ -1193,6 +1272,17 @@ def _format_shell_result(returncode: int, stdout: str, stderr: str) -> str:
 # ============================================================================
 
 
+def tool_finish_repair(args: dict) -> str:
+    """Return an explicit, machine-readable no-patch terminal outcome."""
+    status = str(args.get("status") or "").strip().lower()
+    reason = str(args.get("reason") or "").strip()
+    if status not in {"cannot_patch", "needs_more_context"}:
+        return "Error: finish_repair status 必须是 cannot_patch 或 needs_more_context"
+    if not reason:
+        return "Error: finish_repair reason 不能为空，必须说明当前证据或缺失上下文"
+    return json.dumps({"status": status, "reason": reason}, ensure_ascii=False)
+
+
 def tool_expand_observation(context: ToolContext, args: dict) -> str:
     """Return a bounded, checksum-validated Observation payload."""
     from agent_runtime.context_runtime import ObservationStore
@@ -1315,6 +1405,20 @@ def build_tool_registry(context) -> dict:
             "@@ hunk（须含 - 或上下文行）/ *** End Patch。先 read_file。参数: patch"
         ),
         "run": lambda args: tool_apply_patch(context, args),
+    }
+
+    # ---- finish_repair ----
+    registry["finish_repair"] = {
+        "budget_group": "recovery",
+        "schema": auto_schema(FinishRepairArgs),
+        "risky": False,
+        "terminal": True,
+        "execution_tier": TIER_HOST,
+        "description": (
+            "结构化结束本次修复且不声称已生成补丁。"
+            "status 只能是 cannot_patch 或 needs_more_context；reason 必须说明证据。"
+        ),
+        "run": tool_finish_repair,
     }
 
     # ---- expand_lock ----

@@ -7,10 +7,12 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from src.orchestrator import Orchestrator
+from src.repair.execution.edit_lock import EditLockState
 from src.repair.execution.lock_reflect import (
     f2p_impl_paths,
     merge_f2p_paths_first,
 )
+from src.repair.run_context import RepairRunContext
 from src.state import RepairState
 
 
@@ -93,3 +95,41 @@ def test_seed_patcher_primary_includes_f2p_impl(monkeypatch):
     allowed = set(state.node_timings.get("allowed_edit") or [])
     assert "astropy/modeling/separable.py" in allowed
     assert state.node_timings.get("f2p_seeded") is True
+
+
+def test_seed_patcher_primary_does_not_expose_verifier_test_patch(monkeypatch, tmp_path):
+    (tmp_path / "impl.py").write_text("value = 1\n", encoding="utf-8")
+    orch = Orchestrator(None)
+    orch._repo_root = str(tmp_path)
+    orch._repair_ctx = RepairRunContext(
+        verify_test_patch="diff --git a/tests/test_secret.py b/tests/test_secret.py\n"
+    )
+    orch._progress = MagicMock()
+    captured = {}
+
+    def fake_seed(state, repo_root, **kwargs):
+        captured.update(kwargs)
+        state.suspect_locations = []
+        return []
+
+    monkeypatch.setattr(
+        "src.repair.localization.localize_fastpath.seed_rule_first_suspects", fake_seed
+    )
+    orch._seed_patcher_primary(RepairState(issue_input="public issue"))
+    assert "test_patch" not in captured
+
+
+def test_expand_lock_requires_read_in_new_generation(tmp_path):
+    target = tmp_path / "pkg" / "impl.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("value = 1\n", encoding="utf-8")
+    lock = EditLockState(repo_root=tmp_path)
+
+    assert lock.mark_read("pkg/impl.py")
+    assert lock.expand_lock("pkg/impl.py") == (True, "expanded:pkg/impl.py")
+    ok, reason = lock.check_write("pkg/impl.py")
+    assert not ok
+    assert "required=1" in reason
+
+    assert lock.mark_read("pkg/impl.py")
+    assert lock.check_write("pkg/impl.py") == (True, "")

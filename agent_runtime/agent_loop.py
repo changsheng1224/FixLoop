@@ -34,6 +34,35 @@ from agent_runtime.terminal_tool import TerminalToolAcceptedError
 _MODIFYING_TOOLS = frozenset({"write_file", "patch_file", "apply_patch", "run_shell"})
 
 
+def _tool_target_paths(tool_name: str, tool_args: dict | None) -> list[str]:
+    """Return normalized file targets for write/recovery decisions.
+
+    ``apply_patch`` carries its paths in the patch envelope rather than a
+    top-level ``path`` argument.  Recovery must use those exact paths so a
+    stale write cannot fall back to a wildcard read reservation.
+    """
+    args = tool_args or {}
+    direct = str(args.get("path") or "").replace("\\", "/").strip()
+    if tool_name != "apply_patch":
+        return [direct] if direct else []
+
+    patch_text = args.get("patch") or args.get("diff") or args.get("input") or ""
+    if not str(patch_text).strip():
+        return []
+    try:
+        from agent_runtime.apply_patch_format import parse_apply_patch_text
+
+        ops = parse_apply_patch_text(str(patch_text))
+    except (TypeError, ValueError):
+        return []
+    paths: list[str] = []
+    for op in ops:
+        path = str(getattr(op, "path", "") or "").replace("\\", "/").strip()
+        if path and path not in paths:
+            paths.append(path)
+    return paths
+
+
 def _log_loop(msg: str) -> None:
     """Loop 阶段 debug 日志（受 --log-level 控制）。"""
     from agent_runtime.logging_setup import get_logger
@@ -41,12 +70,51 @@ def _log_loop(msg: str) -> None:
     get_logger("agent_loop").debug(msg.rstrip("\n"))
 
 
-def _build_anthropic_tools(tools_registry: dict) -> list[dict]:
+def _patch_recovery_anchors(text: str, *, max_chars: int = 6000) -> str:
+    """Keep bounded source/target anchors when a model turn is truncated."""
+    raw = str(text or "")
+    if not raw:
+        return ""
+    lines = raw.splitlines()
+    markers = (
+        "allowed_edit:",
+        "DISK GROUNDING",
+        "嫌疑位置",
+        "相关测试文件",
+        "失败面",
+        "[PATCHER RUNTIME CONTRACT]",
+    )
+    starts = [
+        index
+        for index, line in enumerate(lines)
+        if any(marker in line for marker in markers)
+    ]
+    chunks: list[str] = []
+    used = 0
+    for start in starts:
+        chunk = "\n".join(lines[start : start + 36]).strip()
+        if not chunk:
+            continue
+        remaining = max_chars - used
+        if remaining <= 0:
+            break
+        if len(chunk) > remaining:
+            chunk = chunk[:remaining].rstrip() + "\n... anchors truncated ..."
+        chunks.append(chunk)
+        used += len(chunk)
+    return "\n\n".join(chunks)
+
+
+def _build_anthropic_tools(
+    tools_registry: dict, *, allowed_names: set[str] | None = None
+) -> list[dict]:
     """将内部工具注册表转换为 Anthropic tool_use 格式（仅 schema 字段）。"""
     from agent_runtime.tool_schema import schema_to_json, tool_schema_view
 
     result = []
     for name, spec in tool_schema_view(tools_registry).items():
+        if allowed_names is not None and name not in allowed_names:
+            continue
         schema = spec.get("json_schema") or spec.get("schema", {})
         result.append(
             {
@@ -92,6 +160,16 @@ class AgentLoop:
         self.MAX_EMPTY_RETRIES = 3
         self._last_dream_stats: dict[str, int] = {}
         self._llm_call_count = 0
+        self._blocked_convergence_reads = 0
+        self._patch_decision_required = False
+        # Patcher recovery is explicit state, so a rejected write/read cannot
+        # silently fall back to the previous model/tool projection.
+        self._patch_recovery_directive = ""
+        self._patch_recovery_allowed_tools: set[str] | None = None
+        self._patch_recovery_kind = ""
+        self._max_native_recovery_turns = max(
+            2, min(6, int(getattr(agent.config, "max_recovery_attempts", 0) or 3))
+        )
         from agent_runtime.repair_run import RunTerminalGuard
 
         self._terminal_guard = RunTerminalGuard()
@@ -393,6 +471,7 @@ class AgentLoop:
         if provider_error is None and isinstance(error, TimeoutError | OSError):
             provider_error = normalize_provider_error(error)
         if isinstance(provider_error, ProviderError):
+            self._emit("provider_error", provider_error.to_trace_payload())
             ts.stop_with_reason(StopReason.API_ERROR, "failed", detail=str(provider_error))
             return self._complete_run(
                 ts,
@@ -582,6 +661,220 @@ class AgentLoop:
         specific = mapping.get(group)
         return specific is None or self._budget_check(specific)
 
+    def _grant_read_reserve(
+        self,
+        path: str,
+        *,
+        kind: str,
+        step: int,
+        generation: int = 0,
+    ) -> None:
+        quota = getattr(self.agent, "quota", None)
+        if quota is None or not hasattr(quota, "grant_read_reserve"):
+            return
+        if quota.grant_read_reserve(path, kind=kind, generation=generation):
+            self._emit(
+                "post_lock_read_reserved" if kind == "post_lock" else "targeted_read_reserved",
+                {
+                    "step": step,
+                    "path": path,
+                    "kind": kind,
+                    "generation": generation,
+                    "uses": 1,
+                },
+            )
+
+    def _matching_read_reservation(self, tool_name: str, tool_args: dict) -> dict | None:
+        quota = getattr(self.agent, "quota", None)
+        if quota is None or not hasattr(quota, "matching_read_reserve"):
+            return None
+        tool_spec = (self.agent.tools or {}).get(tool_name) or {}
+        return quota.matching_read_reserve(tool_name, tool_spec, tool_args)
+
+    def _has_targeted_read_reserve(self) -> bool:
+        """Whether a bounded exact reread is currently available."""
+        quota = getattr(self.agent, "quota", None)
+        if quota is None or not hasattr(quota, "quota_summary"):
+            return False
+        reserves = (quota.quota_summary() or {}).get("read_reserves") or []
+        return any(str(item.get("kind", "")) == "targeted" for item in reserves)
+
+    def _set_patch_recovery(
+        self, kind: str, directive: str, allowed_tools: set[str]
+    ) -> None:
+        self._patch_recovery_kind = str(kind)
+        self._patch_recovery_directive = str(directive)
+        self._patch_recovery_allowed_tools = set(allowed_tools)
+        self._patch_decision_required = True
+
+    def _patcher_grounded(self) -> bool:
+        """Return whether this Patcher has read an editable implementation path."""
+        runtime = self.agent.session.get("_patcher_runtime", {}) or {}
+        if bool(runtime.get("grounded")):
+            return True
+        try:
+            from src.repair.execution.edit_lock import get_active_edit_lock
+            from src.repair.localization.localize_quality import _is_test_path
+
+            lock = get_active_edit_lock(getattr(self.agent.tool_context, "root", None))
+            if lock is None:
+                return False
+            return any(
+                path in lock.read_set
+                and path in lock.allowed_edit
+                and not _is_test_path(path)
+                for path in lock.allowed_edit
+            )
+        except Exception:
+            return False
+
+    def _sync_patcher_grounding(self, tool_name: str, tool_args: dict, result) -> None:
+        """Reflect implementation-read evidence into L1 state and action gating."""
+        if (getattr(self.agent, "agent_name", "") or "") != "patcher":
+            return
+        metadata = getattr(result, "metadata", {}) or {}
+        if metadata.get("tool_status") != "success" or tool_name != "read_file":
+            return
+        try:
+            from src.repair.execution.edit_lock import get_active_edit_lock, normalize_repo_rel
+            from src.repair.localization.localize_quality import _is_test_path
+
+            lock = get_active_edit_lock(getattr(self.agent.tool_context, "root", None))
+            if lock is None:
+                return
+            path = normalize_repo_rel(str(tool_args.get("path") or ""), lock.repo_root)
+            grounded_paths = [
+                item
+                for item in sorted(lock.allowed_edit)
+                if item in lock.read_set and not _is_test_path(item)
+            ]
+            if path not in grounded_paths and not grounded_paths:
+                return
+            runtime = self.agent.session.setdefault("_patcher_runtime", {})
+            runtime["grounded"] = True
+            runtime["grounded_paths"] = grounded_paths[:12]
+            runtime["patch_required"] = True
+            state = getattr(self.agent, "_l2_repair_state", None)
+            if state is not None:
+                state.node_timings["allowed_edit"] = sorted(lock.allowed_edit)
+                state.node_timings["patcher_grounded"] = True
+                state.node_timings["patch_required"] = True
+                ledger = ((self.agent.session.get("memory") or {}).get("working") or {}).get(
+                    "evidence_ledger", []
+                )
+                if isinstance(ledger, list):
+                    state.node_timings["evidence_ledger"] = [dict(item) for item in ledger[-12:]]
+            self._set_patch_recovery(
+                "grounded_evidence",
+                "已读取实现文件并获得可编辑证据。停止继续探索，立即调用 apply_patch/patch_file；"
+                "若确实无法形成补丁，只能声明 cannot_patch 并说明具体原因。",
+                {"apply_patch", "patch_file", "finish_repair"},
+            )
+            self._emit(
+                "patcher_grounded",
+                {"path": path, "grounded_paths": grounded_paths[:12], "patch_required": True},
+            )
+        except Exception:
+            return
+
+    def _block_grounded_finish(self, tool_name: str, tool_args: dict, result) -> bool:
+        """Reject needs_more_context after implementation evidence exists."""
+        if tool_name != "finish_repair" or not self._patcher_grounded():
+            return False
+        status = str(tool_args.get("status") or "").strip().lower()
+        if status != "needs_more_context":
+            return False
+        result.status = "rejected"
+        result.error_code = "grounded_finish_blocked"
+        result.retryable = False
+        result.content = (
+            "Error: 已有实现文件证据，不能以 needs_more_context 结束。"
+            "请调用 apply_patch/patch_file；若无法修复请改用 cannot_patch。"
+        )
+        result.metadata.update(
+            {
+                "tool_status": "rejected",
+                "tool_error_code": "grounded_finish_blocked",
+                "retryable": False,
+                "required_next_action": "apply_patch_or_cannot_patch",
+            }
+        )
+        self._set_patch_recovery(
+            "grounded_finish_blocked",
+            "已有实现文件证据，needs_more_context 已拒绝。请直接提交补丁，或声明 cannot_patch。",
+            {"apply_patch", "patch_file", "finish_repair"},
+        )
+        self._emit("grounded_finish_blocked", {"status": status})
+        return True
+
+    def _native_tool_names(
+        self, *, action_required: bool = False, patch_only_recovery: bool = False
+    ) -> set[str] | None:
+        """Project tool schemas to the current repair phase."""
+        is_patcher = (getattr(self.agent, "agent_name", "") or "") == "patcher"
+        if is_patcher and action_required:
+            names = {"apply_patch", "patch_file", "finish_repair"}
+            if self._patch_recovery_allowed_tools is not None:
+                # Recovery directives are stricter than the normal convergence
+                # window.  In particular stale writes expose only the exact
+                # reread, while malformed writes expose apply_patch.
+                return set(self._patch_recovery_allowed_tools)
+            # Patcher owns localization.  Once convergence has requested a
+            # write, retain a small bounded read window so a newly discovered
+            # implementation path is not made unreachable by schema gating.
+            if (
+                not patch_only_recovery
+                and self._step_guard.localization_reads_available
+            ):
+                names.update(
+                    {
+                        "read_file",
+                        "grep",
+                        "list_files",
+                        "search",
+                        "ast_parse",
+                        "inspect_file",
+                        "find_test",
+                    }
+                )
+            # A truncated response is an action boundary.  Only stale
+            # preimage recovery may open one explicitly bounded reread.
+            elif (
+                not patch_only_recovery
+                and self._has_targeted_read_reserve()
+            ):
+                names.update({"read_file", "ast_parse", "inspect_file"})
+            return names
+        if not is_patcher or self._step_guard.phase != "converge":
+            return None
+        writes = {
+            "write_file",
+            "patch_file",
+            "apply_patch",
+            "finish_repair",
+            "expand_lock",
+            "quick_test",
+        }
+        quota = getattr(self.agent, "quota", None)
+        reserves = list((quota.quota_summary() if quota else {}).get("read_reserves") or [])
+        has_post_lock = any(item.get("kind") == "post_lock" for item in reserves)
+        if has_post_lock or (
+            self._step_guard.targeted_read_available and not self._patch_decision_required
+        ):
+            writes.add("read_file")
+        return writes
+
+    def _enter_convergence_gate(self, reason: str, *, step: int) -> None:
+        self._emit(
+            "convergence_gate_entered",
+            {
+                "step": step,
+                "reason": reason,
+                "reads_since_write": self._step_guard.reads_since_write,
+            },
+        )
+        self._grant_read_reserve("*", kind="targeted", step=step)
+
     def _budget_reserve_turn(self, turn: int) -> bool:
         if int(turn) <= self._budget_turns_seen:
             return True
@@ -652,8 +945,93 @@ class AgentLoop:
                     },
                 )
                 replay_blocked = True
+        is_patcher = (
+            getattr(self.agent, "agent_name", None)
+            or getattr(self.agent, "_agent_name", "")
+            or ""
+        ) == "patcher"
+        convergence_blocked = False
+        if is_patcher and not replayed and not replay_blocked:
+            quota_summary = (
+                self.agent.quota.quota_summary()
+                if hasattr(getattr(self.agent, "quota", None), "quota_summary")
+                else {}
+            )
+            read_budget = ((quota_summary.get("groups") or {}).get("read") or {})
+            remaining = read_budget.get("remaining")
+            if remaining is not None and int(remaining) <= 2:
+                if self._step_guard.enter_convergence("read_budget_low"):
+                    self._enter_convergence_gate("read_budget_low", step=step)
+            phase_before = self._step_guard.phase
+            read_reservation = self._matching_read_reservation(tool_name, tool_args)
+            preflight = self._step_guard.preflight(
+                tool_name,
+                tool_args,
+                read_reservation=read_reservation,
+            )
+            if phase_before == "explore" and self._step_guard.phase == "converge":
+                self._enter_convergence_gate(
+                    self._step_guard.convergence_reason or "duplicate_read", step=step
+                )
+            if preflight is not None and preflight.action == "allow_targeted_read":
+                self._grant_read_reserve("*", kind="targeted", step=step)
+            elif preflight is not None and preflight.action == "allow_reserved_read":
+                pass
+            elif preflight is not None and preflight.action.startswith("block_"):
+                from agent_runtime.tool_executor import ToolExecutionResult
+
+                event = (
+                    "duplicate_read_blocked"
+                    if preflight.action == "block_duplicate_read"
+                    else "convergence_read_blocked"
+                )
+                self._emit(
+                    event,
+                    {
+                        "step": step,
+                        "tool": tool_name,
+                        "path": str(tool_args.get("path") or ""),
+                        "phase": self._step_guard.phase,
+                    },
+                )
+                self._blocked_convergence_reads += 1
+                if self._blocked_convergence_reads >= 2:
+                    self._patch_decision_required = True
+                    self._emit(
+                        "patch_decision_required",
+                        {
+                            "step": step,
+                            "blocked_read_attempts": self._blocked_convergence_reads,
+                            "allowed_actions": [
+                                "apply_patch",
+                                "patch_file",
+                                "expand_lock",
+                                "terminal",
+                            ],
+                        },
+                    )
+                result = ToolExecutionResult(
+                    content=(
+                        f"Error: {preflight.detail}。{preflight.replan_hint} "
+                        "可用动作: apply_patch/patch_file/expand_lock/终止。"
+                    ),
+                    status="rejected",
+                    error_code="convergence_required",
+                    metadata={
+                        "tool_status": "rejected",
+                        "tool_error_code": "convergence_required",
+                        "retryable": False,
+                    },
+                )
+                self._set_patch_recovery(
+                    "convergence_required",
+                    "读取请求被收敛闸门拒绝。请停止重复读取，直接调用 apply_patch/patch_file，"
+                    "或调用 finish_repair 说明证据不足。",
+                    {"apply_patch", "patch_file", "finish_repair"},
+                )
+                convergence_blocked = True
         budget_rejected = self._repair_deadline.expired()
-        if not replayed and not replay_blocked and budget_rejected:
+        if not replayed and not replay_blocked and not convergence_blocked and budget_rejected:
             from agent_runtime.tool_executor import ToolExecutionResult
 
             result = ToolExecutionResult(
@@ -664,7 +1042,7 @@ class AgentLoop:
                     "retryable": False,
                 },
             )
-        elif not replayed and not replay_blocked and (
+        elif not replayed and not replay_blocked and not convergence_blocked and (
             not self._repair_budget.allow_tool(group.value) or not self._budget_allows_tool(
             group.value
             )
@@ -707,7 +1085,7 @@ class AgentLoop:
                 }
             )
         t0 = _time.time()
-        if not budget_rejected and not replayed and not replay_blocked:
+        if not budget_rejected and not replayed and not replay_blocked and not convergence_blocked:
             self._budget_reserve("tool_calls")
             if group.value in {"write", "verify", "recovery"}:
                 self._budget_reserve(
@@ -728,6 +1106,7 @@ class AgentLoop:
             self.agent.session["_in_flight_action"] = action.__dict__.copy()
             try:
                 result = self.agent.execute_tool(tool_name, tool_args)
+                self._block_grounded_finish(tool_name, tool_args, result)
             except BaseException:
                 self.agent.session["_in_flight_action"]["status"] = "uncertain"
                 self.agent.session["_in_flight_action"]["uncertain_reason"] = "runtime_exception"
@@ -780,6 +1159,80 @@ class AgentLoop:
         ) is not None:
             raise CancelledError("user", answer=msg)
         result_text = result.content if hasattr(result, "content") else str(result)
+        result_meta = getattr(result, "metadata", {}) or {}
+        error_code = str(result_meta.get("tool_error_code", "") or "")
+        if is_patcher:
+            target_paths = _tool_target_paths(tool_name, tool_args)
+            path_hint = target_paths[0] if target_paths else ""
+            if error_code == "stale_preimage":
+                if self._step_guard.request_targeted_reread("stale_preimage"):
+                    for target_path in target_paths:
+                        self._grant_read_reserve(
+                            target_path, kind="targeted", step=step
+                        )
+                self._set_patch_recovery(
+                    "stale_preimage",
+                    f"补丁的旧文本已失效。先对 {', '.join(target_paths) or '目标文件'} "
+                    "执行一次精确 read_file，"
+                    "再基于刚读到的上下文调用 apply_patch/patch_file；不要重复旧补丁。",
+                    {"read_file", "finish_repair"}
+                    if self._has_targeted_read_reserve()
+                    else {"apply_patch", "finish_repair"},
+                )
+                self._emit(
+                    "stale_patch_rejected",
+                    {
+                        "step": step,
+                        "tool": tool_name,
+                        "path": path_hint,
+                        "paths": target_paths,
+                        "current_sha256": result_meta.get("current_sha256", ""),
+                        "recovery_action": "targeted_reread_then_retry",
+                    },
+                )
+            elif error_code == "invalid_args":
+                self._set_patch_recovery(
+                    "invalid_args",
+                    "写入参数无效。禁止空 old_text/new_text 或重复相同工具调用；"
+                    "请改用包含文件路径、上下文行和 +/- 行的 apply_patch，"
+                    "或调用 finish_repair 说明无法修复。",
+                    {"apply_patch", "finish_repair"},
+                )
+                self._emit(
+                    "patch_write_rejected",
+                    {"step": step, "tool": tool_name, "error_code": error_code},
+                )
+            elif error_code == "no_change":
+                self._step_guard.request_targeted_reread("no_change")
+                for target_path in target_paths:
+                    self._grant_read_reserve(target_path, kind="targeted", step=step)
+                self._set_patch_recovery(
+                    "no_change",
+                    f"上一次写入没有产生磁盘变化。先精确读取 "
+                    f"{', '.join(target_paths) or '目标文件'} 的当前内容，"
+                    "再提交不同的 apply_patch，或调用 finish_repair。",
+                    {"read_file", "finish_repair"},
+                )
+                ts.node_timings["patch_no_change"] = True
+                self._emit(
+                    "patch_no_change",
+                    {
+                        "step": step,
+                        "tool": tool_name,
+                        "recovery_action": "reread_then_retry_or_finish",
+                    },
+                )
+            elif error_code == "edit_lint_reject":
+                self._set_patch_recovery(
+                    "edit_lint_reject",
+                    "补丁因编辑期语法检查未落盘。请修正语法后用 apply_patch 提交，"
+                    "不要重复相同内容。",
+                    {"apply_patch", "finish_repair"},
+                )
+                self._emit(
+                    "patch_write_rejected",
+                    {"step": step, "tool": tool_name, "error_code": error_code},
+                )
         te_ms = int((_time.time() - t0) * 1000)
         from agent_runtime.repair_runtime import CanonicalToolCall, observation_from_result
 
@@ -922,7 +1375,9 @@ class AgentLoop:
                 tool=tool_name,
                 callback=callback,
             )
-        self.agent.update_memory_after_tool(tool_name, tool_args, result_text)
+        if _meta.get("tool_status") == "success":
+            self.agent.update_memory_after_tool(tool_name, tool_args, result_text)
+            self._sync_patcher_grounding(tool_name, tool_args, result)
         self._record_tool_outcome(tool_name, result, ts, tool_args)
         if emit_recording:
             self._notify_react_phase(
@@ -983,15 +1438,57 @@ class AgentLoop:
         tool_success = result.metadata.get("tool_status") == "success"
         if tool_success:
             self._advance_todo()
+            if tool_name in {"write_file", "patch_file", "apply_patch"}:
+                self._patch_decision_required = False
+                self._patch_recovery_directive = ""
+                self._patch_recovery_allowed_tools = None
+                self._patch_recovery_kind = ""
+            consumed_reserve = result.metadata.get("read_reserve_consumed")
+            if isinstance(consumed_reserve, dict):
+                self._emit(
+                    "post_lock_read_consumed"
+                    if consumed_reserve.get("kind") == "post_lock"
+                    else "targeted_read_consumed",
+                    {"step": step, **consumed_reserve},
+                )
+                if (
+                    tool_name == "read_file"
+                    and consumed_reserve.get("kind") == "targeted"
+                    and self._patch_recovery_kind in {"stale_preimage", "no_change"}
+                ):
+                    self._set_patch_recovery(
+                        "post_reread",
+                        "精确重读已完成。现在必须基于该读取结果调用 apply_patch/patch_file，"
+                        "或调用 finish_repair；不要再次读取同一范围。",
+                        {"apply_patch", "patch_file", "finish_repair"},
+                    )
+            if (
+                tool_name == "expand_lock"
+                and tool_args.get("path")
+                and "expanded:" in str(result_text)
+            ):
+                generation = 0
+                try:
+                    from src.repair.execution.edit_lock import get_active_edit_lock
+
+                    root = getattr(getattr(self.agent, "tool_context", None), "root", None)
+                    lock = get_active_edit_lock(root)
+                    if lock is not None:
+                        generation = lock.required_read_generation(str(tool_args["path"]))
+                except Exception:
+                    generation = 0
+                self._grant_read_reserve(
+                    str(tool_args["path"]).replace("\\", "/"),
+                    kind="post_lock",
+                    step=step,
+                    generation=generation,
+                )
 
         # StepGuard：仅「改盘」算进展。patcher 的 read/grep 不再伪装成 has_affected，
         # 否则会空转耗尽 step_limit（R11 django）。
         meta = result.metadata if hasattr(result, "metadata") else {}
         affected = meta.get("affected_paths", []) if isinstance(meta, dict) else []
         self._no_progress_steps = self._step_guard.stall_count
-        is_patcher = (
-            getattr(self.agent, "agent_name", None) or getattr(self.agent, "_agent_name", "") or ""
-        ) == "patcher"
         if is_patcher:
             guard_has_affected = bool(affected) or (
                 tool_name in _MODIFYING_TOOLS
@@ -1000,13 +1497,20 @@ class AgentLoop:
             )
         else:
             guard_has_affected = bool(affected) or tool_name not in _MODIFYING_TOOLS
-        verdict = self._step_guard.evaluate(
-            StepContext(
-                tool_name=tool_name,
-                tool_args=tool_args,
-                has_affected=guard_has_affected,
+        verdict = None
+        if not convergence_blocked:
+            verdict = self._step_guard.evaluate(
+                StepContext(
+                    tool_name=tool_name,
+                    tool_args=tool_args,
+                    has_affected=guard_has_affected,
+                    progress_key=(
+                        self._step_guard.read_progress_key(tool_name, tool_args)
+                        if tool_success
+                        else ""
+                    ),
+                )
             )
-        )
         if verdict is not None:
             if verdict.reason:
                 # 终止级判决
@@ -1061,8 +1565,15 @@ class AgentLoop:
                 self.stop_reason = verdict.reason
                 return verdict.replan_hint or f"任务终止：{verdict.detail}"
             else:
-                # warning 级（drift 预警，不终止）
-                self._emit("goal_drift_warning", {"detail": verdict.detail})
+                if verdict.action == "enter_convergence":
+                    self._enter_convergence_gate(
+                        self._step_guard.convergence_reason or "read_limit_without_write",
+                        step=step,
+                    )
+                    result_text += f"\n\n{verdict.replan_hint}"
+                else:
+                    # warning 级（drift 预警，不终止）
+                    self._emit("goal_drift_warning", {"detail": verdict.detail})
         self.agent.record(
             {
                 "role": "tool",
@@ -1525,6 +2036,8 @@ class AgentLoop:
             }
         )
         self._task_state = ts
+        if agent_name == "patcher":
+            self.agent.session.pop("_patcher_runtime", None)
         self._call_timings = []
         self._budget_manager = BudgetManager.from_config(self.agent.config)
         self._budget_turns_seen = 0
@@ -1533,6 +2046,11 @@ class AgentLoop:
             getattr(self.agent.config, "degradation", None),
         )
         self._retry_count = 0
+        self._blocked_convergence_reads = 0
+        self._patch_decision_required = False
+        self._patch_recovery_directive = ""
+        self._patch_recovery_allowed_tools = None
+        self._patch_recovery_kind = ""
         from agent_runtime.repair_runtime import ExecutionDeadline
 
         self._repair_deadline = ExecutionDeadline(
@@ -1566,6 +2084,7 @@ class AgentLoop:
                 self._step_guard.reset(
                     task_summary=self._get_task_summary_text(),
                     suspect_files=self._extract_suspect_files(),
+                    localization_mode=(agent_name == "patcher"),
                 )
 
                 if hasattr(self.agent.model_client, "complete_turn"):
@@ -1631,6 +2150,7 @@ class AgentLoop:
                 self._step_guard.reset(
                     task_summary=self._get_task_summary_text(),
                     suspect_files=self._extract_suspect_files(),
+                    localization_mode=(getattr(self.agent, "_agent_name", "") == "patcher"),
                 )
                 if checkpoint.get("path") == "native" and hasattr(
                     self.agent.model_client, "complete_turn"
@@ -1673,9 +2193,13 @@ class AgentLoop:
             attach_projection_metadata,
             build_context_prefix,
         )
-        from agent_runtime.model_turn import FinishKind, ModelTurnRequest
+        from agent_runtime.model_turn import (
+            FinishKind,
+            ModelTurnRequest,
+            ToolChoice,
+            ToolChoiceMode,
+        )
 
-        tools_def = _build_anthropic_tools(self.agent.tools)
         native_tail: list[dict] = []
         usage_total = {
             "input_tokens": 0,
@@ -1685,9 +2209,22 @@ class AgentLoop:
             "calls": 0,
         }
         output_recovery = 0
+        output_recovery_directive = ""
         started = _time.time()
 
-        for turn in range(1, self.max_steps + 1):
+        # A rejected gateway/executor call needs one bounded recovery request;
+        # it must not consume the normal repair-turn budget.  Extra turns are
+        # available only while an explicit patcher recovery directive exists.
+        for turn in range(1, self.max_steps + self._max_native_recovery_turns + 1):
+            recovery_turn = turn > self.max_steps
+            if recovery_turn and not (
+                self._patch_recovery_directive or self._patch_decision_required
+            ):
+                ts.stop_step_limit(self.max_steps)
+                return self._complete_run(
+                    ts,
+                    f"<final>已达到最大推理轮数限制({self.max_steps})。</final>",
+                )
             if self._repair_deadline.expired():
                 ts.stop_with_reason(
                     StopReason.DEADLINE_EXCEEDED,
@@ -1700,20 +2237,21 @@ class AgentLoop:
                 )
             configured_output = int(getattr(self.agent.config, "max_new_tokens", 0) or 4096)
             latency_decision = self._apply_latency_decision(configured_output)
-            if not self._repair_budget.allow_turn():
+            if not recovery_turn and not self._repair_budget.allow_turn():
                 ts.stop_step_limit(self.max_steps)
                 return self._complete_run(
                     ts,
                     f"<final>已达到最大推理轮数限制({self.max_steps})。</final>",
                 )
-            if not self._budget_reserve_turn(turn):
+            if not recovery_turn and not self._budget_reserve_turn(turn):
                 ts.stop_with_reason(
                     StopReason.BUDGET_EXHAUSTED,
                     "stopped",
                     detail="unified budget turns exhausted",
                 )
                 return self._complete_run(ts, "<final>统一推理轮次预算已耗尽。</final>")
-            self._repair_budget.record_turn()
+            if not recovery_turn:
+                self._repair_budget.record_turn()
             if (msg := self._abort_if_cancelled(ts, phase="native_reasoning")) is not None:
                 return msg
             self._begin_edit_lock_turn()
@@ -1733,12 +2271,47 @@ class AgentLoop:
             try:
                 system_prompt, dynamic_user, budget_meta = self.agent.build_for_native(user_message)
             except ContextTooLargeError as e:
+                diagnostics = dict(getattr(e, "metadata", {}) or {})
+                self._emit(
+                    "context_build_failed",
+                    {
+                        "step": turn,
+                        "actual": e.actual,
+                        "limit": e.limit,
+                        **diagnostics,
+                    },
+                )
                 ts.stop_with_reason(
                     StopReason.CONTEXT_OVERFLOW,
                     "stopped",
                     detail=f"actual={e.actual} limit={e.limit}",
                 )
                 return self._complete_run(ts, e.user_message)
+            if output_recovery_directive:
+                # 截断恢复只丢弃不完整的 assistant 输出；任务 envelope 必须
+                # 重新注入，避免压缩后的 history 只剩 observation 而丢失目标。
+                task_summary = (
+                    self._get_task_summary_text().strip()
+                    or getattr(self._task_state, "user_request", "")
+                    or user_message
+                )
+                dynamic_user = output_recovery_directive
+                if task_summary:
+                    dynamic_user += f"\n[REPAIR TASK]\n{task_summary[:2000]}"
+                anchors = _patch_recovery_anchors(user_message)
+                if anchors:
+                    dynamic_user += f"\n[PATCHER EVIDENCE ANCHORS]\n{anchors}"
+            elif self._patch_decision_required:
+                dynamic_user = (
+                    f"{dynamic_user}\n\n[PATCH DECISION REQUIRED] Exploration is closed. "
+                    "Call apply_patch/patch_file now, or call finish_repair with a concise "
+                    "cannot_patch/needs_more_context reason grounded in the evidence ledger."
+                )
+            if self._patch_recovery_directive:
+                dynamic_user = (
+                    f"{dynamic_user}\n\n[PATCH RECOVERY]\n"
+                    f"{self._patch_recovery_directive}"
+                )
             if hard_limit := self._check_hard_cap(budget_meta):
                 return self._complete_run(ts, hard_limit)
             context_prefix = build_context_prefix(self.agent, budget_meta)
@@ -1756,14 +2329,45 @@ class AgentLoop:
                 return self._complete_run(ts, "<final>Prompt token 预算已耗尽。</final>")
             self._accumulate_context_stats(budget_meta)
             self._emit("context_built", build_trace_payload(budget_meta))
+            emergency = budget_meta.get("emergency_compaction")
+            if isinstance(emergency, dict):
+                self._emit("context_emergency_compacted", {"step": turn, **emergency})
 
-            messages = [{"role": "user", "content": dynamic_user}, *native_tail[-6:]]
-            max_output = max(512, min(latency_decision["max_output_tokens"], 8192))
+            action_required = bool(output_recovery_directive or self._patch_decision_required)
+            # Do not replay stale assistant tool calls during a forced action
+            # turn.  Providers may continue emitting a read call from the
+            # prior tail even after that tool is removed from the schema.
+            messages = [
+                {"role": "user", "content": dynamic_user},
+                *([] if action_required else native_tail[-6:]),
+            ]
+            allowed_tool_names = self._native_tool_names(
+                action_required=action_required,
+                patch_only_recovery=bool(output_recovery_directive),
+            )
+            tools_def = _build_anthropic_tools(
+                self.agent.tools,
+                allowed_names=allowed_tool_names,
+            )
+            phase_output_cap = 4096
+            if action_required:
+                # Required tool choice alone does not prevent reasoning-heavy
+                # models from consuming the entire response budget before the
+                # tool call.  Keep PATCH_ONLY recovery bounded, but leave room
+                # for the provider to finish its pre-tool reasoning.
+                phase_output_cap = 4096 if output_recovery_directive else 2048
+            max_output = max(
+                512,
+                min(latency_decision["max_output_tokens"], phase_output_cap, 8192),
+            )
             deadline = getattr(step_clock, "_deadline", None)
             request = ModelTurnRequest(
                 system_prompt=system_prompt,
                 messages=messages,
                 tools=tools_def,
+                tool_choice=(
+                    ToolChoice(ToolChoiceMode.REQUIRED) if action_required else None
+                ),
                 max_output_tokens=max_output,
                 deadline=deadline,
             )
@@ -1842,6 +2446,9 @@ class AgentLoop:
                 path="native",
             )
 
+            if finish.kind not in {FinishKind.MAX_OUTPUT_TOKENS, FinishKind.EMPTY_OUTPUT}:
+                output_recovery_directive = ""
+
             if finish.kind == FinishKind.TOOL_CALLS and result.tool_calls:
                 assistant_content = result.content or [
                     {
@@ -1897,21 +2504,81 @@ class AgentLoop:
                 )
                 continue
 
-            if finish.kind in {FinishKind.MAX_OUTPUT_TOKENS, FinishKind.EMPTY_OUTPUT}:
+            if finish.kind == FinishKind.MAX_OUTPUT_TOKENS:
+                content_blocks = result.content if isinstance(result.content, list) else []
+                block_counts: dict[str, int] = {}
+                for block in content_blocks:
+                    block_type = (
+                        str(block.get("type") or "unknown")
+                        if isinstance(block, dict)
+                        else "invalid"
+                    )
+                    block_counts[block_type] = block_counts.get(block_type, 0) + 1
+                thinking_only = (
+                    bool(content_blocks)
+                    and set(block_counts) <= {"thinking"}
+                    and not result.text
+                    and not result.tool_calls
+                )
+                if thinking_only:
+                    self._patch_decision_required = True
+                    self._step_guard.enter_convergence("thinking_only_truncation")
+                    self._emit(
+                        "thinking_only_truncation",
+                        {
+                            "step": turn,
+                            "requested_max_output_tokens": max_output,
+                            "actual_output_tokens": int(
+                                result.usage.get("output_tokens", 0) or 0
+                            ),
+                            "recovery_attempt": output_recovery + 1,
+                        },
+                    )
+                self._emit(
+                    "model_output_truncated",
+                    {
+                        "step": turn,
+                        "requested_max_output_tokens": max_output,
+                        "actual_output_tokens": int(result.usage.get("output_tokens", 0) or 0),
+                        "text_chars": len(result.text or ""),
+                        "content_block_count": len(content_blocks),
+                        "content_block_counts": block_counts,
+                        "tool_call_count": len(result.tool_calls),
+                        "recovery_attempt": output_recovery + 1,
+                        "history_action": "discarded",
+                    },
+                )
                 if output_recovery < 1:
                     output_recovery += 1
-                    if result.text:
-                        native_tail.append(
-                            {"role": "assistant", "content": result.content or result.text}
-                        )
-                    native_tail.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                "Complete the current turn once. Produce a valid tool call or a "
-                                "concise terminal result; do not repeat prior analysis."
-                            ),
-                        }
+                    output_recovery_directive = (
+                        "[OUTPUT RECOVERY] The previous model output was truncated and was "
+                        "discarded. Do not continue or repeat that analysis. Complete this turn "
+                        "with exactly one apply_patch/patch_file call, or call finish_repair with "
+                        "a grounded cannot_patch/needs_more_context reason. "
+                        "Do not perform more broad exploration."
+                    )
+                    continue
+                ts.stop_with_reason(
+                    StopReason.MODEL_OUTPUT_TRUNCATED,
+                    "failed",
+                    detail=(
+                        f"provider_finish={finish.kind.value}; "
+                        f"requested={max_output}; recovery_attempts={output_recovery}"
+                    ),
+                )
+                return self._complete_run(
+                    ts,
+                    '<final>{"status":"needs_more_context",'
+                    '"reason":"模型输出连续被截断，未执行不完整内容。"}</final>',
+                )
+
+            if finish.kind == FinishKind.EMPTY_OUTPUT:
+                if output_recovery < 1:
+                    output_recovery += 1
+                    output_recovery_directive = (
+                        "[EMPTY OUTPUT RECOVERY] The previous response was empty. Produce exactly "
+                        "one apply_patch/patch_file call, or call finish_repair with a grounded "
+                        "cannot_patch/needs_more_context reason."
                     )
                     continue
                 ts.stop_with_reason(

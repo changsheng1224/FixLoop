@@ -38,15 +38,37 @@ class StepEngine:
             try:
                 self.task_state.advance_runtime(lifecycle_phase)
             except ValueError as exc:
-                self.emit(
-                    "runtime_contract_violation",
-                    {
-                        "phase": event.phase,
-                        "runtime_phase": lifecycle_phase.value,
-                        "detail": str(exc),
-                        "step": event.step,
-                    },
-                )
+                # Multiple tool calls can produce observing -> acting within
+                # one provider turn.  Keep the canonical lifecycle legal by
+                # making the implicit reasoning step explicit and observable.
+                runtime = getattr(self.task_state, "runtime_contract", {}) or {}
+                if (
+                    runtime.get("phase") == RuntimePhase.OBSERVING.value
+                    and lifecycle_phase == RuntimePhase.ACTING
+                ):
+                    self.task_state.advance_runtime(RuntimePhase.REASONING)
+                    self.task_state.advance_runtime(RuntimePhase.ACTING)
+                    self.emit(
+                        "runtime_contract_recovery",
+                        {
+                            "from_phase": RuntimePhase.OBSERVING.value,
+                            "via_phase": RuntimePhase.REASONING.value,
+                            "to_phase": RuntimePhase.ACTING.value,
+                            "step": event.step,
+                            "tool": event.tool,
+                        },
+                    )
+                else:
+                    self.emit(
+                        "runtime_contract_violation",
+                        {
+                            "phase": event.phase,
+                            "runtime_phase": lifecycle_phase.value,
+                            "detail": str(exc),
+                            "step": event.step,
+                        },
+                    )
+                    raise
         return event
 
 

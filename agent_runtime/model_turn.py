@@ -23,6 +23,24 @@ class FinishKind(StrEnum):
     PROVIDER_ERROR = "provider_error"
 
 
+class ToolChoiceMode(StrEnum):
+    """Provider-neutral policy for selecting native tools."""
+
+    AUTO = "auto"
+    REQUIRED = "required"
+    NAMED = "named"
+
+
+@dataclass(frozen=True)
+class ToolChoice:
+    mode: ToolChoiceMode = ToolChoiceMode.AUTO
+    name: str = ""
+
+    def __post_init__(self) -> None:
+        if self.mode == ToolChoiceMode.NAMED and not self.name.strip():
+            raise ValueError("named tool choice requires a tool name")
+
+
 @dataclass(frozen=True)
 class ProviderFinish:
     kind: FinishKind
@@ -42,6 +60,7 @@ class ModelTurnRequest:
     system_prompt: str
     messages: list[dict]
     tools: list[dict] = field(default_factory=list)
+    tool_choice: ToolChoice | None = None
     max_output_tokens: int = 4096
     deadline: float | None = None
 
@@ -56,19 +75,17 @@ class ModelTurnResult:
     text: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
     content: list[dict] = field(default_factory=list)
-    finish: ProviderFinish = field(
-        default_factory=lambda: ProviderFinish(FinishKind.EMPTY_OUTPUT)
-    )
+    finish: ProviderFinish = field(default_factory=lambda: ProviderFinish(FinishKind.EMPTY_OUTPUT))
     usage: dict[str, int] = field(default_factory=dict)
 
 
 def normalize_anthropic_finish(raw_reason: str, *, has_tools: bool, has_text: bool) -> FinishKind:
     """Map Anthropic-compatible stop reasons to the runtime contract."""
     reason = str(raw_reason or "").strip().lower()
-    if has_tools or reason == "tool_use":
-        return FinishKind.TOOL_CALLS
     if reason in {"max_tokens", "model_context_window_exceeded"}:
         return FinishKind.MAX_OUTPUT_TOKENS
+    if has_tools or reason == "tool_use":
+        return FinishKind.TOOL_CALLS
     if reason in {"content_filter", "safety", "refusal"}:
         return FinishKind.CONTENT_FILTER
     if has_text and reason in {"", "end_turn", "stop_sequence", "stop"}:

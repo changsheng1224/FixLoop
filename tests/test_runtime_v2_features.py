@@ -10,8 +10,18 @@ def test_provider_finish_normalization():
         normalize_openai_finish,
     )
 
-    assert normalize_anthropic_finish("tool_use", has_tools=True, has_text=False) == FinishKind.TOOL_CALLS
-    assert normalize_anthropic_finish("max_tokens", has_tools=False, has_text=True) == FinishKind.MAX_OUTPUT_TOKENS
+    assert (
+        normalize_anthropic_finish("tool_use", has_tools=True, has_text=False)
+        == FinishKind.TOOL_CALLS
+    )
+    assert (
+        normalize_anthropic_finish("max_tokens", has_tools=False, has_text=True)
+        == FinishKind.MAX_OUTPUT_TOKENS
+    )
+    assert (
+        normalize_anthropic_finish("max_tokens", has_tools=True, has_text=True)
+        == FinishKind.MAX_OUTPUT_TOKENS
+    )
     assert normalize_openai_finish("length", has_text=True) == FinishKind.MAX_OUTPUT_TOKENS
     assert normalize_openai_finish("stop", has_text=False) == FinishKind.EMPTY_OUTPUT
 

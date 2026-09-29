@@ -42,6 +42,7 @@ class ProviderError(RuntimeError):
         retry_after_s: float | None = None,
         provider: str = "",
         cause: Exception | None = None,
+        metadata: dict[str, Any] | None = None,
     ):
         super().__init__(message)
         self.code = ProviderErrorCode(str(code))
@@ -49,6 +50,19 @@ class ProviderError(RuntimeError):
         self.retry_after_s = retry_after_s
         self.provider = provider
         self.cause = cause
+        self.metadata = dict(metadata or {})
+
+    def to_trace_payload(self) -> dict[str, Any]:
+        """Return the sanitized, JSON-safe provider failure projection."""
+        return {
+            "error_code": self.code.value,
+            "message": str(self),
+            "provider": self.provider,
+            "retryable": self.retryable,
+            "retry_after_s": self.retry_after_s,
+            "exception_type": type(self.cause).__name__ if self.cause else "",
+            "diagnostics": dict(self.metadata),
+        }
 
 
 class ModelClient(Protocol):

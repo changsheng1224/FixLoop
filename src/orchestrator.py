@@ -1115,6 +1115,7 @@ class Orchestrator(RepairPipelineMixin):
         # 失败面：注入断言 + 失败测试原文，驱动定点读改
         from src.repair.execution.control import pop_patcher_depth, push_patcher_depth
         from src.repair.execution.patcher_contract import (
+            begin_patcher_attempt,
             classify_patcher_attempt,
             record_patcher_terminal_status,
             render_patcher_runtime_contract,
@@ -1125,6 +1126,11 @@ class Orchestrator(RepairPipelineMixin):
             build_verify_feedback_payload,
             render_verify_feedback_block,
         )
+
+        # Terminal status is durable for reporting, but phase/evidence markers
+        # are scoped to one model attempt.  Start the retry in locating mode
+        # while retaining terminal history and feedback below.
+        begin_patcher_attempt(state)
 
         surface = build_fail_surface(state, repo_root=self._repo_root)
         bucket = str(state.node_timings.get("verify_bucket") or "")
@@ -1175,6 +1181,7 @@ class Orchestrator(RepairPipelineMixin):
             plan=plan,
             issue=state.issue_input,
             runtime_contract_block=render_patcher_runtime_contract(state),
+            allowed_edit=allowed,
         )
 
         try:
@@ -1183,6 +1190,8 @@ class Orchestrator(RepairPipelineMixin):
                 state,
                 applied,
                 apply_failed=bool(state.agent_errors.get("patcher_apply")),
+                terminal_answer=str(meta.get("agent_answer") or ""),
+                agent_stop_reason=str(meta.get("agent_stop_reason") or ""),
             )
             record_patcher_terminal_status(state, status, reason="patcher_turn_complete", meta=meta)
             return applied, meta
@@ -1241,6 +1250,9 @@ class Orchestrator(RepairPipelineMixin):
         if compact_enabled:
             self._compact_patcher_history(state)
         before = self._snapshot_repo()
+        observation_start = len(
+            (getattr(self.patcher, "session", {}) or {}).get("tool_observations", [])
+        )
         answer, agent_timing = self._run_agent(
             self.patcher,
             prompt,
@@ -1250,6 +1262,15 @@ class Orchestrator(RepairPipelineMixin):
             l2_attempt=state.retry_count,
         )
         after = self._snapshot_repo()
+        observations = list(
+            (getattr(self.patcher, "session", {}) or {}).get("tool_observations", [])
+        )[observation_start:]
+        write_tools = {"write_file", "patch_file", "apply_patch"}
+        write_attempted = any(
+            str(item.get("tool") or item.get("tool_name") or "") in write_tools
+            for item in observations
+        )
+        state.node_timings["patcher_write_attempted"] = bool(write_attempted)
         lock = getattr(self, "_edit_lock", None)
         if lock is not None:
             state.node_timings["apply_patch_ok_count"] = int(
@@ -1278,6 +1299,15 @@ class Orchestrator(RepairPipelineMixin):
                         },
                     )
         patches = patches_from_snapshot_diff(before, after)
+        if write_attempted and not patches:
+            if lock is not None and (
+                getattr(lock, "unread_write_reject_count", 0)
+                or getattr(lock, "apply_path_reject_count", 0)
+                or getattr(lock, "edit_lint_reject_count", 0)
+            ):
+                state.node_timings["patcher_write_rejected"] = True
+            else:
+                state.node_timings["patcher_export_failed"] = True
         patches, rejected = check_patch_faithfulness(
             patches, state, soft_keep=False, repo_root=str(self._repo_root or "")
         )
@@ -1307,6 +1337,10 @@ class Orchestrator(RepairPipelineMixin):
             "edit_mode": "tools",
             "internal": agent_timing.get("internal") or {},
             "task_template_source": (tpl_meta or {}).get("task_template_source"),
+            "agent_answer": str(answer or "")[:4000],
+            "agent_stop_reason": str(
+                getattr(getattr(self.patcher, "_last_task_state", None), "stop_reason", "") or ""
+            ),
         }
         if not patches:
             from src.repair.execution.loose_patch_recover import parse_patches_with_recover
@@ -1867,6 +1901,7 @@ class Orchestrator(RepairPipelineMixin):
         plan: RepairPlan | None = None,
         issue: str = "",
         runtime_contract_block: str = "",
+        allowed_edit: list[str] | None = None,
     ) -> tuple[str, dict]:
         ctx = self._repair_ctx
         blackboard = ctx.blackboard if ctx is not None else None
@@ -1897,6 +1932,7 @@ class Orchestrator(RepairPipelineMixin):
             diff_only=True,
             read_line_range=self._read_line_range,
             runtime_contract_block=runtime_contract_block,
+            allowed_edit=allowed_edit,
         )
         tracer = ctx.repair_tracer if ctx is not None else None
         if subscribe_meta and tracer is not None:
@@ -1943,35 +1979,101 @@ class Orchestrator(RepairPipelineMixin):
         suspects: list[SuspectLocation],
         plan: RepairPlan | None = None,
     ) -> list[str]:
-        """预读相关测试文件全文（同文件内所有用例一并提供）。"""
+        """预读相关测试的定向片段，避免把整个测试文件塞进 Patcher prompt。"""
+        max_total_chars = 12_000
+        max_file_chars = 5_000
+        max_excerpt_lines = 90
         test_paths: list[Path] = []
+        target_names: dict[Path, set[str]] = {}
 
         if context and context.related_tests:
             for item in context.related_tests:
-                path = self._resolve_test_path(str(item))
+                ref = str(item)
+                path = self._resolve_test_path(ref)
                 if path and path not in test_paths:
                     test_paths.append(path)
+                if path and "::" in ref:
+                    target_names.setdefault(path, set()).update(
+                        part for part in ref.split("::")[1:] if part
+                    )
 
         for s in suspects:
             guessed = self._guess_test_file(s.file_path, s.function_name or "")
             if guessed and guessed not in test_paths:
                 test_paths.append(guessed)
+            if guessed and s.function_name:
+                target_names.setdefault(guessed, set()).add(s.function_name)
 
         if not test_paths:
             test_paths = self._discover_repo_test_files()
 
         blocks: list[str] = []
+        used_chars = 0
         for path in test_paths:
             try:
                 content = path.read_text(encoding="utf-8")
             except OSError:
                 continue
+            excerpt = self._select_test_excerpt(
+                content,
+                target_names.get(path, set()),
+                max_chars=max_file_chars,
+                max_lines=max_excerpt_lines,
+            )
+            if not excerpt:
+                continue
+            remaining = max_total_chars - used_chars
+            if remaining <= 0:
+                break
+            if len(excerpt) > remaining:
+                excerpt = excerpt[:remaining].rstrip() + "\n# ... excerpt truncated ..."
             rel = path.name
             blocks.append(f"  {rel}:")
             blocks.append("  ```python")
-            blocks.append(content.rstrip())
+            blocks.append(excerpt)
             blocks.append("  ```")
+            used_chars += len(excerpt)
         return blocks
+
+    @staticmethod
+    def _select_test_excerpt(
+        content: str,
+        target_names: set[str],
+        *,
+        max_chars: int,
+        max_lines: int,
+    ) -> str:
+        """Keep the relevant test definition, with a bounded head/tail fallback."""
+        lines = content.splitlines()
+        if not lines:
+            return ""
+        starts: list[int] = []
+        for index, line in enumerate(lines):
+            stripped = line.strip()
+            if not target_names:
+                continue
+            for name in target_names:
+                if stripped.startswith((f"def {name}", f"class {name}")):
+                    starts.append(index)
+                    break
+        if starts:
+            center = starts[0]
+            begin = max(0, center - 8)
+            end = min(len(lines), center + max_lines - 8)
+            selected = lines[begin:end]
+        elif len(lines) <= max_lines:
+            selected = lines
+        else:
+            head = max_lines // 2
+            selected = (
+                lines[:head]
+                + ["# ... middle of test file omitted ..."]
+                + lines[-(max_lines - head):]
+            )
+        excerpt = "\n".join(selected).rstrip()
+        if len(excerpt) > max_chars:
+            excerpt = excerpt[:max_chars].rstrip() + "\n# ... excerpt truncated ..."
+        return excerpt
 
     def _resolve_test_path(self, ref: str) -> Path | None:
         """从 pytest nodeid 或路径解析测试文件。"""

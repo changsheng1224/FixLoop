@@ -6,9 +6,9 @@ from enum import StrEnum
 
 from src.repair.verification.termination import (
     RepairTerminalStatus,
+    has_actionable_patch,
     has_repair_timeout,
     introduced_regression,
-    is_repair_success,
 )
 from src.state import RepairState
 
@@ -171,6 +171,10 @@ def _is_apply_fail(state: RepairState) -> bool:
 
 
 def _is_parse_fail(state: RepairState) -> bool:
+    from src.repair.execution.patcher_contract import PATCHER_TERMINAL_STATUSES
+
+    if state.node_timings.get("patcher_terminal_status") in PATCHER_TERMINAL_STATUSES:
+        return False
     if state.node_timings.get("patcher_parse_failed"):
         return True
     if state.candidate_patches:
@@ -199,7 +203,7 @@ def _is_wrong_file(state: RepairState) -> bool:
 
 def classify_failure_tags(state: RepairState) -> list[FailureTag]:
     """按优先级推断主失败 tag；成功修复返回空列表。"""
-    if is_repair_success(state):
+    if has_actionable_patch(state):
         return []
     if has_repair_timeout(state):
         return [FailureTag.TIMEOUT]
@@ -207,6 +211,10 @@ def classify_failure_tags(state: RepairState) -> list[FailureTag]:
         return [FailureTag.REGRESSION]
     if _is_apply_fail(state):
         return [FailureTag.APPLY_FAILED]
+    from src.repair.execution.patcher_contract import PATCHER_TERMINAL_STATUSES
+
+    if state.node_timings.get("patcher_terminal_status") in PATCHER_TERMINAL_STATUSES:
+        return [FailureTag.NO_PROGRESS]
     # E17: 空收集/环境失败优先于笼统 parse_fail（有候选但 verify 配置坏时）
     if _is_verify_config_failure(state) and state.candidate_patches:
         return [FailureTag.VERIFY_CONFIG]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -51,11 +52,20 @@ class TestConvertAndDataset:
         assert len(instances) == 5
         assert [i.instance_id for i in instances] == list(DEV_INSTANCE_IDS)
 
-    def test_issue_contains_problem_and_id(self):
+    def test_issue_contains_only_public_problem_by_default(self):
         inst = load_instances_from_jsonl(FIXTURE)[0]
         issue = instance_to_issue(inst)
-        assert inst.instance_id in issue
         assert "catalog indexing" in issue.lower() or "Bug:" in issue
+        assert inst.instance_id not in issue
+        assert inst.base_commit not in issue
+        assert "FAIL_TO_PASS" not in issue
+
+    def test_assisted_issue_metadata_is_explicit_opt_in(self):
+        inst = load_instances_from_jsonl(FIXTURE)[0]
+        issue = instance_to_issue(inst, include_evaluation_metadata=True)
+        assert inst.instance_id in issue
+        assert inst.base_commit in issue
+        assert "FAIL_TO_PASS" in issue
 
     def test_filter_preserves_order(self):
         instances = load_instances_from_jsonl(FIXTURE)
@@ -145,6 +155,63 @@ def _init_mini_repo(path: Path) -> None:
 
 
 class TestAdapterFakeE2E:
+    def test_fixed_input_hash_mismatch_fails_before_factory(self, work_dir):
+        calls: list[str] = []
+        cfg = AdapterConfig(
+            output_dir=work_dir / "out",
+            work_root=work_dir / "work",
+            instances_jsonl=FIXTURE,
+            instance_ids=list(DEV_INSTANCE_IDS),
+            instances_sha256="0" * 64,
+        )
+
+        report = SweBenchAdapter(cfg, orchestrator_factory=calls.append).run()
+
+        assert report["ok"] is False
+        assert report["error"].startswith("instances_sha256_mismatch")
+        assert report["failure_summary"] == {FailureClass.ENV.value: 5}
+        assert calls == []
+
+    def test_fixed_input_hash_accepts_exact_bytes(self, work_dir):
+        expected = hashlib.sha256(FIXTURE.read_bytes()).hexdigest()
+        cfg = AdapterConfig(
+            output_dir=work_dir / "out",
+            work_root=work_dir / "work",
+            instances_jsonl=FIXTURE,
+            instance_ids=list(DEV_INSTANCE_IDS),
+            instances_sha256=expected,
+            dry_run=True,
+        )
+
+        report = SweBenchAdapter(cfg, orchestrator_factory=None).run()
+
+        assert report["ok"] is True
+
+    def test_required_sandbox_fails_before_factory(self, monkeypatch, work_dir):
+        class UnhealthyReport:
+            ready = False
+            errors = ["docker ping: denied"]
+
+        calls: list[str] = []
+        monkeypatch.setattr(
+            "src.harness.sandbox_health.probe_sandbox_health",
+            lambda **_kwargs: UnhealthyReport(),
+        )
+        cfg = AdapterConfig(
+            output_dir=work_dir / "out",
+            work_root=work_dir / "work",
+            instances_jsonl=FIXTURE,
+            instance_ids=list(DEV_INSTANCE_IDS),
+            require_verifier_sandbox=True,
+        )
+
+        report = SweBenchAdapter(cfg, orchestrator_factory=calls.append).run()
+
+        assert report["ok"] is False
+        assert report["error"] == "verifier_sandbox_unavailable: docker ping: denied"
+        assert report["failure_summary"] == {FailureClass.ENV.value: 5}
+        assert calls == []
+
     def test_dry_run_five_instances(self, work_dir):
         out = work_dir / "out"
         work = work_dir / "work"
@@ -237,6 +304,7 @@ class TestAdapterFakeE2E:
         assert len(preds) == 5
         assert all(p.get("model_patch") for p in preds)
         assert report["failure_summary"].get(FailureClass.NONE.value) == 5
+        assert all(result["verifier"]["all_passed"] for result in report["results"])
         manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
         assert manifest["extra"]["gold_patch_visibility"] == "assisted"
         for iid in DEV_INSTANCE_IDS:
@@ -257,8 +325,29 @@ class TestSwebenchCliDefaults:
         args = build_parser().parse_args(["--skip-verify"])
         assert args.skip_verify is True
 
+    def test_fixed_protocol_flags(self):
+        from src.benchmark.swebench.__main__ import build_parser
+
+        args = build_parser().parse_args(
+            ["--instances-sha256", "abc", "--require-verifier-sandbox"]
+        )
+        assert args.instances_sha256 == "abc"
+        assert args.require_verifier_sandbox is True
+
 
 class TestClassifyPostRepair:
+    def test_empty_patch_preserves_patcher_terminal_cause(self):
+        from src.benchmark.swebench.classify import classify_post_repair
+
+        fc, detail = classify_post_repair(
+            model_patch="",
+            repair_status="exhausted",
+            verified=False,
+            terminal_status="localization_incomplete",
+        )
+        assert fc == FailureClass.AGENT
+        assert detail == "localization_incomplete"
+
     def test_verified_fixed_pending_harness(self):
         from src.benchmark.swebench.classify import classify_post_repair
         from src.benchmark.swebench.types import FailureClass

@@ -9,11 +9,12 @@ __all__ = [
     "TERMINAL_STATUSES",
     "apply_terminal_status",
     "finalize_repair_state",
+    "has_actionable_patch",
     "has_repair_timeout",
     "introduced_regression",
     "is_repair_success",
     "is_terminal",
-    "mark_fixed_skip_verify",
+    "mark_pending_verify",
     "regression_detected",
 ]
 
@@ -37,9 +38,19 @@ def is_repair_success(state: RepairState) -> bool:
     return state.status == "patched" and bool(state.candidate_patches)
 
 
-def mark_fixed_skip_verify(state: RepairState) -> None:
-    """标记修复成功且跳过验证（--skip-verify / 无 Verifier）。"""
-    state.set_status(RepairTerminalStatus.FIXED, "verify_skipped")
+def has_actionable_patch(state: RepairState) -> bool:
+    """补丁可交付给后续验证；不等同于已经验证成功。"""
+    if is_repair_success(state):
+        return True
+    return (
+        state.status == RepairTerminalStatus.PENDING_VERIFY
+        and bool(state.candidate_patches)
+    )
+
+
+def mark_pending_verify(state: RepairState) -> None:
+    """记录已生成补丁但尚未验证，不把它计作修复成功。"""
+    state.set_status(RepairTerminalStatus.PENDING_VERIFY, "verify_skipped")
     state.node_timings["verify_skipped"] = True
 
 

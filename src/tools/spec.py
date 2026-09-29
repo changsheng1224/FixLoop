@@ -37,6 +37,7 @@ class ToolSpec:
     retry_backoff_s: float = 0.1
     rate_limit_per_minute: int = 0
     circuit_breaker_threshold: int = 0
+    terminal: bool = False
 
     def json_schema(self) -> dict[str, Any]:
         """Return the canonical provider-neutral JSON Schema."""
@@ -132,6 +133,7 @@ class ToolRegistry:
                         circuit_breaker_threshold=max(
                             0, int(legacy.get("circuit_breaker_threshold") or 0)
                         ),
+                        terminal=bool(legacy.get("terminal", False)),
                     )
                 )
                 continue
@@ -172,6 +174,7 @@ class ToolRegistry:
                         or current.circuit_breaker_threshold
                     ),
                 ),
+                terminal=bool(legacy.get("terminal", current.terminal)),
             )
         return self
 
@@ -222,6 +225,11 @@ def default_repair_tool_registry() -> ToolRegistry:
             risk_level="high", requires_approval=True,
             capabilities=frozenset({"filesystem.write", "patch.apply"}),
             requires_evidence=True, requires_read_before_write=True,
+        ),
+        ToolSpec(
+            "finish_repair", roles=_PATCHER, phases=frozenset({"patch"}),
+            budget_group="recovery", replay_policy="never_replay",
+            capabilities=frozenset({"repair.terminate"}), terminal=True,
         ),
         ToolSpec(
             "expand_lock", roles=_PATCHER, phases=frozenset({"patch"}),
@@ -289,6 +297,7 @@ def bind_execution_tools(tools: dict[str, dict], registry: ToolRegistry) -> dict
                 "retry_backoff_s": spec.retry_backoff_s,
                 "rate_limit_per_minute": spec.rate_limit_per_minute,
                 "circuit_breaker_threshold": spec.circuit_breaker_threshold,
+                "terminal": spec.terminal,
             }
         )
     return tools
@@ -326,5 +335,6 @@ def project_tool_specs(specs: list[ToolSpec]) -> dict[str, dict]:
             "retry_backoff_s": spec.retry_backoff_s,
             "rate_limit_per_minute": spec.rate_limit_per_minute,
             "circuit_breaker_threshold": spec.circuit_breaker_threshold,
+            "terminal": spec.terminal,
         }
     return projected

@@ -4,6 +4,7 @@ from src.repair.verification.termination import (
     RepairTerminalStatus,
     apply_terminal_status,
     finalize_repair_state,
+    has_actionable_patch,
     introduced_regression,
     is_repair_success,
     is_terminal,
@@ -34,6 +35,16 @@ class TestRepairTerminalStatus:
             candidate_patches=[CandidatePatch(file_path="a.py")],
         )
         assert is_repair_success(state)
+
+    def test_pending_verify_is_terminal_but_not_success(self):
+        state = RepairState(
+            issue_input="x",
+            status="pending_verify",
+            candidate_patches=[CandidatePatch(file_path="a.py")],
+        )
+        assert is_terminal(state.status)
+        assert not is_repair_success(state)
+        assert has_actionable_patch(state)
 
 
 class TestApplyTerminalStatus:

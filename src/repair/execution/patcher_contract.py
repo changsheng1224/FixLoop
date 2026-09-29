@@ -7,6 +7,8 @@ It must not encode dataset- or case-specific repair rules.
 
 from __future__ import annotations
 
+import json
+import re
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
@@ -14,11 +16,27 @@ if TYPE_CHECKING:
     from src.state import CandidatePatch, RepairState
 
 __all__ = [
+    "PatcherPhase",
     "PatcherTerminalStatus",
+    "PATCHER_TERMINAL_STATUSES",
     "classify_patcher_attempt",
+    "begin_patcher_attempt",
+    "derive_patcher_phase",
+    "patcher_evidence_snapshot",
     "record_patcher_terminal_status",
+    "terminal_status_from_answer",
     "render_patcher_runtime_contract",
 ]
+
+
+class PatcherPhase(StrEnum):
+    """Internal Patcher lifecycle; localization remains owned by Patcher."""
+
+    LOCATING = "locating"
+    GROUNDED = "grounded"
+    READY_TO_PATCH = "ready_to_patch"
+    PATCHING = "patching"
+    TERMINAL = "terminal"
 
 
 class PatcherTerminalStatus(StrEnum):
@@ -28,6 +46,107 @@ class PatcherTerminalStatus(StrEnum):
     VERIFICATION_FAILED = "verification_failed"
     NO_PROGRESS = "no_progress"
     MODEL_OUTPUT_INVALID = "model_output_invalid"
+    MODEL_OUTPUT_TRUNCATED = "model_output_truncated"
+    CONTEXT_OVERFLOW = "context_overflow"
+    EDIT_LOCK_BLOCKED = "edit_lock_blocked"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+    LOCALIZATION_INCOMPLETE = "localization_incomplete"
+    NO_CHANGE = "no_change"
+    NO_WRITE_ATTEMPT = "no_write_attempt"
+    WRITE_REJECTED = "write_rejected"
+    PATCH_EXPORT_FAILED = "patch_export_failed"
+
+
+# Statuses below describe a completed patcher attempt without a deliverable
+# patch.  Keep this in one place so pipeline, failure tags, and benchmark
+# reporting cannot silently drift apart as new terminal causes are added.
+PATCHER_TERMINAL_STATUSES = frozenset(
+    status.value
+    for status in PatcherTerminalStatus
+    if status is not PatcherTerminalStatus.PATCH_PRODUCED
+)
+
+
+def begin_patcher_attempt(state: RepairState) -> None:
+    """Clear per-attempt markers while retaining the durable terminal history."""
+    for key in (
+        "patcher_terminal_status",
+        "patcher_terminal_reason",
+        "patcher_phase",
+        "patcher_evidence",
+        "patch_no_change",
+        "patcher_parse_failed",
+        "patcher_apply_failed",
+        "patcher_write_attempted",
+        "patcher_write_rejected",
+        "patcher_export_failed",
+    ):
+        state.node_timings.pop(key, None)
+    for key in ("patcher_parse", "patcher_apply"):
+        state.agent_errors.pop(key, None)
+
+
+def patcher_evidence_snapshot(state) -> dict[str, int | bool]:
+    """Summarize evidence without copying source text into the prompt."""
+    context = getattr(state, "retrieved_context", None)
+    suspects = list(getattr(state, "suspect_locations", None) or [])
+    plan = getattr(state, "repair_plan", None)
+    allowed = list((getattr(state, "node_timings", {}) or {}).get("allowed_edit") or [])
+    tests = len(getattr(context, "related_tests", None) or []) if context else 0
+    snippets = len(getattr(context, "similar_snippets", None) or []) if context else 0
+    grounded = bool(suspects or allowed or (plan and getattr(plan, "suspect_files", None)))
+    return {
+        "suspects": len(suspects),
+        "allowed_edit": len(allowed),
+        "related_tests": tests,
+        "similar_snippets": snippets,
+        "grounded": grounded,
+    }
+
+
+def derive_patcher_phase(state, *, patches: list | None = None) -> PatcherPhase:
+    """Derive the Patcher phase from durable state, not model prose."""
+    if patches or getattr(state, "candidate_patches", None):
+        return PatcherPhase.PATCHING
+    status = str((getattr(state, "node_timings", {}) or {}).get("patcher_terminal_status") or "")
+    if status in PATCHER_TERMINAL_STATUSES:
+        return PatcherPhase.TERMINAL
+    evidence = patcher_evidence_snapshot(state)
+    return PatcherPhase.GROUNDED if evidence["grounded"] else PatcherPhase.LOCATING
+
+
+def terminal_status_from_answer(answer: str) -> PatcherTerminalStatus | None:
+    """Parse an explicit model terminal declaration without treating it as patch JSON."""
+    text = str(answer or "").strip()
+    if not text:
+        return None
+    candidates = [text]
+    final_match = re.search(r"<final>\s*(.*?)\s*</final>", text, flags=re.I | re.S)
+    if final_match:
+        candidates.insert(0, final_match.group(1).strip())
+    for candidate in candidates:
+        try:
+            payload = json.loads(candidate)
+        except (TypeError, ValueError):
+            payload = None
+        if isinstance(payload, dict):
+            raw = str(payload.get("status") or payload.get("outcome") or "").lower()
+            if raw in {
+                "cannot_patch",
+                "needs_more_context",
+                "insufficient_evidence",
+                "localization_incomplete",
+            }:
+                return PatcherTerminalStatus(raw)
+    lowered = candidates[0].lower()
+    for status in (
+        PatcherTerminalStatus.CANNOT_PATCH,
+        PatcherTerminalStatus.NEEDS_MORE_CONTEXT,
+        PatcherTerminalStatus.INSUFFICIENT_EVIDENCE,
+    ):
+        if re.search(rf"(?<![a-z_]){re.escape(status.value)}(?![a-z_])", lowered):
+            return status
+    return None
 
 
 def record_patcher_terminal_status(
@@ -59,10 +178,29 @@ def classify_patcher_attempt(
     patches: list[CandidatePatch],
     *,
     apply_failed: bool = False,
+    terminal_answer: str = "",
+    agent_stop_reason: str = "",
 ) -> PatcherTerminalStatus:
     """Classify a patcher turn without deciding the concrete fix."""
     if patches:
         return PatcherTerminalStatus.PATCH_PRODUCED
+    explicit = terminal_status_from_answer(terminal_answer)
+    if explicit is not None:
+        return explicit
+    if agent_stop_reason == "model_output_truncated":
+        return PatcherTerminalStatus.MODEL_OUTPUT_TRUNCATED
+    if agent_stop_reason == "context_overflow":
+        return PatcherTerminalStatus.CONTEXT_OVERFLOW
+    if state.node_timings.get("unread_write_reject_count"):
+        return PatcherTerminalStatus.EDIT_LOCK_BLOCKED
+    if state.node_timings.get("patch_no_change"):
+        return PatcherTerminalStatus.NO_CHANGE
+    if state.node_timings.get("patcher_write_rejected"):
+        return PatcherTerminalStatus.WRITE_REJECTED
+    if state.node_timings.get("patcher_export_failed"):
+        return PatcherTerminalStatus.PATCH_EXPORT_FAILED
+    if state.node_timings.get("patcher_write_attempted") is False:
+        return PatcherTerminalStatus.NO_WRITE_ATTEMPT
     if state.node_timings.get("no_progress_warning"):
         return PatcherTerminalStatus.NO_PROGRESS
     if apply_failed or state.agent_errors.get("patcher_apply"):
@@ -71,6 +209,8 @@ def classify_patcher_attempt(
         "patcher_parse_failed"
     ):
         return PatcherTerminalStatus.MODEL_OUTPUT_INVALID
+    if not patcher_evidence_snapshot(state)["grounded"]:
+        return PatcherTerminalStatus.LOCALIZATION_INCOMPLETE
     return PatcherTerminalStatus.NEEDS_MORE_CONTEXT
 
 
@@ -104,8 +244,14 @@ def render_patcher_runtime_contract(state: RepairState | None) -> str:
     """Render generic runtime controls for the patcher prompt."""
     if state is None:
         return ""
+    evidence = patcher_evidence_snapshot(state)
+    phase = derive_patcher_phase(state)
+    state.node_timings["patcher_phase"] = phase.value
+    state.node_timings["patcher_evidence"] = dict(evidence)
     lines = [
         "[PATCHER RUNTIME CONTRACT]",
+        f"- internal_phase: {phase.value}",
+        "- evidence: " + ", ".join(f"{key}={value}" for key, value in evidence.items()),
         "- Decide by public issue, current source, tool results, evidence ledger, "
         "and verifier feedback only.",
         "- Do not use gold patches, gold test patches, dataset IDs, or case-specific shortcuts.",
@@ -113,6 +259,22 @@ def render_patcher_runtime_contract(state: RepairState | None) -> str:
         "or declaring cannot_patch with evidence.",
         "- Prefer apply_patch with grounded pre-image; avoid repeating a previously rejected diff.",
     ]
+    if phase == PatcherPhase.LOCATING:
+        lines.extend(
+            [
+                "- You own localization. Use search/read/AST tools to find the "
+                "implementation and failing expectation.",
+                "- Do not write until a real implementation path and supporting "
+                "source evidence are identified.",
+                "- If evidence remains insufficient, call finish_repair with "
+                "needs_more_context and name the missing evidence.",
+            ]
+        )
+    elif phase == PatcherPhase.GROUNDED:
+        lines.append(
+            "- Localization evidence exists; make the smallest grounded "
+            "implementation change now."
+        )
     feedback_payload = state.node_timings.get("structured_verify_feedback")
     if isinstance(feedback_payload, dict):
         lines.extend(_render_structured_feedback_hint(feedback_payload))

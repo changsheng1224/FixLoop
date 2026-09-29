@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from src.harness.sandbox_health import probe_sandbox_health
 
 
@@ -84,6 +86,25 @@ class TestTryCreateVerifier:
             lambda **_kwargs: FakeReport(),
         )
         assert try_create_verifier(None, workspace, workspace.repo_root) is None
+
+    def test_required_probe_failure_raises(self, monkeypatch, workspace):
+        from src.repair_factory import RequiredVerifierError, try_create_verifier
+
+        class FakeReport:
+            ready = False
+            errors = ["docker ping: denied"]
+
+        monkeypatch.setattr(
+            "src.harness.sandbox_health.probe_sandbox_health",
+            lambda **_kwargs: FakeReport(),
+        )
+        with pytest.raises(RequiredVerifierError, match="docker ping: denied"):
+            try_create_verifier(
+                None,
+                workspace,
+                workspace.repo_root,
+                required=True,
+            )
 
     def test_creates_verifier_when_probe_ready(self, monkeypatch, workspace):
         from src.repair_factory import try_create_verifier

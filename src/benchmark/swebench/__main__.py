@@ -34,6 +34,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="本地实例 JSONL（跳过 HuggingFace）",
     )
     p.add_argument(
+        "--instances-sha256",
+        default="",
+        help="锁定本地实例 JSONL 的 SHA-256；不匹配时在模型调用前失败",
+    )
+    p.add_argument(
         "--instance-ids",
         nargs="*",
         default=None,
@@ -79,6 +84,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-verify",
         action="store_true",
         help="repair 阶段跳过 FixLoop verify（默认关闭：会跑 verify）",
+    )
+    p.add_argument(
+        "--require-verifier-sandbox",
+        action="store_true",
+        help="要求 Docker Verifier 完整健康；禁止 host/static fallback",
     )
     p.add_argument(
         "--allow-unverified-harness",
@@ -141,6 +151,8 @@ def _make_factory(args):
     return make_orchestrator_factory(
         model_client=client,
         skip_verify=bool(args.skip_verify),
+        execution_tier="container" if args.require_verifier_sandbox else "auto",
+        require_sandbox=bool(args.require_verifier_sandbox),
     )
 
 
@@ -237,6 +249,8 @@ def main(argv: list[str] | None = None) -> int:
         harness_backend=args.harness_backend,
         wsl_distro=args.wsl_distro or None,
         allow_gold_patch_injection=bool(args.fake or args.provider == "fake"),
+        instances_sha256=args.instances_sha256,
+        require_verifier_sandbox=bool(args.require_verifier_sandbox),
     )
 
     adapter = SweBenchAdapter(

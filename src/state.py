@@ -45,6 +45,7 @@ class RepairPhase(StrEnum):
 
 class RepairStatus(StrEnum):
     PENDING = "pending"
+    PENDING_VERIFY = "pending_verify"
     FIXED = "fixed"
     FAILED = "failed"
     EXHAUSTED = "exhausted"
@@ -589,6 +590,7 @@ class RepairState:
         ):
             errors.append("terminal harness control requires metrics")
         if strict and self.status in {
+            RepairStatus.PENDING_VERIFY,
             RepairStatus.FIXED,
             RepairStatus.FAILED,
             RepairStatus.EXHAUSTED,

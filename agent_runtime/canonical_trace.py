@@ -23,13 +23,30 @@ STATUSES = frozenset({STATUS_OK, STATUS_ERROR, STATUS_CANCELLED, STATUS_UNSET})
 
 # 文档化事件目录（既有名，不强制改名）
 EVENT_CATALOG: dict[str, tuple[str, ...]] = {
-    "model": ("model_request_start", "model_first_token", "model_complete"),
+    "model": (
+        "model_request_start",
+        "model_first_token",
+        "model_complete",
+        "provider_error",
+        "model_output_truncated",
+        "thinking_only_truncation",
+    ),
     "tool": (
         "tool_executed",
         "tool_preview",
         "tool_order_warning",
         "mcp_call",
         "observation_stored",
+        "convergence_gate_entered",
+        "duplicate_read_blocked",
+        "convergence_read_blocked",
+        "targeted_read_reserved",
+        "post_lock_read_reserved",
+        "post_lock_read_consumed",
+        "targeted_read_consumed",
+        "patch_decision_required",
+        "patch_no_change",
+        "runtime_contract_recovery",
     ),
     "skill": (
         "skill_discovered",
@@ -45,7 +62,12 @@ EVENT_CATALOG: dict[str, tuple[str, ...]] = {
         "skill_fallback",
         "skill_feedback_recorded",
     ),
-    "context": ("context_built", "compression_triggered"),
+    "context": (
+        "context_built",
+        "compression_triggered",
+        "context_build_failed",
+        "context_emergency_compacted",
+    ),
     "budget": (
         "budget_exhausted",
         "budget_reserved",
@@ -231,7 +253,7 @@ def infer_status(event: str, payload: dict[str, Any] | None = None) -> str:
         if str(data.get("status", "")).lower() == "cancelled":
             return STATUS_CANCELLED
         return STATUS_ERROR
-    if event in ("budget_exhausted", "latency_slo_exceeded"):
+    if event in ("budget_exhausted", "latency_slo_exceeded", "provider_error"):
         return STATUS_ERROR
     if event == "span_closed":
         reason = str(data.get("reason") or "")

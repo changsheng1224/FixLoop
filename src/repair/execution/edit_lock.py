@@ -79,6 +79,9 @@ class EditLockState:
         }
         self.allowed_edit.discard("")
         self.read_set: set[str] = set()
+        self._generation = 0
+        self._required_read_generation: dict[str, int] = {}
+        self._read_generation: dict[str, int] = {}
         self.unread_write_reject_count = 0
         self.apply_path_reject_count = 0
         self.apply_patch_ok_count = 0
@@ -121,6 +124,7 @@ class EditLockState:
         except OSError:
             return False
         self.read_set.add(rel)
+        self._read_generation[rel] = self._required_read_generation.get(rel, 0)
         if auto_allow_impl and rel.endswith(".py") and not _is_test_path(rel):
             if self.require_expand_before_auto and self.expand_count <= 0:
                 return True
@@ -145,7 +149,13 @@ class EditLockState:
             return False, f"stat_failed:{e}"
         self.allowed_edit.add(rel)
         self.expand_count += 1
+        self._generation += 1
+        self._required_read_generation[rel] = self._generation
         return True, f"expanded:{rel}"
+
+    def required_read_generation(self, path: str) -> int:
+        rel = normalize_repo_rel(path, self.repo_root)
+        return int(self._required_read_generation.get(rel, 0) or 0)
 
     def check_write(self, path: str) -> tuple[bool, str]:
         rel = normalize_repo_rel(path, self.repo_root)
@@ -155,9 +165,14 @@ class EditLockState:
         if rel not in self.allowed_edit:
             self.apply_path_reject_count += 1
             return False, f"not_in_allowed_edit:{rel}"
-        if rel not in self.read_set:
+        required_generation = int(self._required_read_generation.get(rel, 0) or 0)
+        read_generation = int(self._read_generation.get(rel, -1) or 0)
+        if rel not in self.read_set or read_generation < required_generation:
             self.unread_write_reject_count += 1
-            return False, f"unread_before_write:{rel}"
+            return False, (
+                f"unread_before_write:{rel}:"
+                f"read_generation={read_generation}:required={required_generation}"
+            )
         return True, ""
 
     def check_patch_paths(self, paths: list[str]) -> tuple[bool, list[str]]:

@@ -29,6 +29,9 @@ class HarnessResult:
     stderr: str
     report_path: Path | None = None
     resolved_ids: list[str] | None = None
+    completed_ids: list[str] | None = None
+    unresolved_ids: list[str] | None = None
+    error_ids: list[str] | None = None
     error: str = ""
     backend: str = ""  # native | wsl | none
 
@@ -177,7 +180,7 @@ def _run_harness_native(
         check=False,
     )
     report = _find_report(run_id, cwd=cwd)
-    resolved = _parse_resolved(report) if report else []
+    outcome = _parse_report_outcome(report) if report else {}
     err = ""
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or f"harness exit {proc.returncode}")[:8000]
@@ -187,7 +190,10 @@ def _run_harness_native(
         stdout=proc.stdout or "",
         stderr=proc.stderr or "",
         report_path=report,
-        resolved_ids=resolved,
+        resolved_ids=outcome.get("resolved_ids", []),
+        completed_ids=outcome.get("completed_ids", []),
+        unresolved_ids=outcome.get("unresolved_ids", []),
+        error_ids=outcome.get("error_ids", []),
         error=err,
         backend="native",
     )
@@ -253,7 +259,7 @@ def _run_harness_wsl(
         env_exports=wsl_proxy_env(distro),
     )
     report = _find_report(run_id, cwd=cwd)
-    resolved = _parse_resolved(report) if report else []
+    outcome = _parse_report_outcome(report) if report else {}
     err = ""
     if result.returncode != 0:
         err = (result.stderr or result.stdout or f"wsl harness exit {result.returncode}")[:8000]
@@ -263,7 +269,10 @@ def _run_harness_wsl(
         stdout=result.stdout,
         stderr=result.stderr,
         report_path=report,
-        resolved_ids=resolved,
+        resolved_ids=outcome.get("resolved_ids", []),
+        completed_ids=outcome.get("completed_ids", []),
+        unresolved_ids=outcome.get("unresolved_ids", []),
+        error_ids=outcome.get("error_ids", []),
         error=err,
         backend="wsl",
     )
@@ -320,21 +329,49 @@ def _find_report(run_id: str, *, cwd: Path) -> Path | None:
     return candidates[0] if candidates else None
 
 
-def _parse_resolved(report_path: Path) -> list[str]:
+def _parse_report_outcome(report_path: Path) -> dict[str, list[str]]:
     try:
         data = json.loads(report_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return []
+        return {}
     if isinstance(data, dict):
-        for key in ("resolved_ids", "resolved", "resolved_instances"):
-            val = data.get(key)
-            if isinstance(val, list):
-                return [str(x) for x in val]
+        outcome: dict[str, list[str]] = {}
+        aliases = {
+            "resolved_ids": ("resolved_ids", "resolved", "resolved_instances"),
+            "completed_ids": ("completed_ids", "completed", "completed_instances"),
+            "unresolved_ids": ("unresolved_ids", "unresolved", "unresolved_instances"),
+            "error_ids": ("error_ids", "errors", "error_instances"),
+        }
+        for canonical, keys in aliases.items():
+            for key in keys:
+                val = data.get(key)
+                if isinstance(val, list):
+                    outcome[canonical] = [str(x) for x in val]
+                    break
+        if "resolved_ids" in outcome:
+            return outcome
         resolved = []
-        for k, v in data.items():
-            if isinstance(v, bool) and v:
-                resolved.append(str(k))
-            if isinstance(v, dict) and v.get("resolved") is True:
-                resolved.append(str(k))
-        return resolved
-    return []
+        completed = []
+        errors = []
+        for key, value in data.items():
+            if isinstance(value, bool):
+                completed.append(str(key))
+                if value:
+                    resolved.append(str(key))
+            elif isinstance(value, dict):
+                if value.get("resolved") is True:
+                    resolved.append(str(key))
+                if "resolved" in value or value.get("completed") is True:
+                    completed.append(str(key))
+                if value.get("error"):
+                    errors.append(str(key))
+        outcome["resolved_ids"] = resolved
+        outcome.setdefault("completed_ids", completed)
+        outcome.setdefault("error_ids", errors)
+        return outcome
+    return {}
+
+
+def _parse_resolved(report_path: Path) -> list[str]:
+    """兼容内部调用：返回结构化 report 中的 resolved IDs。"""
+    return _parse_report_outcome(report_path).get("resolved_ids", [])

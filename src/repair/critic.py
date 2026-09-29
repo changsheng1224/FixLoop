@@ -1,7 +1,4 @@
-"""提交前轻量评审（Critic）：默认 rules_first，不替代 Verifier。
-
-故意保持极简：空 / 仅测。越锁交给 edit_lock；补丁质量交给模型与 Verifier。
-"""
+"""提交前轻量评审（Critic）：默认 rules_first，不替代 Verifier。"""
 
 from __future__ import annotations
 
@@ -100,6 +97,50 @@ def _has_nonempty_change(patches: list[CandidatePatch]) -> bool:
     return False
 
 
+def _meaningful_line(line: str) -> bool:
+    stripped = line.strip()
+    return bool(
+        len(stripped) >= 6
+        and not stripped.startswith("#")
+        and stripped not in {"pass", "break", "continue", "return", "else:", "try:"}
+        and stripped not in {"(", ")", "[", "]", "{", "}"}
+    )
+
+
+def _has_adjacent_duplicate_addition(patch: CandidatePatch) -> bool:
+    """只拦截补丁新引入的相邻重复语句，避免扫描存量代码误报。"""
+    diff = str(getattr(patch, "diff", "") or "")
+    if diff:
+        lines = diff.splitlines()
+        for index, raw in enumerate(lines):
+            if not raw.startswith("+") or raw.startswith("+++"):
+                continue
+            added = raw[1:].strip()
+            if not _meaningful_line(added):
+                continue
+            for neighbor_index in (index - 1, index + 1):
+                if neighbor_index < 0 or neighbor_index >= len(lines):
+                    continue
+                neighbor = lines[neighbor_index]
+                if neighbor.startswith(("-", "@@", "---", "+++")):
+                    continue
+                if neighbor[:1] in {" ", "+"} and neighbor[1:].strip() == added:
+                    return True
+
+    original = str(getattr(patch, "original_lines", "") or "")
+    patched = str(getattr(patch, "patched_lines", "") or "")
+    if original == patched:
+        return False
+    patched_lines = patched.splitlines()
+    original_lines = original.splitlines()
+    original_pairs = set(zip(original_lines, original_lines[1:]))
+    for left, right in zip(patched_lines, patched_lines[1:]):
+        if left.strip() == right.strip() and _meaningful_line(left):
+            if (left, right) not in original_pairs:
+                return True
+    return False
+
+
 def review_patch(
     patches: list[CandidatePatch] | None,
     *,
@@ -109,7 +150,8 @@ def review_patch(
 ) -> CriticVerdict:
     """评审候选补丁。
 
-    rules_first：空 / 仅改测试 → reject。越锁交给写时 edit_lock；质量交给模型与 Verifier。
+    rules_first：空 / 仅改测试 / 新增相邻重复语句 → reject。
+    越锁仍交给写时 edit_lock。
     """
     resolved = (mode or resolve_critic_mode()).strip().lower()
     if resolved == "off":
@@ -139,6 +181,13 @@ def review_patch(
         return CriticVerdict(
             accepted=False,
             reason="tests_only",
+            mode="rules_first",
+        )
+
+    if any(_has_adjacent_duplicate_addition(patch) for patch in patches):
+        return CriticVerdict(
+            accepted=False,
+            reason="redundant_duplicate_addition",
             mode="rules_first",
         )
 

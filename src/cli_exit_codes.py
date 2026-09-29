@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from src.repair.verification.termination import has_repair_timeout, is_repair_success
+from src.repair.verification.termination import has_actionable_patch, has_repair_timeout
 from src.state import RepairState
 
 REPAIR_EXIT_OK = 0
@@ -37,6 +37,6 @@ def repair_exit_code(state: RepairState) -> int:
     """根据 RepairState 计算 repair 子命令进程退出码。"""
     if has_repair_timeout(state):
         return REPAIR_EXIT_TIMEOUT
-    if is_repair_success(state):
+    if has_actionable_patch(state):
         return REPAIR_EXIT_OK
     return REPAIR_EXIT_FAIL

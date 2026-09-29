@@ -177,6 +177,34 @@ class TestContextManagerBuild:
         with pytest.raises(ContextTooLargeError):
             cm.build_for_native("test")
 
+    def test_oversized_request_is_emergency_compacted_with_head_and_tail(self, agent):
+        cm = ContextManager(agent, total_budget=4000)
+        request = "ISSUE_HEAD\n" + ("large diagnostic payload\n" * 12000) + "ISSUE_TAIL"
+
+        _system, dynamic, meta = cm.build_for_native(request)
+
+        compact = meta["emergency_compaction"]
+        assert compact["original_request_tokens"] > 4000
+        assert compact["compacted_request_tokens"] <= 2400
+        assert meta["total_tokens"] <= 4000
+        assert meta["request_preserved"] is False
+        assert meta["task_budget_overflow"] is True
+        assert "ISSUE_HEAD" in dynamic
+        assert "ISSUE_TAIL" in dynamic
+
+    def test_native_context_integrity_uses_current_issue_as_goal_evidence(self, agent):
+        repair_context = agent.session.setdefault("memory", {}).setdefault(
+            "working", {}
+        ).setdefault("repair_context", {})
+        repair_context["goal"] = "fix issue"
+        agent.record({"role": "user", "content": "previous evidence"})
+
+        _system, _dynamic, meta = ContextManager(agent).build_for_native("fix issue")
+
+        integrity = meta["compression_pipeline"]["context_integrity"]
+        assert integrity["checks"]["goal"] is True
+        assert integrity["ok"] is True
+
 
 class TestStateSection:
     """_get_state() 注入 task_summary + phase + plan_todos 前 3 条。"""

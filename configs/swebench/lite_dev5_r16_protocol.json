@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "protocol_id": "swebench-lite-dev5-r16",
+  "instances_jsonl": "configs/swebench/lite_dev5_r16_public.jsonl",
+  "instances_sha256": "4446feb23816e015193feaeab00842e944e599c3435d8e28a311b9dabfadf640",
+  "source_repo_cache": "artifacts/swebench_repos_r16",
+  "instance_ids": [
+    "astropy__astropy-12907",
+    "django__django-11099",
+    "matplotlib__matplotlib-23964",
+    "pylint-dev__pylint-6506",
+    "sympy__sympy-20590"
+  ],
+  "provider": "anthropic_compat",
+  "model": "deepseek-v4-pro",
+  "model_name": "fixloop",
+  "max_retries": 1,
+  "repair_timeout_s": 900,
+  "max_workers": 1,
+  "verifier": {
+    "enabled": true,
+    "require_sandbox": true,
+    "image": "repair-agent/python-repair"
+  },
+  "critic": {
+    "enabled": true,
+    "mode": "rules_first"
+  },
+  "official_harness": false,
+  "patcher_projection": "public_problem_only"
+}
