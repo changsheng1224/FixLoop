@@ -163,11 +163,11 @@ class PlanStore:
                         raise ValueError("journal_receipt_checksum_invalid")
             mapping[key] = value
 
-    def checkpoint(self, plan: Plan | None) -> dict:
+    def checkpoint(self, plan: Plan | None, long_task_state: dict | None = None) -> dict:
         with self._lock:
-            return self._checkpoint(plan)
+            return self._checkpoint(plan, long_task_state)
 
-    def _checkpoint(self, plan: Plan | None) -> dict:
+    def _checkpoint(self, plan: Plan | None, long_task_state: dict | None = None) -> dict:
         events = self.events()
         attempts = self.latest("attempt", "attempt_id")
         payload = {
@@ -179,6 +179,7 @@ class PlanStore:
             "journal_sequence": events[-1]["seq"],
             "journal_checksum": events[-1]["checksum"],
             "active_attempts": sorted(k for k, v in attempts.items() if v["phase"] != "reconciled"),
+            "long_task_state": dict(long_task_state or {}),
         }
         seal = {**payload, "checksum": digest(payload)}
         self.append("checkpoint", seal)
