@@ -1,6 +1,6 @@
 # FixLoop WSL 命令与测试沙箱 MVP 开发计划
 
-日期：2026-09-30。依据：[MVP Spec](../specs/2026-09-30-wsl-command-sandbox-mvp.md)。状态：P0 环境诊断、P1 独立后端与 P2 受门禁集成已完成；P3–P4 未完成，普通修复任务的产品沙箱仍未启用。证据见 [P0 记录](2026-09-30-wsl-command-sandbox-p0-record.md)、[P1 记录](2026-09-30-wsl-command-sandbox-p1-record.md) 与 [P2 记录](2026-09-30-wsl-command-sandbox-p2-record.md)。
+日期：2026-09-30。依据：[MVP Spec](../specs/2026-09-30-wsl-command-sandbox-mvp.md)。状态：P0–P3 已实现；P4 隔离与开销评测已执行，S13 真实 Agent 修复闭环待模型调用授权，MVP 完成门禁尚未通过。证据见 [P0 记录](2026-09-30-wsl-command-sandbox-p0-record.md)、[P1 记录](2026-09-30-wsl-command-sandbox-p1-record.md)、[P2 记录](2026-09-30-wsl-command-sandbox-p2-record.md) 与 [P4 记录](2026-09-30-wsl-command-sandbox-p4-record.md)。
 
 ## 顺序与约束
 
