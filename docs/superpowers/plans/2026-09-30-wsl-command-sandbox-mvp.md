@@ -1,6 +1,6 @@
 # FixLoop WSL 命令与测试沙箱 MVP 开发计划
 
-日期：2026-09-30。依据：[MVP Spec](../specs/2026-09-30-wsl-command-sandbox-mvp.md)。状态：未开始实现。
+日期：2026-09-30。依据：[MVP Spec](../specs/2026-09-30-wsl-command-sandbox-mvp.md)。状态：P0 环境诊断与 P1 独立后端已完成；P2–P4 未完成，产品沙箱未启用。证据见 [P0 记录](2026-09-30-wsl-command-sandbox-p0-record.md) 与 [P1 记录](2026-09-30-wsl-command-sandbox-p1-record.md)。
 
 ## 顺序与约束
 
