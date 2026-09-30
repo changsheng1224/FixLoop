@@ -3,6 +3,7 @@
 import pytest
 
 from agent_runtime.linux_sandbox.models import SandboxResult
+from agent_runtime.linux_sandbox.tool_policy import SandboxToolAccess, sandbox_tool_access
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.tools import build_tool_registry, tool_quick_test, tool_run_shell
 from src.middleware import build_repair_gateway
@@ -93,7 +94,7 @@ def test_sandbox_grep_never_resolves_host_rg(tmp_path, monkeypatch):
     assert "needle" in tool_grep(ctx, {"pattern": "needle"})
 
 
-def test_uncertain_blocks_followup_command_and_write_at_executor(tmp_path):
+def test_uncertain_blocks_followup_command_and_write_at_executor(tmp_path, monkeypatch):
     from agent_runtime.config import AgentConfig
     from agent_runtime.providers.clients import FakeModelClient
     from agent_runtime.runtime import Agent
@@ -111,13 +112,24 @@ def test_uncertain_blocks_followup_command_and_write_at_executor(tmp_path):
         tool_context=ctx,
     )
     executor = ToolExecutor(agent, approval_policy="auto")
+    capture = executor._capture_snapshot
+    captures = []
+
+    def tracked_capture():
+        captures.append(True)
+        return capture()
+
+    monkeypatch.setattr(executor, "_capture_snapshot", tracked_capture)
     first = executor.execute("quick_test", {"nodeid": "missing.py"})
     assert first.status == "rejected"
+    captures.clear()
     (tmp_path / "test_a.py").write_text("def test_a(): pass\n")
     second = executor.execute("quick_test", {"nodeid": "test_a.py"})
     assert second.status == "uncertain"
     assert second.metadata["execution_tier"] == "none"
     assert "rollback_attempted" not in second.metadata
+    assert len(captures) == 1  # Never inspect a workspace with unconfirmed cleanup.
+    assert second.metadata["workspace_diff_status"] == "pending_cleanup"
     blocked = executor.execute("write_file", {"path": "new.py", "content": "x=1"})
     assert blocked.error_code == "execution_uncertain"
     assert not (tmp_path / "new.py").exists()
@@ -161,3 +173,35 @@ def test_manifest_cannot_enable_sandbox_blocked_tools(tmp_path):
     assert tools["git_diff"]["lifecycle"] == "disabled"
     assert not gateway.can_call("patcher", "git_diff")
     assert tools["run_shell"]["execution_tier"] == "linux_sandbox"
+
+
+def test_sandbox_tool_policy_denies_unknown_tools_and_audits_commands():
+    assert sandbox_tool_access("unknown_plugin") is SandboxToolAccess.DENIED
+    assert sandbox_tool_access("git_diff") is SandboxToolAccess.DENIED
+    assert sandbox_tool_access("run_shell") is SandboxToolAccess.SANDBOX_COMMAND
+    assert sandbox_tool_access("write_file") is SandboxToolAccess.TRUSTED_WRITE
+
+
+def test_executor_rejects_command_with_unverified_execution_tier(tmp_path):
+    from agent_runtime.config import AgentConfig
+    from agent_runtime.providers.clients import FakeModelClient
+    from agent_runtime.runtime import Agent
+    from agent_runtime.tool_executor import ToolExecutor
+    from agent_runtime.workspace import WorkspaceContext
+
+    ctx, backend = context(tmp_path)
+    tools = build_tool_registry(ctx)
+    tools["run_shell"]["execution_tier"] = "host"
+    agent = Agent(
+        config=AgentConfig(provider="fake", approval="auto"),
+        model_client=FakeModelClient(["<final>ok</final>"]),
+        workspace=WorkspaceContext.build(str(tmp_path)),
+        tools=tools,
+        cwd=str(tmp_path),
+        tool_context=ctx,
+    )
+    result = ToolExecutor(agent, approval_policy="auto").execute(
+        "run_shell", {"command": "python -c 'print(1)'"}
+    )
+    assert result.error_code == "policy_denied"
+    assert backend.requests == []

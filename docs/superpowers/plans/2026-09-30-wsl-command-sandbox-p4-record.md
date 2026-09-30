@@ -2,6 +2,8 @@
 
 Date: 2026-09-30. Branch: `codex/wsl-command-sandbox-p4`. Status: **partial**. S13 real Agent repair is pending explicit authorization for model usage/cost. No production profile, push, merge, or full test suite is claimed.
 
+The later local refactor and its own real-machine results are recorded in [the refactor record](2026-09-30-wsl-command-sandbox-refactor-record.md); the P4 evidence below remains the original baseline.
+
 ## Reproduction and evidence
 
 The trusted evaluator is `src/eval/sandbox_mvp.py`; its harmless fixture is `tests/fixtures/linux_sandbox/test_fixture.py`. The evaluator accepts only four trusted configuration keys (`workspace`, `state_root`, `toolchain`, `helper`), creates a fresh WSL ext4 workspace and separate state directory per scenario, and never takes model-provided commands. The Windows-to-WSL invocation uses fixed argv with `python3 -I`; the evaluation process explicitly imports the checkout from `/mnt/c`, but the **target** workspace is always native WSL ext4. This evaluation import mechanism is not the product launcher.

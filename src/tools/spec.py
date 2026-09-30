@@ -302,9 +302,15 @@ def default_repair_tool_registry(*, sandbox_mode: bool = False) -> ToolRegistry:
         ),
     ]
     if sandbox_mode:
-        blocked = {"git_blame", "git_diff", "sandbox_build", "sandbox_test", "sandbox_verify"}
+        from agent_runtime.linux_sandbox.tool_policy import (
+            SandboxToolAccess,
+            sandbox_tool_access,
+        )
+
         specs = [
-            replace(spec, lifecycle="disabled", roles=frozenset()) if spec.name in blocked else spec
+            replace(spec, lifecycle="disabled", roles=frozenset())
+            if sandbox_tool_access(spec.name) is SandboxToolAccess.DENIED
+            else spec
             for spec in specs
         ]
     return ToolRegistry(specs)

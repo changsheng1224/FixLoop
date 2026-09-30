@@ -116,41 +116,25 @@ class ToolExecutor:
             return self._rejected(2, "not_found", f"Error: 工具 '{name}' 未注册。")
         ctx = self.agent.tool_context
         if getattr(ctx, "sandbox_backend", None) is not None:
-            if getattr(ctx, "sandbox_uncertain", False) and name in {
-                "write_file",
-                "patch_file",
-                "apply_patch",
-                "quick_test",
-                "run_shell",
+            from agent_runtime.linux_sandbox.tool_policy import (
+                SandboxToolAccess,
+                sandbox_tool_access,
+            )
+
+            access = sandbox_tool_access(name)
+            if getattr(ctx, "sandbox_uncertain", False) and access in {
+                SandboxToolAccess.TRUSTED_WRITE,
+                SandboxToolAccess.SANDBOX_COMMAND,
             }:
                 return self._rejected(
                     2,
                     "execution_uncertain",
                     "Error: sandbox cleanup unverified; writes and commands blocked.",
                 )
-            allowed_categories = {
-                "read_file",
-                "list_files",
-                "grep",
-                "search",
-                "code_lookup",
-                "code_relations",
-                "write_file",
-                "patch_file",
-                "apply_patch",
-                "finish_repair",
-                "expand_lock",
-                "expand_observation",
-                "quick_test",
-                "run_shell",
-                "inspect_file",
-                "find_test",
-                "ast_parse",
-                "stack_parse",
-                "java_ast_parse",
-                "java_stack_parse",
-            }
-            if name not in allowed_categories:
+            if access is SandboxToolAccess.DENIED or (
+                access is SandboxToolAccess.SANDBOX_COMMAND
+                and tool_spec.get("execution_tier") != "linux_sandbox"
+            ):
                 return self._rejected(
                     2, "policy_denied", f"Error: tool '{name}' is not audited for wsl_bwrap."
                 )
@@ -290,24 +274,26 @@ class ToolExecutor:
             patch_preview_meta,
         )
         if is_risky:
-            if sandbox_command:
-                after_snapshot = self._capture_snapshot()
-            elif result.status in {
-                ToolStatus.ERROR.value,
-                ToolStatus.REJECTED.value,
-                ToolStatus.CANCELLED.value,
-                ToolStatus.UNCERTAIN.value,
-            }:
-                self._restore_restore_snapshot(restore_snapshot)
-                result.metadata["rollback_attempted"] = True
-                after_snapshot = self._capture_snapshot()
-            elif token is not None and token.is_cancelled:
-                self._restore_restore_snapshot(restore_snapshot)
-                result.metadata["cancel_restored"] = True
-                after_snapshot = self._capture_snapshot()
+            if sandbox_command and (
+                result.status == ToolStatus.UNCERTAIN.value
+                or getattr(self.agent.tool_context, "sandbox_uncertain", False)
+            ):
+                self.agent.tool_context.sandbox_uncertain = True
+                result.metadata["workspace_diff_status"] = "pending_cleanup"
             else:
+                if not sandbox_command and result.status in {
+                    ToolStatus.ERROR.value,
+                    ToolStatus.REJECTED.value,
+                    ToolStatus.CANCELLED.value,
+                    ToolStatus.UNCERTAIN.value,
+                }:
+                    self._restore_restore_snapshot(restore_snapshot)
+                    result.metadata["rollback_attempted"] = True
+                elif not sandbox_command and token is not None and token.is_cancelled:
+                    self._restore_restore_snapshot(restore_snapshot)
+                    result.metadata["cancel_restored"] = True
                 after_snapshot = self._capture_snapshot()
-            result.metadata.update(self._diff_snapshots(before_snapshot, after_snapshot))
+                result.metadata.update(self._diff_snapshots(before_snapshot, after_snapshot))
             affected_paths = result.metadata.get("affected_paths") or []
             if result.ok and not affected_paths and not sandbox_command:
                 result.status = ToolStatus.NO_CHANGE.value
