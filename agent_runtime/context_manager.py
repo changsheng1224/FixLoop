@@ -375,6 +375,11 @@ class ContextManager:
             filler.add_section(
                 "source", self._get_source(metadata, available), BUDGET_SOURCE
             )
+        filler.add_section(
+            "state",
+            self._get_long_task(metadata),
+            scaled_section_budget(BUDGET_MEMORY, section_cap or total),
+        )
         # Keep the current request available to the integrity check.  The
         # request is intentionally not part of projected history, so checking
         # the goal against history alone incorrectly reports goal loss on every
@@ -636,6 +641,21 @@ class ContextManager:
             parts.insert(0, repair_state)
 
         return "\n".join(parts) if parts else ""
+
+    def _get_long_task(self, metadata: dict) -> str:
+        """Project PlanSession state into a compression-protected section."""
+        plan_session = getattr(self.agent, "_plan_session", None)
+        if plan_session is None or not hasattr(plan_session, "build_long_task_context"):
+            return ""
+        try:
+            context = plan_session.build_long_task_context(str(metadata.get("plan_node_id", "")))
+        except (ValueError, OSError):
+            return ""
+        metadata["long_task_context"] = context
+        self.agent.session["long_task_context"] = context
+        return "长任务状态（压缩保护）:\n" + json.dumps(
+            context, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
 
     def _get_knowledge(self, query: str = "") -> str:
         """Knowledge 段：三层 RAG 检索结果。

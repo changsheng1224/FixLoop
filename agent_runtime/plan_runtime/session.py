@@ -19,6 +19,7 @@ from .processes import process_identity
 from .reducer import refresh, transition
 from .validate import tool_effect, validate_plan
 from .workspace import changes, snapshot, workspace_id, workspace_lease
+from .long_task import LongTaskContext, LongTaskState
 
 
 class PlanSession:
@@ -60,6 +61,10 @@ class PlanSession:
             raise
         self.observation_state = observation_state if observation_state is not None else {}
         self.evidence = EvidenceLedger(self.store, workspace, self.observation_state, state_root)
+        raw_long_task = self.store.latest("long_task_state", "state_id")
+        latest_long_task = next(iter(raw_long_task.values()), None)
+        self.long_task_state = LongTaskState.verify(latest_long_task) if latest_long_task else LongTaskState(task_id=task_id, run_id=run_id)
+        self.long_task = LongTaskContext(self.long_task_state, self.plan, self.evidence)
         self.event_sink = event_sink
         self.fault = fault
         self.local = threading.local()
@@ -115,9 +120,64 @@ class PlanSession:
 
     def checkpoint(self) -> dict:
         self.cut("before_checkpoint")
-        seal = self.store.checkpoint(self.plan)
+        self._persist_long_task_state()
+        seal = self.store.checkpoint(self.plan, self.long_task_state.seal())
         self.cut("checkpoint_saved")
         return seal
+
+    def _persist_long_task_state(self) -> None:
+        raw = self.long_task_state.seal()
+        raw["state_id"] = self.identity["session_id"]
+        self.store.append("long_task_state", raw)
+
+    def configure_long_task(self, original_request: str, *, hard_constraints=None) -> None:
+        self.long_task_state.original_request = str(original_request)
+        self.long_task_state.hard_constraints = [str(v) for v in (hard_constraints or [])]
+        self.long_task._touch()
+        self._persist_long_task_state()
+
+    def record_decision(self, decision: str, *, rationale: str = "", source: str = "") -> None:
+        self.long_task.record_decision(decision, rationale=rationale, source=source)
+        self._persist_long_task_state()
+
+    def build_long_task_context(self, node_id: str = "") -> dict:
+        self.long_task.plan = self.plan
+        return self.long_task.build(node_id)
+
+    def render_long_task_context(self, node_id: str = "") -> str:
+        self.long_task.plan = self.plan
+        return self.long_task.render(node_id)
+
+    def verify_long_task_checkpoint(self, checkpoint: dict) -> None:
+        self.store.verify_checkpoint(checkpoint)
+        LongTaskState.verify(checkpoint.get("long_task_state") or {})
+
+    def refresh_evidence(self, ref: str, fetcher) -> str:
+        """Refresh a stale evidence ref through a caller-supplied fetcher."""
+        new_ref = self.long_task.refresh_evidence(ref, fetcher)
+        self._persist_long_task_state()
+        return new_ref
+
+    def refresh_observation_with_node(self, ref: str, node_id: str, callback) -> str:
+        """Re-fetch stale evidence through a newly scheduled Plan explore node."""
+        if not self.evidence.get(ref):
+            raise ValueError("unknown_evidence_ref")
+        if ref not in self.long_task_state.evidence_refs:
+            self.long_task_state.evidence_refs.append(ref)
+        if self.evidence.valid(ref):
+            return ref
+        result = self.run_node(node_id, callback)
+        refs = list(result.get("evidence_refs", [])) if isinstance(result, dict) else []
+        candidates = [item for item in refs if self.evidence.valid(item)]
+        if not candidates:
+            raise ValueError("refresh_node_missing_valid_evidence")
+        new_ref = candidates[0]
+        self.long_task_state.evidence_refs = [new_ref if item == ref else item for item in self.long_task_state.evidence_refs]
+        self.long_task_state.stale_evidence = [item for item in self.long_task_state.stale_evidence if item != ref]
+        self.long_task_state.key_decisions.append({"id": new_id("evidence"), "supersedes": ref, "replacement": new_ref})
+        self.long_task_state.state_revision += 1
+        self._persist_long_task_state()
+        return new_ref
 
     def refresh(self):
         candidate = refresh(self.plan, self.evidence)
@@ -155,6 +215,8 @@ class PlanSession:
                 kind=node.kind,
                 owner=process_identity(os.getpid()) or {},
             )
+            self.long_task.set_node(node_id, "running")
+            self._persist_long_task_state()
             raw = asdict(attempt)
             self.store.append("attempt", raw)
             self.cut("prepared")
@@ -311,6 +373,7 @@ class PlanSession:
             blob_ref=self.store.put_blob(safe_text),
             file_versions=versions,
             whole_workspace=whole,
+            tool_arguments=dict(arguments),
         )
         refs = [observation_ref]
         if effect == "write" and changed and result.ok and stopped:
@@ -347,6 +410,7 @@ class PlanSession:
         result.metadata["plan_operation_id"] = operation_id
         result.metadata["plan_attempt_id"] = attempt["attempt_id"]
         result.metadata["observation_id"] = stored.observation_id
+        result.metadata["plan_evidence_refs"] = list(refs)
         return result
 
     def operations(self, attempt_id: str) -> list[dict]:
@@ -435,6 +499,10 @@ class PlanSession:
                             reason="patch_changed_source_version",
                         )
             self.refresh()
+            self.long_task.plan = self.plan
+            self.long_task.set_node(node.node_id, status)
+            self.long_task.add_evidence(list(refs))
+            self._persist_long_task_state()
             self.emit(
                 "node_" + status,
                 node_id=node.node_id,

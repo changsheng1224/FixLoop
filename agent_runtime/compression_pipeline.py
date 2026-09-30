@@ -54,10 +54,10 @@ PROTECTED_KEYWORDS = ("Error", "Traceback", "Fail", "FAILED", "error:")
 
 def is_repair_state_item(item: dict) -> bool:
     """State records are protected even when they contain no error keyword."""
-    if item.get("repair_state") or item.get("evidence_ref"):
+    if item.get("repair_state") or item.get("evidence_ref") or item.get("long_task_state"):
         return True
     content = str(item.get("content", ""))
-    return content.startswith("修复状态") or content.startswith("[repair-context]")
+    return content.startswith("修复状态") or content.startswith("长任务状态") or content.startswith("[repair-context]")
 
 
 def truncate_tool_content(

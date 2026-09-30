@@ -39,6 +39,14 @@ RUNTIME_IDENTITY_KEYS = [
 ]
 
 
+def _long_task_digest(value: dict) -> str:
+    import json
+
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
 def current_runtime_identity(agent) -> dict:
     """捕获当前 Agent 的 runtime 身份快照。
 
@@ -188,6 +196,9 @@ def create_checkpoint(
         ),
     }
     checkpoint["action_ledger"] = list(agent.session.get("action_ledger", []) or [])[-100:]
+    if agent.session.get("long_task_context"):
+        checkpoint["long_task_context"] = dict(agent.session["long_task_context"])
+        checkpoint["long_task_context_checksum"] = _long_task_digest(checkpoint["long_task_context"])
     if trigger == "user_cancel" and in_flight_tool:
         checkpoint["in_flight_tool"] = in_flight_tool
         checkpoint["in_flight_action"] = dict(agent.session.get("_in_flight_action", {}) or {})
@@ -359,6 +370,30 @@ def evaluate_resume_state(agent) -> dict:
             observation_diff.append(f"{item.get('observation_id')} (stale)")
     result["observation_diff"] = observation_diff
 
+    saved_long_task = last.get("long_task_context") or {}
+    if saved_long_task:
+        if last.get("long_task_context_checksum") != _long_task_digest(saved_long_task):
+            return _emit_resume_result(agent, _resume_result("integrity-failure", last))
+    current_long_task = agent.session.get("long_task_context") or {}
+    long_task_diff = []
+    for key in ("original_request", "hard_constraints", "current_node", "state_revision"):
+        if saved_long_task.get(key) and current_long_task.get(key) != saved_long_task.get(key):
+            long_task_diff.append(key)
+    result["long_task_diff"] = long_task_diff
+    plan_session = getattr(agent, "_plan_session", None)
+    if plan_session is not None and saved_long_task:
+        try:
+            checked = plan_session.build_long_task_context(
+                str(saved_long_task.get("current_node", {}).get("node_id", ""))
+            )
+            stale_refs = sorted(set(saved_long_task.get("evidence_refs", [])) - set(checked.get("evidence_refs", [])))
+            result["long_task_stale_evidence"] = stale_refs
+            if stale_refs and "long_task_evidence" not in long_task_diff:
+                long_task_diff.append("long_task_evidence")
+        except (ValueError, OSError):
+            result["long_task_stale_evidence"] = list(saved_long_task.get("evidence_refs", []))
+            long_task_diff.append("long_task_state_unavailable")
+
     # 检查 key_files freshness
     for path, saved_hash in last.get("key_files", {}).items():
         current = _file_freshness(agent._cwd, path)
@@ -390,7 +425,7 @@ def evaluate_resume_state(agent) -> dict:
     # 判定状态
     if result["stale_files"] or result["identity_diff"]:
         result["status"] = "workspace-mismatch" if result["identity_diff"] else "partial-stale"
-    elif observation_diff or context_diff:
+    elif observation_diff or context_diff or long_task_diff:
         result["status"] = "partial-stale"
     elif (
         last.get("trigger") == "step_end"
@@ -443,6 +478,8 @@ def _resume_result(status: str, checkpoint: dict | None = None) -> dict:
         "stale_files": [],
         "identity_diff": [],
         "context_diff": [],
+        "long_task_diff": [],
+        "long_task_stale_evidence": [],
         "last_checkpoint": checkpoint,
     }
 
