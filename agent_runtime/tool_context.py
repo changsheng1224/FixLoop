@@ -38,6 +38,11 @@ class ToolContext:
     exploration_service: object | None = None
     lsp_argv: tuple[str, ...] | None = None
     exploration_event_sink: Callable[[str, dict], None] | None = None
+    sandbox_backend: object | None = None
+    sandbox_workspace_id: str = "workspace"
+    sandbox_task_id: str = "task"
+    sandbox_run_id: str = "run"
+    sandbox_uncertain: bool = False
 
     def __post_init__(self):
         if self.path_resolver is None:

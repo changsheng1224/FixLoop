@@ -85,11 +85,14 @@ def main() -> int:
     p_repair.add_argument("--dry-run", action="store_true", help="演习模式")
     p_repair.add_argument("--skip-verify", action="store_true", help="跳过 Docker 验证")
     p_repair.add_argument(
-        "--code-exploration-mode", choices=["text", "lsp", "relations"],
-        default="text", help="代码探索模式（默认 text）",
+        "--code-exploration-mode",
+        choices=["text", "lsp", "relations"],
+        default="text",
+        help="代码探索模式（默认 text）",
     )
     p_repair.add_argument(
-        "--pylsp-path", default=None,
+        "--pylsp-path",
+        default=None,
         help="受信任的 pylsp 可执行文件绝对路径（LSP 模式可选）",
     )
     p_repair.add_argument(
@@ -105,6 +108,12 @@ def main() -> int:
         "--require-sandbox",
         action="store_true",
         help="要求 Docker sandbox；不可用时不降级到 host/static",
+    )
+    p_repair.add_argument(
+        "--execution-backend",
+        choices=["legacy", "wsl_bwrap"],
+        default="legacy",
+        help="wsl_bwrap remains gated until external control state isolation (P3)",
     )
     p_repair.add_argument(
         "--fast-retrieve",
@@ -243,6 +252,15 @@ def main() -> int:
 
 
 def _repair(args) -> int:
+    if getattr(args, "execution_backend", "legacy") == "wsl_bwrap":
+        if args.execution_tier != "auto" or args.require_sandbox:
+            print("错误: wsl_bwrap conflicts with legacy tier/require-sandbox", file=sys.stderr)
+            return REPAIR_EXIT_CONFIG
+        if args.code_exploration_mode != "text" or args.pylsp_path:
+            print("错误: wsl_bwrap does not support LSP", file=sys.stderr)
+            return REPAIR_EXIT_CONFIG
+        print("错误: wsl_bwrap repair requires P3 external state_root isolation", file=sys.stderr)
+        return REPAIR_EXIT_CONFIG
     load_dotenv()
     repo = str(Path(args.repo).resolve())
     config_err = repair_config_error(repo)
@@ -256,6 +274,7 @@ def _repair(args) -> int:
             dry_run=args.dry_run,
             execution_tier=args.execution_tier,
             require_sandbox=args.require_sandbox,
+            execution_backend=getattr(args, "execution_backend", "legacy"),
             code_exploration_mode=args.code_exploration_mode,
             code_exploration_server_argv=(args.pylsp_path,) if args.pylsp_path else None,
         )

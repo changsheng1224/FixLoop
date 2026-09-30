@@ -114,6 +114,46 @@ class ToolExecutor:
         tool_spec = self.agent.tools.get(name)
         if tool_spec is None:
             return self._rejected(2, "not_found", f"Error: 工具 '{name}' 未注册。")
+        ctx = self.agent.tool_context
+        if getattr(ctx, "sandbox_backend", None) is not None:
+            if getattr(ctx, "sandbox_uncertain", False) and name in {
+                "write_file",
+                "patch_file",
+                "apply_patch",
+                "quick_test",
+                "run_shell",
+            }:
+                return self._rejected(
+                    2,
+                    "execution_uncertain",
+                    "Error: sandbox cleanup unverified; writes and commands blocked.",
+                )
+            allowed_categories = {
+                "read_file",
+                "list_files",
+                "grep",
+                "search",
+                "code_lookup",
+                "code_relations",
+                "write_file",
+                "patch_file",
+                "apply_patch",
+                "finish_repair",
+                "expand_lock",
+                "expand_observation",
+                "quick_test",
+                "run_shell",
+                "inspect_file",
+                "find_test",
+                "ast_parse",
+                "stack_parse",
+                "java_ast_parse",
+                "java_stack_parse",
+            }
+            if name not in allowed_categories:
+                return self._rejected(
+                    2, "policy_denied", f"Error: tool '{name}' is not audited for wsl_bwrap."
+                )
 
         # ---- Gate 3: 参数校验 ----
         validated_args, args_reject = self._validate_args(name, args)
@@ -198,9 +238,12 @@ class ToolExecutor:
             return approval_reject
 
         # ---- Gate 8: 执行前工作区快照 ----
-        is_risky = name in self._high_risk_tools
+        sandbox_command = tool_spec.get("execution_tier") == "linux_sandbox"
+        is_risky = name in self._high_risk_tools or sandbox_command
         before_snapshot = self._capture_snapshot() if is_risky else {}
-        restore_snapshot = self._capture_restore_snapshot() if is_risky else {}
+        restore_snapshot = (
+            self._capture_restore_snapshot() if is_risky and not sandbox_command else {}
+        )
 
         # ---- Gate 9: 执行工具 ----
         execution_result = normalize_tool_result(
@@ -247,7 +290,9 @@ class ToolExecutor:
             patch_preview_meta,
         )
         if is_risky:
-            if result.status in {
+            if sandbox_command:
+                after_snapshot = self._capture_snapshot()
+            elif result.status in {
                 ToolStatus.ERROR.value,
                 ToolStatus.REJECTED.value,
                 ToolStatus.CANCELLED.value,
@@ -264,7 +309,7 @@ class ToolExecutor:
                 after_snapshot = self._capture_snapshot()
             result.metadata.update(self._diff_snapshots(before_snapshot, after_snapshot))
             affected_paths = result.metadata.get("affected_paths") or []
-            if result.ok and not affected_paths:
+            if result.ok and not affected_paths and not sandbox_command:
                 result.status = ToolStatus.NO_CHANGE.value
                 result.error_code = "no_change"
                 result.retryable = True
@@ -301,7 +346,12 @@ class ToolExecutor:
             {
                 key: value
                 for key, value in metadata.items()
-                if key not in {"tool_status", "retryable"}
+                if key
+                not in (
+                    {"tool_status", "retryable", "execution_tier"}
+                    if sandbox_command
+                    else {"tool_status", "retryable"}
+                )
             }
         )
         if self._quota is not None:
@@ -477,6 +527,11 @@ class ToolExecutor:
     ) -> tuple[dict | None, ToolExecutionResult | None]:
         """Gate 7：执行分级审批策略。"""
         tier = self._approval_tier(name)
+        if (
+            name in {"run_shell", "quick_test"}
+            and getattr(self.agent.tool_context, "sandbox_backend", None) is not None
+        ):
+            tier = self._APPROVAL_TIER_ASK
         if tier == self._APPROVAL_TIER_DENY:
             return None, self._rejected(
                 7,
@@ -569,7 +624,12 @@ class ToolExecutor:
         prev_ctx_budget = getattr(ctx, "budget", None)
         prev_ctx_idempotency = getattr(ctx, "idempotency_key", "")
         # write/patch 必须等工具返回后再 restore；只读/shell 可协作式中断
-        run_cancel = token if name not in ("write_file", "patch_file", "apply_patch") else None
+        sandbox_command = tool_spec.get("execution_tier") == "linux_sandbox"
+        run_cancel = (
+            token
+            if name not in ("write_file", "patch_file", "apply_patch") and not sandbox_command
+            else None
+        )
         ctx.cancel_token = token
         ctx.deadline = deadline
         ctx.budget = getattr(self.agent, "_repair_budget", None)
@@ -585,10 +645,12 @@ class ToolExecutor:
 
             result = run_with_timeout(
                 partial(_invoke_tool, tool_spec["run"], args),
-                timeout_s=timeout_s,
+                timeout_s=0 if sandbox_command else timeout_s,
                 cancel_token=run_cancel,
                 mode=str(tool_spec.get("execution_mode", "thread") or "thread"),
             )
+            if isinstance(result, ToolResult):
+                return result
             if hasattr(result, "metadata") and hasattr(result, "content"):
                 metadata = dict(result.metadata or {})
                 if getattr(result, "structured_facts", None):
@@ -659,7 +721,7 @@ class ToolExecutor:
             metadata.update(gate7_meta)
         if patch_preview_meta:
             metadata["patch_preview"] = patch_preview_meta
-        if name == "run_shell":
+        if name == "run_shell" and execution_tier != "linux_sandbox":
             provider = getattr(self.agent.tool_context, "shell_env_provider", None)
             if callable(provider):
                 metadata["shell_env_keys"] = sorted(provider().keys())
@@ -836,8 +898,7 @@ class ToolExecutor:
         if name in self._READ_TOOLS:
             if name == "code_lookup":
                 return all(
-                    item.get("tool_name") == name
-                    and item.get("tool_args", {}) == args
+                    item.get("tool_name") == name and item.get("tool_args", {}) == args
                     for item in recent
                 )
             same_name = recent[0].get("tool_name") == recent[1].get("tool_name") == name

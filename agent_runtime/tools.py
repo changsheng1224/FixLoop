@@ -197,19 +197,27 @@ def _list_files_structured(context, args: dict):
 
 def _code_lookup_structured(context, args: dict):
     service = _exploration_service(context)
-    service.emit("query_start", {"query_type": "code_lookup",
-                                 "operation": args.get("operation", "definition")})
+    service.emit(
+        "query_start",
+        {"query_type": "code_lookup", "operation": args.get("operation", "definition")},
+    )
     result = service.lookup(args)
     retrieval = result.metadata.get("retrieval_result", {})
-    service.emit("query_end", {
-        "query_type": "code_lookup", "query_id": retrieval.get("query_id", ""),
-        "hits": len(retrieval.get("hits", [])),
-        "completeness": retrieval.get("completeness", "unknown"),
-        "truncation_reasons": retrieval.get("truncation_reasons", []),
-    })
+    service.emit(
+        "query_end",
+        {
+            "query_type": "code_lookup",
+            "query_id": retrieval.get("query_id", ""),
+            "hits": len(retrieval.get("hits", [])),
+            "completeness": retrieval.get("completeness", "unknown"),
+            "truncation_reasons": retrieval.get("truncation_reasons", []),
+        },
+    )
     if retrieval.get("degradation_reason") not in {None, "disabled"}:
-        service.emit("lsp_degraded", {"query_id": retrieval.get("query_id", ""),
-                                      "reason": retrieval["degradation_reason"]})
+        service.emit(
+            "lsp_degraded",
+            {"query_id": retrieval.get("query_id", ""), "reason": retrieval["degradation_reason"]},
+        )
     return result
 
 
@@ -230,9 +238,14 @@ def _code_relations_structured(context, args: dict):
     service.emit("query_start", {"query_type": "code_relations"})
     result = service.relations(args)
     view = result.metadata.get("relation_view", {})
-    service.emit("query_end", {"query_type": "code_relations",
-                               "view_revision": view.get("view_revision", 0),
-                               "coverage": view.get("coverage", {})})
+    service.emit(
+        "query_end",
+        {
+            "query_type": "code_relations",
+            "view_revision": view.get("view_revision", 0),
+            "coverage": view.get("coverage", {}),
+        },
+    )
     return result
 
 
@@ -721,6 +734,35 @@ def tool_quick_test(context, args: dict) -> str:
     if not target:
         return "Error: quick_test 需要 nodeid 或 path"
 
+    if getattr(context, "sandbox_backend", None) is not None:
+        from agent_runtime.linux_sandbox.routing import (
+            execute_sandbox,
+            pytest_target,
+            sandbox_tool_result,
+        )
+
+        try:
+            target = pytest_target(context.root, target)
+            timeout = max(1, min(int(args.get("timeout", 60) or 60), 120))
+        except (ValueError, TypeError) as exc:
+            return sandbox_tool_result_rejection(str(exc))
+        result = execute_sandbox(
+            context,
+            "pytest",
+            (
+                "/toolchain/bin/python",
+                "-I",
+                "-m",
+                "pytest",
+                target,
+                "-q",
+                "--tb=line",
+                "--maxfail=3",
+            ),
+            timeout,
+        )
+        return sandbox_tool_result(result, f"quick_test target={target}")
+
     root = getattr(context, "root", ".") or "."
     cmd = ["python", "-m", "pytest", target, "-q", "--tb=line", "--maxfail=3"]
     try:
@@ -944,6 +986,18 @@ def tool_run_shell(context, args: dict) -> str:
         argv = parse_shell_argv(command)
     except ValueError as exc:
         return f"Error: Shell 命令被安全策略拒绝 ({exc})"
+    if getattr(context, "sandbox_backend", None) is not None:
+        from agent_runtime.linux_sandbox.routing import execute_sandbox, sandbox_tool_result
+
+        if argv[0] not in {"python", "python3", "py"}:
+            return sandbox_tool_result_rejection("executable not in Python sandbox profile")
+        result = execute_sandbox(
+            context,
+            "command",
+            ("/toolchain/bin/python", *argv[1:]),
+            timeout,
+        )
+        return sandbox_tool_result(result, "run_shell")
     if os.name == "nt":
         # Windows built-ins (echo/set) and Python shims are resolved by
         # cmd.exe.  The command line is generated from parsed argv, never
@@ -971,6 +1025,18 @@ def tool_run_shell(context, args: dict) -> str:
     if cancel_token is not None:
         return redact_text(_run_shell_cancellable(argv, command, root, env, timeout, cancel_token))
     return redact_text(_run_shell_blocking(argv, command, root, env, timeout))
+
+
+def sandbox_tool_result_rejection(reason: str):
+    from agent_runtime.tool_result import ToolResult, ToolStatus
+
+    return ToolResult(
+        content=f"Error: sandbox policy denied: {reason}",
+        status=ToolStatus.REJECTED.value,
+        error_code="policy_denied",
+        retryable=False,
+        metadata={"execution_tier": "none", "requested_backend": "wsl_bwrap"},
+    )
 
 
 def _run_shell_blocking(argv: list[str], display_command: str, root, env, timeout: int) -> str:
@@ -1172,8 +1238,7 @@ def build_tool_registry(context) -> dict:
         "risky": False,
         "execution_tier": TIER_HOST,
         "description": (
-            "查询 Python 符号定义或引用。"
-            "path、line、column 为已落盘文件的 1 起始精确位置。"
+            "查询 Python 符号定义或引用。path、line、column 为已落盘文件的 1 起始精确位置。"
         ),
         "run": lambda args: _code_lookup_structured(context, args),
     }
@@ -1251,8 +1316,8 @@ def build_tool_registry(context) -> dict:
     registry["quick_test"] = {
         "budget_group": "verify",
         "schema": auto_schema(QuickTestArgs),
-        "risky": False,
-        "execution_tier": TIER_HOST,
+        "risky": context.sandbox_backend is not None,
+        "execution_tier": "linux_sandbox" if context.sandbox_backend is not None else TIER_HOST,
         "description": "环内快检 pytest nodeid/path。参数: nodeid 或 path, timeout",
         "run": lambda args: tool_quick_test(context, args),
     }
@@ -1262,7 +1327,7 @@ def build_tool_registry(context) -> dict:
         "budget_group": "verify",
         "schema": auto_schema(RunShellArgs),
         "risky": True,
-        "execution_tier": TIER_HOST,
+        "execution_tier": "linux_sandbox" if context.sandbox_backend is not None else TIER_HOST,
         "description": "执行 Shell 命令。参数: command, timeout(默认20s，最大120s)",
         "run": lambda args: tool_run_shell(context, args),
     }

@@ -44,6 +44,7 @@ def create_repair_agent(
     gateway: ToolGateway | None = None,
     code_exploration_mode: str = "text",
     code_exploration_server_argv: tuple[str, ...] | None = None,
+    sandbox_context: ToolContext | None = None,
 ) -> Agent:
     """创建 Patcher 或 Verifier Agent。
 
@@ -53,7 +54,15 @@ def create_repair_agent(
             交互式 CLI 可传 ``ask`` 启用双层拦截。
     """
     root = cwd or workspace.repo_root
-    ctx = ToolContext(
+    if sandbox_context is not None and (
+        code_exploration_mode != "text" or code_exploration_server_argv is not None
+    ):
+        raise ValueError("wsl_bwrap does not support LSP or external exploration services")
+    if sandbox_context is not None and sandbox_context.exploration_service is not None:
+        raise ValueError("wsl_bwrap does not support external exploration services")
+    if sandbox_context is not None and sandbox_context.root != root:
+        raise ValueError("wsl_bwrap agent workspace mismatch")
+    ctx = sandbox_context or ToolContext(
         root=root,
         exploration_mode=code_exploration_mode,
         lsp_argv=code_exploration_server_argv,
@@ -61,7 +70,7 @@ def create_repair_agent(
     tools = build_repair_agent_tools(ctx, role)
 
     defaults = _AGENT_DEFAULTS[role]
-    gw = gateway or build_repair_gateway(root)
+    gw = gateway or build_repair_gateway(root, sandbox_mode=ctx.sandbox_backend is not None)
     system_prompt = load_system_prompt(role)
     agent_name = role
     gw.bind_tools(tools)

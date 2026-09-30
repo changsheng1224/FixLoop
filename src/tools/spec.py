@@ -151,9 +151,7 @@ class ToolRegistry:
                 timeout_s=float(legacy.get("timeout_s") or current.timeout_s),
                 side_effect=str(legacy.get("side_effect") or current.side_effect),
                 risk_level=str(legacy.get("risk_level") or current.risk_level),
-                requires_approval=bool(
-                    legacy.get("requires_approval", current.requires_approval)
-                ),
+                requires_approval=bool(legacy.get("requires_approval", current.requires_approval)),
                 replay_policy=str(legacy.get("replay_policy") or current.replay_policy),
                 trust_level=str(legacy.get("trust_level") or current.trust_level),
                 version=str(legacy.get("version") or current.version),
@@ -170,8 +168,7 @@ class ToolRegistry:
                 circuit_breaker_threshold=max(
                     0,
                     int(
-                        legacy.get("circuit_breaker_threshold")
-                        or current.circuit_breaker_threshold
+                        legacy.get("circuit_breaker_threshold") or current.circuit_breaker_threshold
                     ),
                 ),
                 terminal=bool(legacy.get("terminal", current.terminal)),
@@ -194,7 +191,7 @@ def _spec(name: str, roles: frozenset[str], **kwargs) -> ToolSpec:
     return ToolSpec(name=name, roles=roles, phases=_READ_PHASES, **kwargs)
 
 
-def default_repair_tool_registry() -> ToolRegistry:
+def default_repair_tool_registry(*, sandbox_mode: bool = False) -> ToolRegistry:
     specs = [
         _spec("read_file", _READERS, capabilities=frozenset({"filesystem.read"})),
         _spec("search", _READERS, capabilities=frozenset({"code.search"})),
@@ -211,39 +208,77 @@ def default_repair_tool_registry() -> ToolRegistry:
         _spec("java_ast_parse", _PATCHER, capabilities=frozenset({"code.ast"})),
         _spec("java_stack_parse", _PATCHER, capabilities=frozenset({"trace.parse"})),
         _spec(
-            "write_file", _PATCHER, budget_group="write", side_effect="write",
-            risk_level="high", requires_approval=True,
-            replay_policy="never_replay", capabilities=frozenset({"filesystem.write"}),
+            "write_file",
+            _PATCHER,
+            budget_group="write",
+            side_effect="write",
+            risk_level="high",
+            requires_approval=True,
+            replay_policy="never_replay",
+            capabilities=frozenset({"filesystem.write"}),
         ),
         _spec(
-            "patch_file", _PATCHER, budget_group="write", side_effect="write",
-            risk_level="high", requires_approval=True,
-            replay_policy="never_replay", capabilities=frozenset({"filesystem.write"}),
+            "patch_file",
+            _PATCHER,
+            budget_group="write",
+            side_effect="write",
+            risk_level="high",
+            requires_approval=True,
+            replay_policy="never_replay",
+            capabilities=frozenset({"filesystem.write"}),
         ),
         ToolSpec(
-            "apply_patch", roles=_PATCHER, phases=frozenset({"patch"}),
-            modes=frozenset({"repair", "refactor"}), budget_group="write",
-            side_effect="write", replay_policy="never_replay",
-            risk_level="high", requires_approval=True,
+            "apply_patch",
+            roles=_PATCHER,
+            phases=frozenset({"patch"}),
+            modes=frozenset({"repair", "refactor"}),
+            budget_group="write",
+            side_effect="write",
+            replay_policy="never_replay",
+            risk_level="high",
+            requires_approval=True,
             capabilities=frozenset({"filesystem.write", "patch.apply"}),
-            requires_evidence=True, requires_read_before_write=True,
+            requires_evidence=True,
+            requires_read_before_write=True,
         ),
         ToolSpec(
-            "finish_repair", roles=_PATCHER, phases=frozenset({"patch"}),
-            budget_group="recovery", replay_policy="never_replay",
-            capabilities=frozenset({"repair.terminate"}), terminal=True,
+            "finish_repair",
+            roles=_PATCHER,
+            phases=frozenset({"patch"}),
+            budget_group="recovery",
+            replay_policy="never_replay",
+            capabilities=frozenset({"repair.terminate"}),
+            terminal=True,
         ),
         ToolSpec(
-            "expand_lock", roles=_PATCHER, phases=frozenset({"patch"}),
-            budget_group="recovery", capabilities=frozenset({"policy.edit_scope"}),
+            "expand_lock",
+            roles=_PATCHER,
+            phases=frozenset({"patch"}),
+            budget_group="recovery",
+            capabilities=frozenset({"policy.edit_scope"}),
         ),
         ToolSpec(
-            "quick_test", roles=frozenset({"patcher", "verifier"}),
-            phases=frozenset({"patch", "verify", "verification"}), budget_group="verify",
-            side_effect="external", replay_policy="revalidate",
+            "quick_test",
+            roles=frozenset({"patcher", "verifier"}),
+            phases=frozenset({"patch", "verify", "verification"}),
+            budget_group="verify",
+            side_effect="external",
+            replay_policy="never_replay" if sandbox_mode else "revalidate",
+            risk_level="high" if sandbox_mode else "low",
+            requires_approval=sandbox_mode,
             capabilities=frozenset({"test.run"}),
         ),
-        ToolSpec("run_shell", roles=frozenset(), phases=_READ_PHASES, lifecycle="disabled"),
+        ToolSpec(
+            "run_shell",
+            roles=_PATCHER if sandbox_mode else frozenset(),
+            phases=frozenset({"patch"}) if sandbox_mode else _READ_PHASES,
+            lifecycle="active" if sandbox_mode else "disabled",
+            budget_group="verify",
+            side_effect="external",
+            replay_policy="never_replay",
+            risk_level="high",
+            requires_approval=True,
+        ),
         ToolSpec(
             "sandbox_build",
             roles=frozenset({"verifier"}),
@@ -266,6 +301,12 @@ def default_repair_tool_registry() -> ToolRegistry:
             side_effect="external",
         ),
     ]
+    if sandbox_mode:
+        blocked = {"git_blame", "git_diff", "sandbox_build", "sandbox_test", "sandbox_verify"}
+        specs = [
+            replace(spec, lifecycle="disabled", roles=frozenset()) if spec.name in blocked else spec
+            for spec in specs
+        ]
     return ToolRegistry(specs)
 
 

@@ -36,6 +36,7 @@ from src.repair.prompt_router import (
 from src.repair.repo_snapshot import restore_repo_snapshot, snapshot_repo
 from src.repair.run_context import RepairRunContext
 from src.repair.verification.verify import (
+    BwrapVerifyStrategy,
     DockerVerifyStrategy,
     ProfileVerifyStrategy,
     PytestVerifyStrategy,
@@ -190,6 +191,7 @@ class Orchestrator(RepairPipelineMixin):
         sandbox_policy: str = "",
         allow_static_verify_fallback: bool = False,
         l1_prompt_cache_key: str = "",
+        sandbox_context=None,
     ):
         self.patcher = patcher
         self.verifier = verifier
@@ -204,6 +206,19 @@ class Orchestrator(RepairPipelineMixin):
         self.sandbox_policy = configured_policy
         self.require_sandbox = bool(require_sandbox or configured_policy == "required")
         self.allow_static_verify_fallback = allow_static_verify_fallback
+        if sandbox_context is not None and (
+            verifier is not None
+            or use_pytest_verify
+            or allow_static_verify_fallback
+            or require_sandbox
+        ):
+            raise ValueError("wsl_bwrap cannot mix with Docker/host/static verification")
+        if (
+            sandbox_context is not None
+            and getattr(patcher, "tool_context", None) is not sandbox_context
+        ):
+            raise ValueError("wsl_bwrap patcher and verifier must share ToolContext")
+        self._sandbox_context = sandbox_context
         self.l1_prompt_cache_key = l1_prompt_cache_key or self._resolve_l1_prompt_cache_key()
         self._repair_ctx: RepairRunContext | None = None
         self._collaboration_runtime = None
@@ -287,6 +302,9 @@ class Orchestrator(RepairPipelineMixin):
         """
         from agent_runtime.cancellation import CancellationToken
 
+        if self._sandbox_context is not None:
+            raise ValueError("wsl_bwrap repair requires P3 external state_root isolation")
+
         if phase_timeouts is None:
             phase_timeouts = PhaseTimeoutConfig.for_patcher_primary(repair_timeout_s)
 
@@ -354,10 +372,9 @@ class Orchestrator(RepairPipelineMixin):
         # Localizer/Retriever are legacy compatibility agents.  Governance is
         # intentionally enforced only on the current repair roles.
         harness = getattr(self._repair_ctx, "harness_control", None)
-        control_mode = (
-            getattr(getattr(harness, "control_mode", None), "value", "")
-            or (state.human_control or {}).get("mode", "auto")
-        )
+        control_mode = getattr(getattr(harness, "control_mode", None), "value", "") or (
+            state.human_control or {}
+        ).get("mode", "auto")
         approved_tools = set((state.human_control or {}).get("approved_tools", []) or [])
         for agent in self._active_agents:
             gateway = getattr(agent, "_tool_dispatch", None)
@@ -391,10 +408,7 @@ class Orchestrator(RepairPipelineMixin):
                 state_revision=int(getattr(state, "state_revision", 0) or 0),
                 reason=reason,
             )
-            if (
-                phase == "patch"
-                and int(getattr(state, "retry_count", 0) or 0) >= harness.attempt
-            ):
+            if phase == "patch" and int(getattr(state, "retry_count", 0) or 0) >= harness.attempt:
                 harness.retry(reason="repair retry")
         if phase == "patch":
             for role in ("verifier",):
@@ -662,7 +676,10 @@ class Orchestrator(RepairPipelineMixin):
 
     def _verification_enabled(self) -> bool:
         return (
-            self.verifier is not None or self.use_pytest_verify or self.allow_static_verify_fallback
+            self._sandbox_context is not None
+            or self.verifier is not None
+            or self.use_pytest_verify
+            or self.allow_static_verify_fallback
         )
 
     def _snapshot_repo(self) -> dict[str, str]:
@@ -1446,6 +1463,12 @@ class Orchestrator(RepairPipelineMixin):
         language = "python"
         if state.repair_plan is not None and state.repair_plan.language:
             language = state.repair_plan.language
+        if self._sandbox_context is not None and language != "python":
+            run = BwrapVerifyStrategy(self._sandbox_context).run(
+                self._repo_root, cancel_token=cancel_token, language=language
+            )
+            record_verify_timings(state, run)
+            return run.result
         if language != "python":
             run = ProfileVerifyStrategy().run(
                 self._repo_root,
@@ -1480,6 +1503,14 @@ class Orchestrator(RepairPipelineMixin):
         self, state: RepairState, *, cancel_token=None
     ) -> "VerificationResult":
         """Python 路径：Docker / host pytest / static（假定 test_patch 已在树上如需要）。"""
+        if self._sandbox_context is not None:
+            run = BwrapVerifyStrategy(self._sandbox_context).run(
+                self._repo_root,
+                test_path=self._pick_test_path(state),
+                cancel_token=cancel_token,
+            )
+            record_verify_timings(state, run)
+            return run.result
         try:
             from agent_runtime.metrics import get_registry
 
@@ -2068,7 +2099,7 @@ class Orchestrator(RepairPipelineMixin):
             selected = (
                 lines[:head]
                 + ["# ... middle of test file omitted ..."]
-                + lines[-(max_lines - head):]
+                + lines[-(max_lines - head) :]
             )
         excerpt = "\n".join(selected).rstrip()
         if len(excerpt) > max_chars:

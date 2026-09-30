@@ -64,10 +64,21 @@ def wire_orchestrator(
     dry_run: bool = False,
     execution_tier: str = "auto",
     require_sandbox: bool = False,
+    execution_backend: str = "legacy",
     code_exploration_mode: str = "text",
     code_exploration_server_argv: tuple[str, ...] | None = None,
 ) -> O:
     """装配唯一的 Patcher-primary runtime 与可选 Verifier。"""
+    if execution_backend not in {"legacy", "wsl_bwrap"}:
+        raise ValueError("unknown execution backend")
+    if execution_backend == "wsl_bwrap":
+        if execution_tier != "auto" or require_sandbox:
+            raise RequiredVerifierError("wsl_bwrap conflicts with legacy tier/require_sandbox")
+        if code_exploration_mode != "text" or code_exploration_server_argv:
+            raise RequiredVerifierError("wsl_bwrap does not support LSP")
+        raise RequiredVerifierError(
+            "wsl_bwrap repair is gated until P3 external state_root isolation"
+        )
     ws = WorkspaceContext.build(repo_path)
     repo = str(Path(repo_path).resolve())
     ctx = ToolContext(
@@ -138,6 +149,7 @@ def make_orchestrator_factory(
     dry_run: bool = False,
     execution_tier: str = "auto",
     require_sandbox: bool = False,
+    execution_backend: str = "legacy",
     code_exploration_mode: str = "text",
     code_exploration_server_argv: tuple[str, ...] | None = None,
     model_client=None,
@@ -154,6 +166,7 @@ def make_orchestrator_factory(
             dry_run=dry_run,
             execution_tier=execution_tier,
             require_sandbox=require_sandbox,
+            execution_backend=execution_backend,
             code_exploration_mode=code_exploration_mode,
             code_exploration_server_argv=code_exploration_server_argv,
         )
