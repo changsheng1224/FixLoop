@@ -92,3 +92,12 @@ export PATH="$PATH:/c/Program Files/GitHub CLI"
 ```
 
 > 注意：`gh` 命令（pr create / pr merge 等）需要 `HTTPS_PROXY` 环境变量，否则会连接超时。
+
+## GitHub 与 Git 持久化配置
+
+- GitHub CLI 复用本机已有登录状态；不要在每次任务中重复发起 device flow。
+- 本项目可使用专用 `GH_CONFIG_DIR`（例如 `.gh-config`），该目录必须加入 `.gitignore`。
+- 执行 `gh` 前使用 `HTTP_PROXY` 和 `HTTPS_PROXY=http://127.0.0.1:7897`。
+- Git 远端使用 SSH；先运行 `gh auth status` 判断状态，只有明确未登录或 token 无效时才重新认证。
+- 不读取、打印、复制或提交 token；不把 `.gh-config`、`.env` 或凭据文件加入 Git。
+- Git 暂存、提交、推送和 PR 操作应复用当前工作区权限；遇到权限不足时报告具体阻塞，不重复要求用户授权。

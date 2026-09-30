@@ -40,6 +40,8 @@
 
 **Layer 2** 当前主路径是 Patcher 工具环、轻量 Critic 和独立 Verifier；Localizer/Retriever 保留为规则种子、状态模型和历史兼容语义，不应描述为当前主路径中的两个独立 LLM Agent。
 
+Repair 默认使用证据驱动的小型任务 DAG：最多 8 个节点、两路只读探索、两次静止点重规划，主 Agent 串行修改。Plan journal、工具收据及文件版本共同支持在途恢复；未知写入不会自动重放。使用方法和恢复边界见 [Plan DAG 指南](docs/PLAN_DAG.md)。
+
 ## 为什么与众不同
 
 与「LangChain 模板 + 一个 ReAct Agent」的常见做法相比：

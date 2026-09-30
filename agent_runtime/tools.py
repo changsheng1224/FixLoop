@@ -1345,6 +1345,25 @@ def build_tool_registry(context) -> dict:
         "run": lambda args: tool_expand_observation(context, args),
     }
 
+    # Audited effects belong to the trusted registry, never to model output.
+    readonly = {
+        "list_files",
+        "read_file",
+        "grep",
+        "search",
+        "code_lookup",
+        "code_relations",
+        "expand_observation",
+        "finish_repair",
+    }
+    for name, spec in registry.items():
+        spec["side_effect"] = (
+            "read"
+            if name in readonly
+            else "verify"
+            if name in {"quick_test", "run_shell"}
+            else "write"
+        )
     return registry
 
 

@@ -65,6 +65,7 @@ class ToolDAGExecutor:
                         "blocked_by": list(node.depends_on),
                     },
                 )
+            pending.difference_update(node.node_id for node in blocked)
             ready = [node for node in ready if node not in blocked]
             parallel = [node for node in ready if node.side_effect in {"read", "none"}]
             serial = [node for node in ready if node not in parallel]

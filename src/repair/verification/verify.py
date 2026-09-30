@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
@@ -190,6 +191,10 @@ class PytestVerifyStrategy:
             return _verify_cancelled_run(t0)
         elapsed_ms = int((time.time() - t0) * 1000)
         passed = code == 0
+        counts = {
+            kind: sum(int(n) for n in re.findall(rf"(\d+) {kind}\b", out[-1000:]))
+            for kind in ("passed", "failed", "error", "skipped")
+        }
         if not passed:
             print(
                 f"  [verifier] pytest 失败 (exit={code})\n",
@@ -200,6 +205,10 @@ class PytestVerifyStrategy:
         return VerifyRun(
             result=VerificationResult(
                 all_passed=passed,
+                total_tests=sum(counts.values()),
+                passed=counts["passed"],
+                failed=counts["failed"],
+                error=counts["error"],
                 failure_logs=[out[-2000:]] if out and not passed else [],
             ),
             elapsed_ms=elapsed_ms,
@@ -210,6 +219,16 @@ class PytestVerifyStrategy:
                 trusted_execution=True,
                 warning=HOST_FALLBACK_WARNING,
                 pytest_ms=elapsed_ms,
+                command=[sys.executable, "-m", "pytest", "-q"],
+                completed=True,
+                pytest_exit_code=code,
+                category="passed"
+                if code == 0
+                else "failed"
+                if code == 1
+                else "no-tests"
+                if code == 5
+                else "environment",
             ),
         )
 
@@ -615,6 +634,13 @@ def record_verify_timings(state, run: VerifyRun, *, log_sandbox: bool = False) -
     from src.repair.timing_schema import set_phase_ms
 
     set_phase_ms(state.node_timings, "verify", run.elapsed_ms, internal=run.internal)
+    state.node_timings["plan_verification_receipt"] = {
+        "command": run.internal.get("command", []),
+        "completed": run.internal.get("completed", False),
+        "exit_code": run.internal.get("pytest_exit_code"),
+        "category": run.internal.get("category", run.error or "unknown"),
+        "receipt_id": run.internal.get("receipt_id", ""),
+    }
     if run.error:
         state.agent_errors["verifier"] = run.error
     if log_sandbox and run.internal:

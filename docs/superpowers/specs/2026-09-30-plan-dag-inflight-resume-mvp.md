@@ -1,6 +1,6 @@
 # FixLoop Plan DAG 与完整在途任务恢复 MVP Spec
 
-日期：2026-09-30。状态：用户已确定范围；本文是开发契约，功能尚未实现。
+日期：2026-09-30。状态：已实现并验收选定的 Python/host 修复路径；实现与恢复边界见 `docs/PLAN_DAG.md`，实跑证据见 `docs/PLAN_DAG_ACCEPTANCE_2026-09-30.md`。本文保留为开发契约。
 
 ## 1. 目标与范围
 

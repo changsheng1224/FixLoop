@@ -355,8 +355,15 @@ class Agent:
             return executor.execute_gated(name, args)
 
         if self._tool_dispatch is not None:
-            return self._tool_dispatch(self._agent_name, name, run)
-        return run()
+
+            def dispatch():
+                return self._tool_dispatch(self._agent_name, name, run)
+        else:
+            dispatch = run
+        plan_session = getattr(self, "_plan_session", None)
+        if plan_session is not None:
+            return plan_session.execute_tool(self, name, args, dispatch)
+        return dispatch()
 
     def _get_tool_executor(self):
         from agent_runtime.tool_executor import ToolExecutor
@@ -527,11 +534,7 @@ class Agent:
                 user_id=str(identity.get("user_id", "") or ""),
                 task_id=str(identity.get("task_id", "") or ""),
             )
-            stage = (
-                "patch"
-                if name in {"write_file", "patch_file", "apply_patch"}
-                else "tool"
-            )
+            stage = "patch" if name in {"write_file", "patch_file", "apply_patch"} else "tool"
             attribution = mem.get("memory_context_attribution") or {}
             for memory_id in recalled_ids:
                 governance.record_usage_stage(
@@ -560,9 +563,9 @@ class Agent:
                 end=int(args.get("end", 200) or 200),
                 result_text=result_text,
             )
-            context["candidate_files"] = list(
-                dict.fromkeys(context["candidate_files"] + [path])
-            )[-12:]
+            context["candidate_files"] = list(dict.fromkeys(context["candidate_files"] + [path]))[
+                -12:
+            ]
 
         elif name in ("write_file", "patch_file") and path:
             remember_file(mem, path)

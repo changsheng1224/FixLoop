@@ -311,7 +311,9 @@ class Orchestrator(RepairPipelineMixin):
         """
         from agent_runtime.cancellation import CancellationToken
 
-        if self._sandbox_context is not None and not getattr(self._sandbox_context, "state_root", ""):
+        if self._sandbox_context is not None and not getattr(
+            self._sandbox_context, "state_root", ""
+        ):
             raise ValueError("wsl_bwrap repair requires P3 external state_root isolation")
 
         if phase_timeouts is None:
@@ -695,7 +697,20 @@ class Orchestrator(RepairPipelineMixin):
         return snapshot_repo(self._repo_root)
 
     def _restore_repo_snapshot(self, snapshot: dict[str, str]) -> None:
-        restore_repo_snapshot(self._repo_root, snapshot)
+        binding = self._plan_binding
+        if binding is None:
+            restore_repo_snapshot(self._repo_root, snapshot)
+            return
+        import hashlib
+
+        from agent_runtime.plan_runtime.workspace import snapshot as content_snapshot
+
+        expected = content_snapshot(self._repo_root)
+        for path, text in snapshot.items():
+            expected[path] = hashlib.sha256(
+                text.replace("\n", os.linesep).encode("utf-8")
+            ).hexdigest()
+        binding.rollback(lambda: restore_repo_snapshot(self._repo_root, snapshot), expected)
 
     @staticmethod
     def _patcher_system_prompt(plan: RepairPlan | None) -> str:
@@ -796,7 +811,9 @@ class Orchestrator(RepairPipelineMixin):
 
         tracer = RepairRunTracer(
             self._repo_root,
-            state_root=str(getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""),
+            state_root=str(
+                getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""
+            ),
         )
         l1_meta = {}
         if self.l1_prompt_cache_key:
@@ -811,7 +828,7 @@ class Orchestrator(RepairPipelineMixin):
         phase_cfg = self._repair_ctx.phase_timeout_config if self._repair_ctx else None
         if phase_cfg is not None and phase_cfg.any_enabled():
             l1_meta["phase_timeout_budgets"] = phase_cfg.budget_dict()
-        run_id = tracer.begin(state.issue_input, **l1_meta)
+        run_id = tracer.begin(state.issue_input, run_id=state.repair_run_id, **l1_meta)
         from agent_runtime.harness_engineering import (
             ExecutionContract,
             HarnessControlPlane,
@@ -1261,6 +1278,33 @@ class Orchestrator(RepairPipelineMixin):
         prompt: str,
         tpl_meta: dict,
     ) -> tuple[list[CandidatePatch], dict]:
+        from src.repair.plan_binding import RepairPlanBinding
+
+        try:
+            if self._plan_binding is None:
+                self._plan_binding = RepairPlanBinding(self, state)
+            return self._plan_binding.run_patcher(
+                prompt,
+                tpl_meta,
+                lambda p, m: self._run_patcher_agent(state, p, m),
+            )
+        except (ValueError, OSError) as exc:
+            state.agent_errors["plan_runtime"] = str(exc)
+            state.node_timings["plan_blocked"] = True
+            return [], {
+                "total_ms": 0,
+                "model_call_ms": 0,
+                "parse_apply_ms": 0,
+                "plan_blocked": str(exc),
+                "edit_mode": "plan_blocked",
+            }
+
+    def _run_patcher_agent(
+        self,
+        state: RepairState,
+        prompt: str,
+        tpl_meta: dict,
+    ) -> tuple[list[CandidatePatch], dict]:
         """Agent loop：工具改盘 → 快照 diff 成 CandidatePatch（不再二次 apply）。"""
         import os
 
@@ -1372,28 +1416,8 @@ class Orchestrator(RepairPipelineMixin):
             ),
         }
         if not patches:
-            from src.repair.execution.loose_patch_recover import parse_patches_with_recover
-
-            parsed = parse_patches_with_recover(answer or "")
-            if parsed:
-                recovered = any((p.explanation or "") == "loose_diff_recover" for p in parsed)
-                if recovered:
-                    state.node_timings["patcher_loose_recovered"] = True
-                log.info(
-                    "[patcher] toolized 无落盘，尝试解析 final 文本 (%d%s)",
-                    len(parsed),
-                    ", loose" if recovered else "",
-                )
-                applied = self._apply_patches_on_disk(parsed, state=state)
-                if applied:
-                    mode = "tools→loose" if recovered else "tools→json_final"
-                    state.node_timings["patcher_edit_mode"] = mode
-                    state.node_timings["patcher_text_salvage"] = True
-                    meta["edit_mode"] = mode
-                    return applied, meta
             state.node_timings["patcher_edit_mode"] = "tools_empty"
             return [], meta
-
         state.node_timings["patcher_edit_mode"] = "tools"
         self._last_apply_errors = []
         self._last_sibling_warnings = []
@@ -1462,6 +1486,11 @@ class Orchestrator(RepairPipelineMixin):
         return applied
 
     def _run_verifier(self, state: RepairState) -> "VerificationResult":
+        if self._plan_binding is not None:
+            return self._plan_binding.run_verifier(lambda: self._run_verifier_impl(state))
+        return self._run_verifier_impl(state)
+
+    def _run_verifier_impl(self, state: RepairState) -> "VerificationResult":
         """Docker 沙箱或本地 pytest 验证（不走 LLM Agent loop）。"""
         from src.collaboration.isolation import role_projection
         from src.repair.verification.verify_test_patch import VerifyTestPatchOverlay

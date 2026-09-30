@@ -53,6 +53,7 @@ def save_repair_checkpoint(state, repo_root: str, *, state_root: str = "") -> Pa
             "tool_budget": state_payload.get("tool_budget", {}),
             "phase": state_payload.get("phase", ""),
             "state_revision": state_payload.get("state_revision", 0),
+            "plan_checkpoint": state_payload.get("node_timings", {}).get("plan_checkpoint", {}),
         },
         task_state=state_payload,
         context_manifest={

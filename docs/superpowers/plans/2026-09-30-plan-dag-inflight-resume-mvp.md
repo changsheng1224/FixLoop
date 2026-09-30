@@ -1,6 +1,6 @@
 # FixLoop Plan DAG 与完整在途任务恢复 MVP 开发计划
 
-日期：2026-09-30。依据：[MVP Spec](../specs/2026-09-30-plan-dag-inflight-resume-mvp.md)。状态：未实现。
+日期：2026-09-30。依据：[MVP Spec](../specs/2026-09-30-plan-dag-inflight-resume-mvp.md)。状态：P0–P5 已完成选定 Python/host 路径的实现与本地验收；实际测试与限制见 `docs/PLAN_DAG_ACCEPTANCE_2026-09-30.md`，不以原估算日期或行数作为验收依据。
 
 ## 执行与范围
 

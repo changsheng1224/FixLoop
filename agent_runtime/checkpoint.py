@@ -245,7 +245,7 @@ def _runtime_control_snapshot(agent, task_state) -> dict:
     budget = getattr(agent, "_repair_budget", None)
     deadline = getattr(agent, "_repair_deadline", None)
     loop = getattr(agent, "_loop", None)
-    return {
+    control = {
         "max_steps": int(
             getattr(loop, "max_steps", 0) or getattr(agent.config, "max_steps", 0) or 0
         ),
@@ -263,6 +263,10 @@ def _runtime_control_snapshot(agent, task_state) -> dict:
         "turn": int(getattr(task_state, "turn", 0) or 0),
         "tool_steps": int(getattr(task_state, "tool_steps", 0) or 0),
     }
+    plan_session = getattr(agent, "_plan_session", None)
+    if plan_session is not None:
+        control["plan_checkpoint"] = plan_session.checkpoint()
+    return control
 
 
 def evaluate_resume_state(agent) -> dict:
@@ -297,6 +301,15 @@ def evaluate_resume_state(agent) -> dict:
     # Schema 版本检查
     if last.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
         return _emit_resume_result(agent, _resume_result("schema-mismatch", last))
+    plan_seal = (last.get("runtime_control") or {}).get("plan_checkpoint")
+    if plan_seal:
+        plan_session = getattr(agent, "_plan_session", None)
+        if plan_session is None:
+            return _emit_resume_result(agent, _resume_result("plan-resume-required", last))
+        try:
+            plan_session.store.verify_checkpoint(plan_seal)
+        except ValueError:
+            return _emit_resume_result(agent, _resume_result("integrity-failure", last))
 
     from agent_runtime.context_runtime import validate_context_manifest
 
