@@ -43,6 +43,13 @@ REPAIR_CANONICAL_TOOL_NAMES: tuple[str, ...] = (
 def build_repair_canonical_tools(ctx: ToolContext) -> dict:
     """Repair 流水线 canonical 工具全集（字典序固定，各 phase 共用）。"""
 
+    if ctx.sandbox_backend is not None and (
+        ctx.exploration_mode != "text"
+        or ctx.lsp_argv is not None
+        or ctx.exploration_service is not None
+    ):
+        raise ValueError("wsl_bwrap does not support external exploration services")
+
     tools = build_tool_registry(ctx)
     tools.update(build_repair_tools(ctx))
     tools.update(build_sandbox_tool_registry(ctx))
@@ -61,7 +68,9 @@ def build_repair_canonical_tools(ctx: ToolContext) -> dict:
     selected = {name: tools[name] for name in REPAIR_CANONICAL_TOOL_NAMES}
     from src.tools.spec import bind_execution_tools, default_repair_tool_registry
 
-    return bind_execution_tools(selected, default_repair_tool_registry())
+    return bind_execution_tools(
+        selected, default_repair_tool_registry(sandbox_mode=ctx.sandbox_backend is not None)
+    )
 
 
 def is_repair_canonical_registry(tools: dict) -> bool:
@@ -88,7 +97,9 @@ def build_repair_agent_tools(ctx: ToolContext, role: RepairAgentRole) -> dict:
     """按修复流水线角色返回 canonical 工具注册表（执行权限由 ToolGateway 控制）。"""
     del role  # 各 phase 同一 schema 集；权限见 src/middleware.py
     tools = build_repair_canonical_tools(ctx)
-    if os.environ.get("FIXLOOP_ENABLE_GITHUB_MCP", "").strip().lower() in ("1", "true", "yes"):
+    if ctx.sandbox_backend is None and os.environ.get(
+        "FIXLOOP_ENABLE_GITHUB_MCP", ""
+    ).strip().lower() in ("1", "true", "yes"):
         from agent_runtime.mcp.registry import build_github_mcp_tools_auto
 
         tools.update(build_github_mcp_tools_auto())

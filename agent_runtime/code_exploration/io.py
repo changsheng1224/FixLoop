@@ -547,7 +547,7 @@ def grep_result(context: ToolContext, args: dict) -> ToolResult:
     files = 0
     bytes_read = 0
     scanned_paths: list[str] = []
-    rg_executable = shutil.which("rg")
+    rg_executable = None if context.sandbox_backend is not None else shutil.which("rg")
     if rg_executable is None:
         result.degradation_reason = "rg_unavailable"
 

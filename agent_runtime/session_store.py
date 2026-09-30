@@ -74,9 +74,12 @@ class SessionStore:
         .agent/sessions/{session_id}.json
     """
 
-    def __init__(self, root: str, *, trace=None):
+    def __init__(self, root: str, *, trace=None, state_root: str | None = None):
         self.root = Path(root)
-        self.sessions_dir = self.root / ".agent" / "sessions"
+        from agent_runtime.state_root import state_root_for
+
+        self.state_root = state_root_for(self.root, state_root)
+        self.sessions_dir = self.state_root / ".agent" / "sessions"
         self.trace = trace
 
     def _emit(self, event: str, payload: dict) -> None:

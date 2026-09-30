@@ -84,6 +84,7 @@ class Agent:
 
         # 构建工具上下文和注册表（允许外部注入）
         self.tool_context = tool_context or ToolContext(root=self._cwd)
+        self.state_root = str(getattr(self.tool_context, "state_root", "") or "")
         self.tool_context.exploration_mode = config.code_exploration.mode
         self.tool_context.lsp_argv = config.code_exploration.server_argv
         self.tools = tools if tools is not None else build_tool_registry(self.tool_context)

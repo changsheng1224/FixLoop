@@ -1241,6 +1241,7 @@ class AgentLoop:
         observation_store = ObservationStore(
             self.agent.session,
             root=str(getattr(self.agent, "_cwd", "") or ""),
+            state_root=str(getattr(self.agent.tool_context, "state_root", "") or ""),
         )
         # A successful write invalidates observations derived from changed files
         # before the new result is registered.
@@ -2004,7 +2005,10 @@ class AgentLoop:
             )
             ts.checkpoint_id = cp.get("checkpoint_id", "") if cp else ""
             ts.checkpoint_sequence = int(cp.get("sequence", 0) or 0) if cp else 0
-            SessionStore(root=self.agent._cwd).save(self.agent.session)
+            SessionStore(
+                root=self.agent._cwd,
+                state_root=str(getattr(self.agent.tool_context, "state_root", "") or ""),
+            ).save(self.agent.session)
             self._get_store().write_task_state(ts)
         except Exception:
             pass
@@ -3099,7 +3103,10 @@ class AgentLoop:
         if self._store is None:
             from agent_runtime.run_store import RunStore
 
-            self._store = RunStore(root=self.agent._cwd)
+            self._store = RunStore(
+                root=self.agent._cwd,
+                state_root=str(getattr(self.agent.tool_context, "state_root", "") or ""),
+            )
         return self._store
 
     def _begin_edit_lock_turn(self) -> None:

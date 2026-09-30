@@ -1,6 +1,6 @@
 # FixLoop WSL 命令与测试沙箱 MVP 开发计划
 
-日期：2026-09-30。依据：[MVP Spec](../specs/2026-09-30-wsl-command-sandbox-mvp.md)。状态：未开始实现。
+日期：2026-09-30。依据：[MVP Spec](../specs/2026-09-30-wsl-command-sandbox-mvp.md)。状态：P0–P3 已实现；P4 隔离与开销评测已执行，S13 真实 Agent 修复闭环待模型调用授权，MVP 完成门禁尚未通过。证据见 [P0 记录](2026-09-30-wsl-command-sandbox-p0-record.md)、[P1 记录](2026-09-30-wsl-command-sandbox-p1-record.md)、[P2 记录](2026-09-30-wsl-command-sandbox-p2-record.md) 与 [P4 记录](2026-09-30-wsl-command-sandbox-p4-record.md)。
 
 ## 顺序与约束
 
@@ -8,7 +8,7 @@ P0 → P1 → P2 → P3 → P4，预计 8–12 个有效工作日。先确认隔
 
 开始时记录当前工作树和相关源码哈希。已有未提交修改不 reset/覆盖，不用仅含 HEAD 的 worktree 冒充当前基线。隔离 checkout 与 Git 工作流按实际状态和 CLAUDE.md 处理；不自动 push/合并。
 
-开发范围仅为一个 WSL2 发行版、原生 Linux 工作区、固定 Python profile、单并发命令/测试沙箱。每阶段先说明目标与模块。当前采纳授权产出文档，尚未开始实现或实机环境变更。
+开发范围仅为一个 WSL2 发行版、原生 Linux 工作区、固定 Python profile、单并发命令/测试沙箱。每阶段先说明目标与模块。
 
 ## P0：环境与威胁模型冻结（1 天）
 

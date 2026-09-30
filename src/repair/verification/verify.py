@@ -214,6 +214,115 @@ class PytestVerifyStrategy:
         )
 
 
+class BwrapVerifyStrategy:
+    """Use the fixed P1 backend for every Python pytest invocation."""
+
+    def __init__(self, context):
+        self.context = context
+
+    def run(
+        self,
+        repo_root: str,
+        test_path: str = "",
+        cancel_token=None,
+        *,
+        language: str = "python",
+    ) -> VerifyRun:
+        from agent_runtime.linux_sandbox.routing import execute_sandbox, pytest_target
+
+        if Path(repo_root).resolve() != Path(self.context.root).resolve():
+            raise ValueError("workspace_mapping_rejected: verifier root mismatch")
+        if language != "python":
+            return VerifyRun(
+                VerificationResult(all_passed=False, failure_logs=["unsupported sandbox language"]),
+                0,
+                {"category": "environment", "execution_tier": "none"},
+                "verification_environment_failed",
+            )
+        started = time.time()
+        try:
+            target = pytest_target(repo_root, test_path) if test_path else ""
+        except ValueError as exc:
+            return VerifyRun(
+                VerificationResult(all_passed=False, failure_logs=[str(exc)]),
+                0,
+                {"category": "environment", "execution_tier": "none"},
+                "verification_environment_failed",
+            )
+        previous_token = self.context.cancel_token
+        self.context.cancel_token = cancel_token
+        try:
+            result = execute_sandbox(
+                self.context,
+                "pytest",
+                (
+                    "/toolchain/bin/python",
+                    "-I",
+                    "-m",
+                    "pytest",
+                    *((target,) if target else ()),
+                    "-q",
+                    "--tb=line",
+                ),
+                120,
+            )
+        finally:
+            self.context.cancel_token = previous_token
+        if (
+            result.execution_status == "completed"
+            and result.cleanup == "confirmed"
+            and result.actual_backend == "linux_sandbox"
+            and bool(result.receipt_id)
+        ):
+            category = {0: "passed", 1: "failed", 5: "no-tests"}.get(
+                result.exit_code, "environment"
+            )
+        elif result.execution_status == "cancelled":
+            category = "interrupted"
+        else:
+            category = "environment"
+        output = (result.stdout_excerpt + "\n" + result.stderr_excerpt).strip()
+        run = VerifyRun(
+            result=VerificationResult(
+                all_passed=category == "passed",
+                failed=1 if category == "failed" else 0,
+                failure_logs=[output or result.error_code or category]
+                if category != "passed"
+                else [],
+            ),
+            elapsed_ms=int((time.time() - started) * 1000),
+            internal=_tier_internal(
+                requested_tier="linux_sandbox",
+                actual_tier="linux_sandbox"
+                if result.actual_backend == "linux_sandbox"
+                else TIER_NONE,
+                isolation_level="wsl_bwrap"
+                if result.actual_backend == "linux_sandbox"
+                else ISOLATION_NONE,
+                trusted_execution=False,
+                category=category,
+                receipt_id=result.receipt_id,
+                policy_digest=result.policy_digest,
+                cleanup=result.cleanup,
+                sandbox_status=result.execution_status,
+                pytest_exit_code=result.exit_code,
+            ),
+            error=None
+            if category == "passed"
+            else (
+                "verification_failed"
+                if category == "failed"
+                else "user_cancel"
+                if category == "interrupted"
+                else "verification_environment_failed"
+            ),
+        )
+        if result.actual_backend != "linux_sandbox":
+            run.internal["actual_tier"] = "none"
+            run.internal["execution_tier"] = "none"
+        return run
+
+
 class StaticVerifyStrategy:
     """非执行静态验证：按语言做语法/编译检查，不运行项目测试。"""
 
@@ -379,7 +488,6 @@ class StaticVerifyStrategy:
             error="static_verify_unsupported",
         )
 
-
     @staticmethod
     def _source_files(root: Path, extensions: tuple[str, ...]) -> list[Path]:
         files: list[Path] = []
@@ -479,9 +587,7 @@ class ProfileVerifyStrategy:
         passed = bool(payload.get("all_passed"))
         category = payload.get("category", "")
         logs = [
-            str(step.get("output", ""))
-            for step in payload.get("steps", [])
-            if step.get("output")
+            str(step.get("output", "")) for step in payload.get("steps", []) if step.get("output")
         ]
         if not passed and payload.get("error"):
             logs.append(str(payload["error"]))

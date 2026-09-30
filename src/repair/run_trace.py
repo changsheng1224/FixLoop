@@ -59,15 +59,16 @@ REPAIR_TRACE_EVENTS = frozenset(
 class RepairRunTracer:
     """Orchestrator 驱动：多 Agent 写入同一 trace.jsonl，结束时合并 report。"""
 
-    def __init__(self, repo_root: str):
+    def __init__(self, repo_root: str, *, state_root: str = ""):
         self.repo_root = repo_root
+        self.state_root = state_root
         self.run_id = ""
         self._store: RunStore | None = None
 
     @property
     def store(self) -> RunStore:
         if self._store is None:
-            self._store = RunStore(self.repo_root)
+            self._store = RunStore(self.repo_root, state_root=self.state_root)
         return self._store
 
     def begin(self, issue: str, **extra: str) -> str:

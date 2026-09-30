@@ -316,9 +316,14 @@ class ObservationStore:
     _locks: dict[str, threading.RLock] = {}
     _locks_guard = threading.Lock()
 
-    def __init__(self, state: dict[str, Any], root: str = ""):
+    def __init__(self, state: dict[str, Any], root: str = "", state_root: str = ""):
         self.state = state
-        self.root = Path(root) if root else None
+        if root:
+            from agent_runtime.state_root import state_root_for
+
+            self.root = state_root_for(root, state_root)
+        else:
+            self.root = None
         self.registry = state.setdefault("observations", {})
         self.blobs = state.setdefault("observation_blobs", {})
         self.scope = dict(state.get("session_scope") or {})

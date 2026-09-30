@@ -35,6 +35,7 @@ RUNTIME_IDENTITY_KEYS = [
     "max_steps",
     "prompt_assets_fingerprint",
     "tools_signature",
+    "sandbox_identity",
 ]
 
 
@@ -55,6 +56,7 @@ def current_runtime_identity(agent) -> dict:
         "max_steps": agent.config.max_steps,
         "tools_signature": agent._prefix.tool_signature,
         "prompt_assets_fingerprint": getattr(agent._prefix, "assets_fingerprint", "") or "",
+        "sandbox_identity": dict(getattr(agent.tool_context, "sandbox_identity", {}) or {}),
     }
 
 
@@ -135,6 +137,7 @@ def create_checkpoint(
         "next_step": "",
         "key_files": key_files,
         "runtime_identity": current_runtime_identity(agent),
+        "sandbox_identity": dict(getattr(agent.tool_context, "sandbox_identity", {}) or {}),
         "tool_steps": task_state.tool_steps,
         "stop_reason": task_state.stop_reason,
         "last_tool": last_tool,
@@ -358,6 +361,10 @@ def evaluate_resume_state(agent) -> dict:
         if current_id.get(key) != saved_id.get(key):
             result["identity_diff"].append(key)
     saved_identity = last.get("identity") or {}
+    saved_sandbox = dict(last.get("sandbox_identity") or {})
+    current_sandbox = dict(getattr(agent.tool_context, "sandbox_identity", {}) or {})
+    if saved_sandbox != current_sandbox:
+        result["identity_diff"].append("sandbox_identity")
     session_scope = agent.session.get("session_scope") or {}
     for key in ("session_id", "user_id", "workspace_id"):
         expected = saved_identity.get(key, "")
@@ -378,6 +385,14 @@ def evaluate_resume_state(agent) -> dict:
         and last.get("next_user_message")
     ):
         result["status"] = "step-resumable"
+        if saved_sandbox.get("backend") == "wsl_bwrap":
+            result["status"] = "sandbox-step-uncertain"
+            result["resume_observation"] = {
+                "reason": "unknown sandbox side effect; explicit inspection required",
+                "tool": last.get("tool", ""),
+                "call_id": str((last.get("result_metadata") or {}).get("call_id", "")),
+            }
+            return _emit_resume_result(agent, result)
         result["resume_observation"] = {
             "tool": last.get("tool", ""),
             "tool_args": last.get("tool_args", {}),

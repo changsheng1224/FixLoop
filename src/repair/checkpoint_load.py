@@ -15,7 +15,7 @@ from agent_runtime.session_contract import CheckpointEnvelope, workspace_manifes
 CHECKPOINT_FILENAME = "repair_checkpoint.json"
 
 
-def save_repair_checkpoint(state, repo_root: str) -> Path:
+def save_repair_checkpoint(state, repo_root: str, *, state_root: str = "") -> Path:
     """将 RepairState 保存到 .agent/runs/<run_id>/repair_checkpoint.json。
 
     保存关键字段：retry_count/phase/feedback/suspect_locations/blackboard_snapshot。
@@ -29,7 +29,9 @@ def save_repair_checkpoint(state, repo_root: str) -> Path:
     if not run_id:
         raise ValueError("RepairState.repair_run_id 未设置")
 
-    path = Path(repo_root) / ".agent" / "runs" / run_id / CHECKPOINT_FILENAME
+    from agent_runtime.state_root import state_root_for
+
+    path = state_root_for(repo_root, state_root) / ".agent" / "runs" / run_id / CHECKPOINT_FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)
     state.checkpoint_sequence = int(getattr(state, "checkpoint_sequence", 0) or 0) + 1
     state.checkpoint_id = "cp-" + uuid.uuid4().hex[:16]
@@ -64,24 +66,29 @@ def save_repair_checkpoint(state, repo_root: str) -> Path:
     ).seal()
     state_payload["checkpoint_envelope"] = envelope.to_dict()
     state_payload["checkpoint_checksum"] = envelope.checksum
+    state_payload["state_root"] = str(path.parents[4])
     tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     tmp.write_text(json.dumps(state_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(path)
     return path
 
 
-def load_repair_checkpoint(repo_root: str, run_id: str) -> dict | None:
+def load_repair_checkpoint(repo_root: str, run_id: str, *, state_root: str = "") -> dict | None:
     """从 .agent/runs/<run_id>/repair_checkpoint.json 加载 RepairState dict。
 
     Returns:
         RepairState dict 或 None（文件不存在/损坏时）。
     """
-    path = Path(repo_root) / ".agent" / "runs" / run_id / CHECKPOINT_FILENAME
+    from agent_runtime.state_root import state_root_for
+
+    path = state_root_for(repo_root, state_root) / ".agent" / "runs" / run_id / CHECKPOINT_FILENAME
     if not path.is_file():
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict) or "retry_count" not in data:
+            return None
+        if state_root and Path(data.get("state_root", "")).resolve() != Path(state_root).resolve():
             return None
         envelope_raw = data.get("checkpoint_envelope")
         if isinstance(envelope_raw, dict):

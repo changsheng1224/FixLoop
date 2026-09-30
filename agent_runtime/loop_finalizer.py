@@ -142,7 +142,11 @@ def finalize_agent_run(loop, ts) -> None:
             root=agent._cwd,
         )
         _promote_memory_candidates(agent, ts)
-        SessionStore(root=agent._cwd, trace=loop._emit).save(agent.session)
+        SessionStore(
+            root=agent._cwd,
+            trace=loop._emit,
+            state_root=str(getattr(agent.tool_context, "state_root", "") or ""),
+        ).save(agent.session)
     except Exception:
         pass
 

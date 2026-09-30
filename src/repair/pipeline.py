@@ -44,7 +44,17 @@ LOCALIZER_COMPLETE_ONCE_SYSTEM = """你是代码定位专家。
 如果无法确定精确行号，使用最可能的文件并将 confidence 降低。"""
 
 
-def _record_pytest_exit(state: RepairState, repo_root: str, key: str) -> None:
+def _record_pytest_exit(state: RepairState, repo_root: str, key: str, sandbox_context=None) -> None:
+    if sandbox_context is not None:
+        from src.repair.verification.verify import BwrapVerifyStrategy
+
+        run = BwrapVerifyStrategy(sandbox_context).run(repo_root)
+        state.node_timings[key] = run.internal.get("pytest_exit_code")
+        state.node_timings[key + "_category"] = run.internal["category"]
+        state.node_timings[key + "_receipt_id"] = run.internal["receipt_id"]
+        if run.internal["category"] not in {"passed", "failed"}:
+            raise RuntimeError("sandbox pytest unavailable: " + run.internal["category"])
+        return
     code, _ = run_pytest(Path(repo_root))
     state.node_timings[key] = code
 
@@ -115,9 +125,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         from src.repair.failure_tags import check_patch_faithfulness
         from src.repair.path_resolve import is_impl_py_path
 
-        patches = patches_from_snapshot_diff(
-            initial_snapshot, after, explanation="timeout_salvage"
-        )
+        patches = patches_from_snapshot_diff(initial_snapshot, after, explanation="timeout_salvage")
         if not patches:
             return []
         # 优先 faithfulness（含 soft_keep）；否则保留少量实现文件
@@ -126,11 +134,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         )
         if kept:
             return kept
-        impl = [
-            p
-            for p in patches
-            if p.file_path and is_impl_py_path(p.file_path)
-        ]
+        impl = [p for p in patches if p.file_path and is_impl_py_path(p.file_path)]
         return impl[:8] or patches[:4]
 
     def _progress_emitter(self):
@@ -250,9 +254,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             int((time.monotonic() - started) * 1000),
         )
         try:
-            self._write_seed_context_to_blackboard(
-                state, state.suspect_locations, context
-            )
+            self._write_seed_context_to_blackboard(state, state.suspect_locations, context)
         except RuntimeError:
             pass
 
@@ -420,7 +422,11 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         if resume_run_id:
             from src.repair.checkpoint_load import load_repair_checkpoint
 
-            cp = load_repair_checkpoint(self._repo_root, resume_run_id)
+            cp = load_repair_checkpoint(
+                self._repo_root,
+                resume_run_id,
+                state_root=str(getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""),
+            )
             if cp:
                 return self._repair_from_checkpoint(state, initial_snapshot, cp, resume_run_id)
 
@@ -541,7 +547,12 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 if self._abort_repair_if_cancelled(state):
                     cancelled = True
                 elif not skip_patch_loop and self._verification_enabled():
-                    _record_pytest_exit(state, self._repo_root, "baseline_pytest_code")
+                    _record_pytest_exit(
+                        state,
+                        self._repo_root,
+                        "baseline_pytest_code",
+                        getattr(self, "_sandbox_context", None),
+                    )
 
                 consecutive_env_fails = 0
                 stop_loss = getattr(self, "_stop_loss", None)
@@ -693,7 +704,12 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                             cooldown.record_success()
                         break
 
-                    _record_pytest_exit(state, self._repo_root, "post_patch_pytest_code")
+                    _record_pytest_exit(
+                        state,
+                        self._repo_root,
+                        "post_patch_pytest_code",
+                        getattr(self, "_sandbox_context", None),
+                    )
 
                     if repo_snapshot is not None:
                         self._restore_repo_snapshot(repo_snapshot)
@@ -737,9 +753,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                         state.agent_errors["no_progress"] = sl.hint
                         warning = f"[无进展]\n{sl.hint}"
                         state.feedback = (
-                            f"{warning}\n\n{state.feedback}".strip()
-                            if state.feedback
-                            else warning
+                            f"{warning}\n\n{state.feedback}".strip() if state.feedback else warning
                         )
                         self._write_feedback_to_blackboard(state.feedback)
                     if diag.bucket.value == "env":
@@ -773,8 +787,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             state,
             (
                 "done"
-                if state.status
-                in {RepairTerminalStatus.FIXED, RepairTerminalStatus.PENDING_VERIFY}
+                if state.status in {RepairTerminalStatus.FIXED, RepairTerminalStatus.PENDING_VERIFY}
                 else "failed"
             ),
             "repair finalized",
@@ -803,7 +816,11 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             try:
                 from src.repair.checkpoint_load import save_repair_checkpoint
 
-                save_repair_checkpoint(state, self._repo_root)
+                save_repair_checkpoint(
+                    state,
+                    self._repo_root,
+                    state_root=str(getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""),
+                )
             except Exception:
                 pass
         self._end_repair_trace(state)
@@ -921,7 +938,12 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     state.set_status(RepairTerminalStatus.FIXED, "verification_passed")
                     break
 
-                _record_pytest_exit(state, self._repo_root, "post_patch_pytest_code")
+                _record_pytest_exit(
+                    state,
+                    self._repo_root,
+                    "post_patch_pytest_code",
+                    getattr(self, "_sandbox_context", None),
+                )
                 if repo_snapshot is not None:
                     self._restore_repo_snapshot(repo_snapshot)
                 else:
@@ -961,9 +983,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     state.agent_errors["no_progress"] = sl.hint
                     warning = f"[无进展]\n{sl.hint}"
                     state.feedback = (
-                        f"{warning}\n\n{state.feedback}".strip()
-                        if state.feedback
-                        else warning
+                        f"{warning}\n\n{state.feedback}".strip() if state.feedback else warning
                     )
                     self._write_feedback_to_blackboard(state.feedback)
                 state.node_timings["consecutive_env_fails"] = stop_loss.snapshot().get(
@@ -1084,7 +1104,11 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             try:
                 from src.repair.checkpoint_load import save_repair_checkpoint
 
-                save_repair_checkpoint(state, self._repo_root)
+                save_repair_checkpoint(
+                    state,
+                    self._repo_root,
+                    state_root=str(getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""),
+                )
             except Exception:
                 pass
 
@@ -1113,7 +1137,11 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             try:
                 from src.repair.checkpoint_load import save_repair_checkpoint
 
-                save_repair_checkpoint(state, self._repo_root)
+                save_repair_checkpoint(
+                    state,
+                    self._repo_root,
+                    state_root=str(getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""),
+                )
             except Exception:
                 pass
         self._end_repair_trace(state)
@@ -1131,7 +1159,12 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             import time
             from pathlib import Path
 
-            repair_dir = Path(self._repo_root) / ".agent" / "repairs"
+            from agent_runtime.state_root import state_root_for
+
+            repair_dir = state_root_for(
+                self._repo_root,
+                str(getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""),
+            ) / ".agent" / "repairs"
             run_id = getattr(state, "repair_run_id", "") or ""
             sub_dir = repair_dir / run_id if run_id else repair_dir
             sub_dir.mkdir(parents=True, exist_ok=True)
@@ -1205,9 +1238,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     pass
             cache_rate = tu.get("cache_hit_rate")
             if cache_rate is None:
-                cache_rate = (state.node_timings.get("runtime_metrics") or {}).get(
-                    "cache_hit_rate"
-                )
+                cache_rate = (state.node_timings.get("runtime_metrics") or {}).get("cache_hit_rate")
             if cache_rate is not None:
                 try:
                     registry.gauge_set(

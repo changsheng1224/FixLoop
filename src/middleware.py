@@ -104,7 +104,8 @@ class ToolGateway:
                 )
         return execute_fn()
 
-def build_repair_gateway(repo_root: str = "") -> ToolGateway:
+
+def build_repair_gateway(repo_root: str = "", *, sandbox_mode: bool = False) -> ToolGateway:
     """返回 Layer 2 修复流水线默认 ToolGateway。
 
     若 ``.agent/tools.yaml`` 存在，直接覆盖对应 ToolSpec 的角色集合。
@@ -112,12 +113,13 @@ def build_repair_gateway(repo_root: str = "") -> ToolGateway:
     from src.collaboration_governance import CollaborationGovernance
     from src.tools.spec import default_repair_tool_registry
 
-    registry = default_repair_tool_registry()
+    registry = default_repair_tool_registry(sandbox_mode=sandbox_mode)
     if repo_root:
         from src.tools.manifest import load_tool_role_overrides
 
         for name, roles in load_tool_role_overrides(repo_root).items():
-            registry.set_roles(name, roles)
+            if not sandbox_mode or registry.get(name).lifecycle != "disabled":
+                registry.set_roles(name, roles)
     return ToolGateway(
         policy=CollaborationGovernance(registry=registry),
         registry=registry,

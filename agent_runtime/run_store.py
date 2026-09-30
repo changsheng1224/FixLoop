@@ -63,9 +63,12 @@ class RunStore:
         └── report.json
     """
 
-    def __init__(self, root: str):
+    def __init__(self, root: str, *, state_root: str | None = None):
         self.root = Path(root)
-        self.runs_dir = self.root / ".agent" / "runs"
+        from agent_runtime.state_root import state_root_for
+
+        self.state_root = state_root_for(self.root, state_root)
+        self.runs_dir = self.state_root / ".agent" / "runs"
 
     @property
     def ttl_days(self) -> int:
