@@ -868,14 +868,20 @@ class ObservationStore:
         path = self.root / ".agent" / "observations" / f"blob-{checksum}.txt"
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
+            # Content-addressed blobs are immutable. Replacing an identical
+            # blob can fail on Windows while another reader holds it open.
+            if path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == checksum:
+                return str(path), checksum, len(raw_text.encode("utf-8"))
             fd, tmp_name = tempfile.mkstemp(
                 prefix=f".{observation_id}.", suffix=".tmp", dir=str(path.parent)
             )
-            os.close(fd)
             tmp = Path(tmp_name)
             try:
-                tmp.write_text(raw_text, encoding="utf-8")
-                with tmp.open("rb") as handle:
+                # Windows FlushFileBuffers requires a writable handle. Fsync
+                # on a reopened read-only file silently forced memory fallback.
+                with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+                    handle.write(raw_text)
+                    handle.flush()
                     os.fsync(handle.fileno())
                 tmp.replace(path)
             finally:

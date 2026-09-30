@@ -71,10 +71,10 @@ class RepairRunTracer:
             self._store = RunStore(self.repo_root, state_root=self.state_root)
         return self._store
 
-    def begin(self, issue: str, **extra: str) -> str:
+    def begin(self, issue: str, *, run_id: str = "", **extra: str) -> str:
         from agent_runtime.canonical_trace import TraceSpanContext, reset_seq
 
-        self.run_id = new_run_id()
+        self.run_id = run_id or new_run_id()
         reset_seq(self.run_id)
         TraceSpanContext.reset()
         TraceSpanContext.push("repair_root")
@@ -282,9 +282,9 @@ class RepairRunTracer:
             "agents": list(by_agent.keys()),
             "agent_asks": [ref.to_dict() for ref in state.agent_asks],
             "harness_status": (getattr(state, "harness_control", {}) or {}).get("status", ""),
-            "harness_manifest_fingerprint": (
-                getattr(state, "harness_manifest", {}) or {}
-            ).get("manifest_fingerprint", ""),
+            "harness_manifest_fingerprint": (getattr(state, "harness_manifest", {}) or {}).get(
+                "manifest_fingerprint", ""
+            ),
         }
         if state.repair_plan is not None:
             finished_payload["intent"] = repair_plan_intent_snapshot(state.repair_plan)

@@ -10,6 +10,18 @@ from src.state import RepairState
 
 
 class TestCliRepair:
+    def test_removed_plan_dag_flag_is_rejected(self, monkeypatch):
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["src.cli", "repair", "--repo", ".", "--issue", "fix", "--plan-dag"],
+        )
+        from src.cli import main
+
+        with pytest.raises(SystemExit) as error:
+            main()
+        assert error.value.code == 2
+
     @pytest.mark.skip(reason="共享 FakeClient + 并行 Agent 存在竞态，需独立 FakeClient")
     def test_repair_skip_verify_smoke(self, temp_workspace, monkeypatch, capsys):
         """repair --skip-verify 在 FakeClient 下可跑通。"""

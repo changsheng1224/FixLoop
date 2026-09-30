@@ -50,7 +50,11 @@ def test_full_json_schema_validation_and_projection():
     }
     normalized, errors = validate_tool_arguments(schema, {"mode": "bad", "count": 0, "options": {}})
     assert normalized["count"] == 0
-    assert {item["code"] for item in errors} >= {"enum_violation", "minimum_violation", "missing_required_argument"}
+    assert {item["code"] for item in errors} >= {
+        "enum_violation",
+        "minimum_violation",
+        "missing_required_argument",
+    }
     assert schema_to_json(schema)["additionalProperties"] is False
     projected = project_tool_specs([ToolSpec(name="inspect", protocol_schema=schema)])["inspect"]
     assert projected["json_schema"]["properties"]["mode"]["enum"] == ["fast", "safe"]
@@ -60,7 +64,12 @@ def test_action_state_machine_blocks_invalid_transition_and_recovers_uncertain()
     action = build_action_record("write_file", {"path": "a.txt"}, revision=2, status="dispatched")
     action = transition_action(action.__dict__, "uncertain", reason="tool_timeout")
     assert action["status"] == "uncertain"
-    assert action_recovery_decision({"action_ledger": [action]}, "write_file", {"path": "a.txt"})["decision"] == "revalidate"
+    assert (
+        action_recovery_decision({"action_ledger": [action]}, "write_file", {"path": "a.txt"})[
+            "decision"
+        ]
+        == "revalidate"
+    )
     with pytest.raises(ValueError):
         transition_action(action, "planned")
 
@@ -105,3 +114,19 @@ def test_tool_dag_parallel_reads_and_serializes_writes():
     )
     assert all(item.status == "success" for item in result.values())
     assert max_active == 2
+
+
+def test_tool_dag_failed_dependency_terminates_without_dispatching_descendants():
+    import subprocess
+    import sys
+
+    code = (
+        "from agent_runtime.tool_dag import ToolDAGExecutor, ToolNode; "
+        "from agent_runtime.tool_result import ToolResult; calls=[]; "
+        "result=ToolDAGExecutor(lambda name,args: "
+        "(calls.append(name) or ToolResult(content='failure',status='error'))).run("
+        "[ToolNode('a','first'),ToolNode('b','second',depends_on=('a',)),"
+        "ToolNode('c','third',depends_on=('b',))]); "
+        "assert calls == ['first']; assert result['c'].status == 'rejected'"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True, timeout=5)

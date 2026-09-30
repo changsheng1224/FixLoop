@@ -363,6 +363,11 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         """记录空补丁并决定是否重试；True 表示继续下一轮。"""
         from src.repair.stop_loss import apply_stop_loss
 
+        if state.node_timings.get("plan_blocked"):
+            state.set_status(RepairTerminalStatus.FAILED, "plan_runtime_blocked")
+            self._checkpoint_progress(state)
+            return False
+
         terminal = self._record_patcher_terminal(state)
         if terminal in {"cannot_patch", "insufficient_evidence"}:
             state.feedback = "Patcher 已给出明确终态：" + terminal
@@ -409,6 +414,19 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         state: RepairState,
         initial_snapshot: dict | None = None,
     ) -> RepairState:
+        try:
+            return self._repair_impl_with_plan(state, initial_snapshot)
+        finally:
+            binding = getattr(self, "_plan_binding", None)
+            if binding is not None:
+                binding.close()
+                self._plan_binding = None
+
+    def _repair_impl_with_plan(
+        self,
+        state: RepairState,
+        initial_snapshot: dict | None = None,
+    ) -> RepairState:
         """修复流水线主体（可被 repair() 超时包装）。
 
         支持 --resume-repair：若有 resume_run_id 且 checkpoint 有效，
@@ -425,7 +443,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             cp = load_repair_checkpoint(
                 self._repo_root,
                 resume_run_id,
-                state_root=str(getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""),
+                state_root=str(
+                    getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""
+                ),
             )
             if cp:
                 return self._repair_from_checkpoint(state, initial_snapshot, cp, resume_run_id)
@@ -819,7 +839,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 save_repair_checkpoint(
                     state,
                     self._repo_root,
-                    state_root=str(getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""),
+                    state_root=str(
+                        getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""
+                    ),
                 )
             except Exception:
                 pass
@@ -1107,7 +1129,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 save_repair_checkpoint(
                     state,
                     self._repo_root,
-                    state_root=str(getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""),
+                    state_root=str(
+                        getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""
+                    ),
                 )
             except Exception:
                 pass
@@ -1140,7 +1164,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 save_repair_checkpoint(
                     state,
                     self._repo_root,
-                    state_root=str(getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""),
+                    state_root=str(
+                        getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""
+                    ),
                 )
             except Exception:
                 pass
@@ -1157,14 +1183,17 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         try:
             import json
             import time
-            from pathlib import Path
 
             from agent_runtime.state_root import state_root_for
 
-            repair_dir = state_root_for(
-                self._repo_root,
-                str(getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""),
-            ) / ".agent" / "repairs"
+            repair_dir = (
+                state_root_for(
+                    self._repo_root,
+                    str(getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""),
+                )
+                / ".agent"
+                / "repairs"
+            )
             run_id = getattr(state, "repair_run_id", "") or ""
             sub_dir = repair_dir / run_id if run_id else repair_dir
             sub_dir.mkdir(parents=True, exist_ok=True)
