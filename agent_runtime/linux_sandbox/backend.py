@@ -14,7 +14,7 @@ from dataclasses import asdict
 
 from .models import SandboxRequest, SandboxResult
 from .policy import SandboxPolicy
-from .receipts import ReceiptStore
+from .receipts import ReceiptStore, receipt_checksum
 
 
 class LinuxSandboxBackend:
@@ -117,6 +117,8 @@ class LinuxSandboxBackend:
                     task_id=request.task_id,
                     run_id=request.run_id,
                     workspace_id=request.workspace_id,
+                    mapping_id=str(self.policy.workspace.resolve()),
+                    distribution_id="wsl2",
                 )
                 return self._dispatch(request, digest)
         except (OSError, ValueError) as exc:
@@ -173,7 +175,8 @@ class LinuxSandboxBackend:
                 if proc.returncode == 0 and payload.get("receipt_id") == request.call_id:
                     receipt = self.store.reconcile(digest)
                     if receipt and receipt.get("result") == payload:
-                        return SandboxResult(**payload)
+                        result = SandboxResult(**payload)
+                        return result
             return SandboxResult(
                 "uncertain",
                 error_code="execution_uncertain",

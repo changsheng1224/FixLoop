@@ -1157,7 +1157,11 @@ def tool_expand_observation(context: ToolContext, args: dict) -> str:
     observation_id = str(args.get("observation_id", "") or "")
     if not observation_id.startswith("OBS-"):
         return "Observation expansion denied: invalid observation id."
-    store = ObservationStore(state, root=context.root)
+    store = ObservationStore(
+        state,
+        root=context.root,
+        state_root=str(getattr(context, "state_root", "") or ""),
+    )
     try:
         result = store.expand_for_context(
             observation_id,

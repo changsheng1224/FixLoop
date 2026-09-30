@@ -219,6 +219,15 @@ class Orchestrator(RepairPipelineMixin):
         ):
             raise ValueError("wsl_bwrap patcher and verifier must share ToolContext")
         self._sandbox_context = sandbox_context
+        if sandbox_context is not None:
+            sandbox_context.sandbox_identity = {
+                "backend": "wsl_bwrap",
+                "policy_digest": "",
+                "distribution_id": "wsl2",
+                "mapping_id": str(getattr(sandbox_context, "root", "") or ""),
+                "receipt_id": "",
+                "receipt_checksum": "",
+            }
         self.l1_prompt_cache_key = l1_prompt_cache_key or self._resolve_l1_prompt_cache_key()
         self._repair_ctx: RepairRunContext | None = None
         self._collaboration_runtime = None
@@ -302,7 +311,7 @@ class Orchestrator(RepairPipelineMixin):
         """
         from agent_runtime.cancellation import CancellationToken
 
-        if self._sandbox_context is not None:
+        if self._sandbox_context is not None and not getattr(self._sandbox_context, "state_root", ""):
             raise ValueError("wsl_bwrap repair requires P3 external state_root isolation")
 
         if phase_timeouts is None:
@@ -785,7 +794,10 @@ class Orchestrator(RepairPipelineMixin):
         from agent_runtime.tokenizers import resolve_tokenizer_spec
         from src.repair.run_trace import RepairRunTracer
 
-        tracer = RepairRunTracer(self._repo_root)
+        tracer = RepairRunTracer(
+            self._repo_root,
+            state_root=str(getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""),
+        )
         l1_meta = {}
         if self.l1_prompt_cache_key:
             l1_meta["l1_prompt_cache_key"] = self.l1_prompt_cache_key

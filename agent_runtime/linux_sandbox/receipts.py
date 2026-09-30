@@ -34,6 +34,10 @@ def _read(path: Path) -> dict | None:
         raise ValueError("receipt_invalid") from exc
 
 
+def receipt_checksum(data: dict) -> str:
+    return _checksum(data)
+
+
 def _write(path: Path, data: dict) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     payload = json.dumps({"payload": data, "sha256": _checksum(data)}, sort_keys=True)

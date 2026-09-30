@@ -422,7 +422,11 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         if resume_run_id:
             from src.repair.checkpoint_load import load_repair_checkpoint
 
-            cp = load_repair_checkpoint(self._repo_root, resume_run_id)
+            cp = load_repair_checkpoint(
+                self._repo_root,
+                resume_run_id,
+                state_root=str(getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""),
+            )
             if cp:
                 return self._repair_from_checkpoint(state, initial_snapshot, cp, resume_run_id)
 
@@ -812,7 +816,11 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             try:
                 from src.repair.checkpoint_load import save_repair_checkpoint
 
-                save_repair_checkpoint(state, self._repo_root)
+                save_repair_checkpoint(
+                    state,
+                    self._repo_root,
+                    state_root=str(getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""),
+                )
             except Exception:
                 pass
         self._end_repair_trace(state)
@@ -1096,7 +1104,11 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             try:
                 from src.repair.checkpoint_load import save_repair_checkpoint
 
-                save_repair_checkpoint(state, self._repo_root)
+                save_repair_checkpoint(
+                    state,
+                    self._repo_root,
+                    state_root=str(getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""),
+                )
             except Exception:
                 pass
 
@@ -1125,7 +1137,11 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             try:
                 from src.repair.checkpoint_load import save_repair_checkpoint
 
-                save_repair_checkpoint(state, self._repo_root)
+                save_repair_checkpoint(
+                    state,
+                    self._repo_root,
+                    state_root=str(getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""),
+                )
             except Exception:
                 pass
         self._end_repair_trace(state)
@@ -1143,7 +1159,12 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             import time
             from pathlib import Path
 
-            repair_dir = Path(self._repo_root) / ".agent" / "repairs"
+            from agent_runtime.state_root import state_root_for
+
+            repair_dir = state_root_for(
+                self._repo_root,
+                str(getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""),
+            ) / ".agent" / "repairs"
             run_id = getattr(state, "repair_run_id", "") or ""
             sub_dir = repair_dir / run_id if run_id else repair_dir
             sub_dir.mkdir(parents=True, exist_ok=True)

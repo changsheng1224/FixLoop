@@ -43,10 +43,13 @@ class ToolContext:
     sandbox_task_id: str = "task"
     sandbox_run_id: str = "run"
     sandbox_uncertain: bool = False
+    state_root: str = ""
+    sandbox_identity: dict = field(default_factory=dict)
 
     def __post_init__(self):
         if self.path_resolver is None:
             self.path_resolver = self._default_resolve
+
 
     def resolve(self, raw_path: str) -> Path:
         """将用户提供的路径解析为绝对路径，并进行逃逸检测。
