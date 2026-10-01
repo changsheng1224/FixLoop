@@ -6,6 +6,7 @@
 import hashlib
 import os
 import re
+import threading
 import time
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
@@ -294,6 +295,8 @@ class Orchestrator(RepairPipelineMixin):
         cancel_token=None,
         resume_run_id: str = "",
         verify_test_patch: str = "",
+        *,
+        run_id: str = "",
     ) -> RepairState:
         """执行修复流水线。
 
@@ -306,12 +309,15 @@ class Orchestrator(RepairPipelineMixin):
             resume_run_id: L2 续跑 run_id（从 repair_checkpoint.json 恢复，
                 跳过 parse/localize，直接进入 patch 循环）。
             verify_test_patch: 可选；SWE 等官方 test_patch，仅在 verify 时临时应用。
+            run_id: 新任务的可选 ID；不能与严格恢复 resume_run_id 同时使用。
 
         Returns:
             RepairState 实例。
         """
         from agent_runtime.cancellation import CancellationToken
 
+        if run_id and resume_run_id:
+            raise ValueError("run_id and resume_run_id are mutually exclusive")
         if self._sandbox_context is not None and not getattr(
             self._sandbox_context, "state_root", ""
         ):
@@ -323,7 +329,7 @@ class Orchestrator(RepairPipelineMixin):
         state = RepairState(
             issue_input=issue,
             max_retries=max_retries,
-            repair_run_id=resume_run_id or "",
+            repair_run_id=resume_run_id or run_id or "",
             active_roles=[
                 role
                 for role, agent in (("patcher", self.patcher), ("verifier", self.verifier))
@@ -342,12 +348,37 @@ class Orchestrator(RepairPipelineMixin):
             role: {"status": "active", "reason": "initial repair roles"}
             for role in state.active_roles
         }
+        from src.repair.checkpoint_load import RepairCheckpointError, load_repair_checkpoint
+        from src.repair.recovery_outcome import publish_recovery_outcome
+
+        checkpoint = None
+        if resume_run_id:
+            try:
+                checkpoint = load_repair_checkpoint(
+                    self._repo_root,
+                    resume_run_id,
+                    state_root=str(getattr(self._sandbox_context, "state_root", "") or ""),
+                    require_valid=True,
+                    issue=issue,
+                )
+            except RepairCheckpointError as exc:
+                state.set_status("recovery_required", exc.code)
+                state.agent_errors["checkpoint"] = exc.code
+                publish_recovery_outcome(
+                    state,
+                    {"run_id": resume_run_id, "status": "recovery_required"},
+                    stage="checkpoint",
+                    reason_code=exc.code,
+                    emitter=self._progress_emitter(),
+                )
+                return state
         token = cancel_token or CancellationToken()
         initial_snapshot = self._snapshot_repo()
 
         self._repair_ctx = RepairRunContext(
             phase_timeout_config=phase_timeouts,
             cancel_token=token,
+            resume_checkpoint=checkpoint,
             verify_test_patch=verify_test_patch or "",
         )
         self._set_collaboration_context(state)
@@ -355,6 +386,17 @@ class Orchestrator(RepairPipelineMixin):
             if token.is_cancelled and not resume_run_id:
                 state.node_timings["user_cancel"] = True
                 state.set_status("user_cancel", "cancelled_before_execution")
+                publish_recovery_outcome(
+                    state,
+                    {
+                        "run_id": state.repair_run_id,
+                        "status": "cancelled",
+                        "cancel_request_id": "before_execution",
+                    },
+                    stage="cancel",
+                    reason_code="cancelled_before_execution",
+                    emitter=self._progress_emitter(),
+                )
                 return state
             with self._repair_cancel_scope(token):
                 if repair_timeout_s <= 0:
@@ -824,6 +866,21 @@ class Orchestrator(RepairPipelineMixin):
         )
         coordinator.acquire()
         self._entry_coordinator = coordinator
+        heartbeat_stop = threading.Event()
+
+        def maintain_entry_owner():
+            while not heartbeat_stop.wait(coordinator.lease_seconds / 3):
+                try:
+                    coordinator.heartbeat()
+                except Exception:
+                    return  # Preserve the durable fence on failure or replacement.
+
+        heartbeat_worker = threading.Thread(
+            target=maintain_entry_owner,
+            name="fixloop-entry-owner",
+            daemon=True,
+        )
+        heartbeat_worker.start()
         try:
             self._initialize_repair_trace(state)
         except BaseException:
@@ -834,6 +891,10 @@ class Orchestrator(RepairPipelineMixin):
                 )
                 state.node_timings["coordination_status"] = current.status
             raise
+        finally:
+            # RepairPlanBinding starts its normal heartbeat before handoff.
+            heartbeat_stop.set()
+            heartbeat_worker.join(timeout=1)
 
     def _initialize_repair_trace(self, state: RepairState) -> None:
         from agent_runtime.log_context import bind_run_id
@@ -1062,6 +1123,15 @@ class Orchestrator(RepairPipelineMixin):
                 )
                 state.node_timings["coordination_status"] = "recovery_required"
                 state.set_status("recovery_required", "repair_worker_unconfirmed")
+                from src.repair.recovery_outcome import publish_recovery_outcome
+
+                publish_recovery_outcome(
+                    state,
+                    coordinator.store.snapshot(state.repair_run_id).to_dict(),
+                    stage="cancel",
+                    reason_code="repair_worker_unconfirmed",
+                    emitter=self._progress_emitter(),
+                )
                 return False
             return state.node_timings.get("coordination_status") != "recovery_required"
         runtime = getattr(self, "_collaboration_runtime", None)
@@ -1075,6 +1145,7 @@ class Orchestrator(RepairPipelineMixin):
         state.node_timings["coordination_status"] = report.status
         if not report.confirmed:
             state.set_status("recovery_required", "cleanup_or_write_unconfirmed")
+        binding.publish_recovery(stage="cancel", reason_code=report.error_code)
         return report.confirmed
 
     def _end_repair_trace(self, state: RepairState) -> None:
@@ -1102,6 +1173,11 @@ class Orchestrator(RepairPipelineMixin):
                 state.agent_errors.setdefault("coordination_finalize", str(exc)[:500])
                 state.node_timings["coordination_status"] = "recovery_required"
                 state.set_status("recovery_required", "coordination_finalize_unconfirmed")
+            previous = state.recovery_outcome
+            binding.publish_recovery(
+                stage=previous.get("stage", "resources"),
+                reason_code=previous.get("reason_code", ""),
+            )
         if state.node_timings.get("coordination_status") != "recovery_required":
             self._maybe_leave_worktree(cancelled=False)
         elif ctx is not None and ctx.worktree_handle is not None:

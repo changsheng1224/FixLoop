@@ -1,0 +1,458 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="7" skipped="0" tests="8" time="25.724" timestamp="2026-10-02T04:10:18.447957+08:00" hostname="DESKTOP-M8LE8SP"><testcase classname="tests.test_recovery_cancel_outcome" name="test_explicit_resume_invalid_checkpoint_never_enters_runtime[missing]" time="0.498"><failure message="AttributeError: 'RepairState' object has no attribute 'recovery_outcome'">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-recovery-cancel-first/test_explicit_resume_invalid_c0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x000001B1A2218E90&gt;
+damage = 'missing'
+
+    @pytest.mark.parametrize("damage", ["missing", "json", "checksum", "identity", "objective"])
+    def test_explicit_resume_invalid_checkpoint_never_enters_runtime(tmp_path, monkeypatch, damage):
+        orch, seed, client = repair_fixture(tmp_path, full=True)
+        if damage != "missing":
+            path = save_repair_checkpoint(seed, str(tmp_path))
+            if damage == "json":
+                path.write_text("not json", encoding="utf-8")
+            elif damage == "checksum":
+                body = json.loads(path.read_text())
+                body["checkpoint_checksum"] = "damaged"
+                path.write_text(json.dumps(body))
+            elif damage == "identity":
+                seed.repair_run_id = "other-run"
+                other = save_repair_checkpoint(seed, str(tmp_path))
+                path.write_bytes(other.read_bytes())
+                seed.repair_run_id = "plan-fixture-run"
+        before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+        events = []
+        orch._progress = ProgressEmitter(quiet=True, record=events.append)
+    
+        def forbidden(*args, **kwargs):
+            pytest.fail("invalid explicit resume entered runtime")
+    
+        monkeypatch.setattr(orch, "_begin_repair_trace", forbidden)
+        issue = "another objective" if damage == "objective" else seed.issue_input
+        result = orch.repair(issue, resume_run_id=seed.repair_run_id, repair_timeout_s=0)
+        assert result.status == "recovery_required"
+        assert client.session_usage["calls"] == 0
+        assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
+&gt;       outcome = result.recovery_outcome
+                  ^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'RepairState' object has no attribute 'recovery_outcome'
+
+tests\test_recovery_cancel_outcome.py:45: AttributeError</failure></testcase><testcase classname="tests.test_recovery_cancel_outcome" name="test_explicit_resume_invalid_checkpoint_never_enters_runtime[json]" time="0.423"><failure message="AttributeError: 'RepairState' object has no attribute 'recovery_outcome'">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-recovery-cancel-first/test_explicit_resume_invalid_c1')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x000001B1A2218D60&gt;
+damage = 'json'
+
+    @pytest.mark.parametrize("damage", ["missing", "json", "checksum", "identity", "objective"])
+    def test_explicit_resume_invalid_checkpoint_never_enters_runtime(tmp_path, monkeypatch, damage):
+        orch, seed, client = repair_fixture(tmp_path, full=True)
+        if damage != "missing":
+            path = save_repair_checkpoint(seed, str(tmp_path))
+            if damage == "json":
+                path.write_text("not json", encoding="utf-8")
+            elif damage == "checksum":
+                body = json.loads(path.read_text())
+                body["checkpoint_checksum"] = "damaged"
+                path.write_text(json.dumps(body))
+            elif damage == "identity":
+                seed.repair_run_id = "other-run"
+                other = save_repair_checkpoint(seed, str(tmp_path))
+                path.write_bytes(other.read_bytes())
+                seed.repair_run_id = "plan-fixture-run"
+        before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+        events = []
+        orch._progress = ProgressEmitter(quiet=True, record=events.append)
+    
+        def forbidden(*args, **kwargs):
+            pytest.fail("invalid explicit resume entered runtime")
+    
+        monkeypatch.setattr(orch, "_begin_repair_trace", forbidden)
+        issue = "another objective" if damage == "objective" else seed.issue_input
+        result = orch.repair(issue, resume_run_id=seed.repair_run_id, repair_timeout_s=0)
+        assert result.status == "recovery_required"
+        assert client.session_usage["calls"] == 0
+        assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
+&gt;       outcome = result.recovery_outcome
+                  ^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'RepairState' object has no attribute 'recovery_outcome'
+
+tests\test_recovery_cancel_outcome.py:45: AttributeError</failure></testcase><testcase classname="tests.test_recovery_cancel_outcome" name="test_explicit_resume_invalid_checkpoint_never_enters_runtime[checksum]" time="0.435"><failure message="AttributeError: 'RepairState' object has no attribute 'recovery_outcome'">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-recovery-cancel-first/test_explicit_resume_invalid_c2')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x000001B1A3460B90&gt;
+damage = 'checksum'
+
+    @pytest.mark.parametrize("damage", ["missing", "json", "checksum", "identity", "objective"])
+    def test_explicit_resume_invalid_checkpoint_never_enters_runtime(tmp_path, monkeypatch, damage):
+        orch, seed, client = repair_fixture(tmp_path, full=True)
+        if damage != "missing":
+            path = save_repair_checkpoint(seed, str(tmp_path))
+            if damage == "json":
+                path.write_text("not json", encoding="utf-8")
+            elif damage == "checksum":
+                body = json.loads(path.read_text())
+                body["checkpoint_checksum"] = "damaged"
+                path.write_text(json.dumps(body))
+            elif damage == "identity":
+                seed.repair_run_id = "other-run"
+                other = save_repair_checkpoint(seed, str(tmp_path))
+                path.write_bytes(other.read_bytes())
+                seed.repair_run_id = "plan-fixture-run"
+        before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+        events = []
+        orch._progress = ProgressEmitter(quiet=True, record=events.append)
+    
+        def forbidden(*args, **kwargs):
+            pytest.fail("invalid explicit resume entered runtime")
+    
+        monkeypatch.setattr(orch, "_begin_repair_trace", forbidden)
+        issue = "another objective" if damage == "objective" else seed.issue_input
+        result = orch.repair(issue, resume_run_id=seed.repair_run_id, repair_timeout_s=0)
+        assert result.status == "recovery_required"
+        assert client.session_usage["calls"] == 0
+        assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
+&gt;       outcome = result.recovery_outcome
+                  ^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'RepairState' object has no attribute 'recovery_outcome'
+
+tests\test_recovery_cancel_outcome.py:45: AttributeError</failure></testcase><testcase classname="tests.test_recovery_cancel_outcome" name="test_explicit_resume_invalid_checkpoint_never_enters_runtime[identity]" time="0.446"><failure message="AttributeError: 'RepairState' object has no attribute 'recovery_outcome'">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-recovery-cancel-first/test_explicit_resume_invalid_c3')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x000001B1A21A9D00&gt;
+damage = 'identity'
+
+    @pytest.mark.parametrize("damage", ["missing", "json", "checksum", "identity", "objective"])
+    def test_explicit_resume_invalid_checkpoint_never_enters_runtime(tmp_path, monkeypatch, damage):
+        orch, seed, client = repair_fixture(tmp_path, full=True)
+        if damage != "missing":
+            path = save_repair_checkpoint(seed, str(tmp_path))
+            if damage == "json":
+                path.write_text("not json", encoding="utf-8")
+            elif damage == "checksum":
+                body = json.loads(path.read_text())
+                body["checkpoint_checksum"] = "damaged"
+                path.write_text(json.dumps(body))
+            elif damage == "identity":
+                seed.repair_run_id = "other-run"
+                other = save_repair_checkpoint(seed, str(tmp_path))
+                path.write_bytes(other.read_bytes())
+                seed.repair_run_id = "plan-fixture-run"
+        before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+        events = []
+        orch._progress = ProgressEmitter(quiet=True, record=events.append)
+    
+        def forbidden(*args, **kwargs):
+            pytest.fail("invalid explicit resume entered runtime")
+    
+        monkeypatch.setattr(orch, "_begin_repair_trace", forbidden)
+        issue = "another objective" if damage == "objective" else seed.issue_input
+        result = orch.repair(issue, resume_run_id=seed.repair_run_id, repair_timeout_s=0)
+        assert result.status == "recovery_required"
+        assert client.session_usage["calls"] == 0
+        assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
+&gt;       outcome = result.recovery_outcome
+                  ^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'RepairState' object has no attribute 'recovery_outcome'
+
+tests\test_recovery_cancel_outcome.py:45: AttributeError</failure></testcase><testcase classname="tests.test_recovery_cancel_outcome" name="test_explicit_resume_invalid_checkpoint_never_enters_runtime[objective]" time="0.441"><failure message="AttributeError: 'RepairState' object has no attribute 'recovery_outcome'">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-recovery-cancel-first/test_explicit_resume_invalid_c4')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x000001B1A21AA7A0&gt;
+damage = 'objective'
+
+    @pytest.mark.parametrize("damage", ["missing", "json", "checksum", "identity", "objective"])
+    def test_explicit_resume_invalid_checkpoint_never_enters_runtime(tmp_path, monkeypatch, damage):
+        orch, seed, client = repair_fixture(tmp_path, full=True)
+        if damage != "missing":
+            path = save_repair_checkpoint(seed, str(tmp_path))
+            if damage == "json":
+                path.write_text("not json", encoding="utf-8")
+            elif damage == "checksum":
+                body = json.loads(path.read_text())
+                body["checkpoint_checksum"] = "damaged"
+                path.write_text(json.dumps(body))
+            elif damage == "identity":
+                seed.repair_run_id = "other-run"
+                other = save_repair_checkpoint(seed, str(tmp_path))
+                path.write_bytes(other.read_bytes())
+                seed.repair_run_id = "plan-fixture-run"
+        before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+        events = []
+        orch._progress = ProgressEmitter(quiet=True, record=events.append)
+    
+        def forbidden(*args, **kwargs):
+            pytest.fail("invalid explicit resume entered runtime")
+    
+        monkeypatch.setattr(orch, "_begin_repair_trace", forbidden)
+        issue = "another objective" if damage == "objective" else seed.issue_input
+        result = orch.repair(issue, resume_run_id=seed.repair_run_id, repair_timeout_s=0)
+        assert result.status == "recovery_required"
+        assert client.session_usage["calls"] == 0
+        assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
+&gt;       outcome = result.recovery_outcome
+                  ^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'RepairState' object has no attribute 'recovery_outcome'
+
+tests\test_recovery_cancel_outcome.py:45: AttributeError</failure></testcase><testcase classname="tests.test_recovery_cancel_outcome" name="test_public_resume_reports_unknown_resource_and_preserves_disk" time="21.947"><failure message="AttributeError: 'RepairState' object has no attribute 'recovery_outcome'">self = &lt;src.repair.plan_binding.RepairPlanBinding object at 0x000001B1A36446E0&gt;
+orchestrator = &lt;src.orchestrator.Orchestrator object at 0x000001B1A3461A30&gt;
+state = RepairState(issue_input='Fix value.py: answer() returns 1 but should return 2.', repair_plan=RepairPlan(language='pyth...'}, action_ledger=[], side_effects=[], checkpoint_id='cp-81988b20f35245b3', checkpoint_sequence=1, hard_constraints=[])
+
+    def __init__(self, orchestrator, state, *, defer_plan=False):
+        self.orchestrator = orchestrator
+        self.state = state
+        if not state.repair_run_id:
+            state.repair_run_id = "repair-" + uuid.uuid4().hex
+        context = orchestrator.patcher.tool_context
+        entry = getattr(orchestrator, "_entry_coordinator", None)
+        self.coordinator = (
+            entry
+            if entry is not None and entry.run_id == state.repair_run_id
+            else RunCoordinator(
+                orchestrator._repo_root,
+                state.repair_run_id,
+                state.repair_run_id,
+                state_root=str(getattr(context, "state_root", "") or ""),
+            )
+        )
+        self.owner_lease = self.coordinator.lease or self.coordinator.acquire()
+        self._closed = False
+        self.exploration = None
+        self.agent = orchestrator.patcher
+        self.session = None
+        self._heartbeat_stop = threading.Event()
+        self._heartbeat_worker = None
+        self.coordinator.cancel_token = getattr(orchestrator.patcher, "cancel_token", None)
+        self._cancel_unsubscribe = None
+        try:
+            # Entry ownership can predate slow Plan/Observation initialization.
+            # Renew before initialization and keep reconciling owners alive too.
+            self.owner_lease = self.coordinator.heartbeat()
+            self._heartbeat_worker = threading.Thread(target=self._maintain_owner, daemon=True)
+            self._heartbeat_worker.start()
+            if self.coordinator.cancel_token is not None:
+                self._cancel_unsubscribe = self.coordinator.cancel_token.add_callback(
+                    self._request_cancel
+                )
+            context.run_coordinator = self.coordinator
+            context.sandbox_owner_token = self.owner_lease.owner_token
+            context.sandbox_generation = self.owner_lease.generation
+            context.sandbox_coordination_revision = self.owner_lease.coordination_revision
+&gt;           self._open(context, defer_plan=defer_plan)
+
+src\repair\plan_binding.py:102: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;src.repair.plan_binding.RepairPlanBinding object at 0x000001B1A36446E0&gt;
+context = ToolContext(root='C:\\Users\\haoyu\\Documents\\FixLoop\\.pytest-recovery-cancel-first\\test_public_resume_reports_unk0...3370352dc3a4ce69caf506f578837ea', sandbox_generation=2, sandbox_coordination_revision=8, sandbox_parent_resource_id='')
+
+    def _open(self, context, *, defer_plan):
+        orchestrator, state = self.orchestrator, self.state
+        self.read_budget = ReadBudget(4)
+        self.session = PlanSession(
+            orchestrator._repo_root,
+            state.repair_run_id,
+            state.repair_run_id,
+            self.agent.tools,
+            state_root=context.state_root,
+            observation_state=self.agent.session,
+            event_sink=self._event,
+            fault=getattr(orchestrator, "_plan_fault", None),
+            owner_lease=self.owner_lease,
+            coordination_store=self.coordinator.store,
+        )
+        from agent_runtime.run_coordination.adapters import (
+            CollaborationTaskAdapter,
+            CoordinationAdapters,
+            PlanAttemptAdapter,
+            SandboxCallAdapter,
+        )
+    
+        collaboration = getattr(orchestrator, "_collaboration_runtime", None)
+        from src.collaboration.exploration_runtime import ExplorationRuntime
+    
+        self.exploration = ExplorationRuntime(
+            self.agent,
+            run_id=state.repair_run_id,
+            parent_task_id=state.repair_run_id,
+            plan_session=self.session,
+            coordinator=self.coordinator,
+            client_factory=getattr(self.agent, "_exploration_client_factory", None),
+            limits=getattr(self.agent, "_exploration_limits", None),
+            event_sink=self._exploration_event,
+        )
+        context.readonly_exploration_runtime = self.exploration
+        self.coordinator.adapters.update(
+            CoordinationAdapters(
+                PlanAttemptAdapter(self.session),
+                CollaborationTaskAdapter(collaboration.store, state.repair_run_id)
+                if collaboration is not None
+                else None,
+                SandboxCallAdapter(context.sandbox_backend)
+                if context.sandbox_backend is not None
+                else None,
+            ).mapping()
+        )
+        coordination = self.coordinator.reconcile()
+        self.publish_recovery(stage="resources")
+        if coordination.get("status") != "active":
+            state.node_timings["coordination_status"] = coordination["status"]
+            if coordination["status"] == "cancelled":
+                raise CancelledError("persisted_cancel_completed")
+&gt;           raise ResumeRecoveryRequiredError(
+                "resume_coordination_" + str(coordination.get("status"))
+            )
+E           src.repair.plan_binding.ResumeRecoveryRequiredError: resume_coordination_recovery_required
+
+src\repair\plan_binding.py:203: ResumeRecoveryRequiredError
+
+During handling of the above exception, another exception occurred:
+
+tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-recovery-cancel-first/test_public_resume_reports_unk0')
+
+    def test_public_resume_reports_unknown_resource_and_preserves_disk(tmp_path):
+        orch, seed, client = repair_fixture(tmp_path, full=True)
+        save_repair_checkpoint(seed, str(tmp_path))
+        old = RunCoordinator(str(tmp_path), seed.repair_run_id, seed.repair_run_id)
+        old.acquire()
+        old.reconcile()
+        old.register_resource(resource_id="unknown-write", kind="command", effect="write")
+        old.finish("recovery_required")
+        target = tmp_path / "value.py"
+        target.write_text("unconfirmed change\n")
+&gt;       result = orch.repair(seed.issue_input, resume_run_id=seed.repair_run_id, repair_timeout_s=0)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_recovery_cancel_outcome.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\orchestrator.py:403: in repair
+    return self._repair_impl(state, initial_snapshot=initial_snapshot)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\repair\pipeline.py:428: in _repair_impl
+    return self._repair_impl_with_plan(state, initial_snapshot)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\repair\pipeline.py:462: in _repair_impl_with_plan
+    return self._repair_from_checkpoint(state, initial_snapshot, cp, state.repair_run_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\repair\pipeline.py:902: in _repair_from_checkpoint
+    self._begin_repair_trace(state)
+src\orchestrator.py:885: in _begin_repair_trace
+    self._initialize_repair_trace(state)
+src\orchestrator.py:1026: in _initialize_repair_trace
+    self._plan_binding = RepairPlanBinding(self, state, defer_plan=True)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\repair\plan_binding.py:122: in __init__
+    self.close()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;src.repair.plan_binding.RepairPlanBinding object at 0x000001B1A36446E0&gt;
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        if self._cancel_unsubscribe is not None:
+            self._cancel_unsubscribe()
+        self._heartbeat_stop.set()
+        if self._heartbeat_worker is not None:
+            self._heartbeat_worker.join(timeout=1)
+        try:
+            if self.exploration is not None:
+                try:
+                    self.exploration.close()
+                except ValueError:
+                    self.coordinator.finish(
+                        "recovery_required", error_code="exploration_cleanup_unconfirmed"
+                    )
+                    self.state.set_status("recovery_required", "exploration_cleanup_unconfirmed")
+            current = self.coordinator.store.snapshot(self.state.repair_run_id)
+            if current.owner_token == self.coordinator.lease.owner_token and current.owner_token:
+                if current.status == "active":
+                    current = self.coordinator.finish("released")
+                elif current.status in {"reconciling", "cancel_requested", "cancelling"}:
+                    current = self.coordinator.finish(
+                        "recovery_required", error_code="binding_closed_before_cleanup"
+                    )
+                self.state.node_timings["coordination_status"] = current.status
+                if current.status == "recovery_required":
+                    self.state.set_status("recovery_required", "cleanup_or_write_unconfirmed")
+            if current.generation == self.coordinator.lease.generation:
+&gt;               previous = self.state.recovery_outcome
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               AttributeError: 'RepairState' object has no attribute 'recovery_outcome'
+
+src\repair\plan_binding.py:368: AttributeError</failure></testcase><testcase classname="tests.test_recovery_cancel_outcome" name="test_cancel_request_and_cleanup_are_distinct_until_finalization" time="0.572"><failure message="AttributeError: 'RepairState' object has no attribute 'recovery_outcome'">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-recovery-cancel-first/test_cancel_request_and_cleanu0')
+
+    def test_cancel_request_and_cleanup_are_distinct_until_finalization(tmp_path):
+        from src.repair.plan_binding import RepairPlanBinding
+    
+        orch, seed, _ = repair_fixture(tmp_path)
+        token = CancellationToken()
+        orch.patcher.cancel_token = token
+        orch._repair_ctx.cancel_token = token
+        binding = RepairPlanBinding(orch, seed, defer_plan=True)
+        orch._plan_binding = binding
+        try:
+            token.cancel()
+&gt;           assert seed.recovery_outcome["status"] == "cancel_requested"
+                   ^^^^^^^^^^^^^^^^^^^^^
+E           AttributeError: 'RepairState' object has no attribute 'recovery_outcome'
+
+tests\test_recovery_cancel_outcome.py:102: AttributeError
+
+During handling of the above exception, another exception occurred:
+
+tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-recovery-cancel-first/test_cancel_request_and_cleanu0')
+
+    def test_cancel_request_and_cleanup_are_distinct_until_finalization(tmp_path):
+        from src.repair.plan_binding import RepairPlanBinding
+    
+        orch, seed, _ = repair_fixture(tmp_path)
+        token = CancellationToken()
+        orch.patcher.cancel_token = token
+        orch._repair_ctx.cancel_token = token
+        binding = RepairPlanBinding(orch, seed, defer_plan=True)
+        orch._plan_binding = binding
+        try:
+            token.cancel()
+            assert seed.recovery_outcome["status"] == "cancel_requested"
+            assert not seed.recovery_outcome["cleanup_confirmed"]
+            assert orch._cancel_run_resources(seed, finalize=False)
+            assert seed.recovery_outcome["status"] == "cancelling"
+            assert seed.recovery_outcome["cleanup_confirmed"]
+            assert seed.recovery_outcome["next_action"] == "wait"
+            orch._end_repair_trace(seed)
+            assert seed.recovery_outcome["status"] == "cancelled"
+            assert seed.recovery_outcome["next_action"] == "new_run"
+        finally:
+&gt;           binding.close()
+
+tests\test_recovery_cancel_outcome.py:112: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;src.repair.plan_binding.RepairPlanBinding object at 0x000001B1A35F3D90&gt;
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        if self._cancel_unsubscribe is not None:
+            self._cancel_unsubscribe()
+        self._heartbeat_stop.set()
+        if self._heartbeat_worker is not None:
+            self._heartbeat_worker.join(timeout=1)
+        try:
+            if self.exploration is not None:
+                try:
+                    self.exploration.close()
+                except ValueError:
+                    self.coordinator.finish(
+                        "recovery_required", error_code="exploration_cleanup_unconfirmed"
+                    )
+                    self.state.set_status("recovery_required", "exploration_cleanup_unconfirmed")
+            current = self.coordinator.store.snapshot(self.state.repair_run_id)
+            if current.owner_token == self.coordinator.lease.owner_token and current.owner_token:
+                if current.status == "active":
+                    current = self.coordinator.finish("released")
+                elif current.status in {"reconciling", "cancel_requested", "cancelling"}:
+                    current = self.coordinator.finish(
+                        "recovery_required", error_code="binding_closed_before_cleanup"
+                    )
+                self.state.node_timings["coordination_status"] = current.status
+                if current.status == "recovery_required":
+                    self.state.set_status("recovery_required", "cleanup_or_write_unconfirmed")
+            if current.generation == self.coordinator.lease.generation:
+&gt;               previous = self.state.recovery_outcome
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               AttributeError: 'RepairState' object has no attribute 'recovery_outcome'
+
+src\repair\plan_binding.py:368: AttributeError</failure></testcase><testcase classname="tests.test_recovery_cancel_outcome" name="test_projection_does_not_promote_cleanup_to_verified_write" time="0.001" /></testsuite></testsuites>

@@ -78,6 +78,8 @@ class TestResumeSkipsParse:
 
         orch = CaptureResumeOrchestrator(None)
         orch._repo_root = str(tmp_path)
+        seed = RepairState(issue_input="test issue", repair_run_id="resume-001")
+        save_repair_checkpoint(seed, str(tmp_path))
 
         result = orch.repair(
             "test issue",
@@ -121,7 +123,7 @@ class TestResumeSkipsParse:
         assert new_state.repair_plan is not None
         assert new_state.repair_plan.issue_type == "type_error"
 
-    def test_resume_repair_reenters_patch_loop(self, tmp_path):
+    def test_resume_repair_reenters_patch_loop(self, tmp_path, monkeypatch):
         """有效 checkpoint 应跳过 parse/localize，并继续执行 patch loop。"""
         from src.orchestrator import Orchestrator
         from src.repair.checkpoint_load import save_repair_checkpoint
@@ -173,13 +175,16 @@ class TestResumeSkipsParse:
                 }
 
         orch = ResumeOrchestrator()
+        # This unit double has no Agent or execution registry. Real owner/Plan
+        # initialization is covered by the public L2 process tests.
+        monkeypatch.setattr(orch, "_begin_repair_trace", lambda _: None)
         result = orch.repair("test issue", repair_timeout_s=0, resume_run_id="resume-002")
 
         assert orch.patch_calls == 1
         assert result.status == "pending_verify"
         assert result.node_timings.get("verify_skipped") is True
 
-    def test_skip_verify_retries_empty_truncated_patch(self, tmp_path):
+    def test_skip_verify_retries_empty_truncated_patch(self, tmp_path, monkeypatch):
         """关闭 Verifier 也必须消费空补丁重试，而不是第一次就退出。"""
         from src.orchestrator import Orchestrator
         from src.state import CandidatePatch
@@ -207,9 +212,7 @@ class TestResumeSkipsParse:
                 self.patch_calls += 1
                 timing = {"total_ms": 1, "model_call_ms": 1, "parse_apply_ms": 0}
                 if self.patch_calls == 1:
-                    repair_state.node_timings["patcher_terminal_status"] = (
-                        "model_output_truncated"
-                    )
+                    repair_state.node_timings["patcher_terminal_status"] = "model_output_truncated"
                     return [], timing
                 repair_state.node_timings["patcher_terminal_status"] = "patch_produced"
                 return [
@@ -221,16 +224,15 @@ class TestResumeSkipsParse:
                 ], timing
 
         orch = ResumeOrchestrator()
-        result = orch.repair(
-            "test issue", repair_timeout_s=0, resume_run_id="resume-empty"
-        )
+        monkeypatch.setattr(orch, "_begin_repair_trace", lambda _: None)
+        result = orch.repair("test issue", repair_timeout_s=0, resume_run_id="resume-empty")
 
         assert orch.patch_calls == 2
         assert result.retry_count == 1
         assert result.status == "pending_verify"
         assert "直接调用一次 apply_patch" in result.feedback
 
-    def test_skip_verify_still_runs_critic_and_retries(self, tmp_path):
+    def test_skip_verify_still_runs_critic_and_retries(self, tmp_path, monkeypatch):
         from src.orchestrator import Orchestrator
         from src.state import CandidatePatch
 
@@ -265,16 +267,14 @@ class TestResumeSkipsParse:
                         patched_lines=added,
                         diff=(
                             "--- a/a.py\n+++ b/a.py\n@@ -1 +1,2 @@\n"
-                            "-value = 1\n+value = 2\n"
-                            + ("+value = 2\n" if duplicate else "")
+                            "-value = 1\n+value = 2\n" + ("+value = 2\n" if duplicate else "")
                         ),
                     )
                 ], {"total_ms": 1, "model_call_ms": 1, "parse_apply_ms": 0}
 
         orch = ResumeOrchestrator()
-        result = orch.repair(
-            "test issue", repair_timeout_s=0, resume_run_id="resume-critic"
-        )
+        monkeypatch.setattr(orch, "_begin_repair_trace", lambda _: None)
+        result = orch.repair("test issue", repair_timeout_s=0, resume_run_id="resume-critic")
 
         assert orch.patch_calls == 2
         assert orch.restore_calls >= 1

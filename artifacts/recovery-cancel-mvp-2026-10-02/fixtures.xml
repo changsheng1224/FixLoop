@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="5" time="1.717" timestamp="2026-10-02T04:19:29.837203+08:00" hostname="DESKTOP-M8LE8SP"><testcase classname="tests.test_resume_repair.TestResumeSkipsParse" name="test_resume_repair_reenters_patch_loop" time="0.100" /><testcase classname="tests.test_resume_repair.TestResumeSkipsParse" name="test_skip_verify_retries_empty_truncated_patch" time="0.042" /><testcase classname="tests.test_resume_repair.TestResumeSkipsParse" name="test_skip_verify_still_runs_critic_and_retries" time="0.039" /><testcase classname="tests.test_recovery_cancel_outcome" name="test_repeated_unconfirmed_cancel_reports_resource_without_rollback" time="0.689"><failure message="agent_runtime.run_coordination.store.StaleGenerationError: owner generation is stale">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-recovery-cancel-fixtures/test_repeated_unconfirmed_canc0')
+
+    def test_repeated_unconfirmed_cancel_reports_resource_without_rollback(tmp_path):
+        from src.repair.plan_binding import RepairPlanBinding
+    
+        orch, seed, _ = repair_fixture(tmp_path)
+        binding = RepairPlanBinding(orch, seed, defer_plan=True)
+        orch._plan_binding = binding
+        binding.coordinator.register_resource(resource_id="residual", kind="command", effect="write")
+        target = tmp_path / "value.py"
+        target.write_text("unconfirmed write\n")
+        try:
+            for _ in range(2):
+&gt;               assert not orch._cancel_run_resources(seed)
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_recovery_cancel_outcome.py:268: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\orchestrator.py:1143: in _cancel_run_resources
+    report = binding.coordinator.cancel(finalize=finalize)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+agent_runtime\run_coordination\coordinator.py:229: in cancel
+    request_id = self.store.request_cancel(lease, request_id)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;agent_runtime.run_coordination.store.RunCoordinationStore object at 0x0000016002E44050&gt;
+lease = OwnerLease(task_id='plan-fixture-run', run_id='plan-fixture-run', workspace_id='76853837a597b435d0695b5198fdbf2f', own...a4008b4d199d17a89a035', generation=1, coordination_revision=6, lease_expires_at=1790886001.146624, status='cancelling')
+request_id = 'cancel-e689c93ec1a24ffe978d372a811627db'
+
+    def request_cancel(self, lease: OwnerLease, request_id: str = "") -&gt; str:
+        request_id = request_id or f"cancel-{uuid.uuid4().hex}"
+        with closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = self._row(conn, lease.run_id)
+            if (
+                row["owner_token"] != lease.owner_token
+                or int(row["generation"]) != lease.generation
+            ):
+                conn.rollback()
+&gt;               raise StaleGenerationError()
+E               agent_runtime.run_coordination.store.StaleGenerationError: owner generation is stale
+
+agent_runtime\run_coordination\store.py:431: StaleGenerationError</failure></testcase><testcase classname="tests.test_recovery_cancel_outcome" name="test_plan_recovery_projection_explains_unknown_and_confirmed_attempts" time="0.001" /></testsuite></testsuites>

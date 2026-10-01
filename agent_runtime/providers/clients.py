@@ -28,9 +28,7 @@ def _sanitize_provider_error_message(value: object) -> str:
     text = " ".join(str(value or "").split())
     for pattern in _SECRET_PATTERNS:
         text = pattern.sub(
-            lambda match: (
-                match.group(1) + "<redacted>" if match.lastindex else "<redacted>"
-            ),
+            lambda match: (match.group(1) + "<redacted>" if match.lastindex else "<redacted>"),
             text,
         )
     if len(text) > _HTTP_ERROR_MESSAGE_LIMIT:
@@ -129,9 +127,7 @@ def _http_error_diagnostics(
         error_obj = payload.get("error")
         if isinstance(error_obj, dict):
             response["error_type"] = _sanitize_provider_error_message(error_obj.get("type"))
-            response["error_message"] = _sanitize_provider_error_message(
-                error_obj.get("message")
-            )
+            response["error_message"] = _sanitize_provider_error_message(error_obj.get("message"))
         elif error_obj:
             response["error_message"] = _sanitize_provider_error_message(error_obj)
         request_id = payload.get("request_id") or payload.get("id")
@@ -246,6 +242,7 @@ class FakeNativeToolClient(FakeModelClient):
             ProviderFinish,
             ToolCall,
         )
+
         latest = request.messages[-1].get("content", "") if request.messages else ""
         if isinstance(latest, list):
             latest = json.dumps(latest, ensure_ascii=False)
@@ -291,6 +288,7 @@ class FakeNativeToolClient(FakeModelClient):
             ),
             usage=usage,
         )
+
 
 class AnthropicCompatibleModelClient(SessionUsageMixin):
     """Anthropic Messages API 兼容客户端。
@@ -429,12 +427,13 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
             if block.get("type") == "text":
                 text_parts.append(str(block.get("text") or ""))
             elif block.get("type") == "tool_use":
-                args = block.get("input") or {}
+                # Preserve malformed fields so batch admission can reject them losslessly.
+                args = block.get("input")
                 tool_calls.append(
                     ToolCall(
-                        name=str(block.get("name") or ""),
-                        arguments=args if isinstance(args, dict) else {},
-                        call_id=str(block.get("id") or ""),
+                        name=block.get("name", ""),
+                        arguments=args,
+                        call_id=block.get("id", ""),
                     )
                 )
         text = "".join(text_parts)
@@ -445,7 +444,7 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
         return ModelTurnResult(
             text=text,
             tool_calls=tool_calls,
-            content=[b for b in content if isinstance(b, dict)],
+            content=content,
             finish=ProviderFinish(finish_kind, raw_reason, "anthropic"),
             usage=_usage_dict(data.get("usage")),
         )

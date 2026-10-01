@@ -1,0 +1,254 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="3" skipped="0" tests="33" time="149.405" timestamp="2026-10-02T04:16:15.234455+08:00" hostname="DESKTOP-M8LE8SP"><testcase classname="tests.test_recovery_cancel_outcome" name="test_explicit_resume_invalid_checkpoint_never_enters_runtime[shape]" time="0.553" /><testcase classname="tests.test_recovery_cancel_outcome" name="test_explicit_resume_invalid_checkpoint_never_enters_runtime[no-envelope]" time="0.456" /><testcase classname="tests.test_recovery_cancel_outcome" name="test_explicit_resume_invalid_checkpoint_never_enters_runtime[workspace]" time="0.459" /><testcase classname="tests.test_recovery_cancel_outcome" name="test_new_run_identity_does_not_load_checkpoint_and_conflicting_intent_is_rejected" time="0.003" /><testcase classname="tests.test_recovery_cancel_outcome" name="test_cancel_before_execution_has_no_model_call_or_runtime_state" time="0.434" /><testcase classname="tests.test_recovery_cancel_outcome" name="test_public_owner_conflict_reports_wait_without_mutating_winner" time="0.503" /><testcase classname="tests.test_recovery_cancel_outcome" name="test_persisted_cancel_resume_finishes_cleanup_and_repeat_does_not_execute" time="21.474" /><testcase classname="tests.test_recovery_cancel_outcome" name="test_external_state_root_checkpoint_roundtrip_preserves_identity" time="0.448" /><testcase classname="tests.test_resume_repair.TestSaveLoadCheckpoint" name="test_save_and_load_roundtrip" time="0.016" /><testcase classname="tests.test_resume_repair.TestSaveLoadCheckpoint" name="test_load_nonexistent_returns_none" time="0.003" /><testcase classname="tests.test_resume_repair.TestSaveLoadCheckpoint" name="test_load_corrupted_returns_none" time="0.005" /><testcase classname="tests.test_resume_repair.TestSaveCheckpointValidatesType" name="test_non_repair_state_raises" time="0.002" /><testcase classname="tests.test_resume_repair.TestSaveCheckpointValidatesType" name="test_missing_run_id_raises" time="0.002" /><testcase classname="tests.test_resume_repair.TestResumeSkipsParse" name="test_orchestrator_repair_passes_resume_run_id_to_state" time="0.016" /><testcase classname="tests.test_resume_repair.TestResumeSkipsParse" name="test_resume_repair_skips_parse" time="0.017" /><testcase classname="tests.test_resume_repair.TestResumeSkipsParse" name="test_resume_repair_reenters_patch_loop" time="0.020"><failure message="AttributeError: 'NoneType' object has no attribute 'tool_context'">self = &lt;tests.test_resume_repair.TestResumeSkipsParse object at 0x000001F4176CD6E0&gt;
+tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-recovery-cancel-entry/test_resume_repair_reenters_pa0')
+
+    def test_resume_repair_reenters_patch_loop(self, tmp_path):
+        """有效 checkpoint 应跳过 parse/localize，并继续执行 patch loop。"""
+        from src.orchestrator import Orchestrator
+        from src.repair.checkpoint_load import save_repair_checkpoint
+        from src.state import CandidatePatch, RepairPlan, RepairState, SuspectLocation
+    
+        repo = str(tmp_path)
+        state = RepairState(issue_input="test issue")
+        state.repair_run_id = "resume-002"
+        state.retry_count = 1
+        state.phase = "patch"
+        state.feedback = "previous verifier feedback"
+        state.suspect_locations = [
+            SuspectLocation(file_path="a.py", start_line=10, end_line=12, confidence=0.9)
+        ]
+        state.repair_plan = RepairPlan(issue_type="type_error")
+        state.blackboard_snapshot = {"entries": {"scratch:feedback": "previous verifier feedback"}}
+        (Path(repo) / ".agent" / "runs" / "resume-002").mkdir(parents=True)
+        save_repair_checkpoint(state, repo)
+    
+        class ResumeOrchestrator(Orchestrator):
+            def __init__(self):
+                super().__init__(None, use_pytest_verify=False)
+                self._repo_root = repo
+                self.patch_calls = 0
+    
+            def _snapshot_repo(self):
+                return {}
+    
+            def _restore_repo_snapshot(self, snapshot):
+                return None
+    
+            def _parse_issue(self, issue):
+                raise AssertionError("resume path should skip parse")
+    
+            def _run_patcher(self, state):
+                self.patch_calls += 1
+                assert state.feedback == "previous verifier feedback"
+                assert state.suspect_locations
+                return [
+                    CandidatePatch(
+                        file_path="a.py",
+                        original_lines="old",
+                        patched_lines="new",
+                    )
+                ], {
+                    "total_ms": 1,
+                    "model_call_ms": 0,
+                    "parse_apply_ms": 1,
+                }
+    
+        orch = ResumeOrchestrator()
+&gt;       result = orch.repair("test issue", repair_timeout_s=0, resume_run_id="resume-002")
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_resume_repair.py:178: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\orchestrator.py:403: in repair
+    return self._repair_impl(state, initial_snapshot=initial_snapshot)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\repair\pipeline.py:430: in _repair_impl
+    return self._repair_impl_with_plan(state, initial_snapshot)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\repair\pipeline.py:486: in _repair_impl_with_plan
+    return self._repair_from_checkpoint(state, initial_snapshot, cp, state.repair_run_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\repair\pipeline.py:926: in _repair_from_checkpoint
+    self._begin_repair_trace(state)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;tests.test_resume_repair.TestResumeSkipsParse.test_resume_repair_reenters_patch_loop.&lt;locals&gt;.ResumeOrchestrator object at 0x000001F417692510&gt;
+state = RepairState(issue_input='test issue', repair_plan=RepairPlan(language='python', language_source='', issue_type='type_e...'}, action_ledger=[], side_effects=[], checkpoint_id='cp-d6367ff97a434b05', checkpoint_sequence=1, hard_constraints=[])
+
+    def _begin_repair_trace(self, state: RepairState) -&gt; None:
+        import uuid
+    
+        from agent_runtime.run_coordination import RunCoordinator
+    
+        if not state.repair_run_id:
+            state.repair_run_id = "repair-" + uuid.uuid4().hex
+        coordinator = RunCoordinator(
+            self._repo_root,
+            state.repair_run_id,
+            state.repair_run_id,
+&gt;           state_root=str(getattr(self.patcher.tool_context, "state_root", "") or ""),
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+        )
+E       AttributeError: 'NoneType' object has no attribute 'tool_context'
+
+src\orchestrator.py:865: AttributeError</failure></testcase><testcase classname="tests.test_resume_repair.TestResumeSkipsParse" name="test_skip_verify_retries_empty_truncated_patch" time="0.018"><failure message="AttributeError: 'NoneType' object has no attribute 'tool_context'">self = &lt;tests.test_resume_repair.TestResumeSkipsParse object at 0x000001F4176CDA70&gt;
+tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-recovery-cancel-entry/test_skip_verify_retries_empty0')
+
+    def test_skip_verify_retries_empty_truncated_patch(self, tmp_path):
+        """关闭 Verifier 也必须消费空补丁重试，而不是第一次就退出。"""
+        from src.orchestrator import Orchestrator
+        from src.state import CandidatePatch
+    
+        repo = str(tmp_path)
+        state = RepairState(issue_input="test issue", max_retries=3)
+        state.repair_run_id = "resume-empty"
+        state.phase = "patch"
+        (Path(repo) / ".agent" / "runs" / state.repair_run_id).mkdir(parents=True)
+        save_repair_checkpoint(state, repo)
+    
+        class ResumeOrchestrator(Orchestrator):
+            def __init__(self):
+                super().__init__(None, use_pytest_verify=False)
+                self._repo_root = repo
+                self.patch_calls = 0
+    
+            def _snapshot_repo(self):
+                return {}
+    
+            def _restore_repo_snapshot(self, snapshot):
+                return None
+    
+            def _run_patcher(self, repair_state):
+                self.patch_calls += 1
+                timing = {"total_ms": 1, "model_call_ms": 1, "parse_apply_ms": 0}
+                if self.patch_calls == 1:
+                    repair_state.node_timings["patcher_terminal_status"] = "model_output_truncated"
+                    return [], timing
+                repair_state.node_timings["patcher_terminal_status"] = "patch_produced"
+                return [
+                    CandidatePatch(
+                        file_path="a.py",
+                        original_lines="old",
+                        patched_lines="new",
+                    )
+                ], timing
+    
+        orch = ResumeOrchestrator()
+&gt;       result = orch.repair("test issue", repair_timeout_s=0, resume_run_id="resume-empty")
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_resume_repair.py:224: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\orchestrator.py:403: in repair
+    return self._repair_impl(state, initial_snapshot=initial_snapshot)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\repair\pipeline.py:430: in _repair_impl
+    return self._repair_impl_with_plan(state, initial_snapshot)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\repair\pipeline.py:486: in _repair_impl_with_plan
+    return self._repair_from_checkpoint(state, initial_snapshot, cp, state.repair_run_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\repair\pipeline.py:926: in _repair_from_checkpoint
+    self._begin_repair_trace(state)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;tests.test_resume_repair.TestResumeSkipsParse.test_skip_verify_retries_empty_truncated_patch.&lt;locals&gt;.ResumeOrchestrator object at 0x000001F418A6B770&gt;
+state = RepairState(issue_input='test issue', repair_plan=None, suspect_locations=[], retrieved_context=None, candidate_patche...'}, action_ledger=[], side_effects=[], checkpoint_id='cp-456d044df1e54153', checkpoint_sequence=1, hard_constraints=[])
+
+    def _begin_repair_trace(self, state: RepairState) -&gt; None:
+        import uuid
+    
+        from agent_runtime.run_coordination import RunCoordinator
+    
+        if not state.repair_run_id:
+            state.repair_run_id = "repair-" + uuid.uuid4().hex
+        coordinator = RunCoordinator(
+            self._repo_root,
+            state.repair_run_id,
+            state.repair_run_id,
+&gt;           state_root=str(getattr(self.patcher.tool_context, "state_root", "") or ""),
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+        )
+E       AttributeError: 'NoneType' object has no attribute 'tool_context'
+
+src\orchestrator.py:865: AttributeError</failure></testcase><testcase classname="tests.test_resume_repair.TestResumeSkipsParse" name="test_skip_verify_still_runs_critic_and_retries" time="0.018"><failure message="AttributeError: 'NoneType' object has no attribute 'tool_context'">self = &lt;tests.test_resume_repair.TestResumeSkipsParse object at 0x000001F418984050&gt;
+tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-recovery-cancel-entry/test_skip_verify_still_runs_cr0')
+
+    def test_skip_verify_still_runs_critic_and_retries(self, tmp_path):
+        from src.orchestrator import Orchestrator
+        from src.state import CandidatePatch
+    
+        repo = str(tmp_path)
+        state = RepairState(issue_input="test issue", max_retries=3)
+        state.repair_run_id = "resume-critic"
+        state.phase = "patch"
+        (Path(repo) / ".agent" / "runs" / state.repair_run_id).mkdir(parents=True)
+        save_repair_checkpoint(state, repo)
+    
+        class ResumeOrchestrator(Orchestrator):
+            def __init__(self):
+                super().__init__(None, use_pytest_verify=False)
+                self._repo_root = repo
+                self.patch_calls = 0
+                self.restore_calls = 0
+    
+            def _snapshot_repo(self):
+                return {"a.py": "value = 1\n"}
+    
+            def _restore_repo_snapshot(self, snapshot):
+                self.restore_calls += 1
+    
+            def _run_patcher(self, repair_state):
+                self.patch_calls += 1
+                duplicate = self.patch_calls == 1
+                added = "value = 2\nvalue = 2" if duplicate else "value = 2"
+                return [
+                    CandidatePatch(
+                        file_path="a.py",
+                        original_lines="value = 1",
+                        patched_lines=added,
+                        diff=(
+                            "--- a/a.py\n+++ b/a.py\n@@ -1 +1,2 @@\n"
+                            "-value = 1\n+value = 2\n" + ("+value = 2\n" if duplicate else "")
+                        ),
+                    )
+                ], {"total_ms": 1, "model_call_ms": 1, "parse_apply_ms": 0}
+    
+        orch = ResumeOrchestrator()
+&gt;       result = orch.repair("test issue", repair_timeout_s=0, resume_run_id="resume-critic")
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_resume_repair.py:272: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\orchestrator.py:403: in repair
+    return self._repair_impl(state, initial_snapshot=initial_snapshot)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\repair\pipeline.py:430: in _repair_impl
+    return self._repair_impl_with_plan(state, initial_snapshot)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\repair\pipeline.py:486: in _repair_impl_with_plan
+    return self._repair_from_checkpoint(state, initial_snapshot, cp, state.repair_run_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\repair\pipeline.py:926: in _repair_from_checkpoint
+    self._begin_repair_trace(state)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;tests.test_resume_repair.TestResumeSkipsParse.test_skip_verify_still_runs_critic_and_retries.&lt;locals&gt;.ResumeOrchestrator object at 0x000001F418A6BB60&gt;
+state = RepairState(issue_input='test issue', repair_plan=None, suspect_locations=[], retrieved_context=None, candidate_patche...'}, action_ledger=[], side_effects=[], checkpoint_id='cp-8fbfa6da474a4d2b', checkpoint_sequence=1, hard_constraints=[])
+
+    def _begin_repair_trace(self, state: RepairState) -&gt; None:
+        import uuid
+    
+        from agent_runtime.run_coordination import RunCoordinator
+    
+        if not state.repair_run_id:
+            state.repair_run_id = "repair-" + uuid.uuid4().hex
+        coordinator = RunCoordinator(
+            self._repo_root,
+            state.repair_run_id,
+            state.repair_run_id,
+&gt;           state_root=str(getattr(self.patcher.tool_context, "state_root", "") or ""),
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+        )
+E       AttributeError: 'NoneType' object has no attribute 'tool_context'
+
+src\orchestrator.py:865: AttributeError</failure></testcase><testcase classname="tests.test_run_coordination_binding" name="test_early_close_relinquishes_owner_and_is_idempotent" time="0.666" /><testcase classname="tests.test_run_coordination_binding" name="test_early_close_preserves_unknown_resources" time="0.592" /><testcase classname="tests.test_run_coordination_binding" name="test_session_open_failure_releases_fence_and_cancel_subscription" time="0.484" /><testcase classname="tests.test_run_coordination_binding" name="test_verified_recovery_clears_old_context_dispatch_block" time="0.607" /><testcase classname="tests.test_run_coordination_binding" name="test_public_resume_rejects_loser_before_task_or_trace_mutation" time="35.173" /><testcase classname="tests.test_run_coordination_binding" name="test_live_worker_timeout_preserves_disk_and_recovery_state" time="0.568" /><testcase classname="tests.test_run_coordination_binding" name="test_trace_initialization_failure_relinquishes_entry_owner" time="0.455" /><testcase classname="tests.test_run_coordination_binding" name="test_public_resume_finishes_persisted_cancel_without_model_calls" time="22.042" /><testcase classname="tests.test_run_coordination_binding" name="test_finalize_preserves_worktree_when_resource_cleanup_is_unknown" time="0.562" /><testcase classname="tests.test_run_coordination_binding" name="test_binding_heartbeat_renews_owner_and_stale_close_preserves_replacement" time="0.699" /><testcase classname="tests.test_run_coordination_binding" name="test_public_resume_returns_recovery_state_for_unknown_resource" time="22.452" /><testcase classname="tests.test_run_coordination_binding" name="test_long_task_initialization_failure_releases_plan_lease" time="0.444" /><testcase classname="tests.test_run_coordination_binding" name="test_confirmed_cancel_rolls_back_before_releasing_owner" time="12.478" /><testcase classname="tests.test_run_coordination_binding" name="test_unknown_patcher_write_is_not_reverted_by_export_gate" time="0.439" /><testcase classname="tests.test_run_coordination_binding" name="test_public_cancel_after_patch_completes_cleanup_and_rollback" time="25.646" /></testsuite></testsuites>

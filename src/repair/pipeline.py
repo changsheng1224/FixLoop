@@ -422,10 +422,23 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         initial_snapshot: dict | None = None,
     ) -> RepairState:
         from agent_runtime.cancellation import CancelledError
+        from agent_runtime.run_coordination import OwnerConflictError
         from src.repair.plan_binding import ResumeRecoveryRequiredError
+        from src.repair.recovery_outcome import publish_recovery_outcome
 
         try:
             return self._repair_impl_with_plan(state, initial_snapshot)
+        except OwnerConflictError as exc:
+            state.set_status("recovery_required", exc.code)
+            state.agent_errors["coordination"] = exc.code
+            publish_recovery_outcome(
+                state,
+                {"run_id": state.repair_run_id, "status": exc.run_status or exc.code},
+                stage="owner",
+                reason_code=exc.code,
+                emitter=self._progress_emitter(),
+            )
+            return state
         except CancelledError:
             state.node_timings["user_cancel"] = True
             state.set_status("user_cancel", "persisted_cancel_completed")
@@ -435,6 +448,17 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             state.node_timings["coordination_status"] = "recovery_required"
             state.agent_errors["plan_runtime"] = str(exc)
             state.set_status("recovery_required", "cleanup_or_write_unconfirmed")
+            previous = state.recovery_outcome
+            publish_recovery_outcome(
+                state,
+                {**previous, "run_id": state.repair_run_id, "status": "recovery_required"},
+                stage=previous.get("stage", "resources"),
+                reason_code=exc.reason,
+                plan_report=previous.get("plan")
+                if previous.get("effects_verified") is not None
+                else None,
+                emitter=self._progress_emitter(),
+            )
             self._end_repair_trace(state)
             return state
         finally:
@@ -456,20 +480,10 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         if initial_snapshot is None:
             initial_snapshot = self._snapshot_repo()
 
-        # ── L2 resume: 从 checkpoint 恢复，跳过 parse/localize ──
-        resume_run_id = state.repair_run_id
-        if resume_run_id:
-            from src.repair.checkpoint_load import load_repair_checkpoint
-
-            cp = load_repair_checkpoint(
-                self._repo_root,
-                resume_run_id,
-                state_root=str(
-                    getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""
-                ),
-            )
-            if cp:
-                return self._repair_from_checkpoint(state, initial_snapshot, cp, resume_run_id)
+        # Explicit resume was validated before owner/trace/task mutation.
+        cp = self._active_repair_ctx().resume_checkpoint
+        if cp is not None:
+            return self._repair_from_checkpoint(state, initial_snapshot, cp, state.repair_run_id)
 
         max_retries = state.max_retries
         issue = state.issue_input
@@ -1075,6 +1089,8 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             resume_timings = {}
 
         state.node_timings = {**dict(checkpoint.get("node_timings") or {}), **resume_timings}
+        # A saved display projection cannot authorize this owner's recovery.
+        state.node_timings.pop("recovery_outcome", None)
         state.retry_count = checkpoint.get("retry_count", 0)
         state.max_retries = checkpoint.get("max_retries", state.max_retries)
         state.phase = checkpoint.get("phase", "patch")

@@ -1,10 +1,10 @@
 # FixLoop 长任务上下文与证据管理 MVP 开发计划
 
-日期：2026-09-30。依据：[MVP Spec](../specs/2026-09-30-long-task-context-evidence-mvp.md)。状态：未实现。
+日期：2026-09-30；状态对账：2026-10-02。依据：[MVP Spec](../specs/2026-09-30-long-task-context-evidence-mvp.md)。状态：完整原范围部分实现；本轮确认的统一状态投影、必需预算门禁和恢复投影已完成，见 [验收记录](../../LONG_TASK_CONTEXT_ACCEPTANCE_2026-10-01.md)。决策版本、超长目标语义投影和其他入口迁移未实施。本文件保留原 P0–P5 拆解，**当前范围以 [2026-10-01 计划](2026-10-01-agent-design-reference-improvements.md)的已确认 MVP 为准**，不得重复建设已有状态模块或将原阶段整体勾完。
 
 ## 执行前提与估算
 
-按 P0 → P1 → P2 → P3 → P4 → P5 顺序实施，预计单人 10–15 个有效工作日，包含相关测试和集成返工。**P0 门禁是 Plan DAG MVP 已在一条真实 L2 修复路径提供稳定 PlanSession 与在途恢复接口**。如果它尚未实现，本计划只能先完成独立模型/fixture，不得把线性 Todo 当成已满足前提；Plan DAG 的 18–28 日另计。
+初始完整范围估算为单人 10–15 个有效工作日，不能当作当前剩余工期。本轮讨论收敛为约 2–4 日的差量 MVP，已复用 PlanSession、LongTaskState、预算和 checkpoint；不包含下述完整决策版本目标。普通 L1 Todo 不能替代此接口；下一领域继续单独讨论，不自动开展内核拆分或 Hermes 专项补充。
 
 当前工作树有未提交修改。开发前记录受影响文件的状态与哈希；不 reset/stash/覆盖。分支、远端 PR 和全量测试遵循 `CLAUDE.md`。本计划不做开启/关闭的效果对照实验。
 
@@ -18,12 +18,12 @@
 
 ## P1：权威状态与决策版本（2–3 天）
 
-模块建议：新增 `agent_runtime/context_governance/state.py`、`decisions.py`；最小接入 L2 任务入口与 PlanSession。具体路径可依落地的 Plan 模块调整。
+模块：扩展已有 `agent_runtime/plan_runtime/long_task.py`、`session.py` 与其 journal；最小接入 L2 任务入口，不新建平行 TaskContextState。字段为目标契约，需按实际差量实施。
 
-1. 实现 TaskContextState、DecisionRecord、schema/checksum/序列化。原始用户请求和硬约束从受信任入口写入，保存稳定引用与 checksum。
+1. 在现有 LongTaskState/schema/checksum/序列化基础上补 DecisionRecord 和来源。原始用户请求和硬约束从受信任入口写入，保存稳定引用与 checksum。
 2. active/superseded 决策用追加 revision 表达；只有主 Agent 可确认新决策，Subagent/摘要不能直接修改权威状态。
 3. Plan 状态由 Plan reducer 维护；本模块只绑定当前 plan_id/version/state_revision/node_id，发现引用不一致时返回 `state_mismatch`。
-4. 提供纯函数将权威状态渲染为当前节点必要信息，独立于压缩历史。
+4. 将现有状态投影改为只读且必要信息优先，独立于压缩历史；freshness 状态更新由显式 owner 操作落盘。
 
 新增测试建议：`tests/test_task_context_state.py`。覆盖目标/约束不被摘要改写、决策 supersede、Plan revision 不一致、schema/checksum 损坏。门禁：相同权威状态得到确定性投影，无第二份可变 Plan 节点状态。
 
@@ -53,7 +53,7 @@
 
 模块：`agent_runtime/checkpoint.py`、`session_contract.py`、Plan 恢复器适配，必要时调整 context manifest 序列化。
 
-1. 在 sealed envelope 内关联 TaskContextState checksum、原始请求引用、active 决策链、Plan 身份、当前节点所需 Observation 清单及版本。活动引用不能被“最近 100 条”截断。
+1. 在现有 sealed envelope 内关联 LongTaskState checksum、原始请求引用、active 决策链、Plan 身份、当前节点所需 Observation 清单及版本；复用已有 Plan 归档，活动引用不能被“最近 100 条”截断。
 2. 恢复先等待 Plan DAG 的 attempt reconciliation；写入 uncertain 时直接阻断上下文续跑。
 3. 校验权威状态、Plan revision、Observation scope/checksum/文件版本。权威身份/完整性不符拒绝自动恢复；局部证据过期只标相关节点待重取。
 4. 恢复后重新组装当前节点上下文并记录报告；旧摘要/旧 manifest 不当成事实源。保持旧 schema 明确诊断，不伪装已核验。

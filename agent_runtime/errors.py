@@ -12,6 +12,19 @@ class EmptyModelResponse(Exception):  # noqa: N818 - public API name kept stable
         super().__init__(self.detail)
 
 
+class ContextBuildBlockedError(Exception):
+    """Required task context is unavailable; never send an incomplete request."""
+
+    def __init__(self, reason: str, *, metadata: dict | None = None):
+        self.reason = reason
+        self.metadata = dict(metadata or {})
+        super().__init__(reason)
+
+    @property
+    def user_message(self) -> str:
+        return f"<final>上下文构建已阻断：{self.reason}。请按诊断重取证据或核对任务状态。</final>"
+
+
 class ContextTooLargeError(Exception):
     """Prompt 上下文超出 HARD_CAP 硬顶限制，拒绝执行。"""
 

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from .models import digest, new_id
+from .view import plan_view
 
 
 @dataclass
@@ -27,7 +30,7 @@ class LongTaskState:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "LongTaskState":
+    def from_dict(cls, raw: dict[str, Any]) -> LongTaskState:
         data = dict(raw or {})
         return cls(
             task_id=str(data.get("task_id", "")),
@@ -49,7 +52,7 @@ class LongTaskState:
         return raw
 
     @classmethod
-    def verify(cls, raw: dict[str, Any]) -> "LongTaskState":
+    def verify(cls, raw: dict[str, Any]) -> LongTaskState:
         data = dict(raw or {})
         checksum = data.pop("state_checksum", "")
         if not checksum or checksum != digest(data):
@@ -69,9 +72,17 @@ class LongTaskContext:
     def _touch(self) -> None:
         self.state.state_revision += 1
 
-    def record_decision(self, decision: str, *, rationale: str = "", source: str = "") -> None:
+    def record_fact(self, fact: str, *, kind: str, source: str = "", evidence_refs=()) -> None:
+        if kind not in {"source_review", "audit_note"}:
+            raise ValueError("audit_fact_kind_invalid")
         self.state.key_decisions.append(
-            {"id": new_id("decision"), "decision": decision, "rationale": rationale, "source": source}
+            {
+                "record_type": kind,
+                "id": new_id("fact"),
+                "fact": fact,
+                "source": source,
+                "evidence_refs": list(evidence_refs),
+            }
         )
         self._touch()
 
@@ -87,8 +98,14 @@ class LongTaskContext:
         self._touch()
 
     def build(self, node_id: str = "") -> dict[str, Any]:
-        node_id = node_id or self.state.current_node_id
-        node = self.plan.node(node_id) if self.plan and node_id else None
+        if (
+            not node_id
+            and self.plan
+            and any(n.node_id == self.state.current_node_id for n in self.plan.nodes)
+        ):
+            node_id = self.state.current_node_id
+        view = plan_view(self.plan, node_id) if self.plan else {}
+        node = next((n for n in view.get("nodes", []) if n["node_id"] == node_id), {})
         refs = list(self.state.evidence_refs)
         valid, stale = [], []
         for ref in refs:
@@ -96,16 +113,24 @@ class LongTaskContext:
                 valid.append(ref)
             else:
                 stale.append(ref)
-        self.state.stale_evidence = list(dict.fromkeys(self.state.stale_evidence + stale))
+        stale_refs = list(dict.fromkeys(self.state.stale_evidence + stale))
+        from .decisions import project_decisions
+
+        decisions = project_decisions(self.state.key_decisions, self.plan, self.evidence, node_id)
         return {
             "task": {"id": self.state.task_id, "run_id": self.state.run_id},
             "original_request": self.state.original_request,
             "hard_constraints": list(self.state.hard_constraints),
-            "key_decisions": list(self.state.key_decisions),
-            "current_node": node.definition() if node else {},
+            "key_decisions": decisions["active"],
+            "decision_checks": decisions["checks"],
+            "audit_facts": deepcopy(
+                [item for item in self.state.key_decisions if item.get("record_type") != "decision"]
+            ),
+            "current_node": node,
+            "plan_view": view,
             "node_history": list(self.state.node_history),
             "evidence_refs": valid,
-            "stale_evidence": list(self.state.stale_evidence),
+            "stale_evidence": stale_refs,
             "state_revision": self.state.state_revision,
             "needs_evidence_refresh": bool(stale),
         }
@@ -127,8 +152,17 @@ class LongTaskContext:
             raise ValueError("evidence_refresh_did_not_replace")
         if not self.evidence.valid(new_ref):
             raise ValueError("evidence_refresh_not_valid")
-        self.state.evidence_refs = [new_ref if item == ref else item for item in self.state.evidence_refs]
+        self.state.evidence_refs = [
+            new_ref if item == ref else item for item in self.state.evidence_refs
+        ]
         self.state.stale_evidence = [item for item in self.state.stale_evidence if item != ref]
-        self.state.key_decisions.append({"id": new_id("evidence"), "supersedes": ref, "replacement": new_ref})
+        self.state.key_decisions.append(
+            {
+                "record_type": "evidence_replacement",
+                "id": new_id("evidence"),
+                "supersedes": ref,
+                "replacement": new_ref,
+            }
+        )
         self._touch()
         return new_ref

@@ -138,7 +138,10 @@ def test_trace_initialization_failure_relinquishes_entry_owner(tmp_path, monkeyp
 
 
 def test_public_resume_finishes_persisted_cancel_without_model_calls(tmp_path):
+    from src.repair.checkpoint_load import save_repair_checkpoint
+
     orch, state, client = repair_fixture(tmp_path, resume=True, full=True)
+    save_repair_checkpoint(state, str(tmp_path))
     old = RunCoordinator(str(tmp_path), state.repair_run_id, state.repair_run_id)
     old.acquire()
     old.reconcile()
@@ -199,7 +202,10 @@ def test_binding_heartbeat_renews_owner_and_stale_close_preserves_replacement(tm
 
 
 def test_public_resume_returns_recovery_state_for_unknown_resource(tmp_path):
+    from src.repair.checkpoint_load import save_repair_checkpoint
+
     orch, state, client = repair_fixture(tmp_path, resume=True, full=True)
+    save_repair_checkpoint(state, str(tmp_path))
     old = RunCoordinator(str(tmp_path), state.repair_run_id, state.repair_run_id)
     old.acquire()
     old.reconcile()
@@ -291,7 +297,7 @@ def test_public_cancel_after_patch_completes_cleanup_and_rollback(tmp_path, monk
     monkeypatch.setattr(client, "complete", cancel_after_final)
     before = (tmp_path / "value.py").read_text()
     result = orch.repair(
-        seed.issue_input, cancel_token=token, repair_timeout_s=0, resume_run_id=seed.repair_run_id
+        seed.issue_input, cancel_token=token, repair_timeout_s=0, run_id=seed.repair_run_id
     )
     assert result.status == "user_cancel", (result.agent_errors, result.node_timings)
     assert (tmp_path / "value.py").read_text() == before

@@ -1,0 +1,490 @@
+{
+  "scope": "targeted only; distinct nodes, latest run by JUnit start time",
+  "totals": {
+    "passed": 102,
+    "failed": 0,
+    "skipped": 0
+  },
+  "batches": [
+    {
+      "report": "baseline.xml",
+      "started_at": "2026-10-02T04:07:25.368966+08:00",
+      "passed": 0,
+      "failed": 2,
+      "skipped": 0
+    },
+    {
+      "report": "first.xml",
+      "started_at": "2026-10-02T04:10:18.447957+08:00",
+      "passed": 1,
+      "failed": 7,
+      "skipped": 0
+    },
+    {
+      "report": "accessor.xml",
+      "started_at": "2026-10-02T04:11:59.884215+08:00",
+      "passed": 7,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "report": "entry.xml",
+      "started_at": "2026-10-02T04:16:15.234455+08:00",
+      "passed": 30,
+      "failed": 3,
+      "skipped": 0
+    },
+    {
+      "report": "gates.xml",
+      "started_at": "2026-10-02T04:16:44.252571+08:00",
+      "passed": 54,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "report": "process.xml",
+      "started_at": "2026-10-02T04:16:44.718316+08:00",
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "report": "fixtures.xml",
+      "started_at": "2026-10-02T04:19:29.837203+08:00",
+      "passed": 4,
+      "failed": 1,
+      "skipped": 0
+    },
+    {
+      "report": "repeat.xml",
+      "started_at": "2026-10-02T04:20:42.023441+08:00",
+      "passed": 9,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "report": "fence.xml",
+      "started_at": "2026-10-02T04:23:51.400373+08:00",
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "report": "schema.xml",
+      "started_at": "2026-10-02T04:27:20.982967+08:00",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0
+    }
+  ],
+  "nodes": {
+    "tests.test_recovery_cancel_outcome::test_explicit_resume_invalid_checkpoint_never_enters_runtime[missing]": {
+      "status": "passed",
+      "report": "accessor.xml"
+    },
+    "tests.test_recovery_cancel_outcome::test_explicit_resume_invalid_checkpoint_never_enters_runtime[json]": {
+      "status": "passed",
+      "report": "accessor.xml"
+    },
+    "tests.test_recovery_cancel_outcome::test_explicit_resume_invalid_checkpoint_never_enters_runtime[checksum]": {
+      "status": "passed",
+      "report": "accessor.xml"
+    },
+    "tests.test_recovery_cancel_outcome::test_explicit_resume_invalid_checkpoint_never_enters_runtime[identity]": {
+      "status": "passed",
+      "report": "accessor.xml"
+    },
+    "tests.test_recovery_cancel_outcome::test_explicit_resume_invalid_checkpoint_never_enters_runtime[objective]": {
+      "status": "passed",
+      "report": "accessor.xml"
+    },
+    "tests.test_recovery_cancel_outcome::test_public_resume_reports_unknown_resource_and_preserves_disk": {
+      "status": "passed",
+      "report": "accessor.xml"
+    },
+    "tests.test_recovery_cancel_outcome::test_cancel_request_and_cleanup_are_distinct_until_finalization": {
+      "status": "passed",
+      "report": "accessor.xml"
+    },
+    "tests.test_recovery_cancel_outcome::test_projection_does_not_promote_cleanup_to_verified_write": {
+      "status": "passed",
+      "report": "first.xml"
+    },
+    "tests.test_recovery_cancel_outcome::test_explicit_resume_invalid_checkpoint_never_enters_runtime[shape]": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_recovery_cancel_outcome::test_explicit_resume_invalid_checkpoint_never_enters_runtime[no-envelope]": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_recovery_cancel_outcome::test_explicit_resume_invalid_checkpoint_never_enters_runtime[workspace]": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_recovery_cancel_outcome::test_new_run_identity_does_not_load_checkpoint_and_conflicting_intent_is_rejected": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_recovery_cancel_outcome::test_cancel_before_execution_has_no_model_call_or_runtime_state": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_recovery_cancel_outcome::test_public_owner_conflict_reports_wait_without_mutating_winner": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_recovery_cancel_outcome::test_persisted_cancel_resume_finishes_cleanup_and_repeat_does_not_execute": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_recovery_cancel_outcome::test_external_state_root_checkpoint_roundtrip_preserves_identity": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_resume_repair.TestSaveLoadCheckpoint::test_save_and_load_roundtrip": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_resume_repair.TestSaveLoadCheckpoint::test_load_nonexistent_returns_none": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_resume_repair.TestSaveLoadCheckpoint::test_load_corrupted_returns_none": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_resume_repair.TestSaveCheckpointValidatesType::test_non_repair_state_raises": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_resume_repair.TestSaveCheckpointValidatesType::test_missing_run_id_raises": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_resume_repair.TestResumeSkipsParse::test_orchestrator_repair_passes_resume_run_id_to_state": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_resume_repair.TestResumeSkipsParse::test_resume_repair_skips_parse": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_resume_repair.TestResumeSkipsParse::test_resume_repair_reenters_patch_loop": {
+      "status": "passed",
+      "report": "fixtures.xml"
+    },
+    "tests.test_resume_repair.TestResumeSkipsParse::test_skip_verify_retries_empty_truncated_patch": {
+      "status": "passed",
+      "report": "fixtures.xml"
+    },
+    "tests.test_resume_repair.TestResumeSkipsParse::test_skip_verify_still_runs_critic_and_retries": {
+      "status": "passed",
+      "report": "fixtures.xml"
+    },
+    "tests.test_run_coordination_binding::test_early_close_relinquishes_owner_and_is_idempotent": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_run_coordination_binding::test_early_close_preserves_unknown_resources": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_run_coordination_binding::test_session_open_failure_releases_fence_and_cancel_subscription": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_run_coordination_binding::test_verified_recovery_clears_old_context_dispatch_block": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_run_coordination_binding::test_public_resume_rejects_loser_before_task_or_trace_mutation": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_run_coordination_binding::test_live_worker_timeout_preserves_disk_and_recovery_state": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_run_coordination_binding::test_trace_initialization_failure_relinquishes_entry_owner": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_run_coordination_binding::test_public_resume_finishes_persisted_cancel_without_model_calls": {
+      "status": "passed",
+      "report": "repeat.xml"
+    },
+    "tests.test_run_coordination_binding::test_finalize_preserves_worktree_when_resource_cleanup_is_unknown": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_run_coordination_binding::test_binding_heartbeat_renews_owner_and_stale_close_preserves_replacement": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_run_coordination_binding::test_public_resume_returns_recovery_state_for_unknown_resource": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_run_coordination_binding::test_long_task_initialization_failure_releases_plan_lease": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_run_coordination_binding::test_confirmed_cancel_rolls_back_before_releasing_owner": {
+      "status": "passed",
+      "report": "repeat.xml"
+    },
+    "tests.test_run_coordination_binding::test_unknown_patcher_write_is_not_reverted_by_export_gate": {
+      "status": "passed",
+      "report": "entry.xml"
+    },
+    "tests.test_run_coordination_binding::test_public_cancel_after_patch_completes_cleanup_and_rollback": {
+      "status": "passed",
+      "report": "repeat.xml"
+    },
+    "tests.test_run_coordination::test_same_run_has_one_cross_process_owner": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_run_coordination::test_stale_generation_is_fenced_after_takeover": {
+      "status": "passed",
+      "report": "repeat.xml"
+    },
+    "tests.test_run_coordination::test_cancel_cleans_children_before_parent_and_is_idempotent": {
+      "status": "passed",
+      "report": "repeat.xml"
+    },
+    "tests.test_run_coordination::test_unknown_cleanup_stays_recovery_required": {
+      "status": "passed",
+      "report": "repeat.xml"
+    },
+    "tests.test_run_coordination::test_simultaneous_resumes_admit_exactly_one_executor": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_run_coordination::test_dead_owner_can_be_replaced_before_lease_expiry": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_run_coordination::test_unknown_process_identity_does_not_authorize_takeover": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_run_coordination::test_cancel_closes_every_dispatch_boundary": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_run_coordination::test_cancel_callback_closes_durable_gate_immediately": {
+      "status": "passed",
+      "report": "repeat.xml"
+    },
+    "tests.test_run_coordination::test_three_level_dag_cleanup_continues_after_adapter_failure": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_run_coordination::test_cancel_recovery_finishes_existing_request_without_reopening_dispatch": {
+      "status": "passed",
+      "report": "repeat.xml"
+    },
+    "tests.test_run_coordination::test_checkpoint_history_is_verified_and_tampering_rejected": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_run_coordination::test_expired_owner_cannot_renew_or_register": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_run_coordination::test_finish_with_residual_resource_remains_recoverable": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_run_coordination::test_phase_tasks_publish_terminal_cleanup": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_run_coordination::test_unknown_write_receipt_never_becomes_completed": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_run_coordination::test_cancel_during_tool_preparation_blocks_actual_dispatch": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_run_coordination::test_failed_immediate_cancel_subscription_is_removed": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_run_coordination::test_cancel_notifies_other_gates_after_one_callback_fails": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_run_coordination_adapters::test_cancel_rejects_receipt_from_other_execution[owner_token]": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_run_coordination_adapters::test_cancel_rejects_receipt_from_other_execution[generation]": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_run_coordination_adapters::test_cancel_rejects_receipt_from_other_execution[call_id]": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_run_coordination_adapters::test_start_failure_requires_durable_no_target_evidence[True]": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_run_coordination_adapters::test_start_failure_requires_durable_no_target_evidence[False]": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_run_coordination_adapters::test_subagent_cancel_requires_terminal_worker_evidence[pending]": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_run_coordination_adapters::test_subagent_cancel_requires_terminal_worker_evidence[running]": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_run_coordination_adapters::test_subagent_cancel_requires_terminal_worker_evidence[expired]": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_run_coordination_adapters::test_phase_runtime_does_not_confirm_expired_external_subagent": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_run_coordination_adapters::test_subagent_claim_race_cannot_drop_cancel_request": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_repair_progress::test_emit_seed_ready_writes_event_and_summary": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_repair_progress::test_quiet_skips_user_face_keeps_record": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_repair_progress::test_emit_failure_does_not_raise": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_repair_progress::test_phase_a_required_events_accepted": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_repair_progress::test_heartbeat_hidden_from_text_by_default": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_repair_progress::test_progress_from_env_defaults_stdout": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_repair_cli_lifecycle::test_github_default_container_end_to_end": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_repair_cli_lifecycle::test_issue_file_and_existing_local_contract": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_repair_cli_lifecycle::test_initialization_environment_failure_preserves_report": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_repair_cli_lifecycle::test_missing_api_key_does_not_clone": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_repair_cli_lifecycle::test_cancel_after_edit_exports_partial_patch": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_repair_cli_lifecycle::test_runtime_failure_keeps_patch": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_repair_cli_lifecycle::test_unverified_never_reported_fixed[None]": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_repair_cli_lifecycle::test_unverified_never_reported_fixed[verification1]": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_repair_cli_lifecycle::test_dependency_failure_report": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_repair_cli_lifecycle::test_actual_verification_backend_is_reported": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_repair_cli_lifecycle::test_runtime_claim_without_disk_change_is_not_success": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_repair_cli_lifecycle::test_dry_run_does_not_claim_verified_repair": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_repair_cli_lifecycle::test_unsupported_remote_project_stops_before_runtime": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_repair_cli_lifecycle::test_empty_issue_and_missing_issue_file_are_rejected": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_repair_cli_lifecycle::test_gated_backend_does_not_clone_or_load_credentials": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_repair_cli_lifecycle::test_existing_output_is_not_overwritten": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_repair_cli_lifecycle::test_text_directory_export_applies": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_repair_cli_lifecycle::test_cli_rejects_conflicting_issue_inputs": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_repair_cli_lifecycle::test_real_cli_dispatch_github": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_plan_l2_binding::test_public_repair_entrypoint_and_resume_keep_run_identity": {
+      "status": "passed",
+      "report": "process.xml"
+    },
+    "tests.test_plan_l2_binding::test_public_repair_resume_after_process_crash": {
+      "status": "passed",
+      "report": "process.xml"
+    },
+    "tests.test_recovery_cancel_outcome::test_repeated_unconfirmed_cancel_reports_resource_without_rollback": {
+      "status": "passed",
+      "report": "repeat.xml"
+    },
+    "tests.test_recovery_cancel_outcome::test_plan_recovery_projection_explains_unknown_and_confirmed_attempts": {
+      "status": "passed",
+      "report": "fixtures.xml"
+    },
+    "tests.test_recovery_cancel_outcome::test_old_generation_cancel_cannot_modify_replacement_owner": {
+      "status": "passed",
+      "report": "fence.xml"
+    },
+    "tests.test_recovery_cancel_outcome::test_saved_recovery_display_is_discarded_when_restoring_checkpoint": {
+      "status": "passed",
+      "report": "fence.xml"
+    },
+    "tests.test_recovery_cancel_outcome::test_explicit_resume_invalid_checkpoint_never_enters_runtime[schema]": {
+      "status": "passed",
+      "report": "schema.xml"
+    }
+  }
+}

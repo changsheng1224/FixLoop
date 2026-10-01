@@ -68,6 +68,11 @@ class NativeOwnerClient(OwnerClient):
 @pytest.mark.parametrize("native", [False, True], ids=["text", "native"])
 def test_owner_delegates_collects_reviews_updates_plan_and_alone_edits(tmp_path, native):
     orch, state, _ = repair_fixture(tmp_path)
+    # Delegation exposes a wider native schema catalog than the basic patch
+    # fixture. Reserve room for its full protocol and protected task state.
+    if native:
+        orch.patcher.config.prompt_budget = 6000
+        orch.patcher.config.hard_cap = 6000
     barrier, clients = threading.Barrier(2), []
     owner = NativeOwnerClient(tmp_path) if native else OwnerClient(tmp_path)
     orch.patcher.model_client = owner
@@ -90,6 +95,15 @@ def test_owner_delegates_collects_reviews_updates_plan_and_alone_edits(tmp_path,
         assert len(tasks) == 2 and all(
             t.payload["exploration"]["status"] == "completed" for t in tasks
         )
+        for client in clients:
+            projection = json.loads(client.requests[0].messages[0]["content"])
+            delegated = projection["context"]
+            assert delegated["goal"] == binding.session.long_task_state.original_request
+            assert delegated["hard_constraints"] == binding.session.long_task_state.hard_constraints
+            assert delegated["current_node"]["node_id"] == "edit"
+            assert delegated["current_node"]["completion"]
+            assert delegated["plan_view"]["plan_id"] == binding.session.plan.plan_id
+            assert "nodes" not in delegated["plan_view"]
         reviews = binding.session.store.latest("exploration_review", "review_id")
         assert len(reviews) == 2, (reviews, binding.session.store.events())
         assert all(
@@ -98,6 +112,10 @@ def test_owner_delegates_collects_reviews_updates_plan_and_alone_edits(tmp_path,
             for ref in r["owner_evidence_refs"]
         )
         assert len(binding.session.long_task_state.key_decisions) >= 2
+        assert all(
+            item["record_type"] == "source_review"
+            for item in binding.session.long_task_state.key_decisions
+        )
         operations = binding.session.store.latest("operation", "operation_id").values()
         assert len([o for o in operations if o["effect"] == "write"]) == 1
         result = orch._run_verifier(state)

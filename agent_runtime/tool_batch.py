@@ -7,17 +7,44 @@ import json
 import time
 import uuid
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from copy import copy, deepcopy
 from dataclasses import dataclass, field
 
 from agent_runtime.cancellation import CancellationToken
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.tool_result import ToolResult, attach_tool_receipt, normalize_tool_result
+from agent_runtime.tool_schema import validate_tool_arguments
 
 PARALLEL_READ_TOOLS = frozenset({"read_file", "list_files"})
 
 
 class ToolBatchProtocolError(ValueError):
     code = "tool_batch_protocol_error"
+
+
+def validate_native_content(calls, content):
+    """Check raw/normalized pairing without repairing or authorizing calls."""
+    if content is None or content == []:
+        return
+    if not isinstance(content, list) or any(not isinstance(block, dict) for block in content):
+        raise ToolBatchProtocolError("invalid native content structure")
+    blocks = [block for block in content if block.get("type") == "tool_use"]
+    if len(blocks) != len(calls):
+        raise ToolBatchProtocolError("native call/content count mismatch")
+    for call, block in zip(calls, blocks, strict=True):
+        if (
+            block.get("id") != call.call_id
+            or block.get("name") != call.name
+            or not isinstance(block.get("input"), dict)
+        ):
+            raise ToolBatchProtocolError("native call/content identity mismatch")
+        try:
+            raw = json.dumps(block["input"], allow_nan=False, sort_keys=True)
+            arguments = json.dumps(call.arguments, allow_nan=False, sort_keys=True)
+        except (TypeError, ValueError) as exc:
+            raise ToolBatchProtocolError("invalid native content arguments") from exc
+        if raw != arguments:
+            raise ToolBatchProtocolError("native call/content arguments mismatch")
 
 
 @dataclass
@@ -48,6 +75,28 @@ class BatchCall:
     status: str = "queued"
     result: ToolResult | None = None
     result_ref: str = ""
+    argument_errors: list[dict] = field(default_factory=list)
+
+    def argument_rejection(self):
+        if not self.argument_errors:
+            return None
+        return ToolResult(
+            content=f"Error: 参数预检失败: {self.argument_errors}",
+            status="rejected",
+            error_code="invalid_arguments",
+            retryable=True,
+            metadata={
+                "preflight": True,
+                "rejection_reason": "invalid_args",
+                "structured_facts": [
+                    {
+                        "kind": "argument_preflight",
+                        "status": "rejected",
+                        "errors": deepcopy(self.argument_errors),
+                    }
+                ],
+            },
+        )
 
     def checkpoint(self):
         return {
@@ -71,10 +120,14 @@ class ToolCallBatch:
     status: str = "pending"
 
     @classmethod
-    def create(cls, calls, *, run_id, turn_id, context, registry, allowed_tools=None):
-        from copy import copy
-
+    def create(
+        cls, calls, *, run_id, turn_id, context, registry, allowed_tools=None, native_content=None
+    ):
         registry = {name: dict(spec) for name, spec in registry.items()}
+        for spec in registry.values():
+            for key in ("schema", "json_schema"):
+                if key in spec:
+                    spec[key] = deepcopy(spec[key])
         if not isinstance(calls, list) or not calls:
             raise ToolBatchProtocolError("invalid batch structure")
         ids = [getattr(call, "call_id", None) for call in calls]
@@ -93,6 +146,7 @@ class ToolCallBatch:
                 json.dumps(call.arguments, allow_nan=False, sort_keys=True)
             except (ValueError, TypeError) as exc:
                 raise ToolBatchProtocolError("invalid arguments structure") from exc
+        validate_native_content(calls, native_content)
         parallel = len(calls) <= 4 and all(
             call.name in PARALLEL_READ_TOOLS
             and registry[call.name].get("side_effect") == "read"
@@ -107,6 +161,11 @@ class ToolCallBatch:
         items = []
         for ordinal, call in enumerate(calls):
             arguments = json.loads(json.dumps(call.arguments))
+            spec = registry[call.name]
+            # Preserve raw arguments and identities; Executor owns normalization and gates.
+            _, argument_errors = validate_tool_arguments(
+                spec.get("json_schema") or spec.get("schema", {}), deepcopy(arguments)
+            )
             args_hash = hashlib.sha256(
                 json.dumps(arguments, sort_keys=True, ensure_ascii=False).encode()
             ).hexdigest()
@@ -131,7 +190,16 @@ class ToolCallBatch:
                 registry=registry,
                 allowed_tools=tuple(registry) if allowed_tools is None else tuple(allowed_tools),
             )
-            items.append(BatchCall(call.call_id, ordinal, call.name, arguments, call_context))
+            items.append(
+                BatchCall(
+                    call.call_id,
+                    ordinal,
+                    call.name,
+                    arguments,
+                    call_context,
+                    argument_errors=argument_errors,
+                )
+            )
         return cls(
             batch_id,
             run_id,

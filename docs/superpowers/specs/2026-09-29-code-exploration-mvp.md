@@ -1,6 +1,6 @@
 # FixLoop 代码探索 MVP Spec
 
-日期：2026-09-29。状态：MVP 范围已获用户采纳；本文用于开发，不表示功能已实现。
+日期：2026-09-29；状态对账：2026-10-01。状态：已有文件/文本检索、Python LSP、任务局部关系及定向验收，历史范围见 [验收证据](../evidence/code-exploration-p4/acceptance.md)。本次已补检索语义贯通与消费时复验，见 [消费链 MVP 验收](../../CODE_EXPLORATION_CONSUMPTION_ACCEPTANCE_2026-10-01.md)；两次验收范围分开记录。本文保留原开发契约，复用 RetrievalResult，不新增全仓 Code Graph。
 
 ## 1. 目标与交付
 

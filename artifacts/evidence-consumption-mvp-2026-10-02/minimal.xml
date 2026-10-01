@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="30" time="83.326" timestamp="2026-10-02T02:37:41.198005+08:00" hostname="DESKTOP-M8LE8SP"><testcase classname="tests.test_plan_l2_binding" name="test_public_repair_entrypoint_and_resume_keep_run_identity" time="32.393"><failure message="AssertionError: ({'plan_runtime': 'plan_edit_completion_not_confirmed'}, {'allowed_edit': ['value.py'], 'apply_patch_ok_count': 0, 'apply_path_reject_count': 0, 'baseline_pytest_code': 1, ...})&#10;assert &lt;RepairStatus...ery_required'&gt; == 'fixed'&#10;  &#10;  - fixed&#10;  + recovery_required">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-evidence-consumption-minimal/test_public_repair_entrypoint_0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x000001AD5FF09F30&gt;
+
+    def test_public_repair_entrypoint_and_resume_keep_run_identity(tmp_path, monkeypatch):
+        monkeypatch.setenv("FIXLOOP_PROGRESS_HEARTBEAT", "0")
+        orch, seed, client = repair_fixture(tmp_path, full=True)
+        result = orch.repair(seed.issue_input, repair_timeout_s=0, resume_run_id=seed.repair_run_id)
+&gt;       assert result.status == "fixed", (result.agent_errors, result.node_timings)
+E       AssertionError: ({'plan_runtime': 'plan_edit_completion_not_confirmed'}, {'allowed_edit': ['value.py'], 'apply_patch_ok_count': 0, 'apply_path_reject_count': 0, 'baseline_pytest_code': 1, ...})
+E       assert &lt;RepairStatus...ery_required'&gt; == 'fixed'
+E         
+E         - fixed
+E         + recovery_required
+
+tests\test_plan_l2_binding.py:68: AssertionError</failure></testcase><testcase classname="tests.test_plan_l2_binding" name="test_public_repair_resume_after_process_crash" time="25.823"><failure message="AssertionError: &#10;assert 0 == 76&#10; +  where 0 = CompletedProcess(args=['C:\\Users\\haoyu\\anaconda3\\python.exe', '-c', &quot;\nimport os, sys\nfrom pathlib import Path\nf...an_progress: edit: node_failed edit\n[progress] repair_finished: status=recovery_required total_ms=24266\n', stderr='').returncode">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-evidence-consumption-minimal/test_public_repair_resume_afte0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x000001AD60BDDCD0&gt;
+
+    def test_public_repair_resume_after_process_crash(tmp_path, monkeypatch):
+        from agent_runtime.plan_runtime.session import PlanSession
+    
+        monkeypatch.setenv("FIXLOOP_PROGRESS_HEARTBEAT", "0")
+        code = """
+    import os, sys
+    from pathlib import Path
+    from tests.plan_l2_support import repair_fixture
+    orch, seed, client = repair_fixture(sys.argv[1], full=True)
+    orch._plan_fault = lambda point: os._exit(76) if point == 'tool_result_recorded' and 'return 2' in (Path(sys.argv[1])/'value.py').read_text() else None
+    orch.repair(seed.issue_input, repair_timeout_s=0, resume_run_id=seed.repair_run_id)
+    """
+        child = subprocess.run(
+            [sys.executable, "-c", code, str(tmp_path)],
+            timeout=90,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONPATH": os.getcwd()},
+        )
+&gt;       assert child.returncode == 76, child.stderr
+E       AssertionError: 
+E       assert 0 == 76
+E        +  where 0 = CompletedProcess(args=['C:\\Users\\haoyu\\anaconda3\\python.exe', '-c', "\nimport os, sys\nfrom pathlib import Path\nf...an_progress: edit: node_failed edit\n[progress] repair_finished: status=recovery_required total_ms=24266\n', stderr='').returncode
+
+tests\test_plan_l2_binding.py:206: AssertionError</failure></testcase><testcase classname="tests.test_evidence_consumption" name="test_inspection_explains_rejection_without_promoting_unknown[missing-invalid-evidence_missing]" time="0.056" /><testcase classname="tests.test_evidence_consumption" name="test_inspection_explains_rejection_without_promoting_unknown[checksum-invalid-evidence_checksum_mismatch]" time="0.055" /><testcase classname="tests.test_evidence_consumption" name="test_inspection_explains_rejection_without_promoting_unknown[scope-invalid-evidence_scope_mismatch]" time="0.061" /><testcase classname="tests.test_evidence_consumption" name="test_inspection_explains_rejection_without_promoting_unknown[source-stale-source_changed]" time="0.060" /><testcase classname="tests.test_evidence_consumption" name="test_inspection_explains_rejection_without_promoting_unknown[blob-invalid-blob_unavailable]" time="0.061" /><testcase classname="tests.test_evidence_consumption" name="test_inspection_explains_rejection_without_promoting_unknown[versions-unknown-file_versions_missing]" time="0.059" /><testcase classname="tests.test_evidence_consumption" name="test_inspection_explains_rejection_without_promoting_unknown[io-unknown-workspace_unverifiable]" time="0.059" /><testcase classname="tests.test_evidence_consumption" name="test_analysis_dependency_rejection_keeps_the_actual_cause" time="0.086" /><testcase classname="tests.test_evidence_consumption" name="test_receipt_after_patch_uses_historical_inputs_without_replaying" time="0.190" /><testcase classname="tests.test_evidence_consumption" name="test_required_summary_reaches_actual_request_even_when_optional_bodies_are_empty[False]" time="0.782" /><testcase classname="tests.test_evidence_consumption" name="test_required_summary_reaches_actual_request_even_when_optional_bodies_are_empty[True]" time="0.621" /><testcase classname="tests.test_evidence_consumption" name="test_stale_required_evidence_returns_reason_and_zero_model_calls[False]" time="0.521" /><testcase classname="tests.test_evidence_consumption" name="test_stale_required_evidence_returns_reason_and_zero_model_calls[True]" time="0.540" /><testcase classname="tests.test_evidence_consumption" name="test_long_fields_are_explicit_previews_without_changing_durable_conclusion" time="0.091" /><testcase classname="tests.test_evidence_consumption" name="test_verification_explanation_is_bound_to_tested_versions" time="0.200" /><testcase classname="tests.test_evidence_consumption" name="test_required_summaries_do_not_bypass_total_input_budget[False]" time="0.562" /><testcase classname="tests.test_evidence_consumption" name="test_required_summaries_do_not_bypass_total_input_budget[True]" time="0.555" /><testcase classname="tests.test_evidence_consumption" name="test_projection_failure_does_not_silently_drop_an_evidence_explanation" time="0.503" /><testcase classname="tests.test_evidence_consumption" name="test_actual_request_distinguishes_checked_source_summary_and_retained_body[False-False]" time="11.137" /><testcase classname="tests.test_evidence_consumption" name="test_actual_request_distinguishes_checked_source_summary_and_retained_body[False-True]" time="0.663" /><testcase classname="tests.test_evidence_consumption" name="test_actual_request_distinguishes_checked_source_summary_and_retained_body[True-False]" time="0.799" /><testcase classname="tests.test_evidence_consumption" name="test_actual_request_distinguishes_checked_source_summary_and_retained_body[True-True]" time="0.770" /><testcase classname="tests.test_evidence_consumption" name="test_invalid_receipt_cannot_be_consumed_as_success[patch-patch_receipt_invalid]" time="0.157" /><testcase classname="tests.test_evidence_consumption" name="test_invalid_receipt_cannot_be_consumed_as_success[verify-verification_receipt_invalid]" time="0.185" /><testcase classname="tests.test_required_long_task_context" name="test_l2_context_pressure_patch_restore_and_verify_do_not_repeat_write" time="4.145" /><testcase classname="tests.test_required_long_task_context" name="test_confirmed_patch_uses_receipt_instead_of_stale_preimage" time="0.129" /><testcase classname="tests.test_required_long_task_context" name="test_pre_model_callback_cannot_send_obsolete_required_state[False]" time="0.592" /><testcase classname="tests.test_required_long_task_context" name="test_pre_model_callback_cannot_send_obsolete_required_state[True]" time="0.591" /></testsuite></testsuites>

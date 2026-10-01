@@ -10,8 +10,7 @@ import uuid
 from agent_runtime.cancellation import CancelledError, run_with_cancellation
 from agent_runtime.compression_pipeline import truncate_tool_result_for_agent
 from agent_runtime.context_metadata import build_trace_payload
-from agent_runtime.errors import ContextTooLargeError, EmptyModelResponse
-from agent_runtime.evidence_extractors import evidence_provenance, extract_evidence
+from agent_runtime.errors import ContextBuildBlockedError, ContextTooLargeError, EmptyModelResponse
 from agent_runtime.loop_limits import max_parse_attempts
 from agent_runtime.model_timing import (
     ModelCallTiming,
@@ -129,6 +128,7 @@ class AgentLoop:
 
     def __init__(self, agent, max_steps: int | None = None, *, stream: bool = False):
         self.agent = agent
+        self._observation_recorder = self._new_observation_recorder()
         agent._loop = self
         self.max_steps = max_steps or agent.config.max_steps
         self.stop_reason = ""
@@ -880,6 +880,35 @@ class AgentLoop:
             self._budget_turns_seen = int(turn)
         return allowed
 
+    def _new_observation_recorder(self):
+        from agent_runtime.observation_recording import ToolObservationRecorder
+
+        return ToolObservationRecorder(
+            session=self.agent.session,
+            root=str(getattr(self.agent, "_cwd", "") or ""),
+            state_root=str(getattr(self.agent.tool_context, "state_root", "") or ""),
+            emit=self._emit,
+            on_changed_paths=self._invalidate_tool_exploration,
+            on_retrieval=self._observe_tool_retrieval,
+        )
+
+    def _invalidate_tool_exploration(self, tool_name):
+        if tool_name not in {"write_file", "patch_file", "apply_patch"}:
+            service = self.agent.tool_context.exploration_service
+            if service is not None:
+                service.invalidate("tool_write")
+
+    def _observe_tool_retrieval(self, tool_name, tool_args, retrieval, observation_id):
+        if self.agent.tool_context.exploration_mode == "relations" and isinstance(retrieval, dict):
+            from agent_runtime.tools import _exploration_service
+
+            _exploration_service(self.agent.tool_context).observe(
+                tool_name,
+                tool_args,
+                retrieval,
+                observation_id,
+            )
+
     # ---- 工具执行（XML / Native 共用）----
 
     def _run_tool_step(self, ts, tool_name, tool_args, **kwargs):
@@ -1305,7 +1334,7 @@ class AgentLoop:
                     {"step": step, "tool": tool_name, "error_code": error_code},
                 )
         te_ms = int((_time.time() - t0) * 1000)
-        from agent_runtime.repair_runtime import CanonicalToolCall, observation_from_result
+        from agent_runtime.repair_runtime import CanonicalToolCall
 
         raw_call = self.agent.session.get("_last_canonical_tool_call", {})
         canonical_call = CanonicalToolCall.create(
@@ -1325,124 +1354,18 @@ class AgentLoop:
             from agent_runtime.tools import _mark_edit_lock_read
 
             _mark_edit_lock_read(self.agent.tool_context, str(tool_args.get("path", "")))
-        observation = observation_from_result(canonical_call, result, te_ms)
-        observation_dict = observation.to_dict()
-        observation_dict["source"] = canonical_call.source.value
-        if call_context is not None:
-            observation_dict.update(
-                {
-                    "turn_id": call_context.turn_id,
-                    "batch_id": call_context.batch_id,
-                    "ordinal": call_context.ordinal,
-                    "receipt": dict(result.receipt),
-                }
-            )
-        from agent_runtime.context_runtime import ObservationStore
-
-        observation_store = ObservationStore(
-            self.agent.session,
-            root=str(getattr(self.agent, "_cwd", "") or ""),
-            state_root=str(getattr(self.agent.tool_context, "state_root", "") or ""),
+        recorded = self._observation_recorder.record(
+            canonical_call,
+            result,
+            duration_ms=te_ms,
+            metadata=_meta,
+            source_version=((tool_registry or {}).get(tool_name) or {}).get("version", ""),
+            idempotency_key=idempotency_key,
+            call_context=call_context,
         )
-        # A successful write invalidates observations derived from changed files
-        # before the new result is registered.
-        if observation.changed_files:
-            observation_store.invalidate_paths(
-                observation.changed_files, "tool_write_changed_dependency"
-            )
-        if observation.changed_files and tool_name not in {
-            "write_file",
-            "patch_file",
-            "apply_patch",
-        }:
-            service = self.agent.tool_context.exploration_service
-            if service is not None:
-                service.invalidate("tool_write")
-        raw_result = _meta.get("raw_result")
-        if raw_result is not None:
-            import json
-
-            raw_observation = json.dumps(raw_result, ensure_ascii=False, default=str)
-        else:
-            raw_observation = result_text
-        structured_facts = list(_meta.get("structured_facts") or [])
-        source_version = str(
-            _meta.get("source_version")
-            or ((tool_registry or {}).get(tool_name) or {}).get("version", "")
-            or ""
-        )
-        structured_facts.extend(
-            extract_evidence(tool_name, tool_args, result_text, source_version=source_version)
-        )
-        provenance = evidence_provenance(tool_name, tool_args, source_version=source_version)
-        structured_facts.append(
-            {
-                "status": observation.status,
-                "error_code": observation.failure_class,
-                "retryable": observation.retryable,
-                "changed_files": observation.changed_files,
-            }
-        )
-        stored = observation_store.put(
-            tool_name,
-            tool_args,
-            raw_observation,
-            summary=result_text[:500],
-            source_version=source_version,
-            structured_facts=structured_facts,
-            provenance=provenance,
-            dependencies=list(observation.changed_files),
-            error_code=observation.failure_class,
-            status=observation.status,
-            evidence_refs=list(observation.evidence_ids),
-            source_dependencies=(
-                dict(_meta.get("source_dependencies") or {})
-                if "source_dependencies" in _meta
-                else None
-            ),
-            retrieval_query_id=str((_meta.get("retrieval_result") or {}).get("query_id", "")),
-            redact=True,
-        )
-        # The loop creates a short-lived Store per tool call; close the SQLite
-        # handle promptly so Windows can clean temporary workspaces reliably.
-        observation_store.close()
-        observation_dict["observation_id"] = stored.observation_id
-        observation_dict["raw_ref"] = stored.raw_ref
-        _meta["observation_id"] = stored.observation_id
-        _meta["artifact_ref"] = stored.raw_ref
+        stored = recorded.stored
         self._last_tool_observation_id = stored.observation_id
         retrieval = _meta.get("retrieval_result")
-        if self.agent.tool_context.exploration_mode == "relations" and isinstance(retrieval, dict):
-            from agent_runtime.tools import _exploration_service
-
-            _exploration_service(self.agent.tool_context).observe(
-                tool_name, tool_args, retrieval, stored.observation_id
-            )
-        # Complete the action receipt after the observation has been durably
-        # stored. This makes idempotent resume able to point at the exact
-        # persisted result instead of replaying an opaque success message.
-        ledger = self.agent.session.get("action_ledger", [])
-        for action_raw in reversed(ledger):
-            if action_raw.get("idempotency_key") == idempotency_key:
-                action_raw["result_ref"] = stored.observation_id
-                action_raw["artifact_ref"] = stored.raw_ref
-                break
-        self._emit(
-            "observation_stored",
-            {
-                "observation_id": stored.observation_id,
-                "tool": tool_name,
-                "status": stored.status,
-                "deduplicated": stored.observation_id != observation_dict.get("observation_id", ""),
-                "redacted": stored.redacted,
-            },
-        )
-        if _meta.get("provider") == "mcp":
-            observation_dict["provider"] = "mcp"
-            observation_dict["server"] = _meta.get("mcp_server", "")
-        self.agent.session["_last_tool_observation"] = observation_dict
-        self.agent.session.setdefault("tool_observations", []).append(observation_dict)
-        self.agent.session["tool_observations"] = self.agent.session["tool_observations"][-50:]
         # 权限拒绝：立即回灌，避免反复试 run_shell/sandbox_test
         if _meta.get("rejection_reason") == "role_not_allowed" or (
             _meta.get("tool_status") == "rejected" and tool_name in ("run_shell", "sandbox_test")
@@ -1466,8 +1389,15 @@ class AgentLoop:
             elapsed_ms=te_ms,
             path=str(path),
         )
-        projected_result_text = truncate_tool_result_for_agent(self.agent, tool_name, result_text)
-        if len(projected_result_text) < len(result_text):
+        projection_input = result_text
+        if isinstance(retrieval, dict):
+            from agent_runtime.code_exploration.consumption import retrieval_header
+
+            projection_input = retrieval_header(retrieval) + result_text
+        projected_result_text = truncate_tool_result_for_agent(
+            self.agent, tool_name, projection_input
+        )
+        if len(projected_result_text) < len(projection_input):
             _meta["output_truncated"] = True
             if hasattr(result, "output_truncated"):
                 result.output_truncated = True
@@ -1765,46 +1695,18 @@ class AgentLoop:
                 self.agent._turn_event_emitter = None
             self._active_tool_batch = None
 
-    def _run_native_batch(self, ts, calls, *, turn, callback=None):
-        from agent_runtime.read_permits import read_permits
-        from agent_runtime.tool_batch import (
-            ToolBatchProtocolError,
-            ToolBatchScheduler,
-            ToolCallBatch,
+    def _run_native_batch(self, ts, calls, *, turn, callback=None, native_content=None):
+        from agent_runtime.tool_batch_runtime import (
+            BatchExecutionHooks,
+            SettledToolStep,
+            ToolBatchRunner,
         )
 
-        progress = self._turn_progress
-        try:
-            batch = ToolCallBatch.create(
-                calls,
-                run_id=progress.run_id,
-                turn_id=progress.turn_id,
-                context=self.agent.tool_context,
-                registry=dict(self.agent.tools),
-                allowed_tools=self.agent._tool_names,
-            )
-        except ToolBatchProtocolError as exc:
-            # Invalid IDs cannot be paired unambiguously: explicit protocol
-            # failure ends the Turn before any tool executes.
-            self._emit("tool_batch_protocol_error", {"error_code": exc.code})
-            raise
-        self._active_tool_batch = batch
-        flows = {}
-        plan_flows = {}
-        refs = {}
         base_step = ts.tool_steps
-        executor = self.agent._get_tool_executor()
         plan = getattr(self.agent, "_plan_session", None)
 
-        def prepare(call):
-            tool_timeout = float(self.agent.config.effective_deadline()["tool_s"] or 0)
-            spec_timeout = float(call.context.registry[call.tool_name].get("timeout_s", 0) or 0)
-            limits = [value for value in (tool_timeout, spec_timeout) if value > 0]
-            call.context.timeout_s = min(limits) if limits else 0
-            self._notify_react_phase(
-                ReactPhase.ACTING, step=turn, path="native", tool=call.tool_name, callback=callback
-            )
-            flow = self._tool_step_flow(
+        def step_flow(call, prepared_result):
+            return self._tool_step_flow(
                 ts,
                 call.tool_name,
                 call.arguments,
@@ -1813,116 +1715,69 @@ class AgentLoop:
                 callback=callback,
                 emit_acting=False,
                 call_context=call.context,
+                prepared_result=prepared_result,
             )
-            preflight = next(flow)
-            flows[call.call_id] = flow
-            if preflight is not None:
-                return preflight
-            if not batch.parallel:
-                return lambda: self.agent.execute_tool(
-                    call.tool_name,
-                    call.arguments,
-                    call_context=call.context,
-                )
-            if plan is not None:
-                plan_flow = plan.tool_operation(
+
+        def settle_step(flow, result):
+            try:
+                flow.send(result)
+            except StopIteration as done:
+                return SettledToolStep(done.value, self._last_tool_observation_id)
+            raise RuntimeError("tool step yielded twice")
+
+        def activate(batch):
+            self._active_tool_batch = batch
+
+        def uncertain():
+            self.agent.tool_context.execution_uncertain = True
+
+        def dispatch(name, gated):
+            dispatch_tool = getattr(self.agent, "_tool_dispatch", None)
+            return dispatch_tool(self.agent._agent_name, name, gated) if dispatch_tool else gated()
+
+        hooks = BatchExecutionHooks(
+            step_flow=step_flow,
+            settle_step=settle_step,
+            execute_serial=lambda call: self.agent.execute_tool(
+                call.tool_name,
+                call.arguments,
+                call_context=call.context,
+            ),
+            plan_operation=(
+                lambda call: plan.tool_operation(
                     self.agent,
                     call.tool_name,
                     call.arguments,
                     call_context=call.context,
                 )
-                try:
-                    next(plan_flow)
-                except StopIteration as done:
-                    return done.value
-                plan_flows[call.call_id] = plan_flow
-            # Freeze the history snapshot on the owner, not in a worker.
-            execute = executor.for_call(call.context)
-
-            def work():
-                def gated():
-                    return execute.execute_gated(call.tool_name, call.arguments)
-
-                dispatch = getattr(self.agent, "_tool_dispatch", None)
-                if dispatch is not None:
-                    return dispatch(self.agent._agent_name, call.tool_name, gated)
-                return gated()
-
-            return work
-
-        def collect(call, result):
-            if result.status == "uncertain":
-                self.agent.tool_context.execution_uncertain = True
-            from agent_runtime.batch_reads import recheck_read
-
-            result = recheck_read(result)
-            plan_flow = plan_flows.pop(call.call_id, None)
-            if plan_flow is not None:
-                try:
-                    plan_flow.send(result)
-                except StopIteration as done:
-                    result = done.value
-            return result
-
-        def settle(call, result):
-            from agent_runtime.batch_reads import recheck_read
-
-            old_status = result.status
-            result = recheck_read(result)
-            if result.status != old_status:
-                scheduler.finish(call, result)
-            flow = flows.pop(call.call_id, None)
-            if flow is not None:
-                try:
-                    flow.send(result)
-                except StopIteration as done:
-                    text = done.value
-            else:
-                # Queued calls cancelled before preparation have no action or
-                # budget reservation, but still get an Observation/result.
-                text = self._run_tool_step(
-                    ts,
-                    call.tool_name,
-                    call.arguments,
-                    step=base_step + call.ordinal + 1,
-                    path="native",
-                    callback=callback,
-                    call_context=call.context,
-                    prepared_result=result,
-                )
-            call.result_ref = refs.get(call.call_id) or str(
-                getattr(self, "_last_tool_observation_id", "") or ""
             )
-            refs[call.call_id] = call.result_ref
-            self.agent.session["turn_progress"] = progress.checkpoint(batch)
-            return {"type": "tool_result", "tool_use_id": call.call_id, "content": text}
-
-        scheduler = ToolBatchScheduler(
-            read_permits(self.agent.tool_context.root, progress.run_id), progress, on_result=collect
+            if plan is not None
+            else None,
+            dispatch=dispatch,
+            activate=activate,
+            acting=lambda call: self._notify_react_phase(
+                ReactPhase.ACTING,
+                step=turn,
+                path="native",
+                tool=call.tool_name,
+                callback=callback,
+            ),
+            uncertain=uncertain,
         )
-        try:
-            results = scheduler.run(
-                batch,
-                prepare,
-                settle,
-                cancel_token=self._cancel_token,
-                expired=self._repair_deadline.expired,
-            )
-            batch.status = (
-                "uncertain"
-                if any(c.status == "uncertain" for c in batch.calls)
-                else "cancelled"
-                if any(c.status == "cancelled" for c in batch.calls)
-                else "completed"
-            )
-            progress.emit("tool_batch_completed", batch_id=batch.batch_id, status=batch.status)
-        finally:
-            for flow in flows.values():
-                if flow is not None:
-                    flow.close()
-            for flow in plan_flows.values():
-                flow.close()
-            self.agent.session["turn_progress"] = progress.checkpoint(batch)
+        runner = ToolBatchRunner(
+            context=self.agent.tool_context,
+            registry=dict(self.agent.tools),
+            allowed_tools=self.agent._tool_names,
+            executor=self.agent._get_tool_executor(),
+            progress=self._turn_progress,
+            session=self.agent.session,
+            hooks=hooks,
+            cancel_token=self._cancel_token,
+            expired=self._repair_deadline.expired,
+            tool_timeout_s=float(self.agent.config.effective_deadline()["tool_s"] or 0),
+            emit=self._emit,
+        )
+        results, refs = runner.run(calls, native_content=native_content)
         if (msg := self._abort_if_cancelled(ts, phase="batch_settled")) is not None:
             raise CancelledError("user", answer=msg)
         return results, refs
@@ -1957,11 +1812,37 @@ class AgentLoop:
             )
         return None
 
+    def _context_blocked(self, ts, error: ContextBuildBlockedError) -> str:
+        self._emit("context_blocked", {"reason": error.reason, **error.metadata})
+        self.agent.session["context_blocked"] = {"reason": error.reason, **error.metadata}
+        ts.stop_with_reason(StopReason.CONTEXT_BLOCKED, "stopped", detail=error.reason)
+        return self._complete_run(ts, error.user_message)
+
     def _xml_build_context(self, ts, user_message: str, *, step: int, callback) -> str:
         t0 = _time.time()
-        prompt_text, token_meta = self.agent._build_prompt_with_meta(user_message)
+        # XML continuations (including old checkpoints) carry raw tool output.
+        # Reference code observations instead, so the current history projection
+        # is the only source body used after freshness checks.
+        last = self.agent.session.get("_last_tool_observation", {})
+        oid = str(last.get("observation_id", ""))
+        record = self.agent.session.get("observations", {}).get(oid, {})
+        prefix = f"工具 {record.get('tool', '')} 执行完成。\n结果:\n"
+        if record.get("retrieval_result") and user_message.startswith(prefix):
+            user_message = prefix + f"[observation_ref={oid}; see validated context history]"
+        from agent_runtime.context_manager import ContextManager
+
+        manager = ContextManager(self.agent)
+        request, token_meta = manager.prepare_request(user_message, protocol="xml")
+        prompt_text = request.messages[0]["content"]
+        self._prepared_context_manager = manager
+        self._prepared_request = request
         if hard_limit := self._check_hard_cap(token_meta):
             return hard_limit
+        if token_meta.get("required_state_ref"):
+            try:
+                self.agent._plan_session.validate_required_context(token_meta["long_task_context"])
+            except ValueError:
+                raise ContextBuildBlockedError("state_mismatch") from None
         from agent_runtime.message_projection import (
             attach_projection_metadata,
             build_context_prefix,
@@ -2029,6 +1910,10 @@ class AgentLoop:
         )
         for empty_try in range(self.MAX_EMPTY_RETRIES):
             try:
+                if meta.get("request_hash"):
+                    self._prepared_context_manager.validate_prepared_request(
+                        self._prepared_request, meta
+                    )
                 if self._stream_enabled and hasattr(self.agent.model_client, "complete_stream"):
 
                     def on_chunk(chunk: str) -> None:
@@ -2335,6 +2220,8 @@ class AgentLoop:
     # ---- 入口 ----
 
     def run(self, user_message: str, callback=None, *, skip_plan: bool = False) -> str:
+        # The runtime owner is the run thread, which may differ from the constructor thread.
+        self._observation_recorder = self._new_observation_recorder()
         from agent_runtime.budget_manager import BudgetManager
         from agent_runtime.latency_controller import LatencySLOController
         from agent_runtime.log_context import log_context
@@ -2575,7 +2462,6 @@ class AgentLoop:
         )
         from agent_runtime.model_turn import (
             FinishKind,
-            ModelTurnRequest,
             ToolChoice,
             ToolChoiceMode,
         )
@@ -2662,18 +2548,68 @@ class AgentLoop:
                 max_steps=self.max_steps,
                 path="native",
             )
+            from agent_runtime.context_manager import ContextManager
+
+            action_required = bool(output_recovery_directive or self._patch_decision_required)
+            tools_def = _build_anthropic_tools(
+                self.agent.tools,
+                allowed_names=self._native_tool_names(
+                    action_required=action_required,
+                    patch_only_recovery=bool(output_recovery_directive),
+                ),
+            )
+            phase_output_cap = 4096 if not action_required or output_recovery_directive else 2048
+            max_output = max(
+                512, min(latency_decision["max_output_tokens"], phase_output_cap, 8192)
+            )
+            directives = []
+            user_override = None
+            if output_recovery_directive:
+                if getattr(self.agent, "_plan_session", None) is not None:
+                    directives.append(output_recovery_directive)
+                else:
+                    # Preserve the established standalone L1 recovery envelope.
+                    summary = (
+                        self._get_task_summary_text().strip() or ts.user_request or user_message
+                    )
+                    user_override = output_recovery_directive
+                    if summary:
+                        user_override += f"\n[REPAIR TASK]\n{summary[:2000]}"
+                    anchors = _patch_recovery_anchors(user_message)
+                    if anchors:
+                        user_override += f"\n[PATCHER EVIDENCE ANCHORS]\n{anchors}"
+            elif self._patch_decision_required:
+                directives.append(
+                    "[PATCH DECISION REQUIRED] Exploration is closed. "
+                    "Call apply_patch/patch_file now, or call finish_repair with a concise "
+                    "cannot_patch/needs_more_context reason grounded in the evidence ledger."
+                )
+            if self._patch_recovery_directive:
+                directives.append("[PATCH RECOVERY]\n" + self._patch_recovery_directive)
+            if user_override and directives:
+                user_override += "\n\n" + "\n\n".join(directives)
+                directives = []
+            manager = ContextManager(self.agent)
             try:
-                system_prompt, dynamic_user, budget_meta = self.agent.build_for_native(user_message)
+                request, budget_meta = manager.prepare_request(
+                    user_message,
+                    protocol="native",
+                    tools=tools_def,
+                    native_tail=native_tail,
+                    tail_refs=native_tail_refs,
+                    directives=directives,
+                    action_required=action_required,
+                    tool_choice=ToolChoice(ToolChoiceMode.REQUIRED) if action_required else None,
+                    max_output_tokens=max_output,
+                    deadline=getattr(step_clock, "_deadline", None),
+                    user_override=user_override,
+                )
+            except ContextBuildBlockedError as e:
+                return self._context_blocked(ts, e)
             except ContextTooLargeError as e:
-                diagnostics = dict(getattr(e, "metadata", {}) or {})
                 self._emit(
                     "context_build_failed",
-                    {
-                        "step": turn,
-                        "actual": e.actual,
-                        "limit": e.limit,
-                        **diagnostics,
-                    },
+                    {"step": turn, "actual": e.actual, "limit": e.limit, **e.metadata},
                 )
                 ts.stop_with_reason(
                     StopReason.CONTEXT_OVERFLOW,
@@ -2681,101 +2617,27 @@ class AgentLoop:
                     detail=f"actual={e.actual} limit={e.limit}",
                 )
                 return self._complete_run(ts, e.user_message)
-            if output_recovery_directive:
-                # 截断恢复只丢弃不完整的 assistant 输出；任务 envelope 必须
-                # 重新注入，避免压缩后的 history 只剩 observation 而丢失目标。
-                task_summary = (
-                    self._get_task_summary_text().strip()
-                    or getattr(self._task_state, "user_request", "")
-                    or user_message
-                )
-                dynamic_user = output_recovery_directive
-                if task_summary:
-                    dynamic_user += f"\n[REPAIR TASK]\n{task_summary[:2000]}"
-                anchors = _patch_recovery_anchors(user_message)
-                if anchors:
-                    dynamic_user += f"\n[PATCHER EVIDENCE ANCHORS]\n{anchors}"
-            elif self._patch_decision_required:
-                dynamic_user = (
-                    f"{dynamic_user}\n\n[PATCH DECISION REQUIRED] Exploration is closed. "
-                    "Call apply_patch/patch_file now, or call finish_repair with a concise "
-                    "cannot_patch/needs_more_context reason grounded in the evidence ledger."
-                )
-            if self._patch_recovery_directive:
-                dynamic_user = (
-                    f"{dynamic_user}\n\n[PATCH RECOVERY]\n{self._patch_recovery_directive}"
-                )
-            if hard_limit := self._check_hard_cap(budget_meta):
-                return self._complete_run(ts, hard_limit)
+            dynamic_user = request.messages[0]["content"]
+            self._prepared_context_manager = manager
+            self._prepared_request = request
             context_prefix = build_context_prefix(self.agent, budget_meta)
             attach_projection_metadata(
                 budget_meta, self.agent.session, context_prefix=context_prefix
             )
             self._last_budget_meta = budget_meta
             budget_meta["runtime_budget"] = self._budget_payload()
-            if not self._budget_reserve("prompt_tokens", budget_meta.get("total_tokens", 0)):
+            if not self._budget_reserve("prompt_tokens", budget_meta["provider_input_tokens"]):
                 ts.stop_with_reason(
-                    StopReason.CONTEXT_OVERFLOW,
-                    "stopped",
-                    detail="prompt token budget exhausted",
+                    StopReason.CONTEXT_OVERFLOW, "stopped", detail="prompt token budget exhausted"
                 )
                 return self._complete_run(ts, "<final>Prompt token 预算已耗尽。</final>")
             self._accumulate_context_stats(budget_meta)
             self._emit("context_built", build_trace_payload(budget_meta))
-            emergency = budget_meta.get("emergency_compaction")
-            if isinstance(emergency, dict):
-                self._emit("context_emergency_compacted", {"step": turn, **emergency})
-
-            action_required = bool(output_recovery_directive or self._patch_decision_required)
-            # Do not replay stale assistant tool calls during a forced action
-            # turn.  Providers may continue emitting a read call from the
-            # prior tail even after that tool is removed from the schema.
-            selected_source_refs = set(budget_meta.get("_source_observation_refs", []))
-            projected_tail = []
-            for message in native_tail[-6:]:
-                if message.get("role") != "user" or not isinstance(message.get("content"), list):
-                    projected_tail.append(message)
-                    continue
-                blocks = []
-                for block in message["content"]:
-                    source_ref = native_tail_refs.get(str(block.get("tool_use_id", "")), "")
-                    if source_ref and source_ref in selected_source_refs:
-                        blocks.append({**block, "content": f"[source selected: {source_ref}]"})
-                    else:
-                        blocks.append(block)
-                projected_tail.append({**message, "content": blocks})
-            messages = [
-                {"role": "user", "content": dynamic_user},
-                *([] if action_required else projected_tail),
-            ]
-            allowed_tool_names = self._native_tool_names(
-                action_required=action_required,
-                patch_only_recovery=bool(output_recovery_directive),
-            )
-            tools_def = _build_anthropic_tools(
-                self.agent.tools,
-                allowed_names=allowed_tool_names,
-            )
-            phase_output_cap = 4096
-            if action_required:
-                # Required tool choice alone does not prevent reasoning-heavy
-                # models from consuming the entire response budget before the
-                # tool call.  Keep PATCH_ONLY recovery bounded, but leave room
-                # for the provider to finish its pre-tool reasoning.
-                phase_output_cap = 4096 if output_recovery_directive else 2048
-            max_output = max(
-                512,
-                min(latency_decision["max_output_tokens"], phase_output_cap, 8192),
-            )
-            deadline = getattr(step_clock, "_deadline", None)
-            request = ModelTurnRequest(
-                system_prompt=system_prompt,
-                messages=messages,
-                tools=tools_def,
-                tool_choice=(ToolChoice(ToolChoiceMode.REQUIRED) if action_required else None),
-                max_output_tokens=max_output,
-                deadline=deadline,
-            )
+            if isinstance(budget_meta.get("emergency_compaction"), dict):
+                self._emit(
+                    "context_emergency_compacted",
+                    {"step": turn, **budget_meta["emergency_compaction"]},
+                )
             if not self._budget_reserve("llm_calls"):
                 ts.stop_with_reason(
                     StopReason.BUDGET_EXHAUSTED,
@@ -2801,8 +2663,11 @@ class AgentLoop:
             )
             call_started = _time.time()
             try:
+                manager.validate_prepared_request(request, budget_meta)
                 result = self._invoke_model_call(lambda: client.complete_turn(request))
                 step_clock.check(step=turn, path="native")
+            except ContextBuildBlockedError as e:
+                return self._context_blocked(ts, e)
             except StepTimeoutError as e:
                 return self._finish_step_timeout(ts, e, clock=step_clock)
             except TimeoutError:
@@ -2871,6 +2736,7 @@ class AgentLoop:
                         result.tool_calls,
                         turn=turn,
                         callback=callback,
+                        native_content=result.content,
                     )
                     native_tail_refs.update(batch_refs)
                 except TerminalToolAcceptedError as e:
@@ -3045,6 +2911,8 @@ class AgentLoop:
                 prompt_text = self._xml_build_context(
                     ts, user_message, step=step, callback=callback
                 )
+            except ContextBuildBlockedError as e:
+                return self._context_blocked(ts, e)
             except ContextTooLargeError as e:
                 ts.stop_with_reason(
                     StopReason.CONTEXT_OVERFLOW,
@@ -3070,6 +2938,8 @@ class AgentLoop:
             )
             try:
                 raw, t1 = self._xml_call_model(ts, prompt_text, step=step, callback=callback)
+            except ContextBuildBlockedError as e:
+                return self._context_blocked(ts, e)
             except CancelledError as e:
                 if e.answer:
                     return e.answer

@@ -29,8 +29,11 @@ class CoordinationError(RuntimeError):
 
 
 class OwnerConflictError(CoordinationError):
-    def __init__(self, message: str = "owner is held by another execution") -> None:
-        super().__init__("resume_owner_conflict", message)
+    def __init__(
+        self, message: str = "owner is held by another execution", *, run_status=""
+    ) -> None:
+        self.run_status = run_status
+        super().__init__("resume_run_terminal" if run_status else "resume_owner_conflict", message)
 
 
 class StaleGenerationError(CoordinationError):
@@ -242,7 +245,9 @@ class RunCoordinationStore:
                     raise CoordinationIntegrityError("resume_task_identity_mismatch")
                 if row["status"] in {"cancelled", "failed"}:
                     conn.rollback()
-                    raise OwnerConflictError("run is terminal; create a new run identity")
+                    raise OwnerConflictError(
+                        "run is terminal; create a new run identity", run_status=row["status"]
+                    )
                 live = float(row["lease_expires_at"]) > now
                 if live and row["owner_token"]:
                     # A crashed process may leave a lease inside its nominal

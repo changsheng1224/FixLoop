@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="3" time="14.084" timestamp="2026-10-02T02:39:48.190298+08:00" hostname="DESKTOP-M8LE8SP"><testcase classname="tests.test_evidence_consumption" name="test_dependency_cycle_is_rejected_with_a_stable_reason" time="0.122" /><testcase classname="tests.test_evidence_consumption" name="test_native_consumption_tracks_retained_groups_after_forced_action[False]" time="12.972"><failure message="assert 'unchecked body' not in '[{&quot;role&quot;: &quot;...ed body&quot;}]}]'&#10;  &#10;  'unchecked body' is contained here:&#10;    ontent&quot;: &quot;unchecked body&quot;}]}]">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-evidence-consumption-tail/test_native_consumption_tracks0')
+omit_tail = False
+
+    @pytest.mark.parametrize("omit_tail", [False, True])
+    def test_native_consumption_tracks_retained_groups_after_forced_action(tmp_path, omit_tail):
+        from agent_runtime.code_exploration.io import read_file_result
+        from tests.test_context_assembly import _group
+    
+        (tmp_path / "value.py").write_text("value = 1\n")
+        with session_for(tmp_path) as session:
+            session.create(simple_plan(session))
+            session.configure_long_task("inspect source")
+            agent, client = _agent(tmp_path, session, native=True)
+            agent.shared_run_id = session.identity["run_id"]
+            agent._l2_agent = "observer"
+            agent._l2_task_id = session.identity["task_id"]
+            agent.session["id"] = session.identity["session_id"]
+            agent.session["session_identity"] = dict(session.identity)
+            agent.session["session_scope"] = {"session_id": session.identity["session_id"]}
+    
+            def invoke(attempt):
+                result = read_file_result(agent.tool_context, {"path": "value.py"})
+                session.execute_tool(agent, "read_file", {"path": "value.py"}, lambda: result)
+                return session.tool_result(attempt)
+    
+            session.run_node("read-0", invoke)
+            ref = session.plan.node("read-0").output_evidence_refs[0]
+            oid = session.evidence.get(ref)["observation_id"]
+            request, _ = ContextManager(agent).prepare_request(
+                "continue",
+                protocol="native",
+                native_tail=_group("source-call", "unchecked body"),
+                tail_refs={"source-call": oid},
+                action_required=omit_tail,
+            )
+            client.complete_turn(request)
+            text = json.dumps(client.requests[0].messages)
+&gt;           assert "unchecked body" not in text
+E           assert 'unchecked body' not in '[{"role": "...ed body"}]}]'
+E             
+E             'unchecked body' is contained here:
+E               ontent": "unchecked body"}]}]
+
+tests\test_evidence_consumption.py:369: AssertionError</failure></testcase><testcase classname="tests.test_evidence_consumption" name="test_native_consumption_tracks_retained_groups_after_forced_action[True]" time="0.590" /></testsuite></testsuites>

@@ -28,6 +28,7 @@ class StopReason(StrEnum):
     STALL = "stall"
     GOAL_DRIFT = "goal_drift"
     CONTEXT_OVERFLOW = "context_overflow"
+    CONTEXT_BLOCKED = "context_blocked"
     BUDGET_EXHAUSTED = "budget_exhausted"
     DEADLINE_EXCEEDED = "deadline_exceeded"
     MODEL_OUTPUT_TRUNCATED = "model_output_truncated"

@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="2" time="108.099" timestamp="2026-10-02T01:40:03.475568+08:00" hostname="DESKTOP-M8LE8SP"><testcase classname="tests.test_plan_l2_binding" name="test_public_repair_entrypoint_and_resume_keep_run_identity" time="36.004"><failure message="agent_runtime.run_coordination.store.StaleGenerationError: expired owner cannot renew">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-long-context-public-fixed/test_public_repair_entrypoint_0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x000001F648A4D350&gt;
+
+    def test_public_repair_entrypoint_and_resume_keep_run_identity(tmp_path, monkeypatch):
+        monkeypatch.setenv("FIXLOOP_PROGRESS_HEARTBEAT", "0")
+        orch, seed, client = repair_fixture(tmp_path, full=True)
+&gt;       result = orch.repair(seed.issue_input, repair_timeout_s=0, resume_run_id=seed.repair_run_id)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_plan_l2_binding.py:67: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\orchestrator.py:361: in repair
+    return self._repair_impl(state, initial_snapshot=initial_snapshot)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\repair\pipeline.py:428: in _repair_impl
+    return self._repair_impl_with_plan(state, initial_snapshot)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\repair\pipeline.py:481: in _repair_impl_with_plan
+    self._begin_repair_trace(state)
+src\orchestrator.py:828: in _begin_repair_trace
+    self._initialize_repair_trace(state)
+src\orchestrator.py:965: in _initialize_repair_trace
+    self._plan_binding = RepairPlanBinding(self, state, defer_plan=True)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\repair\plan_binding.py:91: in __init__
+    self.owner_lease = self.coordinator.heartbeat()
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+agent_runtime\run_coordination\coordinator.py:86: in heartbeat
+    self.lease = self.store.heartbeat(self._require_lease(), lease_seconds=self.lease_seconds)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;agent_runtime.run_coordination.store.RunCoordinationStore object at 0x000001F648D7A660&gt;
+lease = OwnerLease(task_id='plan-fixture-run', run_id='plan-fixture-run', workspace_id='8492109a92b6c2c509f380bb66c40b38', own...2679d2f0aef69d17457', generation=1, coordination_revision=1, lease_expires_at=1790876434.6110654, status='reconciling')
+
+    def heartbeat(self, lease: OwnerLease, *, lease_seconds: float = 30.0) -&gt; OwnerLease:
+        now = time.time()
+        with closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = self._row(conn, lease.run_id)
+            if (
+                row["owner_token"] != lease.owner_token
+                or int(row["generation"]) != lease.generation
+            ):
+                conn.rollback()
+                raise StaleGenerationError()
+            if row["status"] not in {"reconciling", "active", "cancel_requested", "cancelling"}:
+                conn.rollback()
+                raise StaleGenerationError()
+            if float(row["lease_expires_at"]) &lt;= now:
+                conn.rollback()
+&gt;               raise StaleGenerationError("expired owner cannot renew")
+E               agent_runtime.run_coordination.store.StaleGenerationError: expired owner cannot renew
+
+agent_runtime\run_coordination\store.py:403: StaleGenerationError</failure></testcase><testcase classname="tests.test_plan_l2_binding" name="test_public_repair_resume_after_process_crash" time="71.244" /></testsuite></testsuites>

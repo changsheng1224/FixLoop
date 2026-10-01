@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="3" time="79.167" timestamp="2026-10-02T01:47:49.762832+08:00" hostname="DESKTOP-M8LE8SP"><testcase classname="tests.test_plan_l2_binding" name="test_public_repair_entrypoint_and_resume_keep_run_identity" time="76.912" /><testcase classname="tests.test_required_long_task_context" name="test_public_entry_owner_is_renewed_during_slow_initialization" time="1.074"><failure message="agent_runtime.run_coordination.store.StaleGenerationError: owner generation is stale">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-long-context-entry-fixed/test_public_entry_owner_is_ren0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x000001F8393F29E0&gt;
+
+    def test_public_entry_owner_is_renewed_during_slow_initialization(tmp_path, monkeypatch):
+        import threading
+        import time
+    
+        from agent_runtime import run_coordination
+        from tests.plan_l2_support import repair_fixture
+    
+        orch, state, client = repair_fixture(tmp_path)
+        real_coordinator = run_coordination.RunCoordinator
+    
+        def short_lease(*args, **kwargs):
+            return real_coordinator(*args, **kwargs, lease_seconds=0.6)
+    
+        def slow_initialize(_state):
+            coordinator = orch._entry_coordinator
+            initial_expiry = coordinator.lease.lease_expires_at
+            deadline = time.monotonic() + 3
+            while coordinator.lease.lease_expires_at &lt;= initial_expiry + 0.6:
+                assert time.monotonic() &lt; deadline, "entry lease was not renewed"
+                time.sleep(0.02)
+            coordinator.assert_lease(allow_cancelling=True)
+    
+        monkeypatch.setattr(run_coordination, "RunCoordinator", short_lease)
+        monkeypatch.setattr(orch, "_initialize_repair_trace", slow_initialize)
+        try:
+&gt;           orch._begin_repair_trace(state)
+
+tests\test_required_long_task_context.py:396: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\orchestrator.py:844: in _begin_repair_trace
+    self._initialize_repair_trace(state)
+tests\test_required_long_task_context.py:391: in slow_initialize
+    coordinator.assert_lease(allow_cancelling=True)
+agent_runtime\run_coordination\coordinator.py:90: in assert_lease
+    self.store.assert_lease(self._require_lease(), allow_cancelling=allow_cancelling)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;agent_runtime.run_coordination.store.RunCoordinationStore object at 0x000001F84EB19A90&gt;
+lease = OwnerLease(task_id='plan-fixture-run', run_id='plan-fixture-run', workspace_id='6be0c843dfbd4d81b11e7f2e048eccd9', own...48d2a57bc72a8c9bd859', generation=1, coordination_revision=4, lease_expires_at=1790876948.960715, status='reconciling')
+
+    def assert_lease(self, lease: OwnerLease, *, allow_cancelling: bool = False) -&gt; sqlite3.Row:
+        now = time.time()
+        with closing(self._connect()) as conn:
+            row = self._row(conn, lease.run_id)
+            allowed = {"active"} | (
+                {"cancelling", "cancel_requested"} if allow_cancelling else set()
+            )
+            if (
+                row["owner_token"] != lease.owner_token
+                or int(row["generation"]) != lease.generation
+                or row["workspace_id"] != lease.workspace_id
+                or row["status"] not in allowed
+                or float(row["lease_expires_at"]) &lt;= now
+            ):
+&gt;               raise StaleGenerationError()
+E               agent_runtime.run_coordination.store.StaleGenerationError: owner generation is stale
+
+agent_runtime\run_coordination\store.py:341: StaleGenerationError
+
+During handling of the above exception, another exception occurred:
+
+tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-long-context-entry-fixed/test_public_entry_owner_is_ren0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x000001F8393F29E0&gt;
+
+    def test_public_entry_owner_is_renewed_during_slow_initialization(tmp_path, monkeypatch):
+        import threading
+        import time
+    
+        from agent_runtime import run_coordination
+        from tests.plan_l2_support import repair_fixture
+    
+        orch, state, client = repair_fixture(tmp_path)
+        real_coordinator = run_coordination.RunCoordinator
+    
+        def short_lease(*args, **kwargs):
+            return real_coordinator(*args, **kwargs, lease_seconds=0.6)
+    
+        def slow_initialize(_state):
+            coordinator = orch._entry_coordinator
+            initial_expiry = coordinator.lease.lease_expires_at
+            deadline = time.monotonic() + 3
+            while coordinator.lease.lease_expires_at &lt;= initial_expiry + 0.6:
+                assert time.monotonic() &lt; deadline, "entry lease was not renewed"
+                time.sleep(0.02)
+            coordinator.assert_lease(allow_cancelling=True)
+    
+        monkeypatch.setattr(run_coordination, "RunCoordinator", short_lease)
+        monkeypatch.setattr(orch, "_initialize_repair_trace", slow_initialize)
+        try:
+            orch._begin_repair_trace(state)
+            assert not client.prompts
+            assert not any(
+                worker.name == "fixloop-entry-owner" and worker.is_alive()
+                for worker in threading.enumerate()
+            )
+        finally:
+            if getattr(orch, "_entry_coordinator", None):
+&gt;               orch._entry_coordinator.finish("released")
+
+tests\test_required_long_task_context.py:404: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+agent_runtime\run_coordination\coordinator.py:292: in finish
+    return self.store.finish(self._require_lease(), status, error_code=error_code)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;agent_runtime.run_coordination.store.RunCoordinationStore object at 0x000001F84EB19A90&gt;
+lease = OwnerLease(task_id='plan-fixture-run', run_id='plan-fixture-run', workspace_id='6be0c843dfbd4d81b11e7f2e048eccd9', own...48d2a57bc72a8c9bd859', generation=1, coordination_revision=4, lease_expires_at=1790876948.960715, status='reconciling')
+status = 'released'
+
+    def finish(self, lease: OwnerLease, status: str, *, error_code: str = "") -&gt; RunSnapshot:
+        if status not in {"cancelled", "failed", "released", "recovery_required"}:
+            raise ValueError("terminal_status_invalid")
+        with closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = self._row(conn, lease.run_id)
+            if (
+                row["owner_token"] != lease.owner_token
+                or int(row["generation"]) != lease.generation
+            ):
+                conn.rollback()
+&gt;               raise StaleGenerationError()
+E               agent_runtime.run_coordination.store.StaleGenerationError: owner generation is stale
+
+agent_runtime\run_coordination\store.py:854: StaleGenerationError</failure></testcase><testcase classname="tests.test_run_coordination_binding" name="test_trace_initialization_failure_relinquishes_entry_owner" time="0.424" /></testsuite></testsuites>

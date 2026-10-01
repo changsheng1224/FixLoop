@@ -1,0 +1,530 @@
+{
+  "scope": "targeted only; distinct nodes, latest run by JUnit start time",
+  "totals": {
+    "passed": 119,
+    "failed": 0,
+    "skipped": 0
+  },
+  "batches": [
+    {
+      "report": "baseline.xml",
+      "started_at": "2026-10-02T03:46:16.043099+08:00",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "report": "baseline-tests.xml",
+      "started_at": "2026-10-02T03:46:44.961222+08:00",
+      "passed": 0,
+      "failed": 2,
+      "skipped": 0
+    },
+    {
+      "report": "first.xml",
+      "started_at": "2026-10-02T03:48:24.865797+08:00",
+      "passed": 13,
+      "failed": 1,
+      "skipped": 0
+    },
+    {
+      "report": "runtime.xml",
+      "started_at": "2026-10-02T03:50:23.623917+08:00",
+      "passed": 50,
+      "failed": 1,
+      "skipped": 0
+    },
+    {
+      "report": "truncated.xml",
+      "started_at": "2026-10-02T03:51:08.334906+08:00",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "report": "gates.xml",
+      "started_at": "2026-10-02T03:52:56.206170+08:00",
+      "passed": 55,
+      "failed": 0,
+      "skipped": 0
+    }
+  ],
+  "nodes": {
+    "tests.test_native_batch_preflight::test_missing_argument_is_paired_without_dispatch_or_budget_reservation": {
+      "status": "passed",
+      "report": "first.xml"
+    },
+    "tests.test_native_batch_preflight::test_provider_preserves_malformed_input_until_protocol_rejection[null]": {
+      "status": "passed",
+      "report": "first.xml"
+    },
+    "tests.test_native_batch_preflight::test_raw_protocol_mismatch_rejects_batch_before_any_real_effect[id]": {
+      "status": "passed",
+      "report": "first.xml"
+    },
+    "tests.test_native_batch_preflight::test_raw_protocol_mismatch_rejects_batch_before_any_real_effect[name]": {
+      "status": "passed",
+      "report": "first.xml"
+    },
+    "tests.test_native_batch_preflight::test_raw_protocol_mismatch_rejects_batch_before_any_real_effect[arguments]": {
+      "status": "passed",
+      "report": "first.xml"
+    },
+    "tests.test_native_batch_preflight::test_raw_protocol_mismatch_rejects_batch_before_any_real_effect[missing]": {
+      "status": "passed",
+      "report": "first.xml"
+    },
+    "tests.test_native_batch_preflight::test_raw_protocol_mismatch_rejects_batch_before_any_real_effect[duplicate]": {
+      "status": "passed",
+      "report": "first.xml"
+    },
+    "tests.test_native_batch_preflight::test_raw_protocol_mismatch_rejects_batch_before_any_real_effect[order]": {
+      "status": "passed",
+      "report": "first.xml"
+    },
+    "tests.test_native_batch_preflight::test_raw_protocol_mismatch_rejects_batch_before_any_real_effect[block]": {
+      "status": "passed",
+      "report": "first.xml"
+    },
+    "tests.test_native_batch_preflight::test_raw_protocol_mismatch_rejects_batch_before_any_real_effect[root]": {
+      "status": "passed",
+      "report": "first.xml"
+    },
+    "tests.test_native_batch_preflight::test_provider_preserves_malformed_input_until_protocol_rejection[array]": {
+      "status": "passed",
+      "report": "first.xml"
+    },
+    "tests.test_native_batch_preflight::test_provider_preserves_malformed_input_until_protocol_rejection[string]": {
+      "status": "passed",
+      "report": "first.xml"
+    },
+    "tests.test_native_batch_preflight::test_provider_preserves_malformed_input_until_protocol_rejection[boolean]": {
+      "status": "passed",
+      "report": "first.xml"
+    },
+    "tests.test_native_batch_preflight::test_truncated_turn_discards_even_complete_write_candidates": {
+      "status": "passed",
+      "report": "truncated.xml"
+    },
+    "tests.test_native_batch_preflight::test_preflight_freezes_nested_schema_and_preserves_original_arguments": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_native_batch_preflight::test_bad_write_is_rejected_but_valid_write_is_not_rolled_back": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_native_batch_preflight::test_matching_raw_blocks_allow_text_and_thinking_without_changing_pairing": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_native_batch_preflight::test_provider_empty_object_is_valid_for_optional_arguments": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_native_tool_batch::test_native_same_tool_real_read_pairing_live_cli_and_trace": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_native_tool_batch::test_native_permission_rejection_does_not_block_valid_call": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_native_tool_batch::test_native_quota_reservations_prevent_overspend": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_native_tool_batch::test_native_mixed_write_keeps_pairing_and_invalidates_old_read": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_native_tool_batch::test_native_protocol_failure_executes_nothing[calls0]": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_native_tool_batch::test_native_protocol_failure_executes_nothing[calls1]": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_native_tool_batch::test_native_protocol_failure_executes_nothing[calls2]": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_native_tool_batch::test_native_cancel_keeps_all_result_receipts": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_native_tool_batch::test_native_file_version_change_is_partial_and_does_not_grant_edit_lock": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_native_tool_batch::test_native_run_budget_rejections_still_have_ordered_observations": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_native_tool_batch::test_native_group_budget_reservation_is_atomic": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_native_tool_batch::test_native_serial_side_effect_retains_inflight_action_and_sequential_steps": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_native_tool_batch::test_native_partial_read_is_not_verified_or_silently_reused": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_native_tool_batch::test_native_oversize_batch_returns_every_result_in_order": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_tool_batch::test_same_name_calls_overlap_and_keep_order": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_tool_batch::test_protocol_rejection_before_dispatch[calls0]": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_tool_batch::test_protocol_rejection_before_dispatch[calls1]": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_tool_batch::test_protocol_rejection_before_dispatch[calls2]": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_tool_batch::test_protocol_rejection_before_dispatch[calls3]": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_tool_batch::test_protocol_rejection_before_dispatch[calls4]": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_tool_batch::test_protocol_rejection_before_dispatch[calls5]": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_tool_batch::test_protocol_rejection_before_dispatch[None]": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_tool_batch::test_mixed_batch_serial_original_order[write_file]": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_tool_batch::test_mixed_batch_serial_original_order[run_shell]": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_tool_batch::test_mixed_batch_serial_original_order[quick_test]": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_tool_batch::test_more_than_four_calls_degrade_without_dropping": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_tool_batch::test_failed_read_does_not_block_sibling": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_tool_batch::test_cancel_running_and_queued_and_discard_late_result": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_tool_batch::test_cooperative_cancel_confirms_worker_return": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_tool_batch::test_timeout_keeps_abandoned_capacity_and_cancels_undispatchable_calls": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_tool_batch::test_batch_freezes_registry_and_default_path_resolver": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_tool_batch::test_cancel_during_future_collection_never_reuses_returned_success": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_kernel_split::test_services_run_real_parallel_reads_without_loop_and_commit_on_owner": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_kernel_split::test_queued_cancellation_records_every_call_without_dispatch": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_kernel_split::test_worker_cannot_use_owner_services[recorder]": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_kernel_split::test_worker_cannot_use_owner_services[runner]": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_kernel_split::test_storage_failure_closes_handle_and_publishes_no_result_reference": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_kernel_split::test_settlement_failure_closes_prepared_steps_and_preserves_checkpoint": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_kernel_split::test_preparation_failure_closes_already_prepared_operation": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_kernel_split::test_unconfirmed_timeout_marks_runtime_uncertain_and_keeps_all_refs": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_kernel_split::test_mcp_raw_record_and_matching_action_keep_exact_reference": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_tool_batch_plan_integration::test_two_plan_nodes_each_native_batch_never_create_four_readers": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_tool_batch_plan_integration::test_borrowed_permit_remains_occupied_until_abandoned_child_exits": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_tool_batch_resume_projection::test_checkpoint_keeps_active_receipts_and_incomplete_ui_is_not_resume_authority": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_tool_batch_resume_projection::test_actual_step_resume_shows_incomplete_progress_without_reexecuting_unknown_call": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_native_tool_batch_crash::test_native_process_exit_uses_plan_receipts_not_ui_for_recovery[read-tool_result_recorded]": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_native_tool_batch_crash::test_native_process_exit_uses_plan_receipts_not_ui_for_recovery[write-tool_dispatched]": {
+      "status": "passed",
+      "report": "runtime.xml"
+    },
+    "tests.test_native_batch_preflight::test_schema_type_and_unknown_field_rejections_keep_valid_sibling[type]": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_native_batch_preflight::test_schema_type_and_unknown_field_rejections_keep_valid_sibling[unknown-field]": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestToolExecutionResult::test_success_result": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestToolExecutionResult::test_rejected_result": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor::test_unknown_write_keeps_disk_and_blocks_followup_writes": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestToolExecutorGates::test_rejects_non_allowed_tool": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestToolExecutorGates::test_rejects_invalid_params": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestToolExecutorGates::test_detects_duplicate_calls": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestToolExecutorGates::test_allows_non_duplicate": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestToolExecutorGates::test_post_lock_reserve_bypasses_duplicate_gate_once": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestToolExecutorGates::test_approval_auto_allows": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestToolExecutorGates::test_approval_never_denies": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestToolExecutorGates::test_writes_get_snapshot_diff": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestToolExecutorGates::test_write_without_workspace_diff_is_no_change": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestToolExecutorGates::test_stale_patch_exposes_current_preimage": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestToolExecutorGates::test_empty_patch_preimage_is_rejected_with_recovery": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestToolExecutorGates::test_gate3_path_escape_rejected": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestToolExecutorGates::test_readonly_tool_no_snapshot": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestToolExecutorGates::test_patch_file_includes_preview_metadata": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestToolExecutorGates::test_patch_file_approval_shows_preview": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestApproval::test_approve_auto": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestApproval::test_approve_never": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestExecutionTier::test_host_tool_has_tier_in_metadata": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestExecutionTier::test_run_shell_is_denied_by_gate7": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestExecutionTier::test_write_file_is_host_tier": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestExecutionTier::test_tool_spec_has_execution_tier": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestExecutionTier::test_rejected_tool_has_no_tier_in_metadata": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestExecutionTier::test_execution_tier_in_trace_public_keys": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestGate5SemanticDuplicate::test_read_tool_same_path_different_args_duplicate": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestGate5SemanticDuplicate::test_read_tool_different_path_not_duplicate": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestGate5SemanticDuplicate::test_write_tool_exact_match_duplicate": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestGate5SemanticDuplicate::test_write_tool_different_content_not_duplicate": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestGate5SemanticDuplicate::test_less_than_two_calls_not_duplicate": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestGate5SemanticDuplicate::test_search_same_path_different_pattern_duplicate": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestGate7ApprovalTiers::test_read_tools_are_auto": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestGate7ApprovalTiers::test_write_tools_are_ask": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestGate7ApprovalTiers::test_run_shell_is_deny": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestGate7ApprovalTiers::test_unknown_tool_defaults_to_ask": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestGate7ApprovalTiers::test_auto_tool_executes_without_approval": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestGate7ApprovalTiers::test_write_file_asks_approval": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestGate7ApprovalTiers::test_deny_tool_rejected": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestLoopDetection::test_single_call_no_detection": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestLoopDetection::test_three_same_calls_triggers": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestLoopDetection::test_different_args_no_detection": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestLoopDetection::test_threshold_zero_disables": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_executor.TestLoopDetection::test_interleaved_tool_resets_window": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_schema.TestToolSchemaView::test_excludes_run_pointer": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_tool_schema.TestToolSchemaView::test_sorted_iteration_not_required": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_model_client_usage.TestAnthropicRecordUsage::test_record_usage_accumulates_cache": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_native_fc_text_salvage::test_parser_extracts_function_calls_as_tool": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_native_fc_text_salvage::test_complete_turn_recovers_function_calls_in_text": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_native_fc_text_salvage::test_native_rules_discourage_xml_function_calls": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_exploration_l2::test_owner_delegates_collects_reviews_updates_plan_and_alone_edits[text]": {
+      "status": "passed",
+      "report": "gates.xml"
+    },
+    "tests.test_exploration_l2::test_owner_delegates_collects_reviews_updates_plan_and_alone_edits[native]": {
+      "status": "passed",
+      "report": "gates.xml"
+    }
+  }
+}

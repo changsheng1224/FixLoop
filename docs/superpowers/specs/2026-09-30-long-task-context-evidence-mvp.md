@@ -1,6 +1,8 @@
 # FixLoop 长任务上下文与证据管理 MVP Spec
 
-日期：2026-09-30。状态：开发规格；本文不表示功能已实现。
+日期：2026-09-30；状态对账：2026-10-02。状态：完整原规格仍为部分实现。已完成本轮确认的统一任务/Plan 投影、必需预算门禁、恢复后重建上下文；范围及相关测试见 [长任务上下文验收](../../LONG_TASK_CONTEXT_ACCEPTANCE_2026-10-01.md)。决策版本、超长目标的受信任摘要和全部入口迁移继续后置，不能宣称 C1–C9 整体验收。当前差量与借鉴取舍见 [Agent 设计参照](../../AGENT_DESIGN_REFERENCES_2026-10-01.md)，剩余实施顺序见 [P0–P4 计划](../plans/2026-10-01-agent-design-reference-improvements.md)。
+
+本轮选定 MVP 复用 LongTaskState/v1 与既有 journal，不落地下面完整 v2 目标契约。硬约束仅由显式入口提供；不增加自动约束/决策提炼。长原文装不下时阻断；未实现引用加语义摘要的继续方式。通用调用示例不常驻 Plan 请求，完整角色规则受保护。以下原设计保留为后续范围参考，不能用来扩大本轮验收。
 
 ## 1. 目标与交付
 
@@ -14,46 +16,47 @@
 4. checkpoint 封装与恢复校验；重组当前节点上下文，不重放未知副作用。
 5. 固定多阶段任务的压缩、修改、恢复和越权引用测试；记录实测数据，不预设提升幅度。
 
-预计在 **Plan DAG MVP 已实现并稳定接入同一条 L2 修复路径后**，单人约 10–15 个有效工作日，含相关测试和集成返工。该估计不包含 Plan DAG 自身的 18–28 日，也不包含代码探索或 WSL 沙箱 MVP。实现与测试规模约 900–1,500 行，仅用于控制范围，不是验收指标。
+初始完整范围估算为单人约 10–15 个有效工作日、900–1,500 行实现与测试；该估算不是当前剩余工作量。Plan DAG 已接入选定 Python/host L2 路径，后续按实际差量估算，不重复建设已有模块或叠加旧工期。
 
 ## 2. 依赖、当前基础与非目标
 
-本功能消费此前的 [Plan DAG 与完整在途任务恢复 MVP](./2026-09-30-plan-dag-inflight-resume-mvp.md) 提供的 PlanSession、plan_version、state_revision、node_id、attempt journal 和恢复判定。该 Plan 当前仍为 spec；其真实接口落地前只允许实现独立模型和测试，不得用现有 `plan_todos` 冒充 DAG 节点，也不得宣称端到端完成。
+本功能消费 [Plan DAG 与完整在途任务恢复 MVP](./2026-09-30-plan-dag-inflight-resume-mvp.md) 提供的 PlanSession、plan_version、state_revision、node_id、attempt journal 和恢复判定。其选定路径已有 [实现与验收记录](../../PLAN_DAG_ACCEPTANCE_2026-09-30.md)。后续直接扩展现有 `plan_runtime/long_task.py` 和 PlanSession，不新增第二份任务上下文状态；现有 `plan_todos` 不得作为 L2 DAG 权威状态。
 
 现有基础：
 
 | 模块 | 复用与缺口 |
 |---|---|
 | `agent_runtime/context_runtime.py` | ContextRequest、ContextPolicyEngine、ObservationStore 已有预算选择、外置输出、checksum、按路径失效；`hard_pin` 仍会因预算不足而被裁剪。 |
-| `agent_runtime/context_manager.py` | 已记录 selected/dropped manifest；当前 state 主要是 Todo 摘要，应改为 Plan 节点投影。 |
+| `agent_runtime/context_manager.py`、`section_filler.py` | 已有 Todo 摘要和长任务 Plan 投影；两次 state 填充可能覆盖且重复计量，长任务段仍可能被裁剪，构建异常可返回空串；需单次权威投影及必需项失败门禁。 |
 | `agent_runtime/compression_pipeline.py` | L0–L5 和首条用户消息保护已存在；结构化任务状态不能由其摘要推断或覆盖。 |
-| `agent_runtime/checkpoint.py`、`session_contract.py` | 已有 sealed envelope/context manifest/Observation manifest；当前 Observation manifest 取最近 100 条，不能保证所有活动引用都被封装。 |
-| `src/collaboration/contracts.py` | 已有 AgentTask/AgentResult；首期只校验结果状态和证据引用，不新增语义合并器。 |
+| `agent_runtime/plan_runtime/long_task.py`、`session.py` | 已有原始请求、约束、决策追加、证据 refs 和 sealed state；需补来源、决策 supersede 及 Plan revision 绑定。 |
+| `agent_runtime/checkpoint.py`、`session_contract.py`、Plan journal | 已有 seal，Plan 归档证据避免历史窗口/GC 丢失依据；需补封装 active 决策引用并核查全部活动上下文引用，不把历史最近 100 条窗口当作完整性证明。 |
+| `src/collaboration/exploration_runtime.py`、`exploration_results.py` | 已有只读 Subagent 与候选来源校验、确定性去重；继续由主 Agent 核验后接纳，不新增语义合并器。 |
 
 首期不做：完整负向搜索/目录新增文件的自动失效；跨任务证据缓存；Subagent 语义去重、投票或冲突裁决；新的日志/证据数据库；通用决策知识图谱；全部 L1/L2 入口迁移；大规模开启/关闭效果对照实验。对范围搜索的“未找到”结论，在缺少可校验范围版本时只能标 `unknown`，不得当作“已确认不存在”。
 
 ## 3. 权威状态与决策契约
 
-在 PlanSession 所属 task/run/workspace 下增加 `TaskContextState`，由受信任任务入口初始化：
+在 PlanSession 所属 task/run/workspace 下扩展现有 `LongTaskState`，由受信任任务入口初始化。下面是待补齐的目标契约，不是当前代码签名；既有 checksum/seal 与持久化入口继续复用：
 
 ```text
-TaskContextState(schema_version="1"):
+LongTaskState(schema_version="long-task-v2", 目标契约):
   task_id, run_id, workspace_id, session_id
   original_request_ref, original_request_checksum
   hard_constraints[]: {constraint_id, text, source_turn_id}
-  plan_id, plan_version, state_revision, active_node_id
+  plan_id, plan_version, plan_state_revision, active_node_id
   decisions[]: DecisionRecord
   state_revision, checksum
 
 DecisionRecord:
   decision_id, revision, status: active | superseded
   statement, rationale_summary, evidence_refs[]
-  supersedes_id?, created_at, updated_at
+  source_turn_id?, supersedes_id?, created_at, updated_at
 ```
 
 原始请求保存在已有受控会话持久层或稳定 artifact 中，引用与 checksum 一起封装。硬约束保留原文和来源 turn，只有用户明确变更目标/约束时才更新；模型摘要不能改写。决策是主 Agent 确认后的记录，保留旧版但仅 active 版本可进入“当前决策”视图。DecisionRecord 不是事实证明；其证据若 stale/unknown，决策投影标 `needs_review`，不能作为已核实代码事实。
 
-Plan 的节点状态、完成条件、依赖和在途结果仍由 Plan reducer/journal 管理。TaskContextState 只保存身份与当前 Plan 引用，不再建立可独立修改的第二份节点状态。若 Plan revision 与 TaskContextState 引用不一致，停止上下文组装并返回 `state_mismatch`，不得取较新的摘要猜测。
+Plan 的节点状态、完成条件、依赖和在途结果仍由 Plan reducer/journal 管理。LongTaskState 只保存身份与当前 Plan 引用；node_history 是审计投影，不是可独立修改的第二份节点状态。若 Plan revision 与 LongTaskState 引用不一致，停止上下文组装并返回 `state_mismatch`，不得取较新的摘要猜测。上下文构建只读，freshness 变化由显式 owner 操作提交 revision，避免投影暗中改写持久状态。
 
 ## 4. 节点级上下文组装
 
@@ -90,7 +93,7 @@ Plan 节点目标、依赖和完成条件作为一个权威投影，不从 Todo 
 
 ## 6. 压缩、外置内容与 Subagent 边界
 
-沿用 L0–L5 压缩与 Observation blob；不复制完整日志到 TaskContextState。压缩摘要只作为历史线索，标注被覆盖 turn/Observation 引用、摘要版本与生成时间。摘要的引用缺失或与权威状态冲突时，保留旧摘要或拒绝新摘要进入有效投影，并发出诊断；原始目标、硬约束、Plan 与 active 决策从结构化来源重新渲染。
+沿用 L0–L5 压缩与 Observation blob；不复制完整日志到 LongTaskState。压缩摘要只作为历史线索，标注被覆盖 turn/Observation 引用、摘要版本与生成时间。摘要的引用缺失或与权威状态冲突时，保留旧摘要或拒绝新摘要进入有效投影，并发出诊断；原始目标、硬约束、Plan 与 active 决策从结构化来源重新渲染。
 
 较长测试/工具输出继续以 Observation 的受控引用展开，保留现有脱敏、scope、checksum 和 token 限制。部分结果、截断、超时须保留状态，不能被摘要写成完整结论。
 
@@ -98,17 +101,17 @@ AgentResult 首期只做进入上下文前的门禁：任务身份吻合、状�
 
 ## 7. checkpoint 与恢复
 
-在先前 Plan DAG 的 sealed checkpoint/journal 上封装 `TaskContextState` 的 schema/checksum、原始请求引用及 checksum、active 决策引用、当前 Plan 身份、context manifest 引用和所有**仍被当前节点/决策/选中上下文引用**的 Observation ID/checksum/文件版本。活动引用不能因当前 checkpoint 的“最近 100 条 Observation”窗口被截掉；历史审计项可按既有保留策略处理。
+在现有 Plan DAG 的 sealed checkpoint/journal 上封装 `LongTaskState` 的 schema/checksum、原始请求引用及 checksum、active 决策引用、当前 Plan 身份、context manifest 引用和所有**仍被当前节点/决策/选中上下文引用**的 Observation ID/checksum/文件版本。复用 Plan 已有证据归档，并补齐活动决策/上下文引用；活动引用不能被历史“最近 100 条”窗口截掉，历史审计项可按既有保留策略处理。
 
 恢复顺序：
 
 1. 先由 Plan DAG 恢复器完成在途 attempt、收据及未知副作用判定；它返回安全的当前 Plan revision/节点或 `uncertain`。
-2. 校验 task/run/workspace/session、TaskContextState 与原始请求 checksum、Plan 引用、决策链、被引用 Observation 的 scope/blob checksum/文件版本。
+2. 校验 task/run/workspace/session、LongTaskState 与原始请求 checksum、Plan 引用、决策链、被引用 Observation 的 scope/blob checksum/文件版本。
 3. 缺失或 stale 的代码证据仅使相关决策和节点待复核；无关证据继续可用。身份、schema、权威状态 checksum 或 Plan revision 不一致时拒绝自动继续。
 4. 当前节点必需证据不完整时返回 `needs_retrieval`，由主 Agent 先重取；未知写入仍遵循 Plan 的 `uncertain` 规则，不能自动重放。
 5. 基于恢复后的权威状态重新组装上下文，写入恢复报告和事件；旧压缩摘要或旧 context manifest 只作为校验对象，不能作为新的事实源。
 
-不新增第二套进程/工具恢复器，不把 checkpoint 当成可恢复的模型隐藏状态。旧 checkpoint 缺少新 schema 时明确以旧模式恢复或拒绝本功能自动接续，不能默默填默认值宣称已校验。
+不新增第二套进程/工具恢复器，不把 checkpoint 当成可恢复的模型隐藏状态。checkpoint 缺少受支持 schema 或必需字段时明确拒绝本功能自动接续，不能默默填默认值宣称已校验；不新增兼容模式或迁移逻辑。
 
 ## 8. 事件、验收与交付条件
 

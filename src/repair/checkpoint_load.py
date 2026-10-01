@@ -10,9 +10,19 @@ import json
 import uuid
 from pathlib import Path
 
-from agent_runtime.session_contract import CheckpointEnvelope, workspace_manifest
+from agent_runtime.session_contract import (
+    CHECKPOINT_ENVELOPE_VERSION,
+    CheckpointEnvelope,
+    workspace_manifest,
+)
 
 CHECKPOINT_FILENAME = "repair_checkpoint.json"
+
+
+class RepairCheckpointError(ValueError):
+    def __init__(self, code):
+        self.code = code
+        super().__init__(code)
 
 
 def save_repair_checkpoint(state, repo_root: str, *, state_root: str = "") -> Path:
@@ -67,35 +77,52 @@ def save_repair_checkpoint(state, repo_root: str, *, state_root: str = "") -> Pa
     ).seal()
     state_payload["checkpoint_envelope"] = envelope.to_dict()
     state_payload["checkpoint_checksum"] = envelope.checksum
-    state_payload["state_root"] = str(path.parents[4])
+    state_payload["state_root"] = str(path.parents[3])
     tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     tmp.write_text(json.dumps(state_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(path)
     return path
 
 
-def load_repair_checkpoint(repo_root: str, run_id: str, *, state_root: str = "") -> dict | None:
+def load_repair_checkpoint(
+    repo_root: str,
+    run_id: str,
+    *,
+    state_root: str = "",
+    require_valid: bool = False,
+    issue: str | None = None,
+) -> dict | None:
     """从 .agent/runs/<run_id>/repair_checkpoint.json 加载 RepairState dict。
 
     Returns:
-        RepairState dict 或 None（文件不存在/损坏时）。
+        RepairState dict。普通探测在缺失/损坏时返回 None；严格恢复抛出
+        带稳定原因码的 RepairCheckpointError，不允许退回新执行。
     """
     from agent_runtime.state_root import state_root_for
 
+    def reject(code):
+        if require_valid:
+            raise RepairCheckpointError(code)
+        return None
+
+    if not run_id or Path(run_id).name != run_id or run_id in {".", ".."}:
+        return reject("resume_checkpoint_identity_mismatch")
     path = state_root_for(repo_root, state_root) / ".agent" / "runs" / run_id / CHECKPOINT_FILENAME
     if not path.is_file():
-        return None
+        return reject("resume_checkpoint_missing")
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict) or "retry_count" not in data:
-            return None
+            return reject("resume_checkpoint_malformed")
         if state_root and Path(data.get("state_root", "")).resolve() != Path(state_root).resolve():
-            return None
+            return reject("resume_checkpoint_identity_mismatch")
         envelope_raw = data.get("checkpoint_envelope")
         if isinstance(envelope_raw, dict):
             envelope = CheckpointEnvelope.from_dict(envelope_raw)
+            if require_valid and envelope.schema_version != CHECKPOINT_ENVELOPE_VERSION:
+                return reject("resume_checkpoint_schema_mismatch")
             if not envelope.verify() or data.get("checkpoint_checksum") != envelope.checksum:
-                return None
+                return reject("resume_checkpoint_integrity_failed")
             # The envelope task_state is authoritative.  Reject a checkpoint
             # whose duplicated top-level fields were modified independently.
             task_state = envelope.task_state or {}
@@ -103,11 +130,40 @@ def load_repair_checkpoint(repo_root: str, run_id: str, *, state_root: str = "")
                 if key in data and json.dumps(data[key], sort_keys=True, default=str) != json.dumps(
                     value, sort_keys=True, default=str
                 ):
-                    return None
+                    return reject("resume_checkpoint_integrity_failed")
             data.update(task_state)
+            if require_valid and (
+                data.get("repair_run_id") != run_id
+                or envelope.identity.get("run_id") != run_id
+                or envelope.identity.get("task_id") != run_id
+                or Path(envelope.workspace_manifest.get("root", "")).resolve()
+                != Path(repo_root).resolve()
+            ):
+                return reject("resume_checkpoint_identity_mismatch")
+        elif require_valid:
+            return reject("resume_checkpoint_integrity_failed")
+        if require_valid and issue is not None and data.get("issue_input") != issue:
+            return reject("resume_task_objective_mismatch")
+        if require_valid and (
+            any(
+                type(data.get(key)) is not int or data[key] < 0
+                for key in ("retry_count", "max_retries", "attempt")
+            )
+            or not isinstance(data.get("node_timings"), dict)
+        ):
+            return reject("resume_checkpoint_malformed")
         return data
-    except (json.JSONDecodeError, OSError, TypeError, ValueError):
-        return None
+    except RepairCheckpointError:
+        raise
+    except (json.JSONDecodeError, UnicodeError, TypeError, ValueError, AttributeError):
+        return reject("resume_checkpoint_malformed")
+    except OSError:
+        return reject("resume_checkpoint_unreadable")
 
 
-__all__ = ["CHECKPOINT_FILENAME", "load_repair_checkpoint", "save_repair_checkpoint"]
+__all__ = [
+    "CHECKPOINT_FILENAME",
+    "RepairCheckpointError",
+    "load_repair_checkpoint",
+    "save_repair_checkpoint",
+]

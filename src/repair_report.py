@@ -61,6 +61,7 @@ class RepairReport:
             status=status,
             runtime_status=str(state.status),
             runtime_run_id=state.repair_run_id,
+            recovery=state.recovery_outcome,
             verification=vr.to_dict() if vr else None,
             verification_tier=actual_tier,
             verification_requested_tier=tier,
@@ -124,6 +125,22 @@ class RepairReport:
                     f"运行时 run_id：{self.data['runtime_run_id']}",
                     f"Trace：{self.data['repo_path']}/.agent/runs/{self.data['runtime_run_id']}/trace.jsonl",
                 ]
+            )
+        recovery = self.data.get("recovery") or {}
+        if recovery:
+            lines.extend(
+                [
+                    "",
+                    f"恢复/取消：{recovery['status']}（{recovery['stage']}）",
+                    f"原因：{recovery['reason_code'] or '无阻断原因'}",
+                    f"下一步：{recovery['guidance']}",
+                    f"清理已确认：{recovery['cleanup_confirmed']}；"
+                    f"恢复涉及的 Plan 副作用核验：{recovery['effects_verified']}",
+                ]
+            )
+            lines.extend(
+                f"- 资源 {r['resource_id']}：{r['reason_code'] or r['status']}"
+                for r in recovery["blocking_resources"]
             )
         lines.extend(["", "## 进度", ""])
         lines.extend(f"- {event['phase']}：{event['message']}" for event in self.data["events"])

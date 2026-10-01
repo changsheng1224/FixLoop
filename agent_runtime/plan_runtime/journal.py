@@ -258,3 +258,15 @@ class PlanStore:
                 active[a["attempt_id"]] = a["phase"]
         if payload["active_attempts"] != sorted(k for k, v in active.items() if v != "reconciled"):
             raise ValueError("checkpoint_attempt_mismatch")
+        if payload.get("long_task_state"):
+            from .long_task import LongTaskState
+
+            saved_state = LongTaskState.verify(payload["long_task_state"])
+            states = [e["payload"] for e in prefix if e["kind"] == "long_task_state"]
+            if (
+                not states
+                or saved_state.to_dict() != LongTaskState.verify(states[-1]).to_dict()
+                or saved_state.task_id != self.identity["task_id"]
+                or saved_state.run_id != self.identity["run_id"]
+            ):
+                raise ValueError("checkpoint_long_task_journal_mismatch")

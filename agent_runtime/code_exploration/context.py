@@ -13,19 +13,27 @@ from agent_runtime.sensitive_paths import is_sensitive_path
 
 
 def select_source_context(
-    service, budget, *, role: str, phase: str, token_limit: int
+    service,
+    budget,
+    *,
+    role: str,
+    phase: str,
+    token_limit: int,
+    source_checks=None,
+    elastic: bool = False,
 ) -> tuple[str, object | None]:
     """Recheck source and Observation before every prompt projection."""
     if not service.pending_candidates or token_limit <= 0:
         return "", None
-    if not service.validate_view():
-        return "", None
+    if not service.validate_view(source_checks):
+        reason = service.last_invalidation_reason
+        return f"Code evidence unavailable: {reason}; reread required.", None
     from agent_runtime.code_exploration.io import _limits
 
     request = ContextRequest(
         role=role,
         phase=phase,
-        token_budget=min(1500, token_limit),
+        token_budget=token_limit if elastic else min(1500, token_limit),
     )
     candidates: list[ContextItem] = []
     for raw in service.pending_candidates[:6]:
@@ -53,8 +61,13 @@ def select_source_context(
                 continue
             service.snippet_cache[key] = excerpt
         source_ref = raw["observation_id"]
+        from agent_runtime.code_exploration.consumption import retrieval_header
+
+        evidence = service.evidence[source_ref]
         text = (
-            f"{relative}:{start}-{end - 1} [source={source_ref} version={actual[:12]}]\n{excerpt}"
+            f"{relative}:{start}-{end - 1} [source={source_ref} version={actual[:12]}]\n"
+            "[snippet_freshness=fresh; parent query freshness is separate]\n"
+            f"{retrieval_header(evidence.retrieval_result)}{excerpt}"
         )
         candidates.append(
             ContextItem(
@@ -72,6 +85,8 @@ def select_source_context(
                     "range": [start, end],
                     "reason": raw["reason"],
                     "epoch": service.epoch,
+                    "freshness": "fresh",
+                    "completeness": evidence.retrieval_result.get("completeness", "unknown"),
                 },
             )
         )

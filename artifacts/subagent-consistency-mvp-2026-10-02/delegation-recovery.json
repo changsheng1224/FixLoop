@@ -1,0 +1,62 @@
+{
+  "context": {
+    "checksum": "1cfcc56a34b0ef7871c698b6574c28d1c5fe73934ce8cc60dc8f3452f7279910",
+    "current_node": {
+      "block_or_failure_reason": "",
+      "completion": [
+        {
+          "evidence_refs": [],
+          "kind": "observation_present"
+        }
+      ],
+      "dependency_statuses": {},
+      "depends_on": [],
+      "input_evidence_refs": [],
+      "kind": "explore",
+      "node_id": "read-0",
+      "objective": "inspect file",
+      "output_evidence_refs": [],
+      "status": "running"
+    },
+    "goal": "Fix answer while preserving its public API",
+    "hard_constraints": [
+      "Keep the public API"
+    ],
+    "plan_view": {
+      "plan_checksum": "d3611221b9279bc9e5ba3404ad71700130dbcc81d5877dfd1ea9245cef4a016c",
+      "plan_id": "plan",
+      "plan_version": 1,
+      "run_id": "run",
+      "selected_node_id": "read-0",
+      "state_revision": 2,
+      "task_id": "task",
+      "workspace_id": "9d5026f95753fe10df882e87984079ff0148a09d1f2b4384d3ea3826bf3d9b0d"
+    },
+    "schema_version": "delegation-context-v1",
+    "task_state_revision": 2
+  },
+  "old_attempt": "explore-attempt-ac48925806e74c79b3a4059f2aa11d4d",
+  "new_attempt": "explore-attempt-aa77e22122434a15a68b6e8f8d3989a1",
+  "receipts": [
+    {
+      "attempt_id": "explore-attempt-ac48925806e74c79b3a4059f2aa11d4d",
+      "charged_tokens": 24000,
+      "lease_generation": 1,
+      "reserved_tokens": 24000,
+      "usage_known": false
+    },
+    {
+      "attempt_id": "explore-attempt-aa77e22122434a15a68b6e8f8d3989a1",
+      "charged_tokens": 300,
+      "lease_generation": 3,
+      "model_turns": 2,
+      "reserved_tokens": 24000,
+      "tool_calls": 1,
+      "usage_known": true
+    }
+  ],
+  "validation": {
+    "status": "valid",
+    "reason": ""
+  }
+}

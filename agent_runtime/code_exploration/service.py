@@ -63,6 +63,7 @@ class CodeExplorationService:
         self.snippet_cache: dict[tuple[str, str, int, int], str] = {}
         self.pending_candidates: list[dict] = []
         self.omitted_evidence = 0
+        self.last_invalidation_reason = ""
         self.scope = self._scope()
 
     def close(self) -> None:
@@ -86,12 +87,14 @@ class CodeExplorationService:
             return
         _, _, task_id, run_id = self._scope()
         try:
-            sink(kind, {"task_id": task_id, "run_id": run_id,
-                        "epoch": self.epoch, **(payload or {})})
+            sink(
+                kind, {"task_id": task_id, "run_id": run_id, "epoch": self.epoch, **(payload or {})}
+            )
         except Exception:
             pass
 
     def invalidate(self, reason: str = "source_changed") -> None:
+        self.last_invalidation_reason = reason
         self.epoch = new_epoch()
         self.view_revision += 1
         self.evidence.clear()
@@ -122,9 +125,11 @@ class CodeExplorationService:
         hits = tuple(retrieval.get("hits") or ())
         if not all_versions or not hits or retrieval.get("execution") != "ok":
             return
-        hit_paths = list(dict.fromkeys(
-            str(hit.get("path", "")) for hit in hits if hit.get("path") in all_versions
-        ))
+        hit_paths = list(
+            dict.fromkeys(
+                str(hit.get("path", "")) for hit in hits if hit.get("path") in all_versions
+            )
+        )
         selected_paths = (hit_paths or list(all_versions))[:8]
         versions = {path: all_versions[path] for path in selected_paths}
         self.omitted_evidence += max(0, len(all_versions) - len(versions))
@@ -136,14 +141,16 @@ class CodeExplorationService:
             hits,
             versions,
             str(retrieval.get("observed_at", "")),
+            dict(retrieval),
         )
-        while len(self.evidence) > 8 or len({
-            path for item in self.evidence.values() for path in item.versions
-        }) > 8:
+        while (
+            len(self.evidence) > 8
+            or len({path for item in self.evidence.values() for path in item.versions}) > 8
+        ):
             self.evidence.pop(next(iter(self.evidence)))
             self.omitted_evidence += 1
 
-    def validate_view(self) -> bool:
+    def validate_view(self, source_checks=None) -> bool:
         """Conservatively discard the whole view on any source or record change."""
         if self.scope != self._scope():
             self.invalidate("task_changed")
@@ -151,9 +158,13 @@ class CodeExplorationService:
             return False
         if not self.evidence:
             return True
+        from agent_runtime.code_exploration.consumption import SourceChecks
         from agent_runtime.context_runtime import ObservationStore
 
-        store = ObservationStore(self.context.observation_state or {}, self.context.root)
+        checks = source_checks or SourceChecks(self.context)
+        store = ObservationStore(
+            self.context.observation_state or {}, self.context.root, self.context.state_root
+        )
         try:
             for item in self.evidence.values():
                 record = store.get(item.observation_id)
@@ -163,18 +174,10 @@ class CodeExplorationService:
                 if not store.expand(item.observation_id):
                     self.invalidate("observation_checksum")
                     return False
-                for relative, expected in item.versions.items():
-                    try:
-                        path = self.context.resolve(relative)
-                        if is_sensitive_path(path):
-                            raise ValueError("sensitive path")
-                        _, actual = _snapshot(path, _limits(self.context).file_hash_bytes)
-                    except (OSError, ValueError, UnicodeError):
-                        self.invalidate("source_unavailable")
-                        return False
-                    if actual != expected:
-                        self.invalidate("source_changed")
-                        return False
+                freshness, reason = checks.check(item.versions, Path(self.context.root).resolve())
+                if freshness != "fresh":
+                    self.invalidate(reason)
+                    return False
             return True
         finally:
             store.close()
@@ -260,16 +263,39 @@ class CodeExplorationService:
             "edges": view["edges"],
             "candidate_snippets": candidates,
         }
-        self.emit("relation_view_built", {
-            "view_revision": self.view_revision,
-            "coverage": view["coverage"],
-            "truncation_reasons": view["truncation_reasons"],
-            "observation_refs": view["observation_refs"],
-        })
+        self.emit(
+            "relation_view_built",
+            {
+                "view_revision": self.view_revision,
+                "coverage": view["coverage"],
+                "truncation_reasons": view["truncation_reasons"],
+                "observation_refs": view["observation_refs"],
+            },
+        )
+        retrieval = RetrievalResult(
+            query_type="code_relations",
+            completeness="partial",
+            scanned_scope={"observed_files": view["covered_files"], "epoch": self.epoch},
+            dependency_versions=view["dependency_versions"],
+            truncation_reasons=["observed_evidence_only", *view["truncation_reasons"]],
+            hits=[
+                RetrievalHit(
+                    hit_id=f"relation:{index}",
+                    path=raw["path"],
+                    range=None,
+                    kind="symbol",
+                    summary=raw["reason"],
+                    source="python_ast",
+                    resolution="syntactic",
+                    content_hash=raw["content_hash"],
+                )
+                for index, raw in enumerate(candidates)
+            ],
+        )
         return ToolResult(
             content="Task-local relations (observed evidence only):\n"
             + json.dumps(summary, ensure_ascii=False),
-            metadata={"relation_view": view, "source_dependencies": view["dependency_versions"]},
+            metadata={"relation_view": view, **retrieval.to_tool_result("").metadata},
         )
 
     def _cancelled(self) -> bool:

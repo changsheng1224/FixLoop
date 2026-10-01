@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="6" time="14.793" timestamp="2026-10-02T02:29:57.208326+08:00" hostname="DESKTOP-M8LE8SP"><testcase classname="tests.test_evidence_consumption" name="test_actual_request_distinguishes_checked_source_summary_and_retained_body[False-False]" time="12.180" /><testcase classname="tests.test_evidence_consumption" name="test_actual_request_distinguishes_checked_source_summary_and_retained_body[False-True]" time="0.625" /><testcase classname="tests.test_evidence_consumption" name="test_actual_request_distinguishes_checked_source_summary_and_retained_body[True-False]" time="0.632"><failure message="assert True is not True">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-evidence-consumption-bodies/test_actual_request_distinguis2')
+native = False, large = True
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x000002577DBC0EF0&gt;
+
+    @pytest.mark.parametrize("native", [False, True])
+    @pytest.mark.parametrize("large", [False, True])
+    def test_actual_request_distinguishes_checked_source_summary_and_retained_body(
+        tmp_path, native, large, monkeypatch
+    ):
+        from agent_runtime.code_exploration.io import read_file_result
+    
+        body = "RAW_WORD " * 10000 if large else "value = 1\n"
+        (tmp_path / "value.py").write_text(body)
+        with session_for(tmp_path) as session:
+            session.create(simple_plan(session))
+            session.configure_long_task("inspect source", hard_constraints=["do not edit"])
+            agent, client = _agent(tmp_path, session, native=native)
+            agent.shared_run_id = session.identity["run_id"]
+            agent._l2_agent = "observer"
+            agent._l2_task_id = session.identity["task_id"]
+            agent.session["id"] = session.identity["session_id"]
+            agent.session["session_identity"] = dict(session.identity)
+            agent.session["session_scope"] = {"session_id": session.identity["session_id"]}
+    
+            def invoke(attempt):
+                result = read_file_result(agent.tool_context, {"path": "value.py"})
+                result.metadata["retrieval_result"].update(
+                    completeness="partial", truncation_reasons=["hit_limit"]
+                )
+                session.execute_tool(agent, "read_file", {"path": "value.py"}, lambda: result)
+                return session.tool_result(attempt)
+    
+            assert session.run_node("read-0", invoke)["status"] == "success"
+            ref = session.plan.node("read-0").output_evidence_refs[0]
+            oid = session.evidence.get(ref)["observation_id"]
+            agent.record(
+                {
+                    "role": "tool",
+                    "content": "discard this unchecked body",
+                    "tool_name": "read_file",
+                    "observation_id": oid,
+                }
+            )
+            monkeypatch.setattr(ContextManager, "_get_compressed_history", lambda self, metadata: "")
+            assert agent.ask("continue", skip_plan=True) == "done"
+            text = json.dumps(client.requests[0].messages) if native else client.prompts[0]
+            assert "discard this unchecked body" not in text
+            assert "partial" in text and "hit_limit" in text
+            record = next(
+                item
+                for item in agent.session["context_manifest"]["evidence_consumption"]
+                if item["evidence_ref"] == ref
+            )
+            assert record["status"] == "valid" and record["summary_sent"]
+&gt;           assert record["body_sent"] is (not large)
+E           assert True is not True
+
+tests\test_evidence_consumption.py:283: AssertionError</failure></testcase><testcase classname="tests.test_evidence_consumption" name="test_actual_request_distinguishes_checked_source_summary_and_retained_body[True-True]" time="0.631"><failure message="assert True is not True">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-evidence-consumption-bodies/test_actual_request_distinguis3')
+native = True, large = True
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x000002577D9878A0&gt;
+
+    @pytest.mark.parametrize("native", [False, True])
+    @pytest.mark.parametrize("large", [False, True])
+    def test_actual_request_distinguishes_checked_source_summary_and_retained_body(
+        tmp_path, native, large, monkeypatch
+    ):
+        from agent_runtime.code_exploration.io import read_file_result
+    
+        body = "RAW_WORD " * 10000 if large else "value = 1\n"
+        (tmp_path / "value.py").write_text(body)
+        with session_for(tmp_path) as session:
+            session.create(simple_plan(session))
+            session.configure_long_task("inspect source", hard_constraints=["do not edit"])
+            agent, client = _agent(tmp_path, session, native=native)
+            agent.shared_run_id = session.identity["run_id"]
+            agent._l2_agent = "observer"
+            agent._l2_task_id = session.identity["task_id"]
+            agent.session["id"] = session.identity["session_id"]
+            agent.session["session_identity"] = dict(session.identity)
+            agent.session["session_scope"] = {"session_id": session.identity["session_id"]}
+    
+            def invoke(attempt):
+                result = read_file_result(agent.tool_context, {"path": "value.py"})
+                result.metadata["retrieval_result"].update(
+                    completeness="partial", truncation_reasons=["hit_limit"]
+                )
+                session.execute_tool(agent, "read_file", {"path": "value.py"}, lambda: result)
+                return session.tool_result(attempt)
+    
+            assert session.run_node("read-0", invoke)["status"] == "success"
+            ref = session.plan.node("read-0").output_evidence_refs[0]
+            oid = session.evidence.get(ref)["observation_id"]
+            agent.record(
+                {
+                    "role": "tool",
+                    "content": "discard this unchecked body",
+                    "tool_name": "read_file",
+                    "observation_id": oid,
+                }
+            )
+            monkeypatch.setattr(ContextManager, "_get_compressed_history", lambda self, metadata: "")
+            assert agent.ask("continue", skip_plan=True) == "done"
+            text = json.dumps(client.requests[0].messages) if native else client.prompts[0]
+            assert "discard this unchecked body" not in text
+            assert "partial" in text and "hit_limit" in text
+            record = next(
+                item
+                for item in agent.session["context_manifest"]["evidence_consumption"]
+                if item["evidence_ref"] == ref
+            )
+            assert record["status"] == "valid" and record["summary_sent"]
+&gt;           assert record["body_sent"] is (not large)
+E           assert True is not True
+
+tests\test_evidence_consumption.py:283: AssertionError</failure></testcase><testcase classname="tests.test_evidence_consumption" name="test_invalid_receipt_cannot_be_consumed_as_success[patch-patch_receipt_invalid]" time="0.149" /><testcase classname="tests.test_evidence_consumption" name="test_invalid_receipt_cannot_be_consumed_as_success[verify-verification_receipt_invalid]" time="0.193" /></testsuite></testsuites>

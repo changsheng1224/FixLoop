@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="4" time="22.251" timestamp="2026-10-01T21:37:00.754211+08:00" hostname="DESKTOP-M8LE8SP"><testcase classname="tests.test_code_evidence_consumption" name="test_hashes_of_some_hits_do_not_make_unversioned_hits_fresh" time="0.038" /><testcase classname="tests.test_code_evidence_consumption" name="test_change_immediately_after_tool_does_not_leak_through_continuation[False]" time="16.987" /><testcase classname="tests.test_code_evidence_consumption" name="test_change_immediately_after_tool_does_not_leak_through_continuation[True]" time="0.732" /><testcase classname="tests.test_code_evidence_consumption" name="test_l2_real_read_patch_and_host_verifier_keep_contracts" time="4.059"><failure message="assert 0 == 1&#10; +  where 0 = sum(&lt;generator object test_l2_real_read_patch_and_host_verifier_keep_contracts.&lt;locals&gt;.&lt;genexpr&gt; at 0x0000028A02DF3370&gt;)">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-code-consumption-boundaries/test_l2_real_read_patch_and_ho0')
+
+    def test_l2_real_read_patch_and_host_verifier_keep_contracts(tmp_path):
+        from tests.plan_l2_support import repair_fixture
+    
+        orch, state, client = repair_fixture(tmp_path)
+        try:
+            patches, meta = orch._run_patcher_toolized(state, "repair", {})
+            assert patches, (meta, state.agent_errors)
+            assert orch._run_verifier(state).all_passed
+            assert "return 2" in (tmp_path / "value.py").read_text()
+            assert any("completeness=complete_in_scope" in prompt for prompt in client.prompts)
+            assert any("freshness=fresh" in prompt for prompt in client.prompts)
+            journal = list(orch._plan_binding.session.store.latest("operation", "operation_id").values())
+&gt;           assert sum(item["tool"] == "patch_file" and item["status"] == "finished"
+                       for item in journal) == 1
+E                      assert 0 == 1
+E                       +  where 0 = sum(&lt;generator object test_l2_real_read_patch_and_host_verifier_keep_contracts.&lt;locals&gt;.&lt;genexpr&gt; at 0x0000028A02DF3370&gt;)
+
+tests\test_code_evidence_consumption.py:276: AssertionError</failure></testcase></testsuite></testsuites>

@@ -64,7 +64,7 @@ def test_actual_l2_tools_and_pytest(tmp_path):
 def test_public_repair_entrypoint_and_resume_keep_run_identity(tmp_path, monkeypatch):
     monkeypatch.setenv("FIXLOOP_PROGRESS_HEARTBEAT", "0")
     orch, seed, client = repair_fixture(tmp_path, full=True)
-    result = orch.repair(seed.issue_input, repair_timeout_s=0, resume_run_id=seed.repair_run_id)
+    result = orch.repair(seed.issue_input, repair_timeout_s=0, run_id=seed.repair_run_id)
     assert result.status == "fixed", (result.agent_errors, result.node_timings)
     assert result.repair_run_id == seed.repair_run_id
     assert result.node_timings["plan_progress"]["nodes"][-1]["status"] == "succeeded"
@@ -123,7 +123,11 @@ orch._run_patcher_toolized(state, 'Read value.py and fix answer()', {})
 
 
 def test_failed_verifier_rollback_and_bounded_replan(tmp_path):
+    from src.repair.progress import ProgressEmitter
+
     orch, state, client = repair_fixture(tmp_path)
+    progress = []
+    orch._progress = ProgressEmitter(quiet=True, record=progress.append)
     (tmp_path / "test_value.py").write_text(
         "from value import answer\ndef test_answer():\n    assert answer() == 3\n"
     )
@@ -147,6 +151,24 @@ def test_failed_verifier_rollback_and_bounded_replan(tmp_path):
         assert patches, (meta, state.agent_errors)
         assert orch._plan_binding.session.plan.plan_version == 2
         assert orch._run_verifier(state).all_passed
+        replans = [
+            json.loads(p.split("\n", 1)[1])["replan"]
+            for p in client.prompts
+            if p.startswith("Create a small repair task DAG") and '"replan":' in p
+        ]
+        assert len(replans) == 1
+        assert replans[0]["verification_receipt"]["completed"] is True
+        assert replans[0]["verification_receipt"]["total_tests"] == 1
+        assert replans[0]["failed_workspace"] != replans[0]["current_workspace"]
+        assert "3" in replans[0]["failure_excerpt"]
+        assert any("replan_started" in p.summary for p in progress)
+        assert {p.extras.get("phase") for p in progress} >= {
+            "explore",
+            "analyze",
+            "edit",
+            "verify",
+            "replan",
+        }
         assert (
             len(
                 [
@@ -172,7 +194,7 @@ from pathlib import Path
 from tests.plan_l2_support import repair_fixture
 orch, seed, client = repair_fixture(sys.argv[1], full=True)
 orch._plan_fault = lambda point: os._exit(76) if point == 'tool_result_recorded' and 'return 2' in (Path(sys.argv[1])/'value.py').read_text() else None
-orch.repair(seed.issue_input, repair_timeout_s=0, resume_run_id=seed.repair_run_id)
+orch.repair(seed.issue_input, repair_timeout_s=0, run_id=seed.repair_run_id)
 """
     child = subprocess.run(
         [sys.executable, "-c", code, str(tmp_path)],

@@ -20,6 +20,7 @@ class ObservedEvidence:
     hits: tuple[dict, ...]
     versions: dict[str, str]
     observed_at: str
+    retrieval_result: dict = field(default_factory=dict)
 
 
 @dataclass

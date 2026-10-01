@@ -1,10 +1,12 @@
 # FixLoop 并发恢复互斥与取消清理闭环 MVP 开发计划
 
-日期：2026-09-30。依据：[MVP Spec](../specs/2026-09-30-resume-cancel-coordination-mvp.md)。状态：未实现。
+日期：2026-09-30；状态对账：2026-10-01。依据：[MVP Spec](../specs/2026-09-30-resume-cancel-coordination-mvp.md)。状态：已有生产接入及定向验证，实际范围见 [RUN_COORDINATION](../../RUN_COORDINATION.md)，本次未复验。本文件保留原 P0–P4 开发契约；后续上下文/内核改进复用该实现，按 [新计划](2026-10-01-agent-design-reference-improvements.md)检查受影响契约，不从零重建 coordinator。
 
 ## 前提、工期与改动原则
 
-顺序 P0 → P1 → P2 → P3 → P4，预计单人 6–10 个有效工作日，含相关测试和集成返工。前提是 Plan DAG durable attempt journal/恢复器及 WSL supervisor cancel/reconcile/receipt 已在同一条 L2 修复路径实现。若前提缺失，先交付并验证对应前置项目；本计划不得以会话内 Action Ledger、CancellationToken 或 mock supervisor 代替生产契约。
+2026-10-02 增量 [恢复与取消 MVP](../../RECOVERY_CANCEL_ACCEPTANCE_2026-10-02.md) 已交付严格入口、共享结果投影和重复失败取消的幂等返回；原 6–10 天的基础建设估计不计入该增量。本次未重建 coordinator 或重复全部 WSL 验收。
+
+原始开发顺序为 P0 → P1 → P2 → P3 → P4，初始估算 6–10 个有效工作日，不是当前剩余工期。已有 Plan/coordination 的真实 L2 接入，WSL 专用验证与其 CLI 产品门禁分别记录；不得以会话内 Action Ledger、CancellationToken 或 mock supervisor 代替生产契约，也不得把专用验证扩大为任意后端已开放。
 
 当前工作树有未提交变更。开始时记录涉及文件状态/哈希，不 reset/stash/覆盖。`CLAUDE.md` 规定相关测试和分支/PR 工作流；不自动运行全量测试、push 或合并。对已有恢复器和沙箱只做必要接口接入，不复制状态机或进程管理逻辑。
 

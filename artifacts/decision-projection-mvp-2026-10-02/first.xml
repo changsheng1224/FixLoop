@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="4" skipped="0" tests="23" time="23.980" timestamp="2026-10-02T02:55:24.401344+08:00" hostname="DESKTOP-M8LE8SP"><testcase classname="tests.test_decision_projection" name="test_only_latest_decision_reaches_actual_request_and_checkpoint[False]" time="14.686" /><testcase classname="tests.test_decision_projection" name="test_only_latest_decision_reaches_actual_request_and_checkpoint[True]" time="0.729" /><testcase classname="tests.test_decision_projection" name="test_required_decision_review_blocks_without_writing_state[False]" time="0.521"><failure message="AssertionError: assert [{'checksum':...3', ...}, ...] == [{'checksum':...3', ...}, ...]&#10;  &#10;  Left contains 2 more items, first extra item: {'checksum': 'cc90828ab825134eb120e067db20d4fbb353961dc91ea90987efe63448a9930a', 'kind': 'long_task_state', 'payload':... 'node_id': 'read-1', ...}], ...}, 'previous': 'b9be2e509a520d9ff60d3630db2a94b1429d11da63350e0442e24c748fb230d6', ...}&#10;  Use -v to get more diff">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-decision-projection-first/test_required_decision_review_0')
+native = False
+
+    @pytest.mark.parametrize("native", [False, True])
+    def test_required_decision_review_blocks_without_writing_state(tmp_path, native):
+        (tmp_path / "value.py").write_text("value = 1\n")
+        with session_for(tmp_path) as session:
+            session.create(simple_plan(session, reads=2))
+            session.configure_long_task("inspect source")
+            session.run_node("read-0", lambda attempt: read(session, attempt))
+            record = _record(session, node_id="read-1")
+            (tmp_path / "value.py").write_text("value = 9\n")
+            before = session.store.events()
+            agent, client = _agent(tmp_path, session, native=native)
+            assert "decision_needs_review" in agent.ask("continue", skip_plan=True)
+            check = agent.session["context_blocked"]["decision_checks"][0]
+            assert check["decision_id"] == record["decision_id"]
+            assert check["reason"] == "evidence_unusable:source_changed"
+            assert not client.prompts
+            if native:
+                assert not client.requests
+&gt;           assert session.store.events() == before
+E           AssertionError: assert [{'checksum':...3', ...}, ...] == [{'checksum':...3', ...}, ...]
+E             
+E             Left contains 2 more items, first extra item: {'checksum': 'cc90828ab825134eb120e067db20d4fbb353961dc91ea90987efe63448a9930a', 'kind': 'long_task_state', 'payload':... 'node_id': 'read-1', ...}], ...}, 'previous': 'b9be2e509a520d9ff60d3630db2a94b1429d11da63350e0442e24c748fb230d6', ...}
+E             Use -v to get more diff
+
+tests\test_decision_projection.py:99: AssertionError</failure></testcase><testcase classname="tests.test_decision_projection" name="test_required_decision_review_blocks_without_writing_state[True]" time="0.521"><failure message="AssertionError: assert [{'checksum':...1', ...}, ...] == [{'checksum':...1', ...}, ...]&#10;  &#10;  Left contains 2 more items, first extra item: {'checksum': '64c54b9c1b256eb9f467069ea186451b5c790df8fd0b01e3f864956fab7239a9', 'kind': 'long_task_state', 'payload':... 'node_id': 'read-1', ...}], ...}, 'previous': '2c342809358dc5d12d7280568a20b84e81a582ed78bb4efca4a9e4cc9c79c5e0', ...}&#10;  Use -v to get more diff">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-decision-projection-first/test_required_decision_review_1')
+native = True
+
+    @pytest.mark.parametrize("native", [False, True])
+    def test_required_decision_review_blocks_without_writing_state(tmp_path, native):
+        (tmp_path / "value.py").write_text("value = 1\n")
+        with session_for(tmp_path) as session:
+            session.create(simple_plan(session, reads=2))
+            session.configure_long_task("inspect source")
+            session.run_node("read-0", lambda attempt: read(session, attempt))
+            record = _record(session, node_id="read-1")
+            (tmp_path / "value.py").write_text("value = 9\n")
+            before = session.store.events()
+            agent, client = _agent(tmp_path, session, native=native)
+            assert "decision_needs_review" in agent.ask("continue", skip_plan=True)
+            check = agent.session["context_blocked"]["decision_checks"][0]
+            assert check["decision_id"] == record["decision_id"]
+            assert check["reason"] == "evidence_unusable:source_changed"
+            assert not client.prompts
+            if native:
+                assert not client.requests
+&gt;           assert session.store.events() == before
+E           AssertionError: assert [{'checksum':...1', ...}, ...] == [{'checksum':...1', ...}, ...]
+E             
+E             Left contains 2 more items, first extra item: {'checksum': '64c54b9c1b256eb9f467069ea186451b5c790df8fd0b01e3f864956fab7239a9', 'kind': 'long_task_state', 'payload':... 'node_id': 'read-1', ...}], ...}, 'previous': '2c342809358dc5d12d7280568a20b84e81a582ed78bb4efca4a9e4cc9c79c5e0', ...}
+E             Use -v to get more diff
+
+tests\test_decision_projection.py:99: AssertionError</failure></testcase><testcase classname="tests.test_decision_projection" name="test_unrelated_stale_decision_does_not_block_exploration[False]" time="0.632" /><testcase classname="tests.test_decision_projection" name="test_unrelated_stale_decision_does_not_block_exploration[True]" time="0.638" /><testcase classname="tests.test_decision_projection" name="test_refreshing_evidence_never_reactivates_or_rebinds_old_decision" time="0.121" /><testcase classname="tests.test_decision_projection" name="test_plan_revision_requires_explicit_decision_review" time="0.116" /><testcase classname="tests.test_decision_projection" name="test_invalid_or_late_replacements_do_not_change_durable_state[duplicate]" time="0.095" /><testcase classname="tests.test_decision_projection" name="test_invalid_or_late_replacements_do_not_change_durable_state[revision]" time="0.086" /><testcase classname="tests.test_decision_projection" name="test_invalid_or_late_replacements_do_not_change_durable_state[version]" time="0.082" /><testcase classname="tests.test_decision_projection" name="test_invalid_or_late_replacements_do_not_change_durable_state[scope]" time="0.087" /><testcase classname="tests.test_decision_projection" name="test_invalid_or_late_replacements_do_not_change_durable_state[empty]" time="0.090" /><testcase classname="tests.test_decision_projection" name="test_invalid_or_late_replacements_do_not_change_durable_state[evidence]" time="0.093" /><testcase classname="tests.test_decision_projection" name="test_worker_cannot_promote_a_decision" time="0.079" /><testcase classname="tests.test_decision_projection" name="test_confirmed_patch_ignores_stale_preimage_decision_without_replaying[False]" time="0.847" /><testcase classname="tests.test_decision_projection" name="test_confirmed_patch_ignores_stale_preimage_decision_without_replaying[True]" time="0.856" /><testcase classname="tests.test_decision_projection" name="test_resume_rebuilds_latest_decision_after_checkpoint_and_ignores_cache" time="0.877" /><testcase classname="tests.test_decision_projection" name="test_resume_review_reason_clears_old_active_projection" time="0.599" /><testcase classname="tests.test_decision_projection" name="test_forged_but_resealed_task_snapshot_cannot_override_journal_prefix" time="0.089" /><testcase classname="tests.test_decision_projection" name="test_callback_cannot_send_a_superseded_decision[False]" time="0.489"><failure message="AttributeError: 'Agent' object has no attribute '_loop'">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-decision-projection-first/test_callback_cannot_send_a_su0')
+native = False
+
+    @pytest.mark.parametrize("native", [False, True])
+    def test_callback_cannot_send_a_superseded_decision(tmp_path, native):
+        (tmp_path / "value.py").write_text("value = 1\n")
+        with session_for(tmp_path) as session:
+            session.create(simple_plan(session))
+            session.configure_long_task("fix value")
+            through_analysis(session)
+            old = _record(session)
+            agent, client = _agent(tmp_path, session, native=native)
+&gt;           original = agent._loop._emit
+                       ^^^^^^^^^^^
+E           AttributeError: 'Agent' object has no attribute '_loop'
+
+tests\test_decision_projection.py:332: AttributeError</failure></testcase><testcase classname="tests.test_decision_projection" name="test_callback_cannot_send_a_superseded_decision[True]" time="0.485"><failure message="AttributeError: 'Agent' object has no attribute '_loop'">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-decision-projection-first/test_callback_cannot_send_a_su1')
+native = True
+
+    @pytest.mark.parametrize("native", [False, True])
+    def test_callback_cannot_send_a_superseded_decision(tmp_path, native):
+        (tmp_path / "value.py").write_text("value = 1\n")
+        with session_for(tmp_path) as session:
+            session.create(simple_plan(session))
+            session.configure_long_task("fix value")
+            through_analysis(session)
+            old = _record(session)
+            agent, client = _agent(tmp_path, session, native=native)
+&gt;           original = agent._loop._emit
+                       ^^^^^^^^^^^
+E           AttributeError: 'Agent' object has no attribute '_loop'
+
+tests\test_decision_projection.py:332: AttributeError</failure></testcase><testcase classname="tests.test_decision_projection" name="test_overlong_required_decision_is_blocked_without_silent_truncation" time="0.681" /></testsuite></testsuites>

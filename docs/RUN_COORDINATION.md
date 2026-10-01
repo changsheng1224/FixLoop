@@ -6,6 +6,8 @@
 
 ## 执行门禁
 
+2026-10-02 增量见 [恢复与取消 MVP 验收](RECOVERY_CANCEL_ACCEPTANCE_2026-10-02.md)：严格 resume_run_id 不再退回普通执行，新执行指定身份使用 run_id；公开状态、进度和报告共享恢复/取消诊断。清理失败释放 owner 后，同 generation 重复 cancel 只返回已有结果，重新清理需显式恢复取得新 owner；已终结 run 使用 resume_run_terminal 区分活跃 owner 竞争。本轮相关证据单独记录，不覆盖下文历史 WSL 验收或开放新后端。
+
 - 每次接管增加 `generation` 并更换 `owner_token`。旧 owner 的续租、派发、资源更新和终结均被拒绝。
 - owner 默认租约为 30 秒，绑定每 10 秒续租；租约过期后不能自行续租。
 - 接管先进入 `reconciling`，逐项核对旧 Plan attempt、AgentTask 和精确 sandbox call 收据，全部确认后才能进入 `active`。

@@ -523,6 +523,7 @@ class RepairState:
     side_effects: list[dict] = field(default_factory=list)
     checkpoint_id: str = ""
     checkpoint_sequence: int = 0
+    hard_constraints: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         """Normalize legacy strings while keeping the dataclass API compatible."""
@@ -565,9 +566,7 @@ class RepairState:
         known_task_ids = set(task_ids)
         for item in tasks:
             unknown = [
-                str(dep)
-                for dep in (item.get("depends_on") or [])
-                if str(dep) not in known_task_ids
+                str(dep) for dep in (item.get("depends_on") or []) if str(dep) not in known_task_ids
             ]
             if unknown:
                 errors.append("collaboration task has unknown dependency")
@@ -590,15 +589,20 @@ class RepairState:
             and not self.harness_metrics
         ):
             errors.append("terminal harness control requires metrics")
-        if strict and self.status in {
-            RepairStatus.PENDING_VERIFY,
-            RepairStatus.FIXED,
-            RepairStatus.FAILED,
-            RepairStatus.EXHAUSTED,
-            RepairStatus.TIMEOUT,
-            RepairStatus.USER_CANCEL,
-            RepairStatus.REGRESSION,
-        } and self.phase not in {RepairPhase.DONE, RepairPhase.FAILED}:
+        if (
+            strict
+            and self.status
+            in {
+                RepairStatus.PENDING_VERIFY,
+                RepairStatus.FIXED,
+                RepairStatus.FAILED,
+                RepairStatus.EXHAUSTED,
+                RepairStatus.TIMEOUT,
+                RepairStatus.USER_CANCEL,
+                RepairStatus.REGRESSION,
+            }
+            and self.phase not in {RepairPhase.DONE, RepairPhase.FAILED}
+        ):
             errors.append("terminal status requires done or failed phase")
         if errors and strict:
             raise ValueError("invalid RepairState: " + "; ".join(errors))
@@ -608,9 +612,7 @@ class RepairState:
         """Single-writer state update facade used by orchestration code."""
         from src.collaboration_governance import apply_state_patch
 
-        return apply_state_patch(
-            self, patch, actor=actor, expected_revision=expected_revision
-        )
+        return apply_state_patch(self, patch, actor=actor, expected_revision=expected_revision)
 
     def set_status(self, status: str | RepairStatus, reason: str = "") -> RepairStatus:
         """Commit a status change through the state governance path."""
@@ -654,10 +656,17 @@ class RepairState:
         )
         return transition
 
+    @property
+    def recovery_outcome(self) -> dict:
+        from copy import deepcopy
+
+        return deepcopy(self.node_timings.get("recovery_outcome", {}))
+
     def to_dict(self) -> dict:
         """序列化为 JSON 可写 dict。"""
         return {
             "issue_input": self.issue_input,
+            "hard_constraints": list(self.hard_constraints),
             "repair_plan": self.repair_plan.to_dict() if self.repair_plan else None,
             "suspect_locations": [s.to_dict() for s in self.suspect_locations],
             "retrieved_context": (
@@ -717,6 +726,7 @@ class RepairState:
         data = migrate_state_payload(data)
         return cls(
             issue_input=data.get("issue_input", ""),
+            hard_constraints=[str(item) for item in data.get("hard_constraints", [])],
             repair_plan=(
                 RepairPlan.from_dict(data["repair_plan"]) if data.get("repair_plan") else None
             ),
