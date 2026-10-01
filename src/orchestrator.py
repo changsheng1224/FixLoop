@@ -817,7 +817,9 @@ class Orchestrator(RepairPipelineMixin):
         if not state.repair_run_id:
             state.repair_run_id = "repair-" + uuid.uuid4().hex
         coordinator = RunCoordinator(
-            self._repo_root, state.repair_run_id, state.repair_run_id,
+            self._repo_root,
+            state.repair_run_id,
+            state.repair_run_id,
             state_root=str(getattr(self.patcher.tool_context, "state_root", "") or ""),
         )
         coordinator.acquire()
@@ -959,6 +961,7 @@ class Orchestrator(RepairPipelineMixin):
         if self._repair_ctx is not None and self._repair_ctx.worktree_handle is not None:
             self._repair_ctx.worktree_initial_snapshot = self._snapshot_repo()
         from src.repair.plan_binding import RepairPlanBinding
+
         self._plan_binding = RepairPlanBinding(self, state, defer_plan=True)
 
     def _maybe_enter_worktree(self, state: RepairState, tracer) -> None:
@@ -1422,6 +1425,8 @@ class Orchestrator(RepairPipelineMixin):
             l2_phase="patch",
             l2_attempt=state.retry_count,
         )
+        if self._plan_binding is not None and self._plan_binding.exploration is not None:
+            self._plan_binding.exploration.drain(cancel=True)
         context = self.patcher.tool_context
         if context.execution_uncertain or context.sandbox_uncertain:
             state.node_timings["coordination_status"] = "recovery_required"

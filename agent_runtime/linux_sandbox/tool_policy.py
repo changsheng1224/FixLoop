@@ -32,7 +32,10 @@ _ACCESS = {
         ),
         SandboxToolAccess.TRUSTED_DATA,
     ),
-    **dict.fromkeys(("finish_repair", "expand_lock"), SandboxToolAccess.TRUSTED_CONTROL),
+    **dict.fromkeys(
+        ("finish_repair", "expand_lock", "delegate_exploration", "collect_exploration"),
+        SandboxToolAccess.TRUSTED_CONTROL,
+    ),
     **dict.fromkeys(("write_file", "patch_file", "apply_patch"), SandboxToolAccess.TRUSTED_WRITE),
     **dict.fromkeys(("quick_test", "run_shell"), SandboxToolAccess.SANDBOX_COMMAND),
 }

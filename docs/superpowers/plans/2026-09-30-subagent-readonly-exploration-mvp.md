@@ -1,6 +1,6 @@
 # FixLoop Subagent 并行探索与证据汇总 MVP 开发计划
 
-日期：2026-09-30。依据：[MVP Spec](../specs/2026-09-30-subagent-readonly-exploration-mvp.md)。状态：未实现。
+日期：2026-09-30。依据：[MVP Spec](../specs/2026-09-30-subagent-readonly-exploration-mvp.md)。状态：2026-10-01 已实现并完成受控模型的真实 runtime 验证；详见[验收记录](2026-10-01-subagent-readonly-acceptance.md)。未进行在线模型评测。
 
 ## 前提、工作量与工作区保护
 
