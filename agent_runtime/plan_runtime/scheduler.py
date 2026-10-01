@@ -42,10 +42,16 @@ class PlanScheduler:
         before = snapshot(session.workspace)
         attempts = [(n, session.prepare(n.node_id)) for n in ready]
         session.emit("parallel_reads_started", nodes=[n.node_id for n in ready])
+        from agent_runtime.read_permits import read_permits
+
+        permits = read_permits(session.workspace, session.identity["run_id"])
+
+        def invoke(attempt, callback):
+            with permits.lease():
+                return session.invoke(attempt, callback)
+
         with ThreadPoolExecutor(max_workers=2) as pool:
-            futures = [
-                (n, a, pool.submit(session.invoke, a, callbacks[n.node_id])) for n, a in attempts
-            ]
+            futures = [(n, a, pool.submit(invoke, a, callbacks[n.node_id])) for n, a in attempts]
             recorded = []
             for node, attempt, future in futures:
                 try:

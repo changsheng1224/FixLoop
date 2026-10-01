@@ -341,8 +341,20 @@ class PlanSession:
         self.checkpoint()
         return result["result"]
 
-    def execute_tool(self, agent, name: str, arguments: dict, raw_execute):
-        """Called inside Agent.execute_tool, encompassing Gateway and Executor gates."""
+    def execute_tool(self, agent, name: str, arguments: dict, raw_execute, *, call_context=None):
+        flow = self.tool_operation(agent, name, arguments, call_context=call_context)
+        try:
+            next(flow)
+        except StopIteration as done:
+            return done.value
+        try:
+            flow.send(raw_execute())
+        except StopIteration as done:
+            return done.value
+        raise RuntimeError("tool operation yielded twice")
+
+    def tool_operation(self, agent, name: str, arguments: dict, *, call_context=None):
+        """Owner-thread journal preparation and settlement around isolated execution."""
         self._fence()
         attempt = getattr(self.local, "attempt", None)
         if attempt is None:
@@ -357,14 +369,21 @@ class PlanSession:
         if attempt["kind"] == "explore" and effect != "read":
             raise ValueError("readonly_tool_violation")
         operation_id = new_id("op")
-        call_id = new_id("call")
+        call_id = call_context.call_id if call_context is not None else new_id("call")
         before = snapshot(self.workspace)
         prior_operations = self.operations(attempt["attempt_id"])
-        expected = (
-            prior_operations[-1].get("workspace_after")
-            if prior_operations
-            else attempt["workspace_before"]
-        )
+        expected = attempt["workspace_before"]
+        if prior_operations:
+            last = prior_operations[-1]
+            expected = last.get("workspace_after")
+            if (
+                expected is None
+                and last.get("effect") == "read"
+                and last.get("phase") in {"prepared", "dispatched"}
+            ):
+                # Independent reads may be prepared before either returns.
+                # Their shared pre-state must still match the actual workspace.
+                expected = last["workspace_before"]
         if expected != before:
             raise ValueError("external_workspace_change_requires_replan")
         operation = {
@@ -378,6 +397,15 @@ class PlanSession:
             "effect": effect,
             "workspace_before": before,
             "phase": "prepared",
+            **(
+                {
+                    "batch_id": call_context.batch_id,
+                    "turn_id": call_context.turn_id,
+                    "ordinal": call_context.ordinal,
+                }
+                if call_context is not None
+                else {}
+            ),
         }
         with self._mutex:
             if len(self.store.latest("operation", "operation_id")) >= 50:
@@ -389,13 +417,14 @@ class PlanSession:
         if before != snapshot(self.workspace):
             raise ValueError("workspace_changed_before_dispatch")
         # Bind the canonical identity consumed by the existing ToolExecutor.
-        pending = agent.session.get("_pending_canonical_tool_call", {})
-        agent.session["_pending_canonical_tool_call"] = {**pending, "call_id": call_id}
+        if call_context is None:
+            pending = agent.session.get("_pending_canonical_tool_call", {})
+            agent.session["_pending_canonical_tool_call"] = {**pending, "call_id": call_id}
         if self.coordination_store is not None:
             setattr(agent.tool_context, "sandbox_parent_resource_id", attempt["attempt_id"])
         self.store.append("operation", {**operation, "phase": "dispatched"})
         self.cut("tool_dispatched")
-        result = normalize_tool_result(raw_execute(), tool_name=name)
+        result = normalize_tool_result((yield), tool_name=name)
         if not result.receipt:
             result = attach_tool_receipt(
                 result,

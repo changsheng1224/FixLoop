@@ -376,6 +376,7 @@ class AgentLoop:
         recording: dict | None = None,
     ) -> str:
         """TaskState 已写入终态后：同步 stop_reason、可选 recording、落盘。"""
+        self._close_turn_progress(status=str(ts.status))
         self._sync_stop_reason(ts)
         runtime_snapshot = ts.runtime_contract or {}
         if not runtime_snapshot.get("terminal"):
@@ -546,6 +547,10 @@ class AgentLoop:
         tool: str | None = None,
         callback=None,
     ) -> None:
+        progress = getattr(self, "_turn_progress", None)
+        if progress is not None:
+            progress.phase = str(phase)
+            progress.emit("turn_phase", status="running")
         from agent_runtime.react_phases import build_react_phase_payload
         from agent_runtime.step_engine import StepEngine
 
@@ -875,7 +880,30 @@ class AgentLoop:
 
     # ---- 工具执行（XML / Native 共用）----
 
-    def _run_tool_step(
+    def _run_tool_step(self, ts, tool_name, tool_args, **kwargs):
+        flow = self._tool_step_flow(ts, tool_name, tool_args, **kwargs)
+        try:
+            request = next(flow)
+        except StopIteration as done:
+            return done.value
+        try:
+            context = kwargs.get("call_context")
+            if request is not None:
+                result = request
+            elif context is not None:
+                result = self.agent.execute_tool(tool_name, tool_args, call_context=context)
+            else:
+                result = self.agent.execute_tool(tool_name, tool_args)
+        except BaseException as exc:
+            flow.throw(exc)
+            raise
+        try:
+            flow.send(result)
+        except StopIteration as done:
+            return done.value
+        raise RuntimeError("tool step yielded twice")
+
+    def _tool_step_flow(
         self,
         ts,
         tool_name: str,
@@ -888,22 +916,41 @@ class AgentLoop:
         emit_acting: bool = True,
         emit_observation: bool = True,
         emit_recording: bool = True,
-    ) -> str:
+        call_context=None,
+        prepared_result=None,
+    ):
         """执行工具、写 trace/history，返回下一轮 user_message。"""
-        if (msg := self._abort_if_cancelled(ts, phase="pre_tool", in_flight=tool_name)) is not None:
+        if (
+            prepared_result is None
+            and (msg := self._abort_if_cancelled(ts, phase="pre_tool", in_flight=tool_name))
+            is not None
+        ):
             raise CancelledError("user", answer=msg)
         from agent_runtime.tool_budget import infer_tool_budget_group
 
-        group = infer_tool_budget_group(tool_name, (self.agent.tools or {}).get(tool_name))
-        idempotency_key = f"{ts.run_id}:{step}:{tool_name}"
-        replayed = False
+        shared_inflight = call_context is None or not call_context.isolated
+        tool_registry = call_context.registry if call_context is not None else self.agent.tools
+
+        group = infer_tool_budget_group(tool_name, (tool_registry or {}).get(tool_name))
+        idempotency_key = (
+            call_context.idempotency_key
+            if call_context is not None
+            else f"{ts.run_id}:{step}:{tool_name}"
+        )
+        replayed = prepared_result is not None
+        if prepared_result is not None:
+            result = prepared_result
         replay_blocked = False
         from agent_runtime.context_runtime import find_action_by_idempotency
 
-        prior_action = find_action_by_idempotency(self.agent.session, idempotency_key)
+        prior_action = (
+            None
+            if prepared_result is not None
+            else find_action_by_idempotency(self.agent.session, idempotency_key)
+        )
         if prior_action is not None:
             prior_status = str(prior_action.get("status", ""))
-            prior_spec = (self.agent.tools or {}).get(tool_name) or {}
+            prior_spec = (tool_registry or {}).get(tool_name) or {}
             if prior_status in {"verified", "succeeded"}:
                 from agent_runtime.tool_executor import ToolExecutionResult
 
@@ -1036,6 +1083,11 @@ class AgentLoop:
             and not convergence_blocked
             and (
                 not self._repair_budget.allow_tool(group.value)
+                or (
+                    self._repair_budget.max_tool_calls > 0
+                    and self._repair_budget.tool_calls + getattr(self, "_pending_batch_tools", 0)
+                    >= self._repair_budget.max_tool_calls
+                )
                 or not self._budget_allows_tool(group.value)
             )
         ):
@@ -1083,10 +1135,15 @@ class AgentLoop:
                 self._budget_reserve(
                     {"write": "writes", "verify": "verifies", "recovery": "recoveries"}[group.value]
                 )
-            self._in_flight_tool = tool_name
+            if call_context is not None:
+                call_context.budget_reserved = True
+            if shared_inflight:
+                self._in_flight_tool = tool_name
+            else:
+                self._pending_batch_tools = getattr(self, "_pending_batch_tools", 0) + 1
             from agent_runtime.context_runtime import build_action_record, transition_action
 
-            tool_spec = (self.agent.tools or {}).get(tool_name) or {}
+            tool_spec = (tool_registry or {}).get(tool_name) or {}
             action = build_action_record(
                 tool_name,
                 tool_args,
@@ -1095,16 +1152,19 @@ class AgentLoop:
                 idempotency_key=idempotency_key,
                 status="dispatched",
             )
-            self.agent.session["_in_flight_action"] = action.__dict__.copy()
+            action_raw = action.__dict__.copy()
+            if shared_inflight:
+                self.agent.session["_in_flight_action"] = action_raw
             try:
-                result = self.agent.execute_tool(tool_name, tool_args)
+                result = yield
                 self._block_grounded_finish(tool_name, tool_args, result)
             except BaseException:
-                self.agent.session["_in_flight_action"]["status"] = "uncertain"
-                self.agent.session["_in_flight_action"]["uncertain_reason"] = "runtime_exception"
+                action_raw["status"] = "uncertain"
+                action_raw["uncertain_reason"] = "runtime_exception"
+                if call_context is not None:
+                    self.agent.session.setdefault("action_ledger", []).append(action_raw)
                 raise
             else:
-                action_raw = self.agent.session.get("_in_flight_action", {})
                 result_meta = getattr(result, "metadata", {}) or {}
                 result_status = str(result_meta.get("tool_status", "error"))
                 error_code = str(result_meta.get("tool_error_code", "") or "")
@@ -1136,19 +1196,38 @@ class AgentLoop:
                 action_raw["result_ref"] = str(result_meta.get("observation_id", ""))
                 self.agent.session.setdefault("action_ledger", []).append(action_raw)
                 self.agent.session["action_ledger"] = self.agent.session["action_ledger"][-100:]
-                self.agent.session.pop("_in_flight_action", None)
+                if shared_inflight:
+                    self.agent.session.pop("_in_flight_action", None)
             finally:
-                self._in_flight_tool = ""
+                if shared_inflight:
+                    self._in_flight_tool = ""
+                else:
+                    self._pending_batch_tools -= 1
+        if budget_rejected or replayed or replay_blocked or convergence_blocked:
+            result = yield result
+        if call_context is not None:
+            from agent_runtime.tool_executor import _canonical_args_hash
+            from agent_runtime.tool_result import attach_tool_receipt
+
+            result = attach_tool_receipt(
+                result,
+                tool_name,
+                args_hash=_canonical_args_hash(tool_name, tool_args),
+                run_id=call_context.run_id,
+                call_id=call_context.call_id,
+            )
         # Gateway/权限拒绝不计入 tool_steps，避免无效步耗尽预算（E5）
         _meta = getattr(result, "metadata", None) or {}
-        if _meta.get("tool_status") != "rejected":
+        if _meta.get("tool_status") != "rejected" and prepared_result is None:
             ts.record_tool(tool_name)
             self._repair_budget.record_tool(group.value)
         else:
             ts.last_tool = tool_name
         if (
-            msg := self._abort_if_cancelled(ts, phase="post_tool", in_flight=tool_name)
-        ) is not None:
+            call_context is None
+            and (msg := self._abort_if_cancelled(ts, phase="post_tool", in_flight=tool_name))
+            is not None
+        ):
             raise CancelledError("user", answer=msg)
         result_text = result.content if hasattr(result, "content") else str(result)
         result_meta = getattr(result, "metadata", {}) or {}
@@ -1231,11 +1310,31 @@ class AgentLoop:
             tool_name,
             tool_args,
             source=raw_call.get("source", "native"),
-            call_id=raw_call.get("call_id", ""),
+            call_id=(
+                call_context.call_id if call_context is not None else raw_call.get("call_id", "")
+            ),
         )
+        if (
+            call_context is not None
+            and call_context.isolated
+            and tool_name == "read_file"
+            and result.ok
+        ):
+            from agent_runtime.tools import _mark_edit_lock_read
+
+            _mark_edit_lock_read(self.agent.tool_context, str(tool_args.get("path", "")))
         observation = observation_from_result(canonical_call, result, te_ms)
         observation_dict = observation.to_dict()
         observation_dict["source"] = canonical_call.source.value
+        if call_context is not None:
+            observation_dict.update(
+                {
+                    "turn_id": call_context.turn_id,
+                    "batch_id": call_context.batch_id,
+                    "ordinal": call_context.ordinal,
+                    "receipt": dict(result.receipt),
+                }
+            )
         from agent_runtime.context_runtime import ObservationStore
 
         observation_store = ObservationStore(
@@ -1250,7 +1349,9 @@ class AgentLoop:
                 observation.changed_files, "tool_write_changed_dependency"
             )
         if observation.changed_files and tool_name not in {
-            "write_file", "patch_file", "apply_patch"
+            "write_file",
+            "patch_file",
+            "apply_patch",
         }:
             service = self.agent.tool_context.exploration_service
             if service is not None:
@@ -1265,7 +1366,7 @@ class AgentLoop:
         structured_facts = list(_meta.get("structured_facts") or [])
         source_version = str(
             _meta.get("source_version")
-            or ((self.agent.tools or {}).get(tool_name) or {}).get("version", "")
+            or ((tool_registry or {}).get(tool_name) or {}).get("version", "")
             or ""
         )
         structured_facts.extend(
@@ -1294,7 +1395,8 @@ class AgentLoop:
             evidence_refs=list(observation.evidence_ids),
             source_dependencies=(
                 dict(_meta.get("source_dependencies") or {})
-                if "source_dependencies" in _meta else None
+                if "source_dependencies" in _meta
+                else None
             ),
             retrieval_query_id=str((_meta.get("retrieval_result") or {}).get("query_id", "")),
             redact=True,
@@ -1308,10 +1410,7 @@ class AgentLoop:
         _meta["artifact_ref"] = stored.raw_ref
         self._last_tool_observation_id = stored.observation_id
         retrieval = _meta.get("retrieval_result")
-        if (
-            self.agent.tool_context.exploration_mode == "relations"
-            and isinstance(retrieval, dict)
-        ):
+        if self.agent.tool_context.exploration_mode == "relations" and isinstance(retrieval, dict):
             from agent_runtime.tools import _exploration_service
 
             _exploration_service(self.agent.tool_context).observe(
@@ -1417,7 +1516,7 @@ class AgentLoop:
             status=tool_status,
         )
         # 终态工具：成功后结束 loop，payload 作为 final answer
-        tool_spec = (self.agent.tools or {}).get(tool_name) or {}
+        tool_spec = (tool_registry or {}).get(tool_name) or {}
         if (
             tool_spec.get("terminal")
             and result.metadata.get("tool_status") == "success"
@@ -1596,6 +1695,11 @@ class AgentLoop:
             }
         )
         next_message = f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
+        progress = getattr(self, "_turn_progress", None)
+        if progress is not None:
+            self.agent.session["turn_progress"] = progress.checkpoint(
+                getattr(self, "_active_tool_batch", None)
+            )
         self._persist_step_checkpoint(
             ts,
             tool_name,
@@ -1607,6 +1711,217 @@ class AgentLoop:
             path=path,
         )
         return next_message
+
+    def _append_turn_progress(self, event, payload):
+        # Progress delivery requires an authoritative trace append. Let IO
+        # failures stop dispatch instead of displaying an unrecorded event.
+        self._get_store().append_trace_event(payload["run_id"], event, payload)
+
+    def _deliver_turn_progress(self, event, callback):
+        progress = getattr(self, "_turn_progress", None)
+        if progress is not None:
+            self.agent.session["turn_progress"] = progress.checkpoint(
+                getattr(self, "_active_tool_batch", None)
+            )
+        self._notify("on_turn_progress", callback, event=event)
+
+    def _close_turn_progress(self, status="completed"):
+        progress = getattr(self, "_turn_progress", None)
+        if progress is not None:
+            batch = getattr(self, "_active_tool_batch", None)
+            if batch is not None:
+                from agent_runtime.tool_batch import call_result, cancellation_result
+
+                for call in batch.calls:
+                    if call.status in {"queued", "running"}:
+                        uncertain = call.status == "running" or call.context.budget_reserved
+                        call.context.cancel_token.cancel("turn_closed")
+                        call.status = "uncertain" if uncertain else "cancelled"
+                        call.result = call_result(call, cancellation_result(uncertain=uncertain))
+                        progress.emit(
+                            "tool_call_uncertain" if uncertain else "tool_call_cancelled",
+                            batch_id=batch.batch_id,
+                            call_id=call.call_id,
+                            ordinal=call.ordinal,
+                            tool_name=call.tool_name,
+                            status=call.status,
+                            error_code=call.result.error_code,
+                        )
+                if batch.status in {"pending", "running"}:
+                    batch.status = (
+                        "uncertain"
+                        if any(c.status == "uncertain" for c in batch.calls)
+                        else "cancelled"
+                    )
+                    progress.emit(
+                        "tool_batch_completed", batch_id=batch.batch_id, status=batch.status
+                    )
+            progress.emit("turn_completed", status=status)
+            self.agent.session["turn_progress"] = progress.checkpoint(batch)
+            self._turn_progress = None
+            self._active_tool_batch = None
+
+    def _run_native_batch(self, ts, calls, *, turn, callback=None):
+        from agent_runtime.read_permits import read_permits
+        from agent_runtime.tool_batch import (
+            ToolBatchProtocolError,
+            ToolBatchScheduler,
+            ToolCallBatch,
+        )
+
+        progress = self._turn_progress
+        try:
+            batch = ToolCallBatch.create(
+                calls,
+                run_id=progress.run_id,
+                turn_id=progress.turn_id,
+                context=self.agent.tool_context,
+                registry=dict(self.agent.tools),
+                allowed_tools=self.agent._tool_names,
+            )
+        except ToolBatchProtocolError as exc:
+            # Invalid IDs cannot be paired unambiguously: explicit protocol
+            # failure ends the Turn before any tool executes.
+            self._emit("tool_batch_protocol_error", {"error_code": exc.code})
+            raise
+        self._active_tool_batch = batch
+        flows = {}
+        plan_flows = {}
+        refs = {}
+        base_step = ts.tool_steps
+        executor = self.agent._get_tool_executor()
+        plan = getattr(self.agent, "_plan_session", None)
+
+        def prepare(call):
+            tool_timeout = float(self.agent.config.effective_deadline()["tool_s"] or 0)
+            spec_timeout = float(call.context.registry[call.tool_name].get("timeout_s", 0) or 0)
+            limits = [value for value in (tool_timeout, spec_timeout) if value > 0]
+            call.context.timeout_s = min(limits) if limits else 0
+            self._notify_react_phase(
+                ReactPhase.ACTING, step=turn, path="native", tool=call.tool_name, callback=callback
+            )
+            flow = self._tool_step_flow(
+                ts,
+                call.tool_name,
+                call.arguments,
+                step=base_step + call.ordinal + 1,
+                path="native",
+                callback=callback,
+                emit_acting=False,
+                call_context=call.context,
+            )
+            preflight = next(flow)
+            flows[call.call_id] = flow
+            if preflight is not None:
+                return preflight
+            if not batch.parallel:
+                return lambda: self.agent.execute_tool(
+                    call.tool_name,
+                    call.arguments,
+                    call_context=call.context,
+                )
+            if plan is not None:
+                plan_flow = plan.tool_operation(
+                    self.agent,
+                    call.tool_name,
+                    call.arguments,
+                    call_context=call.context,
+                )
+                try:
+                    next(plan_flow)
+                except StopIteration as done:
+                    return done.value
+                plan_flows[call.call_id] = plan_flow
+            # Freeze the history snapshot on the owner, not in a worker.
+            execute = executor.for_call(call.context)
+
+            def work():
+                def gated():
+                    return execute.execute_gated(call.tool_name, call.arguments)
+
+                dispatch = getattr(self.agent, "_tool_dispatch", None)
+                if dispatch is not None:
+                    return dispatch(self.agent._agent_name, call.tool_name, gated)
+                return gated()
+
+            return work
+
+        def collect(call, result):
+            if result.status == "uncertain":
+                self.agent.tool_context.execution_uncertain = True
+            from agent_runtime.batch_reads import recheck_read
+
+            result = recheck_read(result)
+            plan_flow = plan_flows.pop(call.call_id, None)
+            if plan_flow is not None:
+                try:
+                    plan_flow.send(result)
+                except StopIteration as done:
+                    result = done.value
+            return result
+
+        def settle(call, result):
+            from agent_runtime.batch_reads import recheck_read
+
+            old_status = result.status
+            result = recheck_read(result)
+            if result.status != old_status:
+                scheduler.finish(call, result)
+            flow = flows.pop(call.call_id, None)
+            if flow is not None:
+                try:
+                    flow.send(result)
+                except StopIteration as done:
+                    text = done.value
+            else:
+                # Queued calls cancelled before preparation have no action or
+                # budget reservation, but still get an Observation/result.
+                text = self._run_tool_step(
+                    ts,
+                    call.tool_name,
+                    call.arguments,
+                    step=base_step + call.ordinal + 1,
+                    path="native",
+                    callback=callback,
+                    call_context=call.context,
+                    prepared_result=result,
+                )
+            call.result_ref = refs.get(call.call_id) or str(
+                getattr(self, "_last_tool_observation_id", "") or ""
+            )
+            refs[call.call_id] = call.result_ref
+            self.agent.session["turn_progress"] = progress.checkpoint(batch)
+            return {"type": "tool_result", "tool_use_id": call.call_id, "content": text}
+
+        scheduler = ToolBatchScheduler(
+            read_permits(self.agent.tool_context.root, progress.run_id), progress, on_result=collect
+        )
+        try:
+            results = scheduler.run(
+                batch,
+                prepare,
+                settle,
+                cancel_token=self._cancel_token,
+                expired=self._repair_deadline.expired,
+            )
+            batch.status = (
+                "uncertain"
+                if any(c.status == "uncertain" for c in batch.calls)
+                else "cancelled"
+                if any(c.status == "cancelled" for c in batch.calls)
+                else "completed"
+            )
+            progress.emit("tool_batch_completed", batch_id=batch.batch_id, status=batch.status)
+        finally:
+            for flow in flows.values():
+                if flow is not None:
+                    flow.close()
+            for flow in plan_flows.values():
+                flow.close()
+            self.agent.session["turn_progress"] = progress.checkpoint(batch)
+        if (msg := self._abort_if_cancelled(ts, phase="batch_settled")) is not None:
+            raise CancelledError("user", answer=msg)
+        return results, refs
 
     # ---- XML 路径辅助 ----
 
@@ -2165,6 +2480,22 @@ class AgentLoop:
                 "exploration_reset_on_resume",
                 {"epoch": self.agent.session.get("exploration_epoch")},
             )
+        if checkpoint.get("turn_progress"):
+            from agent_runtime.turn_progress import restore_progress
+
+            progress = checkpoint["turn_progress"]
+            self.agent.session["turn_progress"] = progress
+            plan = getattr(self.agent, "_plan_session", None)
+            operations = plan.store.latest("operation", "operation_id").values() if plan else ()
+            self.agent.session["turn_progress_replay"] = restore_progress(
+                progress,
+                operations=operations,
+            )
+            self._notify(
+                "on_turn_progress_replay",
+                callback,
+                projection=self.agent.session["turn_progress_replay"],
+            )
         if checkpoint.get("action_ledger") is not None:
             self.agent.session["action_ledger"] = list(checkpoint.get("action_ledger") or [])[-100:]
         if checkpoint.get("side_effects") is not None:
@@ -2260,6 +2591,18 @@ class AgentLoop:
         # it must not consume the normal repair-turn budget.  Extra turns are
         # available only while an explicit patcher recovery directive exists.
         for turn in range(1, self.max_steps + self._max_native_recovery_turns + 1):
+            self._close_turn_progress()
+            import uuid
+
+            from agent_runtime.turn_progress import TurnEventEmitter
+
+            self._turn_progress = TurnEventEmitter(
+                str(getattr(self.agent, "shared_run_id", "") or ts.run_id),
+                "turn-" + uuid.uuid4().hex,
+                self._append_turn_progress,
+                lambda event: self._deliver_turn_progress(event, callback),
+            )
+            self._turn_progress.emit("turn_started", status="running")
             recovery_turn = turn > self.max_steps
             if recovery_turn and not (
                 self._patch_recovery_directive or self._patch_decision_required
@@ -2516,36 +2859,13 @@ class AgentLoop:
                 ]
                 tool_results: list[dict] = []
                 try:
-                    for call in result.tool_calls:
-                        self._notify_react_phase(
-                            ReactPhase.ACTING,
-                            step=turn,
-                            path="native",
-                            tool=call.name,
-                            callback=callback,
-                        )
-                        observation = self._run_tool_step(
-                            ts,
-                            call.name,
-                            call.arguments,
-                            step=ts.tool_steps + 1,
-                            path="native",
-                            callback=callback,
-                            record_assistant=True,
-                            emit_acting=False,
-                            emit_observation=True,
-                            emit_recording=True,
-                        )
-                        tool_results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": call.call_id,
-                                "content": observation,
-                            }
-                        )
-                        native_tail_refs[call.call_id] = str(
-                            getattr(self, "_last_tool_observation_id", "") or ""
-                        )
+                    tool_results, batch_refs = self._run_native_batch(
+                        ts,
+                        result.tool_calls,
+                        turn=turn,
+                        callback=callback,
+                    )
+                    native_tail_refs.update(batch_refs)
                 except TerminalToolAcceptedError as e:
                     self._emit(
                         "terminal_tool_accepted",
@@ -2554,6 +2874,8 @@ class AgentLoop:
                     self.agent.record({"role": "assistant", "content": e.payload})
                     ts.finish_success(e.payload)
                     return self._complete_run(ts, e.payload)
+                except CancelledError as exc:
+                    return exc.answer or self._finish_user_cancel(ts, phase="tool_batch")
                 native_tail.extend(
                     [
                         {"role": "assistant", "content": assistant_content},
@@ -3192,6 +3514,9 @@ class AgentLoop:
             pass
 
     def _finalize_run(self, ts):
+        self._close_turn_progress(
+            status=("uncertain" if str(ts.status) == "running" else str(ts.status))
+        )
         from agent_runtime import loop_finalizer
 
         try:
