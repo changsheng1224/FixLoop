@@ -202,7 +202,10 @@ def parse_shell_argv(command: str) -> list[str]:
     if argv[0].split("/")[-1].split("\\")[-1].lower() in {"python", "python3", "py"}:
         if "-c" in argv:
             code = argv[argv.index("-c") + 1] if argv.index("-c") + 1 < len(argv) else ""
-            if any(token in code for token in ("os.system", "subprocess", "shutil.rmtree", "socket.", "urllib.")):
+            if any(
+                token in code
+                for token in ("os.system", "subprocess", "shutil.rmtree", "socket.", "urllib.")
+            ):
                 raise ValueError("python -c 包含被禁止的进程/网络副作用")
     return argv
 

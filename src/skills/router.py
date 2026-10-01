@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from agent_runtime.vector_math import cosine_similarity
 from src.skills.executable_spec import ExecutableSkillSpec
 from src.skills.registry import ROUTER_VERSION, SkillRegistry, get_default_executable_registry
 
@@ -119,36 +120,12 @@ def _keyword_score(text: str, spec: ExecutableSkillSpec) -> float:
     return min(0.92, hit / max(4.0, math.sqrt(len(keys))))
 
 
-def _cosine(a: Any, b: Any) -> float:
-    try:
-        import numpy as np
-
-        va = np.asarray(a, dtype=float).ravel()
-        vb = np.asarray(b, dtype=float).ravel()
-        na = float(np.linalg.norm(va))
-        nb = float(np.linalg.norm(vb))
-        if na == 0.0 or nb == 0.0:
-            return 0.0
-        return float(np.dot(va, vb) / (na * nb))
-    except Exception:
-        va = list(a)
-        vb = list(b)
-        if len(va) != len(vb) or not va:
-            return 0.0
-        dot = sum(x * y for x, y in zip(va, vb))
-        na = sum(x * x for x in va) ** 0.5
-        nb = sum(y * y for y in vb) ** 0.5
-        if na == 0.0 or nb == 0.0:
-            return 0.0
-        return dot / (na * nb)
-
-
 def _embed_score(text: str, spec: ExecutableSkillSpec, embed_fn: EmbedFn) -> float:
     try:
         q = embed_fn(text)
         best = 0.0
         for proto in spec.prototypes or spec.keywords:
-            best = max(best, _cosine(q, embed_fn(proto)))
+            best = max(best, cosine_similarity(q, embed_fn(proto)))
         return float(best)
     except Exception:
         return 0.0

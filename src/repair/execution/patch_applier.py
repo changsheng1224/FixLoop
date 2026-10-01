@@ -708,7 +708,11 @@ class PatchApplier:
             try:
                 from agent_runtime.metrics import get_registry
 
-                reason = "stale_patch" if any("stale_patch" in e for e in apply_errors) else "apply_error"
+                reason = (
+                    "stale_patch"
+                    if any("stale_patch" in e for e in apply_errors)
+                    else "apply_error"
+                )
                 metric = (
                     "fixloop_stale_patch_rejections_total"
                     if reason == "stale_patch"

@@ -204,17 +204,6 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         context = state.retrieved_context or RetrievedContext()
         state.retrieved_context = context
 
-        from src.repair.execution.lock_reflect import f2p_impl_paths, merge_f2p_paths_first
-        from src.repair.localization.fail_to_pass_hints import extract_fail_to_pass_hints
-
-        f2p = extract_fail_to_pass_hints(state.issue_input or "")
-        if f2p:
-            state.node_timings["f2p_hints"] = list(f2p)
-
-        f2p_impls = f2p_impl_paths(state.issue_input or "", self._repo_root, max_keep=8)
-        state.node_timings["f2p_impl_paths"] = list(f2p_impls)
-        state.node_timings["f2p_seeded"] = bool(f2p_impls)
-
         allowed: list[str] = []
         for s in state.suspect_locations or []:
             fp = (s.file_path or "").replace("\\", "/")
@@ -230,10 +219,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     continue
                 allowed.append(fp.replace("\\", "/"))
 
-        # F2P 置顶进锁；其余嫌疑不按目录硬过滤（交给模型）
-        allowed_unique = merge_f2p_paths_first(f2p_impls, allowed, max_keep=8)
-        if f2p and not f2p_impls:
-            state.node_timings["primary_seed_miss_f2p"] = True
+        allowed_unique = list(dict.fromkeys(allowed))[:8]
 
         lock = EditLockState(
             repo_root=self._repo_root,
@@ -264,15 +250,12 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
         em = self._progress_emitter()
         empty_note = " empty_lock→expand_lock" if not lock.allowed_edit else ""
-        miss = " miss_f2p" if state.node_timings.get("primary_seed_miss_f2p") else ""
         seed_payload = {
             "summary": (
                 f"allowed_edit={len(lock.allowed_edit)} "
-                f"suspects={len(state.suspect_locations or [])}{empty_note}{miss}"
+                f"suspects={len(state.suspect_locations or [])}{empty_note}"
             ),
             "allowed_edit": sorted(lock.allowed_edit),
-            "f2p": list(f2p)[:5],
-            "f2p_impls": list(f2p_impls)[:5],
         }
         em.emit("seed_ready", **seed_payload)
         self._emit_repair_span(
@@ -280,7 +263,6 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             {
                 "summary": seed_payload["summary"],
                 "allowed_edit_n": len(lock.allowed_edit),
-                "f2p_n": len(f2p),
             },
         )
         log.info(

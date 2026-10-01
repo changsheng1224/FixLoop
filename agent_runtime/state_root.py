@@ -30,7 +30,15 @@ def state_root_for(root: str | Path, explicit: str | Path | None = None) -> Path
     return trusted_state_root(root, explicit) or Path(root).resolve()
 
 
-def runtime_identity(*, backend: str = "", policy_digest: str = "", distribution_id: str = "", mapping_id: str = "", receipt_id: str = "", receipt_checksum: str = "") -> dict:
+def runtime_identity(
+    *,
+    backend: str = "",
+    policy_digest: str = "",
+    distribution_id: str = "",
+    mapping_id: str = "",
+    receipt_id: str = "",
+    receipt_checksum: str = "",
+) -> dict:
     return {
         "backend": backend,
         "policy_digest": policy_digest,

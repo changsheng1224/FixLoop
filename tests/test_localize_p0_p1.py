@@ -1,4 +1,4 @@
-"""P0/P1 localize：test_patch、cheap explore、tiers、landing、memory、LLM disk filter。"""
+"""P0/P1 localize：公开测试、cheap explore、tiers、landing、memory、LLM disk filter。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ from unittest.mock import patch
 from src.repair.localization.localize_cheap_explore import cheap_explore_suspects
 from src.repair.localization.localize_fastpath import (
     filter_llm_suspects_to_disk,
-    rule_first_suspects,
 )
 from src.repair.localization.localize_landing import refine_suspect_landing
 from src.repair.localization.localize_memory import (
@@ -17,7 +16,6 @@ from src.repair.localization.localize_memory import (
     remember_confirmed_impls,
     remember_negated_files,
 )
-from src.repair.localization.localize_test_patch import suspects_from_test_patch
 from src.repair.localization.localize_tiers import SuspectTier, decide_patch_gate, tier_for_suspect
 from src.repair.localization.symbol_index import _INDEX_CACHE
 from src.state import RepairState, SuspectLocation
@@ -36,31 +34,11 @@ def _repo() -> Path:
     tests = root / "tests"
     tests.mkdir()
     (tests / "test_core.py").write_text(
-        "from pkg.core import compute\n\n"
-        "def test_compute():\n"
-        "    assert compute(1) == 2\n",
+        "from pkg.core import compute\n\ndef test_compute():\n    assert compute(1) == 2\n",
         encoding="utf-8",
     )
     _INDEX_CACHE.clear()
     return root
-
-
-def test_suspects_from_test_patch_imports():
-    root = _repo()
-    patch = """
-diff --git a/tests/test_core.py b/tests/test_core.py
---- a/tests/test_core.py
-+++ b/tests/test_core.py
-@@ -1,3 +1,4 @@
- from pkg.core import compute
-+from pkg.core import compute as c2
-
- def test_compute():
-"""
-    seeds = suspects_from_test_patch(patch, root)
-    paths = [s.file_path.replace("\\", "/") for s in seeds]
-    assert "pkg/core.py" in paths
-    assert any(s.reason == "test_patch覆盖" for s in seeds)
 
 
 def test_cheap_explore_grep_hits():
@@ -94,7 +72,7 @@ def test_tier_gate_blocks_test_only():
         file_path="tests/test_core.py",
         start_line=1,
         end_line=1,
-        reason="F2P测试",
+        reason="关联测试",
         confidence=0.45,
     )
     d = decide_patch_gate([low], root)
@@ -151,7 +129,7 @@ def test_memory_burn_and_confirm():
             file_path="pkg/core.py",
             start_line=1,
             end_line=1,
-            reason="F2P覆盖",
+            reason="堆栈指向",
             confidence=0.9,
         ),
         SuspectLocation(
@@ -167,18 +145,3 @@ def test_memory_burn_and_confirm():
     paths = [s.file_path.replace("\\", "/") for s in filtered]
     assert "pkg/core.py" in paths
     assert "pkg/bad.py" not in paths
-
-
-def test_rule_first_with_test_patch_arg():
-    root = _repo()
-    issue = "Something broken.\n"
-    patch = """
---- a/tests/test_core.py
-+++ b/tests/test_core.py
-@@ -1,2 +1,3 @@
- from pkg.core import compute
-+from pkg.core import compute
-"""
-    suspects = rule_first_suspects(issue, root, test_patch=patch)
-    paths = [s.file_path.replace("\\", "/") for s in suspects]
-    assert "pkg/core.py" in paths

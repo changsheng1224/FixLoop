@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 
 from agent_runtime.intent.models import PRIMARY_ACTIONS
+from agent_runtime.vector_math import cosine_similarity
 
 EmbedFn = Callable[[str], Any]  # returns vector-like (list/np array)
 
@@ -20,31 +21,6 @@ class EmbedMatch:
     score: float
     margin: float
     top2: str | None = None
-
-
-def _cosine(a: Any, b: Any) -> float:
-    try:
-        import numpy as np
-
-        va = np.asarray(a, dtype=float).ravel()
-        vb = np.asarray(b, dtype=float).ravel()
-        na = float(np.linalg.norm(va))
-        nb = float(np.linalg.norm(vb))
-        if na == 0.0 or nb == 0.0:
-            return 0.0
-        return float(np.dot(va, vb) / (na * nb))
-    except Exception:
-        # pure python fallback
-        va = list(a)
-        vb = list(b)
-        if len(va) != len(vb) or not va:
-            return 0.0
-        dot = sum(x * y for x, y in zip(va, vb))
-        na = sum(x * x for x in va) ** 0.5
-        nb = sum(y * y for y in vb) ** 0.5
-        if na == 0.0 or nb == 0.0:
-            return 0.0
-        return dot / (na * nb)
 
 
 def load_prototypes(path: Path | None = None) -> dict[str, list[str]]:
@@ -102,7 +78,7 @@ class EmbedIndex:
         for primary, vecs in proto.items():
             if not vecs:
                 continue
-            best = max(_cosine(q, v) for v in vecs)
+            best = max(cosine_similarity(q, v) for v in vecs)
             scores.append((primary, best))
         if not scores:
             return None

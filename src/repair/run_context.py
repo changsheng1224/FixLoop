@@ -27,5 +27,3 @@ class RepairRunContext:
     worktree_original_roots: dict = field(default_factory=dict, repr=False)
     original_repo_root: str = ""
     worktree_initial_snapshot: dict = field(default_factory=dict, repr=False)
-    # SWE-bench 等：verify 前临时应用的官方 test_patch（不进 model 导出）
-    verify_test_patch: str = ""

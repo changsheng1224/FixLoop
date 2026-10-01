@@ -1,7 +1,7 @@
 """定位快路径：规则优先于 LLM，避免 localize 空转超时导致空 patch。
 
 能力向（非单例）：
-- issue 栈帧 / 路径 / RepairPlan / F2P / test_patch 先落地
+- 公开 issue 栈帧 / 路径 / RepairPlan / 实际失败测试先落地
 - 空锚 → cheap grep；LLM 只作 enrichment 且路径必须存在于磁盘
 - 跨 retry memory；行级落点
 """
@@ -18,26 +18,24 @@ __all__ = [
     "merge_llm_with_rule_first",
     "rule_first_suspects",
     "seed_rule_first_suspects",
-    "suspects_from_fail_to_pass",
+    "suspects_from_test_evidence",
 ]
 
 
-def suspects_from_fail_to_pass(
-    issue: str,
+def suspects_from_test_evidence(
+    hints: list[str],
     repo_root: str | Path,
     *,
-    extra_hints: list[str] | None = None,
     max_keep: int = 8,
 ) -> list[SuspectLocation]:
-    """FAIL_TO_PASS / 相关测试 hint → 实现文件嫌疑（符号索引覆盖边）。"""
-    from src.repair.localization.fail_to_pass_hints import extract_fail_to_pass_hints
+    """公开测试引用 / 实际失败 nodeid → 仓库内测试关联的实现。"""
     from src.repair.localization.localize_quality import _is_test_path, normalize_repo_path
     from src.repair.localization.symbol_index import get_or_build_index
+    from src.repair.verification.test_references import normalize_related_test_refs
 
-    hints = list(extract_fail_to_pass_hints(issue or ""))
-    for h in extra_hints or []:
-        if h and h not in hints:
-            hints.append(h)
+    if max_keep <= 0:
+        return []
+    hints = normalize_related_test_refs(hints, repo_root)
     if not hints:
         return []
 
@@ -58,7 +56,7 @@ def suspects_from_fail_to_pass(
                     start_line=s.start_line,
                     end_line=s.end_line,
                     function_name=s.function_name,
-                    reason="F2P覆盖",
+                    reason="测试覆盖边",
                     confidence=max(0.8, float(s.confidence or 0.0)),
                 )
             )
@@ -74,7 +72,7 @@ def suspects_from_fail_to_pass(
                     file_path=rel,
                     start_line=1,
                     end_line=1,
-                    reason="F2P测试",
+                    reason="关联测试",
                     confidence=0.45 if _is_test_path(rel) else 0.55,
                 )
             )
@@ -110,15 +108,6 @@ def filter_llm_suspects_to_disk(
     return out
 
 
-def _test_patch_text(state: RepairState | None = None) -> str:
-    if state is None:
-        return ""
-    raw = state.node_timings.get("verify_test_patch") or ""
-    if isinstance(raw, str) and raw.strip():
-        return raw
-    return ""
-
-
 def rule_first_suspects(
     issue: str,
     repo_root: str | Path,
@@ -127,19 +116,17 @@ def rule_first_suspects(
     fallback_from_plan: Callable[[RepairPlan, str], list[SuspectLocation]] | None = None,
     related_tests: list[str] | None = None,
     fail_nodeids: list[str] | None = None,
-    test_patch: str = "",
     state: RepairState | None = None,
     max_keep: int = 8,
     enable_semantic_expand: bool = True,
 ) -> list[SuspectLocation]:
-    """不等 LLM：从 issue/plan/F2P/test_patch/memory 生成可编辑嫌疑。"""
+    """从公开 issue、plan、测试关系与运行时记忆生成定位候选。"""
     from src.repair.localization.localize_landing import refine_suspect_landing
     from src.repair.localization.localize_memory import (
         apply_localize_memory,
         remember_negated_files,
     )
     from src.repair.localization.localize_quality import refine_suspects, suspects_from_issue
-    from src.repair.localization.localize_test_patch import suspects_from_test_patch
 
     if state is not None:
         remember_negated_files(state)
@@ -151,22 +138,13 @@ def rule_first_suspects(
         except Exception:
             pass
 
-    extra = list(related_tests or []) + list(fail_nodeids or [])
     seeded.extend(
-        suspects_from_fail_to_pass(
-            issue or "",
+        suspects_from_test_evidence(
+            list(related_tests or []) + list(fail_nodeids or []),
             repo_root,
-            extra_hints=extra,
             max_keep=max_keep,
         )
     )
-
-    patch_text = test_patch or _test_patch_text(state)
-    if not patch_text and state is not None:
-        # repair_ctx 可能挂在 orchestrator；允许 timings 旁路
-        pass
-    if patch_text:
-        seeded.extend(suspects_from_test_patch(patch_text, repo_root, max_keep=max_keep))
 
     if state is not None:
         seeded = apply_localize_memory(seeded, state)
@@ -211,10 +189,9 @@ def merge_llm_with_rule_first(
     combined.extend(rule_suspects or [])
     if not combined and (issue or related_tests or fail_nodeids):
         combined.extend(
-            suspects_from_fail_to_pass(
-                issue,
+            suspects_from_test_evidence(
+                list(related_tests or []) + list(fail_nodeids or []),
                 repo_root,
-                extra_hints=list(related_tests or []) + list(fail_nodeids or []),
                 max_keep=max_keep,
             )
         )
@@ -243,7 +220,6 @@ def seed_rule_first_suspects(
     repo_root: str | Path,
     *,
     fallback_from_plan: Callable[[RepairPlan, str], list[SuspectLocation]] | None = None,
-    test_patch: str = "",
     max_keep: int = 8,
     enable_semantic_expand: bool = True,
 ) -> list[SuspectLocation]:
@@ -253,7 +229,6 @@ def seed_rule_first_suspects(
     if ctx is not None:
         related = list(ctx.related_tests or [])
     fail_nids = list(state.node_timings.get("verify_failed_nodeids") or [])
-    patch = test_patch or _test_patch_text(state)
     suspects = rule_first_suspects(
         state.issue_input or "",
         repo_root,
@@ -261,7 +236,6 @@ def seed_rule_first_suspects(
         fallback_from_plan=fallback_from_plan,
         related_tests=related,
         fail_nodeids=fail_nids,
-        test_patch=patch,
         state=state,
         max_keep=max_keep,
         enable_semantic_expand=enable_semantic_expand,
@@ -271,9 +245,6 @@ def seed_rule_first_suspects(
         state.node_timings["localize_rule_first"] = {
             "count": len(suspects),
             "top": [s.file_path for s in suspects[:3]],
-            "f2p_seeded": any((s.reason or "").startswith("F2P") for s in suspects),
-            "test_patch_seeded": any(
-                (s.reason or "") == "test_patch覆盖" for s in suspects
-            ),
+            "test_evidence_seeded": any(s.reason == "测试覆盖边" for s in suspects),
         }
     return suspects

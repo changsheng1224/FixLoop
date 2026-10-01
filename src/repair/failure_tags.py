@@ -69,7 +69,7 @@ def _repo_root_hint(state: RepairState) -> str:
 
 
 def allowed_patch_files(state: RepairState) -> set[str]:
-    """补丁允许落盘的文件集合（suspect + plan + related_tests + F2P/test_patch）。
+    """补丁允许落盘的文件集合（suspect + plan + related_tests + 已确认扩展）。
 
     与 bonus §24 faithfulness（patch ⊆ allowed）共用；勿重复实现第二套集合逻辑。
     """
@@ -90,28 +90,6 @@ def allowed_patch_files(state: RepairState) -> set[str]:
         if extra:
             allowed.add(_normalize_path(str(extra)))
 
-    root = _repo_root_hint(state)
-    test_patch = str(state.node_timings.get("verify_test_patch") or "")
-    if test_patch and root:
-        try:
-            from src.repair.localization.localize_test_patch import suspects_from_test_patch
-
-            for s in suspects_from_test_patch(test_patch, root, max_keep=16):
-                if s.file_path:
-                    allowed.add(_normalize_path(s.file_path))
-        except Exception:
-            pass
-    if state.issue_input and root:
-        try:
-            from src.repair.localization.localize_fastpath import suspects_from_fail_to_pass
-
-            for s in suspects_from_fail_to_pass(
-                state.issue_input, root, max_keep=8
-            ):
-                if s.file_path:
-                    allowed.add(_normalize_path(s.file_path))
-        except Exception:
-            pass
     return allowed
 
 

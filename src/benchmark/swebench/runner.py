@@ -464,7 +464,6 @@ class SweBenchAdapter:
                 issue,
                 max_retries=cfg.max_retries,
                 repair_timeout_s=cfg.repair_timeout_s,
-                verify_test_patch=str(getattr(inst, "test_patch", "") or ""),
             )
             result.repair_status = str(getattr(state, "status", "") or "")
             result.repair_run_id = str(getattr(state, "repair_run_id", "") or "")

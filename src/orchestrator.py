@@ -294,7 +294,6 @@ class Orchestrator(RepairPipelineMixin):
         phase_timeouts: PhaseTimeoutConfig | None = None,
         cancel_token=None,
         resume_run_id: str = "",
-        verify_test_patch: str = "",
         *,
         run_id: str = "",
     ) -> RepairState:
@@ -308,7 +307,6 @@ class Orchestrator(RepairPipelineMixin):
             cancel_token: 可选协作式取消 token（CLI Ctrl+C 注入）。
             resume_run_id: L2 续跑 run_id（从 repair_checkpoint.json 恢复，
                 跳过 parse/localize，直接进入 patch 循环）。
-            verify_test_patch: 可选；SWE 等官方 test_patch，仅在 verify 时临时应用。
             run_id: 新任务的可选 ID；不能与严格恢复 resume_run_id 同时使用。
 
         Returns:
@@ -379,7 +377,6 @@ class Orchestrator(RepairPipelineMixin):
             phase_timeout_config=phase_timeouts,
             cancel_token=token,
             resume_checkpoint=checkpoint,
-            verify_test_patch=verify_test_patch or "",
         )
         self._set_collaboration_context(state)
         try:
@@ -1674,14 +1671,10 @@ class Orchestrator(RepairPipelineMixin):
     def _run_verifier_impl(self, state: RepairState) -> "VerificationResult":
         """Docker 沙箱或本地 pytest 验证（不走 LLM Agent loop）。"""
         from src.collaboration.isolation import role_projection
-        from src.repair.verification.verify_test_patch import VerifyTestPatchOverlay
 
         state.node_timings["verifier_input_projection"] = role_projection(state, "verifier")
 
         cancel_token = self._repair_ctx.cancel_token if self._repair_ctx else None
-        test_patch = ""
-        if self._repair_ctx is not None:
-            test_patch = getattr(self._repair_ctx, "verify_test_patch", "") or ""
         language = "python"
         if state.repair_plan is not None and state.repair_plan.language:
             language = state.repair_plan.language
@@ -1707,19 +1700,7 @@ class Orchestrator(RepairPipelineMixin):
             record_verify_timings(state, run)
             return run.result
 
-        try:
-            with VerifyTestPatchOverlay(self._repo_root, test_patch) as overlay:
-                if overlay.applied:
-                    state.node_timings["verify_test_patch_applied"] = True
-                return self._run_verifier_python(state, cancel_token=cancel_token)
-        except Exception as exc:
-            log.warning("[verifier] test_patch overlay failed: %s", exc)
-            return VerificationResult(
-                all_passed=False,
-                total_tests=0,
-                failed=1,
-                failure_logs=[f"verify_config: test_patch_apply_failed: {exc}"],
-            )
+        return self._run_verifier_python(state, cancel_token=cancel_token)
 
     def _run_verifier_python(
         self, state: RepairState, *, cancel_token=None
@@ -1795,92 +1776,23 @@ class Orchestrator(RepairPipelineMixin):
         return VerificationResult(all_passed=False, failure_logs=["verifier 未配置"])
 
     def _pick_test_path(self, state: RepairState) -> str:
-        """从失败面 / Retriever / FAIL_TO_PASS / test_patch 提取 pytest 可收集 target。"""
-        from src.benchmark.swebench.convert import (
-            extract_fail_to_pass_hints,
-            normalize_related_test_refs,
-            resolve_test_ref_for_pytest,
-        )
+        """Prefer actual failure targets, then public repository test references."""
         from src.repair.verification.fail_surface import preferred_verify_targets
-        from src.repair.verification.verify_test_patch import extract_targets_from_test_patch
+        from src.repair.verification.test_references import normalize_related_test_refs
 
-        candidates: list[str] = []
-        # 失败面优先：上一轮 FAILED nodeid
-        candidates.extend(preferred_verify_targets(state))
-        ctx = state.retrieved_context
-        if ctx and ctx.related_tests:
-            for item in ctx.related_tests:
-                if isinstance(item, str) and item.strip():
-                    candidates.append(item.strip())
+        candidates = list(preferred_verify_targets(state))
+        context = state.retrieved_context
+        if context is not None:
+            for item in context.related_tests or []:
+                if isinstance(item, str):
+                    candidates.append(item)
                 elif isinstance(item, dict):
                     for key in ("nodeid", "name", "path"):
-                        value = item.get(key, "")
-                        if value:
-                            candidates.append(str(value).strip())
+                        if value := item.get(key):
+                            candidates.append(str(value))
                             break
-        try:
-            candidates.extend(extract_fail_to_pass_hints(state.issue_input or ""))
-        except Exception:
-            pass
-        test_patch = ""
-        repair_ctx = getattr(self, "_repair_ctx", None)
-        if repair_ctx is not None:
-            test_patch = getattr(repair_ctx, "verify_test_patch", "") or ""
-        try:
-            candidates.extend(extract_targets_from_test_patch(test_patch))
-        except Exception:
-            pass
-
-        # 去重保序
-        deduped: list[str] = []
-        seen: set[str] = set()
-        for c in candidates:
-            key = c.strip().replace("\\", "/")
-            if key and key not in seen:
-                seen.add(key)
-                deduped.append(key)
-        candidates = deduped
-
-        repo_root = getattr(self, "_repo_root", "") or ""
-        normalized = normalize_related_test_refs(candidates, repo_root or None)
-        if repo_root:
-            root = Path(repo_root)
-            for ref in normalized:
-                file_part = ref.split("::", 1)[0]
-                if file_part and (root / file_part).is_file():
-                    return ref
-            # bare name：在仓内搜 def <name>
-            for ref in list(candidates) + list(normalized):
-                name = ref.strip()
-                if "::" in name or "/" in name or "\\" in name or not name.isidentifier():
-                    continue
-                if not name.startswith("test_"):
-                    continue
-                hit = self._find_test_def(root, name)
-                if hit:
-                    return hit
-        if normalized:
-            return normalized[0]
-        if candidates:
-            return resolve_test_ref_for_pytest(candidates[0], repo_root or None)
-        return ""
-
-    def _find_test_def(self, root: Path, test_name: str) -> str:
-        """裸 test 名 → 第一个匹配 ``def test_name`` 的 pytest nodeid。"""
-        needle = f"def {test_name}"
-        try:
-            for path in root.rglob("test_*.py"):
-                try:
-                    text = path.read_text(encoding="utf-8", errors="ignore")
-                except OSError:
-                    continue
-                if needle not in text:
-                    continue
-                rel = str(path.relative_to(root)).replace("\\", "/")
-                return f"{rel}::{test_name}"
-        except OSError:
-            return ""
-        return ""
+        targets = normalize_related_test_refs(candidates, self._repo_root or None)
+        return targets[0] if targets else ""
 
     def _revert_changes(self, state: RepairState):
         """回滚 Patcher 修改的文件（git checkout）。"""
