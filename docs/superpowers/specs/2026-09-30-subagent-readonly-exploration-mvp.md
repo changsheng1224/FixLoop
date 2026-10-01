@@ -1,6 +1,6 @@
 # FixLoop Subagent 并行探索与证据汇总 MVP Spec
 
-日期：2026-09-30。状态：开发规格；功能尚未实现。
+日期：2026-09-30。状态：2026-10-01 已实现；[验收记录](../plans/2026-10-01-subagent-readonly-acceptance.md)说明实际验证范围和限制。
 
 ## 1. 目标、交付与前提
 
@@ -8,7 +8,7 @@
 
 必须交付：固定两类探索、批量委派与句柄回收、真实两路 Subagent 模型/工具循环、严格只读权限、预算与取消、证据 freshness、确定性去重/待复核标记、Turn 进度和安全恢复。预计在前置契约已落地后单人 **10–16 个有效工作日**，含相关测试和集成返工；约 1,000–1,700 行实现加测试用于估算，不作为验收指标。
 
-本版主要接入此前 [Plan DAG 完整在途恢复 MVP](./2026-09-30-plan-dag-inflight-resume-mvp.md) 的任务/节点引用、[长任务上下文与证据 MVP](./2026-09-30-long-task-context-evidence-mvp.md) 的 Observation freshness，以及 [Turn 内进度 MVP](./2026-09-30-tool-batch-turn-progress-mvp.md) 的事件投影。它们目前仍是规格文档；未落地时可实现独立协作模块，但不得宣称 Plan 更新、证据 freshness 或 Turn 进度端到端完成。文件/文本工具足以起步；[代码探索 MVP](./2026-09-29-code-exploration-mvp.md) 的 LSP/关系视图只有实际落地且满足只读取消策略时才可选接入。
+本版主要接入此前 [Plan DAG 完整在途恢复 MVP](./2026-09-30-plan-dag-inflight-resume-mvp.md) 的任务/节点引用、[长任务上下文与证据 MVP](./2026-09-30-long-task-context-evidence-mvp.md) 的 Observation freshness，以及 [Turn 内进度 MVP](./2026-09-30-tool-batch-turn-progress-mvp.md) 的事件投影。2026-10-01 的代码审计确认生产路径已有 PlanSession、Observation 和 Turn reducer，本版接入这些实际入口。文件/文本工具足以起步；[代码探索 MVP](./2026-09-29-code-exploration-mvp.md) 的 LSP/关系视图只有实际落地且满足只读取消策略时才可选接入。
 
 ## 2. 非目标和当前基础
 

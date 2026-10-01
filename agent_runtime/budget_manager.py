@@ -41,6 +41,7 @@ class BudgetManager:
         self._used = {key: 0.0 for key in self._limits}
         self._rejected = {key: 0 for key in self._limits}
         self._lock = threading.RLock()
+        self._scopes: dict[str, dict[str, float]] = {}
 
     @classmethod
     def from_config(cls, config) -> BudgetManager:
@@ -118,6 +119,31 @@ class BudgetManager:
                 for decision in decisions
             ]
 
+    def reserve_scope(self, key: str, costs: dict[str, float]) -> bool:
+        """Idempotently reserve an entire independent worker scope before dispatch."""
+        with self._lock:
+            if key in self._scopes:
+                return True
+            decisions = self.reserve_many(costs)
+            if any(not d.allowed for d in decisions):
+                return False
+            self._scopes[key] = {k: max(0.0, float(v)) for k, v in costs.items()}
+            return True
+
+    def reconcile_scope(self, key: str, costs: dict[str, float]) -> None:
+        """Apply durable usage, including unknown-usage caps, without double charging."""
+        with self._lock:
+            previous = self._scopes.get(key, {})
+            normalized = {k: max(0.0, float(v)) for k, v in costs.items()}
+            for resource in previous.keys() | normalized.keys():
+                self._used[resource] = max(
+                    0.0,
+                    self._used.get(resource, 0.0)
+                    - previous.get(resource, 0.0)
+                    + normalized.get(resource, 0.0),
+                )
+            self._scopes[key] = normalized
+
     def backpressure(self) -> list[dict[str, Any]]:
         """Return resources that are exhausted or nearly exhausted."""
         with self._lock:
@@ -170,6 +196,7 @@ class BudgetManager:
                 "limits": dict(self._limits),
                 "used": dict(self._used),
                 "rejected": dict(self._rejected),
+                "scopes": {k: dict(v) for k, v in self._scopes.items()},
             }
 
     def restore(self, snapshot: dict[str, Any] | None) -> None:
@@ -181,6 +208,7 @@ class BudgetManager:
                 self._used[str(key)] = max(0.0, float(value or 0))
             for key, value in (data.get("rejected") or {}).items():
                 self._rejected[str(key)] = max(0, int(value or 0))
+            self._scopes = {str(k): dict(v) for k, v in (data.get("scopes") or {}).items()}
 
     def summary(self) -> dict[str, dict[str, float | int | str]]:
         with self._lock:

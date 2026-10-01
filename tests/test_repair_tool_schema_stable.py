@@ -65,7 +65,13 @@ class TestRepairPrefixHash:
     def test_tool_names_tuple_sorted(self, ws):
         agent = create_patcher(FakeModelClient(["<final>ok</final>"]), ws)
         assert isinstance(agent._tool_names, tuple)
-        assert agent._tool_names == REPAIR_CANONICAL_TOOL_NAMES
+        assert agent._tool_names == tuple(
+            sorted((*REPAIR_CANONICAL_TOOL_NAMES, "delegate_exploration", "collect_exploration"))
+        )
+        verifier = create_verifier(FakeModelClient([]), ws)
+        assert verifier._tool_names == REPAIR_CANONICAL_TOOL_NAMES
+        assert "delegate_exploration" not in agent._prefix.stable_tools_text
+        assert "delegate_exploration" in agent._prefix.role_text
 
     def test_stable_hash_includes_tools_not_l2_role(self, ws):
         from agent_runtime.prompt_prefix import cache_stable_text

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Literal
 
 from agent_runtime.config import AgentConfig
@@ -45,6 +46,8 @@ def create_repair_agent(
     code_exploration_mode: str = "text",
     code_exploration_server_argv: tuple[str, ...] | None = None,
     sandbox_context: ToolContext | None = None,
+    exploration_client_factory=None,
+    exploration_limits=None,
 ) -> Agent:
     """创建 Patcher 或 Verifier Agent。
 
@@ -68,6 +71,17 @@ def create_repair_agent(
         lsp_argv=code_exploration_server_argv,
     )
     tools = build_repair_agent_tools(ctx, role)
+    delegation_tools = {}
+    if role == "patcher":
+        from agent_runtime.prompt_prefix import build_repair_l1_prefix
+        from src.collaboration.delegation import build_delegation_tools
+
+        if l1_prefix is None:
+            l1_prefix = build_repair_l1_prefix(
+                workspace, tools, dry_run=dry_run, approval=approval, repo_root=root
+            )
+        delegation_tools = build_delegation_tools(ctx)
+        tools.update(delegation_tools)
 
     defaults = _AGENT_DEFAULTS[role]
     gw = gateway or build_repair_gateway(root, sandbox_mode=ctx.sandbox_backend is not None)
@@ -82,8 +96,28 @@ def create_repair_agent(
             "patch_file 仅作兜底；可用 quick_test 跑 FAIL_TO_PASS；"
             "完成后简短说明。仅当无法调用工具时才输出 CandidatePatch JSON 数组。"
         )
+        # Owner control tools belong to the L2 role projection, preserving the
+        # canonical L1 prefix shared with verifier and existing cache keys.
+        system_prompt += "\n\nOwner exploration tools: " + json.dumps(
+            {
+                name: {"description": spec["description"], "schema": spec["schema"]}
+                for name, spec in delegation_tools.items()
+            },
+            ensure_ascii=False,
+        )
     elif json_mode:
         system_prompt += "\n\n【输出格式】只输出合法 JSON（不要包裹在 ```json 或 <final> 中）。"
+
+    def dispatch(agent_name, name, execute):
+        runtime = getattr(ctx, "readonly_exploration_runtime", None)
+        if runtime is not None and tools.get(name, {}).get("side_effect") in {
+            "write",
+            "process",
+            "verify",
+        }:
+            runtime.before_write()
+        return gw.dispatch(agent_name, name, execute)
+
     agent = Agent(
         config=AgentConfig(
             provider="deepseek",
@@ -101,7 +135,7 @@ def create_repair_agent(
         tools=tools,
         system_prompt=system_prompt,
         agent_name=agent_name,
-        tool_dispatch=gw.dispatch,
+        tool_dispatch=dispatch,
         prefix_mode="repair",
         dry_run=dry_run,
         l1_prefix=l1_prefix,
@@ -109,6 +143,8 @@ def create_repair_agent(
         tool_context=ctx,
     )
     agent._repair_gateway = gw
+    agent._exploration_client_factory = exploration_client_factory
+    agent._exploration_limits = exploration_limits
     if budget is not None:
         agent._budget = budget
     return agent

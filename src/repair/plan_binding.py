@@ -73,6 +73,7 @@ class RepairPlanBinding:
         )
         self.owner_lease = self.coordinator.lease or self.coordinator.acquire()
         self._closed = False
+        self.exploration = None
         self.agent = orchestrator.patcher
         self.session = None
         self._heartbeat_stop = threading.Event()
@@ -80,6 +81,11 @@ class RepairPlanBinding:
         self.coordinator.cancel_token = getattr(orchestrator.patcher, "cancel_token", None)
         self._cancel_unsubscribe = None
         try:
+            # Entry ownership can predate slow Plan/Observation initialization.
+            # Renew before initialization and keep reconciling owners alive too.
+            self.owner_lease = self.coordinator.heartbeat()
+            self._heartbeat_worker = threading.Thread(target=self._maintain_owner, daemon=True)
+            self._heartbeat_worker.start()
             if self.coordinator.cancel_token is not None:
                 self._cancel_unsubscribe = self.coordinator.cancel_token.add_callback(
                     self.coordinator.request_cancel
@@ -110,6 +116,13 @@ class RepairPlanBinding:
                 self.close()
             raise
 
+    def _maintain_owner(self):
+        while not self._heartbeat_stop.wait(self.coordinator.lease_seconds / 3):
+            try:
+                self.coordinator.heartbeat()
+            except Exception:
+                return  # the durable fence rejects further dispatch
+
     def _open(self, context, *, defer_plan):
         orchestrator, state = self.orchestrator, self.state
         self.read_budget = ReadBudget(4)
@@ -133,6 +146,19 @@ class RepairPlanBinding:
         )
 
         collaboration = getattr(orchestrator, "_collaboration_runtime", None)
+        from src.collaboration.exploration_runtime import ExplorationRuntime
+
+        self.exploration = ExplorationRuntime(
+            self.agent,
+            run_id=state.repair_run_id,
+            parent_task_id=state.repair_run_id,
+            plan_session=self.session,
+            coordinator=self.coordinator,
+            client_factory=getattr(self.agent, "_exploration_client_factory", None),
+            limits=getattr(self.agent, "_exploration_limits", None),
+            event_sink=self._exploration_event,
+        )
+        context.readonly_exploration_runtime = self.exploration
         self.coordinator.adapters.update(
             CoordinationAdapters(
                 PlanAttemptAdapter(self.session),
@@ -153,16 +179,8 @@ class RepairPlanBinding:
                 "resume_coordination_" + str(coordination.get("status"))
             )
         self.session.owner_lease = self.coordinator.lease
+        self.exploration.restore(state.node_timings.get("exploration_checkpoint"))
 
-        def maintain_owner():
-            while not self._heartbeat_stop.wait(self.coordinator.lease_seconds / 3):
-                try:
-                    self.coordinator.heartbeat()
-                except Exception:
-                    return  # the durable fence rejects further dispatch
-
-        self._heartbeat_worker = threading.Thread(target=maintain_owner, daemon=True)
-        self._heartbeat_worker.start()
         # Register the tasks created by the current orchestrator only after
         # recovery has fenced and reconciled resources from an older owner.
         # Otherwise the current running patch task is mistaken for a stale
@@ -229,9 +247,30 @@ class RepairPlanBinding:
                 "plan_progress", summary=f"{event}: {payload.get('node_id', '')}"
             )
 
+    def _exploration_event(self, event, payload):
+        emitter = getattr(self.agent, "_turn_event_emitter", None)
+        if emitter is not None:
+            emitter.emit(
+                event,
+                **{
+                    k: v
+                    for k, v in payload.items()
+                    if k not in {"event", "event_seq", "run_id", "turn_id"}
+                },
+            )
+        tracer = getattr(getattr(self.orchestrator, "_repair_ctx", None), "repair_tracer", None)
+        if tracer:
+            tracer.emit("exploration", event, payload)
+        self.orchestrator._progress_emitter().emit(
+            "exploration_progress", summary=f"{event}: {payload.get('task_id', '')}"
+        )
+
     def sync(self):
         seal = self.session.checkpoint()
         self.state.node_timings["plan_checkpoint"] = seal
+        if self.exploration is not None:
+            self.state.node_timings["exploration_checkpoint"] = self.exploration.checkpoint()
+            self.state.node_timings["exploration_progress"] = self.exploration.progress()
         self.state.node_timings["plan_progress"] = {
             "version": self.session.plan.plan_version,
             "nodes": [
@@ -257,6 +296,14 @@ class RepairPlanBinding:
         if self._heartbeat_worker is not None:
             self._heartbeat_worker.join(timeout=1)
         try:
+            if self.exploration is not None:
+                try:
+                    self.exploration.close()
+                except ValueError:
+                    self.coordinator.finish(
+                        "recovery_required", error_code="exploration_cleanup_unconfirmed"
+                    )
+                    self.state.set_status("recovery_required", "exploration_cleanup_unconfirmed")
             current = self.coordinator.store.snapshot(self.state.repair_run_id)
             if current.owner_token == self.coordinator.lease.owner_token and current.owner_token:
                 if current.status == "active":
@@ -273,6 +320,16 @@ class RepairPlanBinding:
                 self.agent._plan_session = None
             if self.agent.tool_context.run_coordinator is self.coordinator:
                 self.agent.tool_context.run_coordinator = None
+            if (
+                getattr(self.agent.tool_context, "readonly_exploration_runtime", None)
+                is self.exploration
+            ):
+                self.agent.tool_context.readonly_exploration_runtime = None
+            if (
+                self.exploration is not None
+                and getattr(self.agent, "_run_budget_manager", None) is self.exploration.budget
+            ):
+                del self.agent._run_budget_manager
             if self.session is not None:
                 self.session.close()
 
@@ -355,6 +412,14 @@ class RepairPlanBinding:
         client = getattr(self.agent, "light_client", None) or self.agent.model_client
 
         def complete(prompt, max_new_tokens):
+            decisions = self.exploration.budget.reserve_many(
+                {
+                    "llm_calls": 1,
+                    "prompt_tokens": len(prompt.encode("utf-8")),
+                }
+            )
+            if any(not decision.allowed for decision in decisions):
+                raise ValueError("plan_generation_global_budget_exhausted")
             deadline = getattr(self.agent, "_repair_deadline", None)
             remaining = deadline.remaining_s() if deadline else None
             if remaining is not None and remaining <= 0:
@@ -472,7 +537,10 @@ class RepairPlanBinding:
         value = []
 
         def execute(attempt):
-            value.append(callback(prompt + "\n\nPlan evidence: " + self.conclusion, metadata))
+            try:
+                value.append(callback(prompt + "\n\nPlan evidence: " + self.conclusion, metadata))
+            finally:
+                self.exploration.drain(cancel=True)
             return session.tool_result(attempt)
 
         session.run_node(edit.node_id, execute)
@@ -485,6 +553,7 @@ class RepairPlanBinding:
         from src.state import VerificationResult
 
         session = self.session
+        self.exploration.before_write()
         verify = self._kind("verify")
         if verify.status == "succeeded":
             attempts = session.store.latest("attempt", "attempt_id")
@@ -514,6 +583,7 @@ class RepairPlanBinding:
 
     def rollback(self, callback, expected_after):
         session = self.session
+        self.exploration.drain(cancel=True)
         session._fence(allow_cancelling=True)
         if session.plan and any(n.status in {"running", "uncertain"} for n in session.plan.nodes):
             raise ValueError("rollback_conflicts_with_unconfirmed_execution")

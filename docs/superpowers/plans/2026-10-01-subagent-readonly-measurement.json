@@ -1,0 +1,33 @@
+{
+  "mode": "controlled ModelClient responses and 50 ms latency; actual Agent/tool loops",
+  "measurements": {
+    "serial": {
+      "elapsed_ms": 450.31,
+      "model_calls": 4,
+      "tool_calls": 2,
+      "tokens": 600,
+      "peak_model_concurrency": 1,
+      "paths": [
+        "test_value.py",
+        "value.py"
+      ],
+      "valid_findings": 2,
+      "duplicate_findings": 0
+    },
+    "parallel": {
+      "elapsed_ms": 282.83,
+      "model_calls": 4,
+      "tool_calls": 2,
+      "tokens": 600,
+      "peak_model_concurrency": 2,
+      "paths": [
+        "test_value.py",
+        "value.py"
+      ],
+      "valid_findings": 2,
+      "duplicate_findings": 0
+    }
+  },
+  "extra_tokens": 0,
+  "live_provider_performance_measured": false
+}

@@ -6,7 +6,6 @@ import json
 import sqlite3
 import time
 from contextlib import closing
-from pathlib import Path
 from typing import Any
 
 from src.collaboration.contracts import AgentResult, AgentTask, Handoff, TaskStatus
@@ -19,8 +18,10 @@ class LeaseConflictError(RuntimeError):
 class CollaborationStore:
     SCHEMA_VERSION = 1
 
-    def __init__(self, repo_root: str):
-        root = Path(repo_root) / ".agent"
+    def __init__(self, repo_root: str, *, state_root: str = ""):
+        from agent_runtime.state_root import state_root_for
+
+        root = state_root_for(repo_root, state_root) / ".agent"
         root.mkdir(parents=True, exist_ok=True)
         self.path = root / "collaboration.db"
         self._initialize()

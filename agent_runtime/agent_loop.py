@@ -192,7 +192,9 @@ class AgentLoop:
             max_verify_calls=getattr(agent.config, "max_verify_calls", 0) or 0,
             max_recovery_attempts=getattr(agent.config, "max_recovery_attempts", 0) or 0,
         )
-        self._budget_manager = BudgetManager.from_config(agent.config)
+        self._budget_manager = getattr(
+            agent, "_run_budget_manager", None
+        ) or BudgetManager.from_config(agent.config)
         self._budget_turns_seen = 0
         self._latency_controller = LatencySLOController(
             getattr(agent.config, "slo", None),
@@ -1759,6 +1761,8 @@ class AgentLoop:
             progress.emit("turn_completed", status=status)
             self.agent.session["turn_progress"] = progress.checkpoint(batch)
             self._turn_progress = None
+            if getattr(self.agent, "_turn_event_emitter", None) is progress:
+                self.agent._turn_event_emitter = None
             self._active_tool_batch = None
 
     def _run_native_batch(self, ts, calls, *, turn, callback=None):
@@ -2374,7 +2378,9 @@ class AgentLoop:
         if agent_name == "patcher":
             self.agent.session.pop("_patcher_runtime", None)
         self._call_timings = []
-        self._budget_manager = BudgetManager.from_config(self.agent.config)
+        self._budget_manager = getattr(
+            self.agent, "_run_budget_manager", None
+        ) or BudgetManager.from_config(self.agent.config)
         self._budget_turns_seen = 0
         self._latency_controller = LatencySLOController(
             getattr(self.agent.config, "slo", None),
@@ -2603,6 +2609,7 @@ class AgentLoop:
                 lambda event: self._deliver_turn_progress(event, callback),
             )
             self._turn_progress.emit("turn_started", status="running")
+            self.agent._turn_event_emitter = self._turn_progress
             recovery_turn = turn > self.max_steps
             if recovery_turn and not (
                 self._patch_recovery_directive or self._patch_decision_required

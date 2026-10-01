@@ -36,6 +36,8 @@ class RepairCollaborationRuntime:
         existing = {item.resource_id for item in coordinator.store.resources(self.run_id)}
         tasks = self.store.list_tasks(self.run_id)
         for task in tasks:
+            if "exploration" in task.payload:
+                continue  # ExplorationRuntime owns its read resource and recovery adapter.
             resource_id = f"agent:{task.task_id}"
             if resource_id in existing:
                 continue
