@@ -347,12 +347,12 @@ class Agent:
                 pass
         return self.session.get("history", [])
 
-    def execute_tool(self, name: str, args: dict):
+    def execute_tool(self, name: str, args: dict, *, call_context=None):
         """执行指定工具：经 ToolGateway.dispatch（若配置）→ ToolExecutor 闸口。"""
         executor = self._get_tool_executor()
 
         def run():
-            return executor.execute_gated(name, args)
+            return executor.execute_gated(name, args, call_context=call_context)
 
         if self._tool_dispatch is not None:
 
@@ -362,7 +362,7 @@ class Agent:
             dispatch = run
         plan_session = getattr(self, "_plan_session", None)
         if plan_session is not None:
-            return plan_session.execute_tool(self, name, args, dispatch)
+            return plan_session.execute_tool(self, name, args, dispatch, call_context=call_context)
         return dispatch()
 
     def _get_tool_executor(self):

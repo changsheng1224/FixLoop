@@ -1,6 +1,6 @@
 # FixLoop Tool Batch 与 Turn 内实时进度 MVP Spec
 
-日期：2026-09-30。状态：开发规格；功能尚未实现。
+日期：2026-09-30。状态：MVP 已接入 native AgentLoop（2026-10-01）。实现与验收记录见 [交付说明](../../TOOL_BATCH_TURN_PROGRESS.md)。
 
 ## 1. 目标、范围与工期
 
@@ -12,9 +12,11 @@
 
 ## 2. 非目标及当前基础
 
+首期并行 allowlist 固定为 `read_file` / `list_files`；搜索和关系检索保留串行。
+
 首期不做 `input_from` 结果字段映射、同一模型响应内的多跳工具依赖、任意 Tool DAG 协议扩展、并行写/测试/命令、fail-fast 策略、每工具动态并发配置、复杂 Web UI 或独立的批次恢复器。需要前置结果的后续工具由**下一次模型响应**提出。XML/文本工具调用路径保持原有顺序语义。
 
-当前 `ModelTurnResult.tool_calls` 已含 `call_id`；AgentLoop 的 native 路径按列表顺序逐个调用 `_run_tool_step`。`ToolDAGExecutor` 仅是独立原型，未接该路径；其失败依赖节点放入结果后未从 `pending` 移除，复用前需修复。`ToolExecutor.execute_gated` 从共享 session 的 `_pending_canonical_tool_call` 读取并写 `_last_canonical_tool_call`，执行中临时修改共享 `ToolContext`；AgentLoop 也使用 `_in_flight_tool`、`_in_flight_action`、以 `run:step:tool_name` 构造的幂等键。不能把当前 `_run_tool_step` 直接放进线程池。
+实现前基线（历史描述）：`ModelTurnResult.tool_calls` 已含 `call_id`；AgentLoop 的 native 路径按列表顺序逐个调用 `_run_tool_step`。`ToolDAGExecutor` 仅是独立原型，未接该路径；其失败依赖节点放入结果后未从 `pending` 移除，复用前需修复。`ToolExecutor.execute_gated` 从共享 session 的 `_pending_canonical_tool_call` 读取并写 `_last_canonical_tool_call`，执行中临时修改共享 `ToolContext`；AgentLoop 也使用 `_in_flight_tool`、`_in_flight_action`、以 `run:step:tool_name` 构造的幂等键。不能把当前 `_run_tool_step` 直接放进线程池。
 
 现有 `ToolResult` 有 typed status/data/receipt；`Canonical Trace` 有 run 级 seq；CLIProgressCallback 能打印阶段和工具完成，但没有调用级运行中/排队事件。既有 [WSL 沙箱 MVP](./2026-09-30-wsl-command-sandbox-mvp.md) 的命令/测试 profile 为单并发；本版只选文件/文本只读工具，并且每个候选工具都要证明可并发、可受控取消或可安全丢弃迟到结果。
 

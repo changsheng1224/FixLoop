@@ -22,6 +22,7 @@ class ToolStatus(StrEnum):
     CANCELLED = "cancelled"
     UNCERTAIN = "uncertain"
     DRY_RUN = "dry_run"
+    PARTIAL = "partial"
 
 
 class ToolErrorCode(StrEnum):
@@ -46,6 +47,8 @@ class ToolErrorCode(StrEnum):
     TOOL_EXECUTION_FAILED = "tool_execution_failed"
     PROVIDER_PROTOCOL_ERROR = "provider_protocol_error"
     UNKNOWN = "unknown"
+    PARTIAL_RESULT = "partial_result"
+    CLEANUP_UNVERIFIED = "cleanup_unverified"
 
 
 @dataclass

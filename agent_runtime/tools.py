@@ -1364,6 +1364,14 @@ def build_tool_registry(context) -> dict:
             if name in {"quick_test", "run_shell"}
             else "write"
         )
+    # Audited pure Python readers: no subprocess, bounded IO/output and
+    # cooperative cancellation. Edit-lock updates happen on the loop owner.
+    from agent_runtime.batch_reads import audited_read_file
+    from agent_runtime.code_exploration.io import list_files_result
+
+    for name, handler in (("read_file", audited_read_file), ("list_files", list_files_result)):
+        registry[name]["run_with_context"] = handler
+        registry[name]["parallel_run"] = registry[name]["run"]
     return registry
 
 

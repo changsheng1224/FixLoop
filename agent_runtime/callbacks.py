@@ -32,6 +32,12 @@ class AgentCallback:
     发生时通过 ``_notify()`` 统一调用，XML 与 Native 路径共用。
     """
 
+    def on_turn_progress(self, event: dict) -> None:
+        """Safe structured Turn/call status, delivered after trace append."""
+
+    def on_turn_progress_replay(self, projection: dict) -> None:
+        """Display reconstruction; has no execution or retry authority."""
+
     # ---- 步进 ----
 
     def on_step_start(self, step: int, max_steps: int, *, path: str = "") -> None:
@@ -112,6 +118,12 @@ class CallbackChain(AgentCallback):
                 if self._fail_fast:
                     raise
 
+    def on_turn_progress(self, event: dict) -> None:
+        self._notify_chain("on_turn_progress", event=event)
+
+    def on_turn_progress_replay(self, projection: dict) -> None:
+        self._notify_chain("on_turn_progress_replay", projection=projection)
+
     # 自动代理所有钩子
     def on_step_start(self, step: int, max_steps: int, *, path: str = "") -> None:
         self._notify_chain("on_step_start", step=step, max_steps=max_steps, path=path)
@@ -174,7 +186,46 @@ class CLIProgressCallback(AgentCallback):
     def __init__(self, output=sys.stderr):
         self._output = output
         self._step = 0
+        from agent_runtime.turn_progress import TurnProgress
+
+        self.progress = TurnProgress()
         self._t0: float | None = None
+
+    def on_turn_progress(self, event: dict) -> None:
+        self.progress.apply(event)
+        turn = self.progress.snapshot()["turns"].get(event["turn_id"], {})
+        calls = turn.get("calls", [])
+        running = [call for call in calls if call.get("status") == "running"]
+        queued = sum(call.get("status") == "queued" for call in calls)
+        done = sum(
+            call.get("status") in {"succeeded", "failed", "rejected", "cancelled", "uncertain"}
+            for call in calls
+        )
+        failed = sum(call.get("status") in {"failed", "rejected"} for call in calls)
+        cancelled = sum(call.get("status") == "cancelled" for call in calls)
+        uncertain = sum(call.get("status") == "uncertain" for call in calls)
+        name = event.get("tool_name", "")
+        short_id = event.get("call_id", "")[:8]
+        self._output.write(
+            f"  [turn] {turn.get('phase', '')} {name} {short_id} "
+            f"{event.get('status', '')} running={len(running)} queued={queued} "
+            f"done={done}/{len(calls)} failed={failed} cancelled={cancelled} "
+            f"uncertain={uncertain}\n"
+        )
+        self._output.flush()
+
+    def on_turn_progress_replay(self, projection: dict) -> None:
+        self.restored_progress = projection
+        calls = [
+            call for turn in projection.get("turns", {}).values() for call in turn.get("calls", [])
+        ]
+        confirmed = sum(call.get("confirmation") in {"receipt", "plan_receipt"} for call in calls)
+        incomplete = projection.get("progress_replay_incomplete", False)
+        self._output.write(
+            f"  [turn replay] confirmed={confirmed} unconfirmed={len(calls) - confirmed} "
+            f"progress_replay_incomplete={str(incomplete).lower()}\n"
+        )
+        self._output.flush()
 
     # ---- 覆盖的方法 ----
 

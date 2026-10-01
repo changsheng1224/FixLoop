@@ -31,6 +31,19 @@ EVENT_CATALOG: dict[str, tuple[str, ...]] = {
         "model_output_truncated",
         "thinking_only_truncation",
     ),
+    "turn_progress": (
+        "turn_started",
+        "turn_phase",
+        "tool_batch_created",
+        "tool_batch_completed",
+        "tool_call_queued",
+        "tool_call_started",
+        "tool_call_completed",
+        "tool_call_cancel_requested",
+        "tool_call_cancelled",
+        "tool_call_uncertain",
+        "turn_completed",
+    ),
     "tool": (
         "tool_executed",
         "tool_preview",
@@ -387,7 +400,8 @@ def validate_trace(events: list[dict[str, Any]], *, require_terminal: bool = Tru
             if closed and closed not in span_ids:
                 issues.append(f"unknown_closed_span:{closed}")
     if require_terminal and not any(
-        item.get("event") in {
+        item.get("event")
+        in {
             "run_finished",
             "repair_finished",
             "run_terminal",
@@ -413,7 +427,8 @@ def validate_runtime_trace(
     terminals = [
         event
         for event in canonical
-        if event.get("event") in {
+        if event.get("event")
+        in {
             "run_finished",
             "repair_finished",
             "evaluation_finished",

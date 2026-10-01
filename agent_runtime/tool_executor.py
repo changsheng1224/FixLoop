@@ -16,8 +16,10 @@
 
 import hashlib
 import os
+import threading
+from copy import copy
 from dataclasses import dataclass
-from functools import partial
+from functools import partial, wraps
 from pathlib import Path
 
 from agent_runtime.schema_utils import auto_validate
@@ -79,8 +81,49 @@ class ToolExecutor:
         self._resilience = ToolResilienceController()
         # 死循环检测滑动窗口
         self._call_window: list[str] = []
+        self._window_lock = threading.RLock()
+        self._call_context = None
 
-    def execute_gated(self, name: str, args: dict) -> ToolExecutionResult:
+    def execute_gated(self, name: str, args: dict, *, call_context=None) -> ToolExecutionResult:
+        executor = self.for_call(call_context) if call_context is not None else self
+        result = executor._execute_gated(name, args)
+        context = executor._call_context
+        if context is not None:
+            result = attach_tool_receipt(
+                result,
+                name,
+                args_hash=_canonical_args_hash(name, args),
+                run_id=context.run_id,
+                call_id=context.call_id,
+            )
+        return result
+
+    def for_call(self, call_context):
+        """Freeze an execution facade on the owner before submitting a worker."""
+        local = copy(self)
+        local.agent = copy(self.agent)
+        local.agent.session = {"history": list(self.agent.session.get("history", []))}
+        local.agent.tool_context = call_context.tool_context
+        local.agent.cancel_token = call_context.cancel_token
+        local.agent.shared_run_id = call_context.run_id
+        local._call_context = call_context
+        local.agent.session["_pending_canonical_tool_call"] = {
+            "call_id": call_context.call_id,
+            "source": "native",
+        }
+        local.agent._tool_names = call_context.allowed_tools
+        local.agent.tools = {name: dict(spec) for name, spec in call_context.registry.items()}
+        for spec in local.agent.tools.values():
+            spec["idempotency_key"] = call_context.idempotency_key
+        if call_context.isolated:
+            for name, spec in local.agent.tools.items():
+                if callable(spec.get("run_with_context")):
+                    spec["run"] = partial(spec["run_with_context"], call_context.tool_context)
+                    spec["idempotency_key"] = call_context.idempotency_key
+                    spec["isolated_read"] = True
+        return local
+
+    def _execute_gated(self, name: str, args: dict) -> ToolExecutionResult:
         """按序执行 Executor 闸口（Gate 1–9），不含 Gateway 权限层。"""
         from agent_runtime.repair_runtime import CanonicalToolCall
 
@@ -162,6 +205,12 @@ class ToolExecutor:
         try:
             return self._execute_after_quota(name, args, tool_spec, token)
         finally:
+            if (
+                self._call_context is not None
+                and self._call_context.isolated
+                and self._quota is not None
+            ):
+                self._quota.finish_reservation(self._call_context.idempotency_key)
             if shell_slot_acquired and self._quota is not None:
                 self._quota.release_shell()
 
@@ -176,7 +225,11 @@ class ToolExecutor:
 
         active_reserve = None
         if self._quota is not None and hasattr(self._quota, "matching_read_reserve"):
-            active_reserve = self._quota.matching_read_reserve(name, tool_spec, args)
+            active_reserve = (
+                self._quota.call_reserve(self._call_context.idempotency_key)
+                if self._call_context is not None and self._call_context.isolated
+                else self._quota.matching_read_reserve(name, tool_spec, args)
+            )
         bypass_duplicate = bool(
             isinstance(active_reserve, dict) and active_reserve.get("kind") == "post_lock"
         )
@@ -194,15 +247,15 @@ class ToolExecutor:
         threshold = int(getattr(self.agent.config, "loop_detect_threshold", 0) or 0)
         if threshold > 0 and not bypass_duplicate:
             call_hash = _canonical_args_hash(name, args)
-            self._call_window.append(call_hash)
-            if len(self._call_window) > threshold:
-                self._call_window = self._call_window[-threshold:]
-            if self._call_window.count(call_hash) >= threshold:
+            with self._window_lock:
+                self._call_window.append(call_hash)
+                self._call_window[:] = self._call_window[-threshold:]
+                loop_detected = self._call_window.count(call_hash) >= threshold
+            if loop_detected:
                 return self._rejected(
                     5,
                     "loop_detected",
-                    f"Error: 死循环检测——'{name}' 已连续或高频调用 {threshold} 次。"
-                    f"请尝试不同的工具或策略。",
+                    f"Error: 死循环检测——'{name}' 调用已达到 {threshold} 次。",
                 )
 
         resilience = self._resilience.before(name, tool_spec)
@@ -291,8 +344,10 @@ class ToolExecutor:
             cleanup_unconfirmed = (
                 result.status == ToolStatus.UNCERTAIN.value
                 or result.metadata.get("termination_guaranteed") is False
-                or (result.error_code in {"tool_timeout", "tool_cancelled", "deadline_exceeded"}
-                    and result.metadata.get("termination_guaranteed") is not True)
+                or (
+                    result.error_code in {"tool_timeout", "tool_cancelled", "deadline_exceeded"}
+                    and result.metadata.get("termination_guaranteed") is not True
+                )
             )
             if cleanup_unconfirmed:
                 self.agent.tool_context.execution_uncertain = True
@@ -369,12 +424,18 @@ class ToolExecutor:
             }
         )
         if self._quota is not None:
-            consumed = self._quota.record(
-                name,
-                tool_spec,
-                args,
-                succeeded=result.metadata.get("tool_status") == "success",
-            )
+            if self._call_context is not None and self._call_context.isolated:
+                consumed = self._quota.commit_call(
+                    self._call_context.idempotency_key,
+                    succeeded=result.ok,
+                )
+            else:
+                consumed = self._quota.record(
+                    name,
+                    tool_spec,
+                    args,
+                    succeeded=result.ok,
+                )
             if consumed is not None:
                 result.metadata["read_reserve_consumed"] = consumed
         return result
@@ -463,7 +524,12 @@ class ToolExecutor:
         if self._quota is None:
             return False, None
         decision = self._quota.decision(name, tool_spec, args)
-        if not self._quota.check(name, tool_spec, args):
+        allowed = (
+            self._quota.reserve_call(self._call_context.idempotency_key, name, tool_spec, args)
+            if self._call_context is not None and self._call_context.isolated
+            else self._quota.check(name, tool_spec, args)
+        )
+        if not allowed:
             extra = {}
             if decision is not None:
                 self._quota.record_rejection(name, tool_spec)
@@ -584,7 +650,8 @@ class ToolExecutor:
         for attempt in range(1, attempts + 1):
             result = self._run_tool_once(name, args, tool_spec, token)
             normalized = normalize_tool_result(result, tool_name=name)
-            self._resilience.after(name, tool_spec, success=normalized.ok)
+            if token is None or not token.is_cancelled:
+                self._resilience.after(name, tool_spec, success=normalized.ok)
             deadline = getattr(self.agent, "_repair_deadline", None)
             remaining = deadline.remaining_s() if deadline is not None else None
             if normalized.ok or not policy.should_retry(
@@ -657,13 +724,22 @@ class ToolExecutor:
                 run_with_timeout,
             )
 
-            result = run_with_timeout(
-                partial(_invoke_tool, tool_spec["run"], args),
-                timeout_s=0 if sandbox_command else timeout_s,
-                cancel_token=run_cancel,
-                mode=str(tool_spec.get("execution_mode", "thread") or "thread"),
-            )
+            if tool_spec.get("isolated_read"):
+                # Audited pure filesystem readers run in the batch worker.
+                # The scheduler owns timeout/cleanup; no nested orphan thread.
+                result = tool_spec["run"](args)
+            else:
+                result = run_with_timeout(
+                    partial(_invoke_tool, tool_spec["run"], args),
+                    timeout_s=0 if sandbox_command else timeout_s,
+                    cancel_token=run_cancel,
+                    mode=str(tool_spec.get("execution_mode", "thread") or "thread"),
+                )
             if isinstance(result, ToolResult):
+                if self._call_context is not None and name in {"read_file", "list_files"}:
+                    from agent_runtime.batch_reads import normalize_read_result
+
+                    result = normalize_read_result(result)
                 return result
             if hasattr(result, "metadata") and hasattr(result, "content"):
                 metadata = dict(result.metadata or {})
@@ -909,6 +985,11 @@ class ToolExecutor:
         if len(recent) < 2:
             return False
 
+        if self._call_context is not None:
+            return all(
+                item.get("tool_name") == name and item.get("tool_args", {}) == args
+                for item in recent
+            )
         if name in self._READ_TOOLS:
             if name == "code_lookup":
                 return all(
@@ -1121,6 +1202,15 @@ class ToolExecutor:
             return
 
 
+def _quota_locked(method):
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        with self._reservation_lock:
+            return method(self, *args, **kwargs)
+
+    return locked
+
+
 class QuotaEnforcer:
     """工具执行配额控制。
 
@@ -1146,6 +1236,35 @@ class QuotaEnforcer:
         self._group_ledger = ToolBudgetLedger(group_limits) if group_limits is not None else None
         self._read_reserves: list[dict] = []
         self._terminal_reserve_used = False
+        self._reservation_lock = threading.RLock()
+        self._reservations: dict[str, tuple] = {}
+
+    def reserve_call(self, key, name, spec, args):
+        """Reserve capacity atomically; rejected gates release without charging."""
+        with self._reservation_lock:
+            if key in self._reservations:
+                raise ValueError("duplicate quota reservation")
+            if self._counts["total"] + len(self._reservations) >= self._limits[
+                "total"
+            ] or not self.check(name, spec, args):
+                return False
+            reserve = self._matching_read_reserve(name, spec, args)
+            self._reservations[key] = (name, spec, args, reserve)
+            return True
+
+    def call_reserve(self, key):
+        with self._reservation_lock:
+            item = self._reservations.get(key)
+            return dict(item[3]) if item is not None and item[3] is not None else None
+
+    def commit_call(self, key, *, succeeded):
+        with self._reservation_lock:
+            name, spec, args, _ = self._reservations.pop(key)
+            return self.record(name, spec, args, succeeded=succeeded)
+
+    def finish_reservation(self, key):
+        with self._reservation_lock:
+            self._reservations.pop(key, None)
 
     def _group_for(self, tool_name: str, tool_spec: dict | None = None):
         from agent_runtime.tool_budget import infer_tool_budget_group
@@ -1174,6 +1293,7 @@ class QuotaEnforcer:
         right = os.path.normcase(right).replace("\\", "/")
         return left == right or left.endswith("/" + right) or right.endswith("/" + left)
 
+    @_quota_locked
     def _matching_read_reserve(
         self, tool_name: str, tool_spec: dict | None, args: dict | None
     ) -> dict | None:
@@ -1182,12 +1302,17 @@ class QuotaEnforcer:
         if self._group_for(tool_name, tool_spec) != ToolBudgetGroup.READ:
             return None
         path = self._normalized_path(args)
+        available = [
+            item
+            for item in self._read_reserves
+            if not any(item == reserved[3] for reserved in self._reservations.values())
+        ]
         # post_lock is intentionally narrower than a normal read budget: only
         # read_file on the exact expanded path may consume it.
         exact = next(
             (
                 item
-                for item in self._read_reserves
+                for item in available
                 if item["kind"] == "post_lock"
                 and tool_name == "read_file"
                 and self._paths_match(path, item["path"])
@@ -1199,7 +1324,7 @@ class QuotaEnforcer:
         exact = next(
             (
                 item
-                for item in self._read_reserves
+                for item in available
                 if item["kind"] != "post_lock" and self._paths_match(path, item["path"])
             ),
             None,
@@ -1208,10 +1333,11 @@ class QuotaEnforcer:
             return exact
         # Once a recovery has an exact targeted path, do not let the older
         # wildcard convergence reserve authorize a different file.
-        if any(item["kind"] == "targeted" and item["path"] != "*" for item in self._read_reserves):
+        if any(item["kind"] == "targeted" and item["path"] != "*" for item in available):
             return None
-        return next((item for item in self._read_reserves if item["path"] == "*"), None)
+        return next((item for item in available if item["path"] == "*"), None)
 
+    @_quota_locked
     def grant_read_reserve(self, path: str = "*", *, kind: str, generation: int = 0) -> bool:
         """Grant one read outside the normal read quota, optionally scoped to a path."""
         normalized = "*" if path == "*" else str(path or "").replace("\\", "/")
@@ -1227,6 +1353,7 @@ class QuotaEnforcer:
         self._read_reserves.append(item)
         return True
 
+    @_quota_locked
     def decision(self, tool_name: str, tool_spec: dict | None = None, args: dict | None = None):
         if tool_name == "finish_repair" and not self._terminal_reserve_used:
             from agent_runtime.tool_budget import BudgetDecision, ToolBudgetGroup
@@ -1252,8 +1379,19 @@ class QuotaEnforcer:
                 limit=max(normal.limit, normal.used + 1),
                 reason=f"reserved_read:{reserve['kind']}",
             )
-        return self._group_ledger.check(self._group_for(tool_name, tool_spec))
+        from dataclasses import replace
 
+        group = self._group_for(tool_name, tool_spec)
+        normal = self._group_ledger.check(group)
+        pending = sum(
+            self._group_for(name, spec) == group and reserve is None
+            for name, spec, _, reserve in self._reservations.values()
+        )
+        return replace(
+            normal, used=normal.used + pending, allowed=normal.used + pending < normal.limit
+        )
+
+    @_quota_locked
     def record_rejection(self, tool_name: str, tool_spec: dict | None = None) -> None:
         if self._group_ledger is not None:
             self._group_ledger.record_rejection(self._group_for(tool_name, tool_spec))
@@ -1264,6 +1402,7 @@ class QuotaEnforcer:
     def release_shell(self):
         self._shell_semaphore.release()
 
+    @_quota_locked
     def check(
         self, tool_name: str, tool_spec: dict | None = None, args: dict | None = None
     ) -> bool:
@@ -1278,7 +1417,7 @@ class QuotaEnforcer:
         decision = self.decision(tool_name, tool_spec, args)
         if decision is not None:
             return decision.allowed
-        if self._counts["total"] >= self._limits["total"]:
+        if self._counts["total"] + len(self._reservations) >= self._limits["total"]:
             return False
         if tool_name in ("write_file", "patch_file", "apply_patch"):
             return self._counts["write"] < self._limits["write"]
@@ -1286,12 +1425,14 @@ class QuotaEnforcer:
             return self._counts["shell"] < self._limits["shell"]
         return True  # 只读工具不受限
 
+    @_quota_locked
     def matching_read_reserve(
         self, tool_name: str, tool_spec: dict | None = None, args: dict | None = None
     ) -> dict | None:
         reserve = self._matching_read_reserve(tool_name, tool_spec, args)
         return dict(reserve) if reserve is not None else None
 
+    @_quota_locked
     def record(
         self,
         tool_name: str,
@@ -1317,6 +1458,7 @@ class QuotaEnforcer:
             self._counts["shell"] += 1
         return consumed
 
+    @_quota_locked
     def status(self) -> str:
         """返回当前配额使用情况。"""
         cnt = self._counts
@@ -1334,6 +1476,7 @@ class QuotaEnforcer:
         )
         return f"{legacy}; groups: {compact}"
 
+    @_quota_locked
     def quota_summary(self) -> dict:
         """返回结构化配额使用数据（供 report.json）。"""
         summary = {

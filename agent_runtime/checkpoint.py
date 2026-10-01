@@ -195,10 +195,15 @@ def create_checkpoint(
             checkpoint["context_manifest"].get("selected_context_ids", [])
         ),
     }
+    from copy import deepcopy
+
+    checkpoint["turn_progress"] = deepcopy(agent.session.get("turn_progress", {}))
     checkpoint["action_ledger"] = list(agent.session.get("action_ledger", []) or [])[-100:]
     if agent.session.get("long_task_context"):
         checkpoint["long_task_context"] = dict(agent.session["long_task_context"])
-        checkpoint["long_task_context_checksum"] = _long_task_digest(checkpoint["long_task_context"])
+        checkpoint["long_task_context_checksum"] = _long_task_digest(
+            checkpoint["long_task_context"]
+        )
     if trigger == "user_cancel" and in_flight_tool:
         checkpoint["in_flight_tool"] = in_flight_tool
         checkpoint["in_flight_action"] = dict(agent.session.get("_in_flight_action", {}) or {})
@@ -386,7 +391,10 @@ def evaluate_resume_state(agent) -> dict:
             checked = plan_session.build_long_task_context(
                 str(saved_long_task.get("current_node", {}).get("node_id", ""))
             )
-            stale_refs = sorted(set(saved_long_task.get("evidence_refs", [])) - set(checked.get("evidence_refs", [])))
+            stale_refs = sorted(
+                set(saved_long_task.get("evidence_refs", []))
+                - set(checked.get("evidence_refs", []))
+            )
             result["long_task_stale_evidence"] = stale_refs
             if stale_refs and "long_task_evidence" not in long_task_diff:
                 long_task_diff.append("long_task_evidence")

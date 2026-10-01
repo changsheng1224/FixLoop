@@ -1,6 +1,6 @@
 # FixLoop Tool Batch 与 Turn 内实时进度 MVP 开发计划
 
-日期：2026-09-30。依据：[MVP Spec](../specs/2026-09-30-tool-batch-turn-progress-mvp.md)。状态：未实现。
+日期：2026-09-30。依据：[MVP Spec](../specs/2026-09-30-tool-batch-turn-progress-mvp.md)。状态：MVP 已实现（2026-10-01）；实现边界与 T1–T9 验证见 [交付说明](../../TOOL_BATCH_TURN_PROGRESS.md)。
 
 ## 顺序、工期与工作区保护
 
@@ -65,3 +65,7 @@
 3. 跑相关测试及受影响 lint/format，更新开发说明与面试案例。全量测试仅在用户显式授权时运行。
 
 完成定义：T1–T9 可复核，生产 native 路径可演示单次响应中同名只读调用并发、调用状态实时可见、ToolExecutor 全闸口未绕过、结果配对正确，且不突破 Plan/沙箱并发边界。若前置 Plan/沙箱未落地，应明确报告对应集成项未完成，不借单元 mock 宣称端到端恢复或清理。
+
+## 实施记录（2026-10-01）
+
+P0 审计确认 blocked 节点循环已由此前代码修复，保留回归测试。P1–P5 已接入 native AgentLoop、显式调用隔离、两路共享 permit、原子预算预留、Turn 事件和 CLI 回放。Plan operation 关联 provider call/batch/turn ID，真实进程退出用例验证恢复权威。固定批次实测、相关测试和 lint 见交付说明。未自动 push、PR 或合并，未运行全量测试；独立批次不提供新的执行 journal。
