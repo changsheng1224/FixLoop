@@ -133,7 +133,7 @@ def test_native_quota_reservations_prevent_overspend(workspace):
     assert len(agent.session["tool_observations"]) == 4
 
 
-def test_native_mixed_write_preserves_read_before_and_after(workspace, temp_workspace):
+def test_native_mixed_write_keeps_pairing_and_invalidates_old_read(workspace, temp_workspace):
     agent, client = make_agent(
         workspace,
         [
@@ -145,7 +145,9 @@ def test_native_mixed_write_preserves_read_before_and_after(workspace, temp_work
     AgentLoop(agent).run("inspect then modify", skip_plan=True)
     blocks = client.requests[1].messages[-1]["content"]
     assert [b["tool_use_id"] for b in blocks] == ["before", "write", "after"]
-    assert "Test Project" in blocks[0]["content"]
+    assert "Test Project" not in blocks[0]["content"]
+    assert "tool_write_changed_dependency" in blocks[0]["content"]
+    assert "freshness=stale" in blocks[0]["content"]
     assert "changed" in blocks[2]["content"]
     assert (temp_workspace / "README.md").read_text() == "changed\n"
 
@@ -173,12 +175,14 @@ def test_native_cancel_keeps_all_result_receipts(workspace):
     )
     token = CancellationToken()
     agent.cancel_token = token
-    barrier = threading.Barrier(3)
+    barrier = threading.Barrier(2)
+    started = threading.Event()
     executed = []
 
     def slow(ctx, args):
         executed.append(args["start"])
         barrier.wait(timeout=3)
+        started.set()
         while not ctx.cancel_token.is_cancelled:
             threading.Event().wait(0.005)
         return ToolResult(
@@ -188,7 +192,8 @@ def test_native_cancel_keeps_all_result_receipts(workspace):
     agent.tools["read_file"]["run_with_context"] = slow
     with ThreadPoolExecutor(max_workers=1) as owner:
         future = owner.submit(AgentLoop(agent).run, "inspect", skip_plan=True)
-        barrier.wait(timeout=3)
+        # Wait for tool execution, rather than timing cold runtime/model initialization.
+        assert started.wait(timeout=30)
         token.cancel()
         future.result(timeout=5)
     assert sorted(executed) == [1, 2]

@@ -14,11 +14,16 @@ from agent_runtime.cancellation import CancellationToken, CancelledError, run_bl
 from agent_runtime.plan_runtime.models import digest
 from agent_runtime.plan_runtime.planner import grounded_plan, retry_plan
 from agent_runtime.plan_runtime.recovery import recover
+from agent_runtime.plan_runtime.reducer import transition
+from agent_runtime.plan_runtime.replan import check_replan
 from agent_runtime.plan_runtime.scheduler import PlanScheduler, ReadBudget
 from agent_runtime.plan_runtime.session import PlanSession
 from agent_runtime.plan_runtime.workspace import snapshot
 from agent_runtime.run_coordination import CoordinationError, RunCoordinator
 from agent_runtime.tool_executor import QuotaEnforcer
+from src.repair.replan_decision import decide_replan
+from src.repair.stop_loss import has_stop_loss
+from src.repair.verification.verify_diagnose import collect_log_excerpt
 from src.tools.composite import build_repair_canonical_tools
 
 
@@ -26,6 +31,7 @@ class ResumeRecoveryRequiredError(CoordinationError):
     """Resume is fenced until all old writes and resources are confirmed."""
 
     def __init__(self, reason: str):
+        self.reason = reason
         super().__init__("resume_recovery_required", reason)
 
 
@@ -88,7 +94,7 @@ class RepairPlanBinding:
             self._heartbeat_worker.start()
             if self.coordinator.cancel_token is not None:
                 self._cancel_unsubscribe = self.coordinator.cancel_token.add_callback(
-                    self.coordinator.request_cancel
+                    self._request_cancel
                 )
             context.run_coordinator = self.coordinator
             context.sandbox_owner_token = self.owner_lease.owner_token
@@ -112,6 +118,7 @@ class RepairPlanBinding:
                             "recovery_required", error_code="binding_initialization_interrupted"
                         )
                         state.node_timings["coordination_status"] = current.status
+                    self.publish_recovery(stage="resources")
             finally:
                 self.close()
             raise
@@ -122,6 +129,32 @@ class RepairPlanBinding:
                 self.coordinator.heartbeat()
             except Exception:
                 return  # the durable fence rejects further dispatch
+
+    def publish_recovery(self, *, stage, reason_code=""):
+        from src.repair.recovery_outcome import publish_recovery_outcome
+
+        current = self.coordinator.store.snapshot(self.state.repair_run_id)
+        if current.generation != self.coordinator.lease.generation:
+            return publish_recovery_outcome(
+                self.state,
+                {"run_id": self.state.repair_run_id, "status": "recovery_required"},
+                stage="owner",
+                reason_code="stale_generation",
+                emitter=self.orchestrator._progress_emitter(),
+            )
+        return publish_recovery_outcome(
+            self.state,
+            current.to_dict(),
+            stage=stage,
+            plan_report=getattr(self, "report", None),
+            reason_code=reason_code,
+            emitter=self.orchestrator._progress_emitter(),
+        )
+
+    def _request_cancel(self):
+        request_id = self.coordinator.request_cancel()
+        self.publish_recovery(stage="cancel")
+        return request_id
 
     def _open(self, context, *, defer_plan):
         orchestrator, state = self.orchestrator, self.state
@@ -171,6 +204,7 @@ class RepairPlanBinding:
             ).mapping()
         )
         coordination = self.coordinator.reconcile()
+        self.publish_recovery(stage="resources")
         if coordination.get("status") != "active":
             state.node_timings["coordination_status"] = coordination["status"]
             if coordination["status"] == "cancelled":
@@ -201,8 +235,10 @@ class RepairPlanBinding:
         if saved_seal:
             self.session.verify_checkpoint(saved_seal)
         self.report = recover(self.session)
+        self.publish_recovery(stage="plan")
         if self.report["uncertain"]:
             raise ResumeRecoveryRequiredError("resume_execution_uncertain")
+        self._reconcile_replans()
         if context.execution_uncertain or context.sandbox_uncertain:
             if not coordination["resources"]:
                 raise ResumeRecoveryRequiredError("resume_untracked_execution_uncertain")
@@ -229,6 +265,7 @@ class RepairPlanBinding:
         if not defer_plan:
             self._initialize_plan()
             self.sync()
+        self.publish_recovery(stage="context")
 
     def _event(self, event, payload):
         tracer = getattr(getattr(self.orchestrator, "_repair_ctx", None), "repair_tracer", None)
@@ -240,11 +277,32 @@ class RepairPlanBinding:
             "node_failed",
             "node_uncertain",
             "node_blocked",
+            "node_stale",
+            "plan_created",
+            "planning_started",
+            "replan_decided",
+            "replan_started",
+            "replan_rejected",
             "replan_committed",
             "plan_resume_reconciled",
         }:
+            view = (
+                self.session.plan_view(payload.get("node_id", ""))
+                if self.session and self.session.plan
+                else {}
+            )
+            node = next(
+                (n for n in view.get("nodes", []) if n["node_id"] == payload.get("node_id")), {}
+            )
+            phase = node.get("kind", "replan" if event.startswith("replan_") else "plan")
             self.orchestrator._progress_emitter().emit(
-                "plan_progress", summary=f"{event}: {payload.get('node_id', '')}"
+                "plan_progress",
+                summary=f"{phase}: {event} {payload.get('node_id', '')}",
+                phase=phase,
+                plan_view=view,
+                action=payload.get("action", ""),
+                reason=payload.get("reason", ""),
+                trigger_ref=payload.get("trigger_ref", ""),
             )
 
     def _exploration_event(self, event, payload):
@@ -271,17 +329,17 @@ class RepairPlanBinding:
         if self.exploration is not None:
             self.state.node_timings["exploration_checkpoint"] = self.exploration.checkpoint()
             self.state.node_timings["exploration_progress"] = self.exploration.progress()
+        view = self.session.plan_view()
         self.state.node_timings["plan_progress"] = {
-            "version": self.session.plan.plan_version,
+            **view,
+            "version": view["plan_version"],
             "nodes": [
                 {
-                    "id": n.node_id,
-                    "kind": n.kind,
-                    "status": n.status,
-                    "depends_on": list(n.depends_on),
-                    "reason": n.failure,
+                    **n,
+                    "id": n["node_id"],
+                    "reason": n["block_or_failure_reason"],
                 }
-                for n in self.session.plan.nodes
+                for n in view["nodes"]
             ],
             "resume": self.report,
         }
@@ -315,6 +373,12 @@ class RepairPlanBinding:
                 self.state.node_timings["coordination_status"] = current.status
                 if current.status == "recovery_required":
                     self.state.set_status("recovery_required", "cleanup_or_write_unconfirmed")
+            if current.generation == self.coordinator.lease.generation:
+                previous = self.state.recovery_outcome
+                self.publish_recovery(
+                    stage=previous.get("stage", "resources"),
+                    reason_code=previous.get("reason_code", ""),
+                )
         finally:
             if getattr(self.agent, "_plan_session", None) is self.session:
                 self.agent._plan_session = None
@@ -396,6 +460,7 @@ class RepairPlanBinding:
             refs.extend(r for r in result.get("evidence_refs", ()) if session.evidence.valid(r))
         if not refs:
             raise ValueError("preplan_repository_evidence_missing")
+        session.emit("planning_started")
         plan, self.conclusion = grounded_plan(
             session,
             self.operations,
@@ -404,6 +469,9 @@ class RepairPlanBinding:
             light_client=self._planning_client(),
         )
         session.create(plan)
+        session.configure_long_task(
+            self.state.issue_input, hard_constraints=self.state.hard_constraints
+        )
         # Persist before entering any modifying tool loop.
         self.state.node_timings["plan_checkpoint"] = session.checkpoint()
         self.orchestrator._checkpoint_progress(self.state)
@@ -435,6 +503,245 @@ class RepairPlanBinding:
 
     def _kind(self, kind):
         return next(n for n in self.session.plan.nodes if n.kind == kind)
+
+    def _reconcile_replans(self):
+        """A saved Plan proves commit even if the following trace was lost."""
+        session = self.session
+        events = session.store.events()
+        for request in session.store.latest("replan_request", "trigger_ref").values():
+            if request["status"] != "started":
+                continue
+            committed = next(
+                (
+                    e["payload"]
+                    for e in events
+                    if e["kind"] == "plan"
+                    and e["payload"].get("plan_version") == request["plan_version"] + 1
+                    and e["payload"].get("parent_plan_checksum") == request["plan_checksum"]
+                    and e["payload"].get("replan_reason")
+                    == "verification_failed:" + request["trigger_ref"]
+                ),
+                None,
+            )
+            if committed is None:
+                raise ResumeRecoveryRequiredError("replan_attempt_outcome_unconfirmed")
+            session.store.append(
+                "replan_request",
+                {**request, "status": "committed", "committed_version": committed["plan_version"]},
+            )
+            if not any(
+                e["kind"] == "trace"
+                and e["payload"].get("event") == "replan_committed"
+                and e["payload"].get("trigger_ref") == request["trigger_ref"]
+                for e in events
+            ):
+                session.emit(
+                    "replan_committed",
+                    trigger_ref=request["trigger_ref"],
+                    reason="recovered_durable_commit",
+                )
+
+    def _verification_trigger(self):
+        from src.state import VerificationResult
+
+        session = self.session
+        node = self._kind("verify")
+        attempt = session.store.latest("attempt", "attempt_id").get(node.attempt_id, {})
+        result = attempt.get("result", {})
+        if node.status != "failed" or result.get("status") != "failed":
+            return "", None, {}, "", {}
+        for ref in result.get("evidence_refs", []):
+            record = session.evidence.get(ref)
+            if not record or record.get("kind") != "tests_passed":
+                continue
+            receipt = record.get("receipt", {})
+            if (
+                record["attempt_id"] != node.attempt_id
+                or receipt.get("attempt_id") != node.attempt_id
+                or receipt.get("run_id") != session.identity["run_id"]
+                or not record.get("execution_stopped")
+                or attempt.get("plan_version") != session.plan.plan_version
+                or attempt.get("phase") != "reconciled"
+            ):
+                continue
+            trigger = digest(
+                [session.identity["run_id"], session.plan.plan_version, node.attempt_id, ref]
+            )
+            return (
+                trigger,
+                VerificationResult.from_dict(result["verification_result"]),
+                receipt,
+                ref,
+                record["file_versions"],
+            )
+        raise ResumeRecoveryRequiredError("verification_failure_receipt_missing")
+
+    def _replan_safety_reason(self):
+        session = self.session
+        token = getattr(self.agent, "cancel_token", None)
+        if token and token.is_cancelled:
+            return "replan_cancelled"
+        context = self.agent.tool_context
+        if context.execution_uncertain or context.sandbox_uncertain:
+            return "workspace_execution_uncertain"
+        current = self.coordinator.store.snapshot(self.state.repair_run_id)
+        if current.status != "active":
+            return "replan_coordination_" + current.status
+        if any(
+            r.kind in {"plan_attempt", "exploration_task", "sandbox_call"}
+            and r.cleanup != "confirmed"
+            for r in current.resources
+        ):
+            return "replan_resource_cleanup_unconfirmed"
+        try:
+            check_replan(session)
+        except ValueError as exc:
+            if str(exc) != "replan_budget_exceeded":
+                return str(exc)
+        return ""
+
+    def _fresh_source_refs(self):
+        session = self.session
+        read_ops = {
+            r
+            for op in session.store.latest("operation", "operation_id").values()
+            if op["effect"] == "read"
+            and op["phase"] == "result_recorded"
+            and op.get("execution_stopped")
+            for r in op.get("evidence_refs", [])
+        }
+        return [
+            r
+            for r in sorted(read_ops)
+            if (session.evidence.get(r) or {}).get("kind") == "observation_present"
+            and session.evidence.valid(r)
+        ]
+
+    def _refresh_replan_evidence(self):
+        """Use existing fixed explore nodes and their authorized read path."""
+        session = self.session
+        for node in session.plan.nodes:
+            if node.kind != "explore" or node.status not in {"stale", "succeeded", "ready"}:
+                continue
+            self.read_budget.reserve(1)
+            if node.status == "succeeded":
+                session.commit(
+                    transition(
+                        session.plan,
+                        node.node_id,
+                        "stale",
+                        attempt_id=node.attempt_id,
+                        failure="replan_source_refresh",
+                    )
+                )
+            if session.plan.node(node.node_id).status == "stale":
+                session.commit(
+                    transition(session.plan, node.node_id, "ready", attempt_id=node.attempt_id)
+                )
+            operation = {"tool": node.tool_name, "arguments": json.loads(node.arguments_json)}
+            session.run_node(node.node_id, lambda a, op=operation: self._isolated_read(op, a))
+
+    def _retry_from_verification(self):
+        session = self.session
+        self._reconcile_replans()
+        trigger, result, receipt, ref, failed_workspace = self._verification_trigger()
+        handled = session.store.latest("replan_request", "trigger_ref").get(trigger)
+        if handled:
+            raise ValueError("replan_trigger_already_processed:" + handled["status"])
+        safety = self._replan_safety_reason()
+        deadline = getattr(self.agent, "_repair_deadline", None)
+        stop = "stop_loss" if has_stop_loss(self.state) else ""
+        if deadline and deadline.remaining_s() is not None and deadline.remaining_s() <= 0:
+            stop = "plan_generation_deadline_exceeded"
+        if any(
+            self.exploration.budget.remaining(k) is not None
+            and self.exploration.budget.remaining(k) < 1
+            for k in ("llm_calls", "prompt_tokens")
+        ):
+            stop = "plan_generation_global_budget_exhausted"
+        refs = self._fresh_source_refs()
+
+        def evaluate():
+            decision = decide_replan(
+                session.plan_view(),
+                trigger_ref=trigger,
+                result=result,
+                receipt=receipt,
+                evidence_refs=refs,
+                safety_reason=safety,
+                stop_reason=stop,
+                retry_allowed=0 < self.state.retry_count < self.state.max_retries,
+            )
+            session.emit("replan_decided", **decision.to_dict())
+            return decision
+
+        decision = evaluate()
+        if decision.action == "needs_evidence":
+            self._refresh_replan_evidence()
+            refs = self._fresh_source_refs()
+            safety = self._replan_safety_reason()
+            decision = evaluate()
+        if decision.action != "replan":
+            raise ValueError("replan_" + decision.action + ":" + decision.reason)
+        check_replan(session)
+        context = {
+            "old_plan": session.plan_view(),
+            "trigger_node_id": self._kind("verify").node_id,
+            "trigger_ref": trigger,
+            "verification_evidence_ref": ref,
+            "verification_receipt": receipt,
+            "failure_excerpt": collect_log_excerpt(result),
+            "failed_workspace": failed_workspace,
+            "current_workspace": snapshot(session.workspace),
+            "fresh_source_evidence_refs": refs,
+        }
+        request = {
+            "trigger_ref": trigger,
+            "plan_version": session.plan.plan_version,
+            "plan_checksum": session.plan.plan_checksum,
+            "status": "started",
+        }
+        session.store.append("replan_request", request)
+        session.cut("replan_requested")
+        session.emit("replan_started", trigger_ref=trigger)
+
+        def before_commit():
+            reason = self._replan_safety_reason()
+            if reason:
+                raise ValueError(reason)
+            if session.plan.plan_checksum != request["plan_checksum"]:
+                raise ValueError("replan_source_plan_changed")
+            if has_stop_loss(self.state):
+                raise ValueError("stop_loss")
+            if deadline and deadline.remaining_s() is not None and deadline.remaining_s() <= 0:
+                raise ValueError("plan_generation_deadline_exceeded")
+
+        try:
+            self.conclusion = retry_plan(
+                session,
+                self.operations,
+                refs,
+                objective=self.state.issue_input,
+                reason="verification_failed:" + trigger,
+                light_client=self._planning_client(),
+                replan_context=context,
+                before_commit=before_commit,
+            )
+        except Exception as exc:
+            # Once a durable candidate exists, recovery must adopt it, never
+            # label it rejected because a later trace/checkpoint failed.
+            if session.plan.plan_version != request["plan_version"]:
+                self._reconcile_replans()
+            else:
+                session.store.append(
+                    "replan_request", {**request, "status": "rejected", "reason": str(exc)[:200]}
+                )
+                session.emit("replan_rejected", trigger_ref=trigger, reason=str(exc)[:200])
+            raise
+        session.store.append(
+            "replan_request",
+            {**request, "status": "committed", "committed_version": session.plan.plan_version},
+        )
 
     def _prepare_owner_stages(self):
         session = self.session
@@ -502,7 +809,8 @@ class RepairPlanBinding:
             and e["payload"].get("plan_version") == session.plan.plan_version
         ]
         rolled_back = bool(rollback and rollback[-1].get("completed"))
-        if edit.status == "succeeded" and not rolled_back:
+        verification_failed = self._kind("verify").status == "failed"
+        if edit.status == "succeeded" and not rolled_back and not verification_failed:
             baseline = next(e["payload"] for e in session.store.events() if e["kind"] == "baseline")
             before = {p: session.store.get_blob(key) for p, key in baseline["files"].items()}
             from src.repair.execution.edit_from_disk import patches_from_snapshot_diff
@@ -514,22 +822,8 @@ class RepairPlanBinding:
                 "edit_mode": "plan_resume_adopted",
                 "agent_answer": "adopted durable patch",
             }
-        if edit.status in {"failed", "cancelled", "blocked"} or rolled_back:
-            refs = [
-                v["evidence_id"]
-                for v in session.store.latest("evidence", "evidence_id").values()
-                if v["kind"] == "observation_present" and session.evidence.valid(v["evidence_id"])
-            ]
-            if not refs:
-                raise ValueError("replan_requires_fresh_repository_evidence")
-            self.conclusion = retry_plan(
-                session,
-                self.operations,
-                refs,
-                objective=self.state.issue_input,
-                reason="orchestrator_retry",
-                light_client=self._planning_client(),
-            )
+        if edit.status in {"failed", "cancelled", "blocked"} or rolled_back or verification_failed:
+            self._retry_from_verification()
         self._prepare_owner_stages()
         edit = self._kind("edit")
         if edit.status != "ready":

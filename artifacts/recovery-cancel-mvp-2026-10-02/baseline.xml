@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="2" time="1.756" timestamp="2026-10-02T04:07:25.368966+08:00" hostname="DESKTOP-M8LE8SP"><testcase classname="tests.test_recovery_cancel_outcome" name="test_explicit_resume_invalid_checkpoint_never_enters_runtime[missing]" time="0.510"><failure message="Failed: invalid explicit resume entered runtime">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-recovery-cancel-baseline/test_explicit_resume_invalid_c0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x000001FD2D188180&gt;
+damage = 'missing'
+
+    @pytest.mark.parametrize("damage", ["missing", "json", "checksum", "identity", "objective"])
+    def test_explicit_resume_invalid_checkpoint_never_enters_runtime(tmp_path, monkeypatch, damage):
+        orch, seed, client = repair_fixture(tmp_path, full=True)
+        if damage != "missing":
+            path = save_repair_checkpoint(seed, str(tmp_path))
+            if damage == "json":
+                path.write_text("not json", encoding="utf-8")
+            elif damage == "checksum":
+                body = json.loads(path.read_text())
+                body["checkpoint_checksum"] = "damaged"
+                path.write_text(json.dumps(body))
+            elif damage == "identity":
+                seed.repair_run_id = "other-run"
+                other = save_repair_checkpoint(seed, str(tmp_path))
+                path.write_bytes(other.read_bytes())
+                seed.repair_run_id = "plan-fixture-run"
+        before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+        events = []
+        orch._progress = ProgressEmitter(quiet=True, record=events.append)
+    
+        def forbidden(*args, **kwargs):
+            pytest.fail("invalid explicit resume entered runtime")
+    
+        monkeypatch.setattr(orch, "_begin_repair_trace", forbidden)
+        issue = "another objective" if damage == "objective" else seed.issue_input
+&gt;       result = orch.repair(issue, resume_run_id=seed.repair_run_id, repair_timeout_s=0)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_recovery_cancel_outcome.py:41: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\orchestrator.py:362: in repair
+    return self._repair_impl(state, initial_snapshot=initial_snapshot)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\repair\pipeline.py:428: in _repair_impl
+    return self._repair_impl_with_plan(state, initial_snapshot)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\repair\pipeline.py:481: in _repair_impl_with_plan
+    self._begin_repair_trace(state)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+args = (RepairState(issue_input='Fix value.py: answer() returns 1 but should return 2.', repair_plan=None, suspect_locations=...rkspace_manifest={}, action_ledger=[], side_effects=[], checkpoint_id='', checkpoint_sequence=0, hard_constraints=[]),)
+kwargs = {}
+
+    def forbidden(*args, **kwargs):
+&gt;       pytest.fail("invalid explicit resume entered runtime")
+E       Failed: invalid explicit resume entered runtime
+
+tests\test_recovery_cancel_outcome.py:37: Failed</failure></testcase><testcase classname="tests.test_recovery_cancel_outcome" name="test_explicit_resume_invalid_checkpoint_never_enters_runtime[json]" time="0.444"><failure message="Failed: invalid explicit resume entered runtime">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-recovery-cancel-baseline/test_explicit_resume_invalid_c1')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x000001FD2CA59F30&gt;
+damage = 'json'
+
+    @pytest.mark.parametrize("damage", ["missing", "json", "checksum", "identity", "objective"])
+    def test_explicit_resume_invalid_checkpoint_never_enters_runtime(tmp_path, monkeypatch, damage):
+        orch, seed, client = repair_fixture(tmp_path, full=True)
+        if damage != "missing":
+            path = save_repair_checkpoint(seed, str(tmp_path))
+            if damage == "json":
+                path.write_text("not json", encoding="utf-8")
+            elif damage == "checksum":
+                body = json.loads(path.read_text())
+                body["checkpoint_checksum"] = "damaged"
+                path.write_text(json.dumps(body))
+            elif damage == "identity":
+                seed.repair_run_id = "other-run"
+                other = save_repair_checkpoint(seed, str(tmp_path))
+                path.write_bytes(other.read_bytes())
+                seed.repair_run_id = "plan-fixture-run"
+        before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+        events = []
+        orch._progress = ProgressEmitter(quiet=True, record=events.append)
+    
+        def forbidden(*args, **kwargs):
+            pytest.fail("invalid explicit resume entered runtime")
+    
+        monkeypatch.setattr(orch, "_begin_repair_trace", forbidden)
+        issue = "another objective" if damage == "objective" else seed.issue_input
+&gt;       result = orch.repair(issue, resume_run_id=seed.repair_run_id, repair_timeout_s=0)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_recovery_cancel_outcome.py:41: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\orchestrator.py:362: in repair
+    return self._repair_impl(state, initial_snapshot=initial_snapshot)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\repair\pipeline.py:428: in _repair_impl
+    return self._repair_impl_with_plan(state, initial_snapshot)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\repair\pipeline.py:481: in _repair_impl_with_plan
+    self._begin_repair_trace(state)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+args = (RepairState(issue_input='Fix value.py: answer() returns 1 but should return 2.', repair_plan=None, suspect_locations=...rkspace_manifest={}, action_ledger=[], side_effects=[], checkpoint_id='', checkpoint_sequence=0, hard_constraints=[]),)
+kwargs = {}
+
+    def forbidden(*args, **kwargs):
+&gt;       pytest.fail("invalid explicit resume entered runtime")
+E       Failed: invalid explicit resume entered runtime
+
+tests\test_recovery_cancel_outcome.py:37: Failed</failure></testcase></testsuite></testsuites>

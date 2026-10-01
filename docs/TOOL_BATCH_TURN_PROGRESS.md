@@ -2,6 +2,8 @@
 
 实现日期：2026-10-01。依据 [MVP 规格](superpowers/specs/2026-09-30-tool-batch-turn-progress-mvp.md)。
 
+2026-10-02 增量：[工具批次预检 MVP](BATCH_PREFLIGHT_ACCEPTANCE_2026-10-02.md) 已实现冻结 schema 的逐项参数预检及可用 native 原始 content 的整批核对。参数错误项配对拒绝且不预约调用预算，合法兄弟继续；协议错误整批零执行。此增量单独记录相关验收，不修改下文历史 T1–T9 与固定批次实测数字。
+
 ## 使用与边界
 
 native provider 一次返回多个 `ToolCall` 时，AgentLoop 自动建立调用批次。

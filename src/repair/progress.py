@@ -31,6 +31,9 @@ PHASE_A_EVENTS = frozenset(
 KNOWN_EVENTS = PHASE_A_EVENTS | frozenset(
     {
         "tool_progress",
+        "plan_progress",
+        "recovery_progress",
+        "exploration_progress",
         "quick_test",
         "critic_progress",
         "verify_progress",

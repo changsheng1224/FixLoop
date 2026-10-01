@@ -1,0 +1,264 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="4" skipped="0" tests="20" time="30.033" timestamp="2026-10-02T03:23:26.306237+08:00" hostname="DESKTOP-M8LE8SP"><testcase classname="tests.test_native_tool_batch" name="test_native_same_tool_real_read_pairing_live_cli_and_trace" time="12.769" /><testcase classname="tests.test_native_tool_batch" name="test_native_permission_rejection_does_not_block_valid_call" time="0.755" /><testcase classname="tests.test_native_tool_batch" name="test_native_quota_reservations_prevent_overspend" time="0.762" /><testcase classname="tests.test_native_tool_batch" name="test_native_mixed_write_keeps_pairing_and_invalidates_old_read" time="0.939" /><testcase classname="tests.test_native_tool_batch" name="test_native_protocol_failure_executes_nothing[calls0]" time="0.569" /><testcase classname="tests.test_native_tool_batch" name="test_native_protocol_failure_executes_nothing[calls1]" time="0.588" /><testcase classname="tests.test_native_tool_batch" name="test_native_protocol_failure_executes_nothing[calls2]" time="0.573" /><testcase classname="tests.test_native_tool_batch" name="test_native_cancel_keeps_all_result_receipts" time="0.625"><failure message="RuntimeError: observation_recording_requires_owner">workspace = WorkspaceContext(cwd='C:\\Users\\haoyu\\AppData\\Local\\Temp\\tmp3zoowxys', repo_root='C:\\Users\\haoyu\\AppData\\Loca..., 'pyproject.toml': "[project]\nname='test'\n"}, head='3681a86cf517fbe4282c71e9b68586cd1ffaf146', dirty_file_hashes={})
+
+    def test_native_cancel_keeps_all_result_receipts(workspace):
+        agent, _ = make_agent(
+            workspace,
+            [ToolCall("read_file", {"path": "README.md", "start": i}, f"c{i}") for i in range(1, 5)],
+        )
+        token = CancellationToken()
+        agent.cancel_token = token
+        barrier = threading.Barrier(3)
+        executed = []
+    
+        def slow(ctx, args):
+            executed.append(args["start"])
+            barrier.wait(timeout=3)
+            while not ctx.cancel_token.is_cancelled:
+                threading.Event().wait(0.005)
+            return ToolResult(
+                content="stopped", status="cancelled", metadata={"termination_guaranteed": True}
+            )
+    
+        agent.tools["read_file"]["run_with_context"] = slow
+        with ThreadPoolExecutor(max_workers=1) as owner:
+            future = owner.submit(AgentLoop(agent).run, "inspect", skip_plan=True)
+            barrier.wait(timeout=3)
+            token.cancel()
+&gt;           future.result(timeout=5)
+
+tests\test_native_tool_batch.py:195: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+..\..\anaconda3\Lib\concurrent\futures\_base.py:456: in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+..\..\anaconda3\Lib\concurrent\futures\_base.py:401: in __get_result
+    raise self._exception
+..\..\anaconda3\Lib\concurrent\futures\thread.py:59: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+agent_runtime\agent_loop.py:2314: in run
+    answer = self._run_with_native_tools(user_message, ts, callback)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+agent_runtime\agent_loop.py:2729: in _run_with_native_tools
+    tool_results, batch_refs = self._run_native_batch(
+agent_runtime\agent_loop.py:1777: in _run_native_batch
+    results, refs = runner.run(calls)
+                    ^^^^^^^^^^^^^^^^^
+agent_runtime\tool_batch_runtime.py:153: in run
+    results = scheduler.run(
+agent_runtime\tool_batch.py:225: in run
+    return self._run(batch, prepare, settle, cancel_token=cancel_token, expired=expired)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+agent_runtime\tool_batch.py:375: in _run
+    return [settle(call, call.result) for call in batch.calls]
+            ^^^^^^^^^^^^^^^^^^^^^^^^^
+agent_runtime\tool_batch_runtime.py:139: in settle
+    settled = self.hooks.settle_step(flow, result)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+agent_runtime\agent_loop.py:1720: in settle_step
+    flow.send(result)
+agent_runtime\agent_loop.py:1354: in _tool_step_flow
+    recorded = self._observation_recorder.record(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;agent_runtime.observation_recording.ToolObservationRecorder object at 0x000002079A09F130&gt;
+call = CanonicalToolCall(call_id='c1', name='read_file', arguments={'path': 'README.md', 'start': 1}, source=&lt;ToolSource.NATIVE: 'native'&gt;, raw_name='read_file', raw_arguments='{"path": "README.md", "start": 1}', parse_warnings=())
+result = ToolResult(content='Error: tool batch cancelled', metadata={'termination_guaranteed': True, 'tool_status': 'cancelled'...27e-eb3a-4a31-942e-c75439b6fba9', 'receipt_id': 'receipt-25027c12eaccc1e16a9a'}, output_truncated=False, duration_ms=0)
+
+    def record(
+        self,
+        call,
+        result,
+        *,
+        duration_ms,
+        metadata,
+        source_version,
+        idempotency_key,
+        call_context=None,
+    ):
+        if threading.get_ident() != self.owner_thread:
+&gt;           raise RuntimeError("observation_recording_requires_owner")
+E           RuntimeError: observation_recording_requires_owner
+
+agent_runtime\observation_recording.py:40: RuntimeError</failure></testcase><testcase classname="tests.test_native_tool_batch" name="test_native_file_version_change_is_partial_and_does_not_grant_edit_lock" time="0.604"><failure message="RuntimeError: observation_recording_requires_owner">workspace = WorkspaceContext(cwd='C:\\Users\\haoyu\\AppData\\Local\\Temp\\tmp5yn4hwkk', repo_root='C:\\Users\\haoyu\\AppData\\Loca..., 'pyproject.toml': "[project]\nname='test'\n"}, head='38ddb29d3432764356512171c046565b5d346352', dirty_file_hashes={})
+temp_workspace = WindowsPath('C:/Users/haoyu/AppData/Local/Temp/tmp5yn4hwkk')
+
+    def test_native_file_version_change_is_partial_and_does_not_grant_edit_lock(
+        workspace, temp_workspace
+    ):
+        from types import SimpleNamespace
+    
+        agent, _ = make_agent(
+            workspace,
+            [
+                ToolCall("read_file", {"path": "README.md"}, "old"),
+                ToolCall("read_file", {"path": "pyproject.toml"}, "stable"),
+            ],
+        )
+        read_complete = threading.Event()
+        changed = threading.Event()
+        marked = []
+        agent.tool_context.edit_lock = SimpleNamespace(mark_read=lambda path, **_: marked.append(path))
+        original = agent.tools["read_file"]["run_with_context"]
+    
+        def slow(ctx, args):
+            result = original(ctx, args)
+            if args["path"] == "README.md":
+                read_complete.set()
+                changed.wait(timeout=3)
+            return result
+    
+        agent.tools["read_file"]["run_with_context"] = slow
+        with ThreadPoolExecutor(max_workers=1) as owner:
+            future = owner.submit(AgentLoop(agent).run, "inspect", skip_plan=True)
+            assert read_complete.wait(timeout=3)
+            (temp_workspace / "README.md").write_text("external change\n")
+            changed.set()
+&gt;           assert "done" in future.result(timeout=5)
+                             ^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_native_tool_batch.py:233: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+..\..\anaconda3\Lib\concurrent\futures\_base.py:456: in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+..\..\anaconda3\Lib\concurrent\futures\_base.py:401: in __get_result
+    raise self._exception
+..\..\anaconda3\Lib\concurrent\futures\thread.py:59: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+agent_runtime\agent_loop.py:2314: in run
+    answer = self._run_with_native_tools(user_message, ts, callback)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+agent_runtime\agent_loop.py:2729: in _run_with_native_tools
+    tool_results, batch_refs = self._run_native_batch(
+agent_runtime\agent_loop.py:1777: in _run_native_batch
+    results, refs = runner.run(calls)
+                    ^^^^^^^^^^^^^^^^^
+agent_runtime\tool_batch_runtime.py:153: in run
+    results = scheduler.run(
+agent_runtime\tool_batch.py:225: in run
+    return self._run(batch, prepare, settle, cancel_token=cancel_token, expired=expired)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+agent_runtime\tool_batch.py:375: in _run
+    return [settle(call, call.result) for call in batch.calls]
+            ^^^^^^^^^^^^^^^^^^^^^^^^^
+agent_runtime\tool_batch_runtime.py:139: in settle
+    settled = self.hooks.settle_step(flow, result)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+agent_runtime\agent_loop.py:1720: in settle_step
+    flow.send(result)
+agent_runtime\agent_loop.py:1354: in _tool_step_flow
+    recorded = self._observation_recorder.record(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;agent_runtime.observation_recording.ToolObservationRecorder object at 0x0000020799FAA450&gt;
+call = CanonicalToolCall(call_id='old', name='read_file', arguments={'path': 'README.md'}, source=&lt;ToolSource.NATIVE: 'native'&gt;, raw_name='read_file', raw_arguments='{"path": "README.md"}', parse_warnings=())
+result = ToolExecutionResult(content='[partial freshness=needs_recheck error_code=stale_precondition] 文件版本已变化，请重新读取后再使用。\n# REA...f19-763a-40e8-9817-365563e1c54a', 'receipt_id': 'receipt-b17f7f5e5b6b12f582d3'}, output_truncated=False, duration_ms=6)
+
+    def record(
+        self,
+        call,
+        result,
+        *,
+        duration_ms,
+        metadata,
+        source_version,
+        idempotency_key,
+        call_context=None,
+    ):
+        if threading.get_ident() != self.owner_thread:
+&gt;           raise RuntimeError("observation_recording_requires_owner")
+E           RuntimeError: observation_recording_requires_owner
+
+agent_runtime\observation_recording.py:40: RuntimeError</failure></testcase><testcase classname="tests.test_native_tool_batch" name="test_native_run_budget_rejections_still_have_ordered_observations" time="0.796" /><testcase classname="tests.test_native_tool_batch" name="test_native_group_budget_reservation_is_atomic" time="0.796" /><testcase classname="tests.test_native_tool_batch" name="test_native_serial_side_effect_retains_inflight_action_and_sequential_steps" time="0.834" /><testcase classname="tests.test_native_tool_batch" name="test_native_partial_read_is_not_verified_or_silently_reused" time="0.779" /><testcase classname="tests.test_native_tool_batch" name="test_native_oversize_batch_returns_every_result_in_order" time="0.931" /><testcase classname="tests.test_tool_batch_plan_integration" name="test_two_plan_nodes_each_native_batch_never_create_four_readers" time="1.454" /><testcase classname="tests.test_tool_batch_plan_integration" name="test_borrowed_permit_remains_occupied_until_abandoned_child_exits" time="0.023" /><testcase classname="tests.test_tool_batch_resume_projection" name="test_checkpoint_keeps_active_receipts_and_incomplete_ui_is_not_resume_authority" time="0.532" /><testcase classname="tests.test_tool_batch_resume_projection" name="test_actual_step_resume_shows_incomplete_progress_without_reexecuting_unknown_call" time="0.636" /><testcase classname="tests.test_native_tool_batch_crash" name="test_native_process_exit_uses_plan_receipts_not_ui_for_recovery[read-tool_result_recorded]" time="1.860"><failure message="AssertionError: &#10;assert 0 == 73&#10; +  where 0 = CompletedProcess(args=['C:\\Users\\haoyu\\anaconda3\\python.exe', '-c', &quot;\nimport os, sys\nfrom agent_runtime.agent_lo...nel-split-first\\test_native_process_exit_uses_0', 'read', 'tool_result_recorded'], returncode=0, stdout='', stderr='').returncode">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-kernel-split-first/test_native_process_exit_uses_0')
+kind = 'read', cut = 'tool_result_recorded'
+
+    @pytest.mark.parametrize(
+        "kind,cut", [("read", "tool_result_recorded"), ("write", "tool_dispatched")]
+    )
+    def test_native_process_exit_uses_plan_receipts_not_ui_for_recovery(tmp_path, kind, cut):
+        (tmp_path / "value.py").write_text("value = 1\nother = 2\n")
+        code = """
+    import os, sys
+    from agent_runtime.agent_loop import AgentLoop
+    from agent_runtime.model_turn import ToolCall
+    from agent_runtime.workspace import WorkspaceContext
+    from tests.plan_support import session_for, simple_plan, through_analysis
+    from tests.test_native_tool_batch import make_agent
+    root, kind, cut = sys.argv[1:]
+    with session_for(root) as session:
+        session.create(simple_plan(session))
+        if kind == 'write':
+            through_analysis(session)
+            calls = [ToolCall('write_file', {'path': 'value.py', 'content': 'value = 3\\n'}, 'write-id'),
+                     ToolCall('read_file', {'path': 'value.py'}, 'read-after')]
+            node_id = 'edit'
+        else:
+            calls = [ToolCall('read_file', {'path': 'value.py', 'start': i}, 'read-'+str(i)) for i in (1,2)]
+            node_id = 'read-0'
+        agent, _ = make_agent(WorkspaceContext.build(root), calls)
+        agent._plan_session = session
+        agent.shared_run_id = session.identity['run_id']
+        session.fault = lambda point: os._exit(73) if point == cut else None
+        session.run_node(node_id, lambda attempt: (
+            AgentLoop(agent).run('inspect', skip_plan=True), session.tool_result(attempt))[1])
+    """
+        child = subprocess.run(
+            [sys.executable, "-c", code, str(tmp_path), kind, cut],
+            timeout=30,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONPATH": os.getcwd()},
+        )
+&gt;       assert child.returncode == 73, child.stderr
+E       AssertionError: 
+E       assert 0 == 73
+E        +  where 0 = CompletedProcess(args=['C:\\Users\\haoyu\\anaconda3\\python.exe', '-c', "\nimport os, sys\nfrom agent_runtime.agent_lo...nel-split-first\\test_native_process_exit_uses_0', 'read', 'tool_result_recorded'], returncode=0, stdout='', stderr='').returncode
+
+tests\test_native_tool_batch_crash.py:52: AssertionError</failure></testcase><testcase classname="tests.test_native_tool_batch_crash" name="test_native_process_exit_uses_plan_receipts_not_ui_for_recovery[write-tool_dispatched]" time="1.990"><failure message="AssertionError: &#10;assert 0 == 73&#10; +  where 0 = CompletedProcess(args=['C:\\Users\\haoyu\\anaconda3\\python.exe', '-c', &quot;\nimport os, sys\nfrom agent_runtime.agent_lo...-kernel-split-first\\test_native_process_exit_uses_1', 'write', 'tool_dispatched'], returncode=0, stdout='', stderr='').returncode">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-kernel-split-first/test_native_process_exit_uses_1')
+kind = 'write', cut = 'tool_dispatched'
+
+    @pytest.mark.parametrize(
+        "kind,cut", [("read", "tool_result_recorded"), ("write", "tool_dispatched")]
+    )
+    def test_native_process_exit_uses_plan_receipts_not_ui_for_recovery(tmp_path, kind, cut):
+        (tmp_path / "value.py").write_text("value = 1\nother = 2\n")
+        code = """
+    import os, sys
+    from agent_runtime.agent_loop import AgentLoop
+    from agent_runtime.model_turn import ToolCall
+    from agent_runtime.workspace import WorkspaceContext
+    from tests.plan_support import session_for, simple_plan, through_analysis
+    from tests.test_native_tool_batch import make_agent
+    root, kind, cut = sys.argv[1:]
+    with session_for(root) as session:
+        session.create(simple_plan(session))
+        if kind == 'write':
+            through_analysis(session)
+            calls = [ToolCall('write_file', {'path': 'value.py', 'content': 'value = 3\\n'}, 'write-id'),
+                     ToolCall('read_file', {'path': 'value.py'}, 'read-after')]
+            node_id = 'edit'
+        else:
+            calls = [ToolCall('read_file', {'path': 'value.py', 'start': i}, 'read-'+str(i)) for i in (1,2)]
+            node_id = 'read-0'
+        agent, _ = make_agent(WorkspaceContext.build(root), calls)
+        agent._plan_session = session
+        agent.shared_run_id = session.identity['run_id']
+        session.fault = lambda point: os._exit(73) if point == cut else None
+        session.run_node(node_id, lambda attempt: (
+            AgentLoop(agent).run('inspect', skip_plan=True), session.tool_result(attempt))[1])
+    """
+        child = subprocess.run(
+            [sys.executable, "-c", code, str(tmp_path), kind, cut],
+            timeout=30,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONPATH": os.getcwd()},
+        )
+&gt;       assert child.returncode == 73, child.stderr
+E       AssertionError: 
+E       assert 0 == 73
+E        +  where 0 = CompletedProcess(args=['C:\\Users\\haoyu\\anaconda3\\python.exe', '-c', "\nimport os, sys\nfrom agent_runtime.agent_lo...-kernel-split-first\\test_native_process_exit_uses_1', 'write', 'tool_dispatched'], returncode=0, stdout='', stderr='').returncode
+
+tests\test_native_tool_batch_crash.py:52: AssertionError</failure></testcase></testsuite></testsuites>

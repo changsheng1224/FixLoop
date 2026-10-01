@@ -1,0 +1,1 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="0.758" timestamp="2026-10-02T03:29:51.037675+08:00" hostname="DESKTOP-M8LE8SP"><testcase classname="tests.test_kernel_split" name="test_mcp_raw_record_and_matching_action_keep_exact_reference" time="0.492" /></testsuite></testsuites>

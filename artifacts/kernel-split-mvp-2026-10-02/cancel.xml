@@ -1,0 +1,1 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="14.745" timestamp="2026-10-02T03:27:07.033437+08:00" hostname="DESKTOP-M8LE8SP"><testcase classname="tests.test_native_tool_batch" name="test_native_cancel_keeps_all_result_receipts" time="14.470" /></testsuite></testsuites>

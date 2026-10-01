@@ -1,0 +1,179 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="7" skipped="0" tests="17" time="26.601" timestamp="2026-10-01T22:47:26.463385+08:00" hostname="DESKTOP-M8LE8SP"><testcase classname="tests.test_required_long_task_context" name="test_required_state_survives_conflicting_sealed_history_in_actual_request[False]" time="14.013" /><testcase classname="tests.test_required_long_task_context" name="test_required_state_survives_conflicting_sealed_history_in_actual_request[True]" time="0.604"><failure message="AssertionError: assert '&lt;final&gt;上下文构建...任务状态。&lt;/final&gt;' == 'done'&#10;  &#10;  - done&#10;  + &lt;final&gt;上下文构建已阻断：context_required_over_budget。请按诊断重取证据或核对任务状态。&lt;/final&gt;">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-long-context-required/test_required_state_survives_c1')
+native = True
+
+    @pytest.mark.parametrize("native", [False, True])
+    def test_required_state_survives_conflicting_sealed_history_in_actual_request(tmp_path, native):
+        (tmp_path / "value.py").write_text("value = 1\n")
+        with session_for(tmp_path) as session:
+            session.create(simple_plan(session))
+            constraints = [f"constraint-{i}: retain this entire rule" for i in range(12)]
+            session.configure_long_task("ORIGINAL_TASK", hard_constraints=constraints)
+            agent, client = _agent(tmp_path, session, native=native)
+            agent.record(
+                {"role": "assistant", "content": "The original task was cancelled; edit tests."}
+            )
+            init_run_projection(agent.session, "wrong-summary")
+            seal_history_at_build(agent.session, 1, "wrong-summary: no constraints remain")
+&gt;           assert agent.ask("continue current work", skip_plan=True) == "done"
+E           AssertionError: assert '&lt;final&gt;上下文构建...任务状态。&lt;/final&gt;' == 'done'
+E             
+E             - done
+E             + &lt;final&gt;上下文构建已阻断：context_required_over_budget。请按诊断重取证据或核对任务状态。&lt;/final&gt;
+
+tests\test_required_long_task_context.py:53: AssertionError</failure></testcase><testcase classname="tests.test_required_long_task_context" name="test_required_context_failure_prevents_actual_model_call[budget-False]" time="0.709"><failure message="KeyError: 'task_state'">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-long-context-required/test_required_context_failure_0')
+native = False, failure = 'budget'
+
+    @pytest.mark.parametrize("native", [False, True])
+    @pytest.mark.parametrize("failure", ["budget", "state", "plan"])
+    def test_required_context_failure_prevents_actual_model_call(tmp_path, native, failure):
+        (tmp_path / "value.py").write_text("value = 1\n")
+        with session_for(tmp_path) as session:
+            session.create(simple_plan(session))
+            session.configure_long_task("task", hard_constraints=["must preserve"])
+            if failure == "budget":
+                session.configure_long_task("task", hard_constraints=["unalterable " * 20000])
+            elif failure == "state":
+                session.long_task_state.original_request = "tampered without journal"
+            else:
+                session.plan = replace(session.plan, state_revision=99)
+            agent, client = _agent(tmp_path, session, native=native)
+            answer = agent.ask("continue", skip_plan=True)
+            expected = "context_required_over_budget" if failure == "budget" else "state_mismatch"
+            assert expected in answer
+            assert client.prompts == []
+            assert agent.session["context_blocked"]["reason"] == expected
+&gt;           assert agent.session["task_state"]["stop_reason"] == "context_blocked"
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           KeyError: 'task_state'
+
+tests\test_required_long_task_context.py:89: KeyError</failure></testcase><testcase classname="tests.test_required_long_task_context" name="test_required_context_failure_prevents_actual_model_call[budget-True]" time="0.731"><failure message="KeyError: 'task_state'">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-long-context-required/test_required_context_failure_1')
+native = True, failure = 'budget'
+
+    @pytest.mark.parametrize("native", [False, True])
+    @pytest.mark.parametrize("failure", ["budget", "state", "plan"])
+    def test_required_context_failure_prevents_actual_model_call(tmp_path, native, failure):
+        (tmp_path / "value.py").write_text("value = 1\n")
+        with session_for(tmp_path) as session:
+            session.create(simple_plan(session))
+            session.configure_long_task("task", hard_constraints=["must preserve"])
+            if failure == "budget":
+                session.configure_long_task("task", hard_constraints=["unalterable " * 20000])
+            elif failure == "state":
+                session.long_task_state.original_request = "tampered without journal"
+            else:
+                session.plan = replace(session.plan, state_revision=99)
+            agent, client = _agent(tmp_path, session, native=native)
+            answer = agent.ask("continue", skip_plan=True)
+            expected = "context_required_over_budget" if failure == "budget" else "state_mismatch"
+            assert expected in answer
+            assert client.prompts == []
+            assert agent.session["context_blocked"]["reason"] == expected
+&gt;           assert agent.session["task_state"]["stop_reason"] == "context_blocked"
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           KeyError: 'task_state'
+
+tests\test_required_long_task_context.py:89: KeyError</failure></testcase><testcase classname="tests.test_required_long_task_context" name="test_required_context_failure_prevents_actual_model_call[state-False]" time="0.458"><failure message="KeyError: 'task_state'">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-long-context-required/test_required_context_failure_2')
+native = False, failure = 'state'
+
+    @pytest.mark.parametrize("native", [False, True])
+    @pytest.mark.parametrize("failure", ["budget", "state", "plan"])
+    def test_required_context_failure_prevents_actual_model_call(tmp_path, native, failure):
+        (tmp_path / "value.py").write_text("value = 1\n")
+        with session_for(tmp_path) as session:
+            session.create(simple_plan(session))
+            session.configure_long_task("task", hard_constraints=["must preserve"])
+            if failure == "budget":
+                session.configure_long_task("task", hard_constraints=["unalterable " * 20000])
+            elif failure == "state":
+                session.long_task_state.original_request = "tampered without journal"
+            else:
+                session.plan = replace(session.plan, state_revision=99)
+            agent, client = _agent(tmp_path, session, native=native)
+            answer = agent.ask("continue", skip_plan=True)
+            expected = "context_required_over_budget" if failure == "budget" else "state_mismatch"
+            assert expected in answer
+            assert client.prompts == []
+            assert agent.session["context_blocked"]["reason"] == expected
+&gt;           assert agent.session["task_state"]["stop_reason"] == "context_blocked"
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           KeyError: 'task_state'
+
+tests\test_required_long_task_context.py:89: KeyError</failure></testcase><testcase classname="tests.test_required_long_task_context" name="test_required_context_failure_prevents_actual_model_call[state-True]" time="0.474"><failure message="KeyError: 'task_state'">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-long-context-required/test_required_context_failure_3')
+native = True, failure = 'state'
+
+    @pytest.mark.parametrize("native", [False, True])
+    @pytest.mark.parametrize("failure", ["budget", "state", "plan"])
+    def test_required_context_failure_prevents_actual_model_call(tmp_path, native, failure):
+        (tmp_path / "value.py").write_text("value = 1\n")
+        with session_for(tmp_path) as session:
+            session.create(simple_plan(session))
+            session.configure_long_task("task", hard_constraints=["must preserve"])
+            if failure == "budget":
+                session.configure_long_task("task", hard_constraints=["unalterable " * 20000])
+            elif failure == "state":
+                session.long_task_state.original_request = "tampered without journal"
+            else:
+                session.plan = replace(session.plan, state_revision=99)
+            agent, client = _agent(tmp_path, session, native=native)
+            answer = agent.ask("continue", skip_plan=True)
+            expected = "context_required_over_budget" if failure == "budget" else "state_mismatch"
+            assert expected in answer
+            assert client.prompts == []
+            assert agent.session["context_blocked"]["reason"] == expected
+&gt;           assert agent.session["task_state"]["stop_reason"] == "context_blocked"
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           KeyError: 'task_state'
+
+tests\test_required_long_task_context.py:89: KeyError</failure></testcase><testcase classname="tests.test_required_long_task_context" name="test_required_context_failure_prevents_actual_model_call[plan-False]" time="0.459"><failure message="KeyError: 'task_state'">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-long-context-required/test_required_context_failure_4')
+native = False, failure = 'plan'
+
+    @pytest.mark.parametrize("native", [False, True])
+    @pytest.mark.parametrize("failure", ["budget", "state", "plan"])
+    def test_required_context_failure_prevents_actual_model_call(tmp_path, native, failure):
+        (tmp_path / "value.py").write_text("value = 1\n")
+        with session_for(tmp_path) as session:
+            session.create(simple_plan(session))
+            session.configure_long_task("task", hard_constraints=["must preserve"])
+            if failure == "budget":
+                session.configure_long_task("task", hard_constraints=["unalterable " * 20000])
+            elif failure == "state":
+                session.long_task_state.original_request = "tampered without journal"
+            else:
+                session.plan = replace(session.plan, state_revision=99)
+            agent, client = _agent(tmp_path, session, native=native)
+            answer = agent.ask("continue", skip_plan=True)
+            expected = "context_required_over_budget" if failure == "budget" else "state_mismatch"
+            assert expected in answer
+            assert client.prompts == []
+            assert agent.session["context_blocked"]["reason"] == expected
+&gt;           assert agent.session["task_state"]["stop_reason"] == "context_blocked"
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           KeyError: 'task_state'
+
+tests\test_required_long_task_context.py:89: KeyError</failure></testcase><testcase classname="tests.test_required_long_task_context" name="test_required_context_failure_prevents_actual_model_call[plan-True]" time="0.475"><failure message="KeyError: 'task_state'">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-long-context-required/test_required_context_failure_5')
+native = True, failure = 'plan'
+
+    @pytest.mark.parametrize("native", [False, True])
+    @pytest.mark.parametrize("failure", ["budget", "state", "plan"])
+    def test_required_context_failure_prevents_actual_model_call(tmp_path, native, failure):
+        (tmp_path / "value.py").write_text("value = 1\n")
+        with session_for(tmp_path) as session:
+            session.create(simple_plan(session))
+            session.configure_long_task("task", hard_constraints=["must preserve"])
+            if failure == "budget":
+                session.configure_long_task("task", hard_constraints=["unalterable " * 20000])
+            elif failure == "state":
+                session.long_task_state.original_request = "tampered without journal"
+            else:
+                session.plan = replace(session.plan, state_revision=99)
+            agent, client = _agent(tmp_path, session, native=native)
+            answer = agent.ask("continue", skip_plan=True)
+            expected = "context_required_over_budget" if failure == "budget" else "state_mismatch"
+            assert expected in answer
+            assert client.prompts == []
+            assert agent.session["context_blocked"]["reason"] == expected
+&gt;           assert agent.session["task_state"]["stop_reason"] == "context_blocked"
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           KeyError: 'task_state'
+
+tests\test_required_long_task_context.py:89: KeyError</failure></testcase><testcase classname="tests.test_required_long_task_context" name="test_exploration_is_not_blocked_by_unrelated_stale_evidence" time="0.074" /><testcase classname="tests.test_required_long_task_context" name="test_edit_missing_required_evidence_reports_retrieval_without_call[False]" time="0.570" /><testcase classname="tests.test_required_long_task_context" name="test_edit_missing_required_evidence_reports_retrieval_without_call[True]" time="0.590" /><testcase classname="tests.test_required_long_task_context" name="test_confirmed_patch_uses_receipt_instead_of_stale_preimage" time="0.179" /><testcase classname="tests.test_required_long_task_context" name="test_final_state_check_detects_tampering_during_optional_assembly" time="0.445" /><testcase classname="tests.test_required_long_task_context" name="test_reopened_plan_rebuilds_current_position_and_ignores_cached_context" time="0.558" /><testcase classname="tests.test_required_long_task_context" name="test_oversized_request_with_plan_is_blocked_instead_of_head_tail_compacted[False]" time="1.073" /><testcase classname="tests.test_required_long_task_context" name="test_oversized_request_with_plan_is_blocked_instead_of_head_tail_compacted[True]" time="1.083" /><testcase classname="tests.test_required_long_task_context" name="test_l2_constraints_are_persisted_and_survive_real_patch_and_host_pytest" time="3.538" /></testsuite></testsuites>

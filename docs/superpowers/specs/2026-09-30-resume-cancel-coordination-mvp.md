@@ -1,8 +1,10 @@
 # FixLoop 并发恢复互斥与取消清理闭环 MVP Spec
 
-日期：2026-09-30。状态：开发规格；功能尚未实现。
+日期：2026-09-30；状态对账：2026-10-01。状态：run owner、generation、资源登记及取消/恢复门禁已有实现并接入公开 L2 repair；实际验证与后端边界见 [交付说明](../../RUN_COORDINATION.md)。本文保留开发契约，不据此宣称所有后端或 R1–R9 均通过。本次只做静态对账，后续按 [Agent 设计参照](../../AGENT_DESIGN_REFERENCES_2026-10-01.md)复用已有恢复器。
 
 ## 1. 目标、范围与前提
+
+2026-10-02 已完成独立增量 [严格恢复入口与统一恢复/取消结果](../../RECOVERY_CANCEL_ACCEPTANCE_2026-10-02.md)：不重建下述协调能力；显式恢复失败不转入新执行，诊断由当前事实派生，重复失败取消只返回持久结果。历史 R1–R9 与后端验收仍按原记录解释。
 
 在已有 Plan DAG 完整在途恢复和 WSL 沙箱进程管理之上，保证同一修复 run 只有一个执行者能够恢复并继续派发；取消时停止新派发，向已登记的活动资源传播取消，核对退出和副作用结果后才提交任务终态。重点处理并发 resume、旧执行者迟到提交、取消中的进程残留与未知写入。
 
@@ -13,7 +15,7 @@
 3. `cancel_requested → cancelling → cancelled | recovery_required` 的持久转换与清理收据；
 4. 固定故障注入与一条真实 L2 修复路径的取消/恢复验证。
 
-预计单人 **6–10 个有效工作日**，含相关测试和集成返工；约 600–1,100 行实现加测试用于规划，不作为验收指标。该估计以 [Plan DAG 完整在途恢复 MVP](./2026-09-30-plan-dag-inflight-resume-mvp.md) 已提供 PlanSession/reducer/durable attempt journal，以 [WSL 命令与测试沙箱 MVP](./2026-09-30-wsl-command-sandbox-mvp.md) 已提供 supervisor 的 cancel/reconcile/cleanup 收据为前提。两者目前仍是规格文档；前提未落地前只能实现隔离的模型与测试，不能宣称端到端交付。
+初始完整范围估算为单人 **6–10 个有效工作日**、600–1,100 行实现加测试，不作为当前剩余工作量或验收指标。[Plan DAG](../../PLAN_DAG.md) 已提供真实 journal/恢复器，WSL supervisor 也有专用实现与验证记录；但 `wsl_bwrap` repair CLI profile 仍有门禁，见 [WSL P4 范围](../plans/2026-09-30-wsl-command-sandbox-p4-record.md)。协调能力已实现不代表受限后端自动开放。
 
 ## 2. 现有基础、责任边界和非目标
 
@@ -87,7 +89,7 @@ RunOwner 和 ActiveResource 元数据与 Plan journal 使用同一受信任控�
 4. 取消请求已 durable 存在则继续取消清理；否则仅在所有旧活动资源已核查且安全时切换 `active` 并开放派发。
 5. 记录恢复/取消报告和 checkpoint；拒绝旧 generation 的迟到提交。checkpoint/registry 不一致时保持 `recovery_required`，给出缺失引用。
 
-旧 checkpoint 缺 owner/resource 字段时不能声称通过本版并发恢复保障；进入明确的旧模式或拒绝该 profile 自动恢复，不为历史记录补造清理成功。`recovery_required` 不是 `cancelled` 的别名，主 Agent 必须看到残留资源、未知 Action 或身份冲突的具体诊断。
+checkpoint 缺 owner/resource 字段时拒绝该 profile 自动恢复，不为历史记录补造清理成功，不新增旧模式或兼容迁移。`recovery_required` 不是 `cancelled` 的别名，主 Agent 必须看到残留资源、未知 Action 或身份冲突的具体诊断。
 
 ## 6. 事件、错误码与验收
 

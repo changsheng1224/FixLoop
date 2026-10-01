@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="17" time="19.937" timestamp="2026-10-02T02:07:10.579952+08:00" hostname="DESKTOP-M8LE8SP"><testcase classname="tests.test_context_assembly" name="test_unused_soft_quotas_are_lent_without_increasing_total" time="0.001" /><testcase classname="tests.test_context_assembly" name="test_elastic_accounting_is_bounded_and_deterministic[0]" time="0.001" /><testcase classname="tests.test_context_assembly" name="test_elastic_accounting_is_bounded_and_deterministic[97]" time="0.001" /><testcase classname="tests.test_context_assembly" name="test_elastic_accounting_is_bounded_and_deterministic[1000]" time="0.001" /><testcase classname="tests.test_context_assembly" name="test_elastic_accounting_is_bounded_and_deterministic[4096]" time="0.001" /><testcase classname="tests.test_context_assembly" name="test_unpaired_native_messages_are_rejected_even_when_over_budget[dangling]" time="0.001" /><testcase classname="tests.test_context_assembly" name="test_unpaired_native_messages_are_rejected_even_when_over_budget[mismatch]" time="0.001" /><testcase classname="tests.test_context_assembly" name="test_unpaired_native_messages_are_rejected_even_when_over_budget[duplicate]" time="0.001" /><testcase classname="tests.test_context_assembly" name="test_native_tail_selects_complete_recent_groups_under_shared_budget" time="1.214" /><testcase classname="tests.test_context_assembly" name="test_verify_node_prioritizes_feedback_over_source" time="13.973" /><testcase classname="tests.test_context_assembly" name="test_final_manifest_matches_actual_request_and_checkpoint[False]" time="0.753" /><testcase classname="tests.test_context_assembly" name="test_final_manifest_matches_actual_request_and_checkpoint[True]" time="0.638" /><testcase classname="tests.test_context_assembly" name="test_callback_cannot_change_a_prepared_request_before_model_call[False]" time="0.608" /><testcase classname="tests.test_context_assembly" name="test_callback_cannot_change_a_prepared_request_before_model_call[True]" time="0.620" /><testcase classname="tests.test_context_assembly" name="test_directives_are_protected_and_explicit_protocol_reserve_has_no_agent_scratch" time="0.967" /><testcase classname="tests.test_context_assembly" name="test_real_native_read_preserves_pairing_and_final_hash" time="0.639"><failure message="AssertionError: assert {'reason': 'tool_receipt_identity_mismatch', 'status': 'uncertain'} == 'succeeded'&#10; +  where {'reason': 'tool_receipt_identity_mismatch', 'status': 'uncertain'} = run_node('read-0', &lt;function test_real_native_read_preserves_pairing_and_final_hash.&lt;locals&gt;.invoke at 0x000002722EF20540&gt;)&#10; +    where run_node = &lt;agent_runtime.plan_runtime.session.PlanSession object at 0x000002722F15B350&gt;.run_node">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-context-assembly-required/test_real_native_read_preserve0')
+
+    def test_real_native_read_preserves_pairing_and_final_hash(tmp_path):
+        (tmp_path / "value.py").write_text("value = 1\n")
+        with session_for(tmp_path) as session:
+            session.create(simple_plan(session))
+            session.configure_long_task("inspect", hard_constraints=["do not edit"])
+            agent, client = _agent(tmp_path, session, native=True)
+            client._outputs = [
+                '&lt;tool&gt;{"name":"read_file","args":{"path":"value.py"}}&lt;/tool&gt;',
+                "&lt;final&gt;done&lt;/final&gt;",
+            ]
+    
+            def invoke(attempt):
+                assert agent.ask("inspect", skip_plan=True) == "done"
+                return session.tool_result(attempt)
+    
+&gt;           assert session.run_node("read-0", invoke) == "succeeded"
+E           AssertionError: assert {'reason': 'tool_receipt_identity_mismatch', 'status': 'uncertain'} == 'succeeded'
+E            +  where {'reason': 'tool_receipt_identity_mismatch', 'status': 'uncertain'} = run_node('read-0', &lt;function test_real_native_read_preserves_pairing_and_final_hash.&lt;locals&gt;.invoke at 0x000002722EF20540&gt;)
+E            +    where run_node = &lt;agent_runtime.plan_runtime.session.PlanSession object at 0x000002722F15B350&gt;.run_node
+
+tests\test_context_assembly.py:239: AssertionError</failure></testcase><testcase classname="tests.test_context_assembly" name="test_large_fresh_source_can_use_reclaimed_budget" time="0.135" /></testsuite></testsuites>

@@ -27,6 +27,7 @@ from tests.test_native_tool_batch import make_agent
 root, kind, cut = sys.argv[1:]
 with session_for(root) as session:
     session.create(simple_plan(session))
+    session.configure_long_task('inspect')
     if kind == 'write':
         through_analysis(session)
         calls = [ToolCall('write_file', {'path': 'value.py', 'content': 'value = 3\\n'}, 'write-id'),
@@ -36,6 +37,9 @@ with session_for(root) as session:
         calls = [ToolCall('read_file', {'path': 'value.py', 'start': i}, 'read-'+str(i)) for i in (1,2)]
         node_id = 'read-0'
     agent, _ = make_agent(WorkspaceContext.build(root), calls)
+    # Exercise the crash cut with a complete task and room for the native schema.
+    agent.config.prompt_budget = 6000
+    agent.config.hard_cap = 6000
     agent._plan_session = session
     agent.shared_run_id = session.identity['run_id']
     session.fault = lambda point: os._exit(73) if point == cut else None

@@ -6,6 +6,42 @@ from copy import deepcopy
 
 from agent_runtime.plan_runtime.models import digest
 
+ERROR_CODES = frozenset(
+    {
+        "tool_call_budget_exhausted",
+        "invalid_exploration_result",
+        "invalid_exploration_findings",
+        "invalid_exploration_unknowns",
+        "invalid_exploration_claim",
+        "invalid_exploration_claim_key",
+        "invalid_exploration_statement",
+        "claim_observation_not_owned",
+        "claim_source_or_full_version_missing",
+    }
+)
+
+
+def exploration_error_code(exc):
+    # Only our stable contracts may be exposed; never provider messages or paths.
+    if isinstance(exc, ValueError) and str(exc) in ERROR_CODES:
+        return str(exc)
+    return "invalid_exploration_result"
+
+
+def collection_diagnostics(data, result, reason):
+    diagnostics = []
+    if reason:
+        diagnostics.append({"kind": "validation", "reason": reason})
+    if result.get("error_code"):
+        diagnostics.append({"kind": "execution", "reason": result["error_code"]})
+    elif result["status"] in {"failed", "cancelled", "timed_out", "worker_lost"}:
+        diagnostics.append(
+            {"kind": "execution", "reason": data.get("cancel_requested") or result["status"]}
+        )
+    if result["status"] not in {"queued", "running"} and not result["cleanup_confirmed"]:
+        diagnostics.append({"kind": "cleanup", "reason": "exploration_cleanup_unconfirmed"})
+    return diagnostics
+
 
 def structured_result(raw: dict, task, observations: dict) -> dict:
     """Bind model claims to runtime observations, never model-provided versions."""

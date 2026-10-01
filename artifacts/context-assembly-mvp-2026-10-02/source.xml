@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="4" time="16.096" timestamp="2026-10-02T02:14:58.808819+08:00" hostname="DESKTOP-M8LE8SP"><testcase classname="tests.test_context_assembly" name="test_plan_request_lends_memory_budget_to_complete_fresh_source[False]" time="1.118"><failure message="assert ('def large():' in '[{\'role\': \'user\', \'content\': \'你是一个本地编码 Agent（agent_runtime）。你的任务是帮助用户理解、分析和修改代码仓库。你需要使用提供的工具来探索代码库并完成任务。注意：工具执...&quot;task&quot;,&quot;workspace_id&quot;:&quot;03b464d1e7d8dcdcdfb38ca053a5e65b5fedc0a895bb27046b3f85bfa04e3801&quot;}}\\n## 当前任务\\n\\ncontinue\'}]')">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-context-assembly-source/test_plan_request_lends_memory0')
+native = False
+
+    @pytest.mark.parametrize("native", [False, True])
+    def test_plan_request_lends_memory_budget_to_complete_fresh_source(tmp_path, native):
+        from tests.test_code_relations import _observe, _setup
+    
+        root, state, context, service = _setup(tmp_path, "test_relation")
+        (root / "large.py").write_text('def large():\n    return "' + "word " * 2000 + '"\n')
+        try:
+            oid = _observe(state, context, service, "large.py")
+            service.relations({})
+            with session_for(root) as session:
+                session.create(simple_plan(session))
+                session.configure_long_task(
+                    "inspect implementation", hard_constraints=["preserve tests"]
+                )
+                agent, _ = _agent(root, session, native=native, budget=4000)
+                agent.tool_context = context
+                context.exploration_service = service
+                manager = ContextManager(agent)
+                manager._get_workspace = lambda: ""
+                manager._get_memory = lambda: "old memory " * 5000
+                manager._get_knowledge = lambda query: ""
+                manager._get_compressed_history = lambda metadata: ""
+                request, metadata = manager.prepare_request(
+                    "continue", protocol="native" if native else "xml"
+                )
+                text = str(request.messages)
+&gt;               assert "def large():" in text and "word word" in text
+E               assert ('def large():' in '[{\'role\': \'user\', \'content\': \'你是一个本地编码 Agent（agent_runtime）。你的任务是帮助用户理解、分析和修改代码仓库。你需要使用提供的工具来探索代码库并完成任务。注意：工具执..."task","workspace_id":"03b464d1e7d8dcdcdfb38ca053a5e65b5fedc0a895bb27046b3f85bfa04e3801"}}\\n## 当前任务\\n\\ncontinue\'}]')
+
+tests\test_context_assembly.py:346: AssertionError</failure></testcase><testcase classname="tests.test_context_assembly" name="test_plan_request_lends_memory_budget_to_complete_fresh_source[True]" time="0.852" /><testcase classname="tests.test_code_exploration_context" name="test_selected_source_in_later_native_model_request" time="13.008" /><testcase classname="tests.test_code_exploration_context" name="test_changed_source_is_not_injected_again" time="0.508" /></testsuite></testsuites>

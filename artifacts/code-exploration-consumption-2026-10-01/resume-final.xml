@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="7" time="22.704" timestamp="2026-10-01T21:48:32.633742+08:00" hostname="DESKTOP-M8LE8SP"><testcase classname="tests.test_code_evidence_consumption" name="test_restored_checkpoint_with_changed_source_cannot_replay_old_tool_body" time="1.363"><failure message="AssertionError: assert 'workspace-mismatch' == 'step-resumable'&#10;  &#10;  - step-resumable&#10;  + workspace-mismatch">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-code-consumption-resume-final/test_restored_checkpoint_with_0')
+
+    def test_restored_checkpoint_with_changed_source_cannot_replay_old_tool_body(tmp_path):
+        from agent_runtime.agent_loop import AgentLoop
+        from agent_runtime.checkpoint import evaluate_resume_state
+        from agent_runtime.session_store import SessionStore
+        from agent_runtime.task_state import TaskState
+        from tests.test_code_exploration_resume import _agent
+    
+        source = tmp_path / "service.py"
+        source.write_text("def obsolete_marker():\n    return 1\n", encoding="utf-8")
+        first = _agent(tmp_path, [])
+        loop = AgentLoop(first)
+        task = TaskState.create(user_request="inspect")
+        task.advance_runtime("reasoning")
+        loop._task_state = task
+        loop._run_tool_step(task, "read_file", {"path": "service.py"}, step=1, path="xml")
+        source.write_text("def current_marker():\n    return 2\n", encoding="utf-8")
+        client = FakeModelClient(["&lt;final&gt;resumed&lt;/final&gt;"])
+        restored = Agent.from_session(
+            client,
+            WorkspaceContext.build(str(tmp_path)),
+            SessionStore(str(tmp_path)),
+            first.session["id"],
+            config=AgentConfig(provider="fake", max_steps=3, code_exploration={"mode": "relations"}),
+            cwd=str(tmp_path),
+        )
+        restored.session["resume_state"] = evaluate_resume_state(restored)
+&gt;       assert restored.session["resume_state"]["status"] == "step-resumable"
+E       AssertionError: assert 'workspace-mismatch' == 'step-resumable'
+E         
+E         - step-resumable
+E         + workspace-mismatch
+
+tests\test_code_evidence_consumption.py:385: AssertionError</failure></testcase><testcase classname="tests.test_code_evidence_consumption" name="test_actual_model_request_drops_changed_source_in_history_and_native_tail[False]" time="16.406" /><testcase classname="tests.test_code_evidence_consumption" name="test_actual_model_request_drops_changed_source_in_history_and_native_tail[True]" time="0.909" /><testcase classname="tests.test_code_evidence_consumption" name="test_change_immediately_after_tool_does_not_leak_through_continuation[False]" time="0.705" /><testcase classname="tests.test_code_evidence_consumption" name="test_change_immediately_after_tool_does_not_leak_through_continuation[True]" time="0.735" /><testcase classname="tests.test_native_tool_batch" name="test_native_mixed_write_keeps_pairing_and_invalidates_old_read" time="1.077" /><testcase classname="tests.test_native_tool_batch" name="test_native_partial_read_is_not_verified_or_silently_reused" time="0.902" /></testsuite></testsuites>

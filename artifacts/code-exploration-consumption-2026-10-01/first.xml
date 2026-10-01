@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="5" skipped="0" tests="18" time="22.156" timestamp="2026-10-01T21:31:07.774070+08:00" hostname="DESKTOP-M8LE8SP"><testcase classname="tests.test_code_evidence_consumption" name="test_contract_survives_disk_reload_and_expansion_truncation" time="0.073" /><testcase classname="tests.test_code_evidence_consumption" name="test_changed_or_corrupt_evidence_is_rejected_but_archive_is_preserved[edit-source_changed]" time="0.048" /><testcase classname="tests.test_code_evidence_consumption" name="test_changed_or_corrupt_evidence_is_rejected_but_archive_is_preserved[delete-source_unavailable]" time="0.027" /><testcase classname="tests.test_code_evidence_consumption" name="test_changed_or_corrupt_evidence_is_rejected_but_archive_is_preserved[blob-blob_unavailable]" time="0.033" /><testcase classname="tests.test_code_evidence_consumption" name="test_changed_or_corrupt_evidence_is_rejected_but_archive_is_preserved[run-scope_mismatch]" time="0.022" /><testcase classname="tests.test_code_evidence_consumption" name="test_partial_coverage_and_freshness_are_independent" time="0.058" /><testcase classname="tests.test_code_evidence_consumption" name="test_unversioned_range_is_unknown_and_requires_explicit_reread" time="0.048" /><testcase classname="tests.test_code_evidence_consumption" name="test_checks_obey_host_budgets_and_do_not_mark_unknown_as_stale[bytes]" time="0.025" /><testcase classname="tests.test_code_evidence_consumption" name="test_checks_obey_host_budgets_and_do_not_mark_unknown_as_stale[files]" time="0.026" /><testcase classname="tests.test_code_evidence_consumption" name="test_checks_obey_host_budgets_and_do_not_mark_unknown_as_stale[cancel]" time="0.026" /><testcase classname="tests.test_code_evidence_consumption" name="test_checks_obey_host_budgets_and_do_not_mark_unknown_as_stale[deadline]" time="0.023"><failure message="TypeError: 'int' object is not callable">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-code-consumption-first/test_checks_obey_host_budgets_3')
+stop = 'deadline'
+
+    @pytest.mark.parametrize("stop", ["bytes", "files", "cancel", "deadline"])
+    def test_checks_obey_host_budgets_and_do_not_mark_unknown_as_stale(tmp_path, stop):
+        (tmp_path / "mod.py").write_text("value = 1\n", encoding="utf-8")
+        _, context, store, record = _record(tmp_path)
+        try:
+            context.exploration_limits = RetrievalLimits(search_read_bytes=1) if stop == "bytes" else RetrievalLimits()
+            if stop == "files":
+                context.exploration_limits = RetrievalLimits(search_files=0)
+            if stop == "cancel":
+                context.cancel_token = CancellationToken()
+                context.cancel_token.cancel()
+            if stop == "deadline":
+                from types import SimpleNamespace
+                context.deadline = SimpleNamespace(remaining_s=0)
+            checks = SourceChecks(context)
+&gt;           result = store.expand_for_context(record.observation_id, source_checks=checks)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_code_evidence_consumption.py:131: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+agent_runtime\context_runtime.py:785: in expand_for_context
+    freshness, reason = checks.check(
+agent_runtime\code_exploration\consumption.py:50: in check
+    stopped = _stop_reason(self.context, self.deadline)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+context = ToolContext(root='C:\\Users\\haoyu\\Documents\\FixLoop\\.pytest-code-consumption-first\\test_checks_obey_host_budgets_...tor=None, sandbox_owner_token='', sandbox_generation=0, sandbox_coordination_revision=0, sandbox_parent_resource_id='')
+deadline = 68790.9832958
+
+    def _stop_reason(context: ToolContext, deadline: float) -&gt; str:
+        token = getattr(context, "cancel_token", None)
+        if token is not None and token.is_cancelled:
+            return "cancelled"
+        runtime_deadline = getattr(context, "deadline", None)
+        if runtime_deadline is not None and hasattr(runtime_deadline, "remaining_s"):
+&gt;           remaining = runtime_deadline.remaining_s()
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: 'int' object is not callable
+
+agent_runtime\code_exploration\io.py:89: TypeError</failure></testcase><testcase classname="tests.test_code_evidence_consumption" name="test_state_root_is_not_used_as_source_root_and_hashes_are_shared" time="0.032"><failure message="AssertionError: assert (1 == 1 and 11 == 10)&#10; +  where 1 = &lt;agent_runtime.code_exploration.consumption.SourceChecks object at 0x0000022CD86AB690&gt;.checked_files&#10; +  and   11 = &lt;agent_runtime.code_exploration.consumption.SourceChecks object at 0x0000022CD86AB690&gt;.bytes_read&#10; +  and   10 = len(b'value = 1\n')">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-code-consumption-first/test_state_root_is_not_used_as0')
+
+    def test_state_root_is_not_used_as_source_root_and_hashes_are_shared(tmp_path):
+        root = tmp_path / "workspace"
+        root.mkdir()
+        (root / "mod.py").write_text("value = 1\n", encoding="utf-8")
+        _, context, store, record = _record(root, state_root=str(tmp_path / "state"))
+        try:
+            checks = SourceChecks(context)
+            for _ in range(2):
+                assert store.expand_for_context(record.observation_id, source_checks=checks)["ok"]
+&gt;           assert checks.checked_files == 1 and checks.bytes_read == len(b"value = 1\n")
+E           AssertionError: assert (1 == 1 and 11 == 10)
+E            +  where 1 = &lt;agent_runtime.code_exploration.consumption.SourceChecks object at 0x0000022CD86AB690&gt;.checked_files
+E            +  and   11 = &lt;agent_runtime.code_exploration.consumption.SourceChecks object at 0x0000022CD86AB690&gt;.bytes_read
+E            +  and   10 = len(b'value = 1\n')
+
+tests\test_code_evidence_consumption.py:148: AssertionError</failure></testcase><testcase classname="tests.test_code_evidence_consumption" name="test_actual_model_request_drops_changed_source_in_history_and_native_tail[False]" time="16.773"><failure message="assert &quot;&lt;final&gt;API 错...turn'&lt;/final&gt;&quot; == 'done'&#10;  &#10;  - done&#10;  + &lt;final&gt;API 错误: 'super' object has no attribute 'complete_turn'&lt;/final&gt;">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-code-consumption-first/test_actual_model_request_drop0')
+native = False
+
+    @pytest.mark.parametrize("native", [False, True])
+    def test_actual_model_request_drops_changed_source_in_history_and_native_tail(tmp_path, native):
+        source = tmp_path / "mod.py"
+        source.write_text("old_marker = 1\n", encoding="utf-8")
+        base = FakeNativeToolClient if native else FakeModelClient
+    
+        class RecordingClient(base):
+            def __init__(self):
+                super().__init__([
+                    '&lt;tool&gt;{"name":"read_file","args":{"path":"mod.py"}}&lt;/tool&gt;',
+                    '&lt;tool&gt;{"name":"list_files","args":{"path":"."}}&lt;/tool&gt;',
+                    '&lt;final&gt;done&lt;/final&gt;',
+                ])
+                self.inputs = []
+    
+            def complete_turn(self, request):
+                self.inputs.append(json.dumps(request.messages, ensure_ascii=False))
+                if len(self.inputs) == 2:
+                    source.write_text("new_marker = 2\n", encoding="utf-8")
+                return super().complete_turn(request)
+    
+            def complete(self, prompt, *args, **kwargs):
+                self.inputs.append(prompt)
+                if len(self.inputs) == 2:
+                    source.write_text("new_marker = 2\n", encoding="utf-8")
+                return super().complete(prompt, *args, **kwargs)
+    
+        client = RecordingClient()
+        agent = Agent(config=AgentConfig(provider="fake", max_steps=5), model_client=client,
+                      workspace=WorkspaceContext.build(str(tmp_path)), cwd=str(tmp_path))
+&gt;       assert agent.ask("inspect the module", skip_plan=True) == "done"
+E       assert "&lt;final&gt;API 错...turn'&lt;/final&gt;" == 'done'
+E         
+E         - done
+E         + &lt;final&gt;API 错误: 'super' object has no attribute 'complete_turn'&lt;/final&gt;
+
+tests\test_code_evidence_consumption.py:185: AssertionError</failure></testcase><testcase classname="tests.test_code_evidence_consumption" name="test_actual_model_request_drops_changed_source_in_history_and_native_tail[True]" time="0.913"><failure message="AssertionError: assert 'old_marker = 1' in '你是一个本地编码 Agent（agent_runtime）。你的任务是帮助用户理解、分析和修改代码仓库。你需要使用提供的工具来探索代码库并完成任务。注意：工具执行结果中如果出现 [DRY RUN] 前缀，表示当前在演习模式下运行，不会...ENT_\n\n## 对话历史\n\n### 最近对话\n**user**: inspect the module\n\n\n任务: inspect the module\n\n## 当前任务\n\ninspect the module'">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-code-consumption-first/test_actual_model_request_drop1')
+native = True
+
+    @pytest.mark.parametrize("native", [False, True])
+    def test_actual_model_request_drops_changed_source_in_history_and_native_tail(tmp_path, native):
+        source = tmp_path / "mod.py"
+        source.write_text("old_marker = 1\n", encoding="utf-8")
+        base = FakeNativeToolClient if native else FakeModelClient
+    
+        class RecordingClient(base):
+            def __init__(self):
+                super().__init__([
+                    '&lt;tool&gt;{"name":"read_file","args":{"path":"mod.py"}}&lt;/tool&gt;',
+                    '&lt;tool&gt;{"name":"list_files","args":{"path":"."}}&lt;/tool&gt;',
+                    '&lt;final&gt;done&lt;/final&gt;',
+                ])
+                self.inputs = []
+    
+            def complete_turn(self, request):
+                self.inputs.append(json.dumps(request.messages, ensure_ascii=False))
+                if len(self.inputs) == 2:
+                    source.write_text("new_marker = 2\n", encoding="utf-8")
+                return super().complete_turn(request)
+    
+            def complete(self, prompt, *args, **kwargs):
+                self.inputs.append(prompt)
+                if len(self.inputs) == 2:
+                    source.write_text("new_marker = 2\n", encoding="utf-8")
+                return super().complete(prompt, *args, **kwargs)
+    
+        client = RecordingClient()
+        agent = Agent(config=AgentConfig(provider="fake", max_steps=5), model_client=client,
+                      workspace=WorkspaceContext.build(str(tmp_path)), cwd=str(tmp_path))
+        assert agent.ask("inspect the module", skip_plan=True) == "done"
+&gt;       assert "old_marker = 1" in client.inputs[1]
+E       AssertionError: assert 'old_marker = 1' in '你是一个本地编码 Agent（agent_runtime）。你的任务是帮助用户理解、分析和修改代码仓库。你需要使用提供的工具来探索代码库并完成任务。注意：工具执行结果中如果出现 [DRY RUN] 前缀，表示当前在演习模式下运行，不会...ENT_\n\n## 对话历史\n\n### 最近对话\n**user**: inspect the module\n\n\n任务: inspect the module\n\n## 当前任务\n\ninspect the module'
+
+tests\test_code_evidence_consumption.py:186: AssertionError</failure></testcase><testcase classname="tests.test_code_evidence_consumption" name="test_empty_partial_query_retains_boundaries_in_actual_context" time="0.516" /><testcase classname="tests.test_code_exploration_context" name="test_selected_source_in_later_native_model_request" time="0.930"><failure message="assert 2 == 1&#10; +  where 2 = &lt;built-in method count of str object at 0x0000022CECEFBE60&gt;('def render(value):')&#10; +    where &lt;built-in method count of str object at 0x0000022CECEFBE60&gt; = '[{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;## 调用示例\\n\\n通过接口 tools / tool_use 调用工具（禁止在正文输出 XML）。\\n读若干文件后应尽快 apply_patch；不要长时间只读不改...02d919e52957f005\\&quot;, \\&quot;observation_id\\&quot;: \\&quot;OBS-bfbc64be5dd47100\\&quot;, \\&quot;reason\\&quot;: \\&quot;observed_definition\\&quot;}]}&quot;}]}]'.count">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-code-consumption-first/test_selected_source_in_later_0')
+
+    def test_selected_source_in_later_native_model_request(tmp_path):
+        (tmp_path / "service.py").write_text(
+            "def render(value):\n    return f'&lt;{value}&gt;'\n", encoding="utf-8"
+        )
+        class RecordingClient(FakeNativeToolClient):
+            def __init__(self, outputs):
+                super().__init__(outputs)
+                self.requests = []
+    
+            def complete_turn(self, request):
+                self.requests.append(request)
+                return super().complete_turn(request)
+    
+        client = RecordingClient([
+            '&lt;tool&gt;{"name":"read_file","args":{"path":"service.py"}}&lt;/tool&gt;',
+            '&lt;tool&gt;{"name":"code_relations","args":{}}&lt;/tool&gt;',
+            "&lt;final&gt;done&lt;/final&gt;",
+        ])
+        agent = Agent(
+            config=AgentConfig(provider="fake", max_steps=5,
+                               code_exploration={"mode": "relations"}),
+            model_client=client, workspace=WorkspaceContext.build(str(tmp_path)),
+            cwd=str(tmp_path),
+        )
+        assert agent.ask("Find the render implementation", skip_plan=True) == "done"
+        assert len(client.prompts) == 3
+        third = client.requests[2]
+        request_text = json.dumps(third.messages, ensure_ascii=False)
+        assert "## 当前代码片段" in request_text
+        assert "def render(value):" in request_text
+        assert "[source=OBS-" in request_text
+&gt;       assert request_text.count("def render(value):") == 1
+E       assert 2 == 1
+E        +  where 2 = &lt;built-in method count of str object at 0x0000022CECEFBE60&gt;('def render(value):')
+E        +    where &lt;built-in method count of str object at 0x0000022CECEFBE60&gt; = '[{"role": "user", "content": "## 调用示例\\n\\n通过接口 tools / tool_use 调用工具（禁止在正文输出 XML）。\\n读若干文件后应尽快 apply_patch；不要长时间只读不改...02d919e52957f005\\", \\"observation_id\\": \\"OBS-bfbc64be5dd47100\\", \\"reason\\": \\"observed_definition\\"}]}"}]}]'.count
+
+tests\test_code_exploration_context.py:45: AssertionError</failure></testcase><testcase classname="tests.test_code_exploration_context" name="test_changed_source_is_not_injected_again" time="0.581" /><testcase classname="tests.test_code_exploration_resume" name="test_step_resume_uses_new_epoch_and_no_old_source_context" time="1.102" /></testsuite></testsuites>

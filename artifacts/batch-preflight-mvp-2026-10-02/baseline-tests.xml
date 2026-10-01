@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="2" time="15.355" timestamp="2026-10-02T03:46:44.961222+08:00" hostname="DESKTOP-M8LE8SP"><testcase classname="tests.test_native_batch_preflight" name="test_missing_argument_is_paired_without_dispatch_or_budget_reservation" time="14.552"><failure message="AssertionError: assert 'invalid_args' == 'invalid_arguments'&#10;  &#10;  - invalid_arguments&#10;  ?            -----&#10;  + invalid_args">workspace = WorkspaceContext(cwd='C:\\Users\\haoyu\\AppData\\Local\\Temp\\tmplilzbyeg', repo_root='C:\\Users\\haoyu\\AppData\\Loca..., 'pyproject.toml': "[project]\nname='test'\n"}, head='dd408354116fddc9b1e6792f4b2a3497bde72d9c', dirty_file_hashes={})
+
+    def test_missing_argument_is_paired_without_dispatch_or_budget_reservation(workspace):
+        calls = [
+            ToolCall("read_file", {}, "missing"),
+            ToolCall("read_file", {"path": "README.md"}, "good"),
+        ]
+        agent, client = make_agent(workspace, calls)
+        loop = AgentLoop(agent)
+        assert "done" in loop.run("inspect", skip_plan=True)
+        observations = agent.session["tool_observations"]
+        assert [o["call_id"] for o in observations] == ["missing", "good"]
+&gt;       assert observations[0]["failure_class"] == "invalid_arguments"
+E       AssertionError: assert 'invalid_args' == 'invalid_arguments'
+E         
+E         - invalid_arguments
+E         ?            -----
+E         + invalid_args
+
+tests\test_native_batch_preflight.py:48: AssertionError</failure></testcase><testcase classname="tests.test_native_batch_preflight" name="test_provider_preserves_malformed_input_until_protocol_rejection[null]" time="0.520"><failure message="AssertionError: assert {} == None&#10; +  where {} = ToolCall(name='list_files', arguments={}, call_id='bad').arguments">workspace = WorkspaceContext(cwd='C:\\Users\\haoyu\\AppData\\Local\\Temp\\tmpolce6_nz', repo_root='C:\\Users\\haoyu\\AppData\\Loca..., 'pyproject.toml': "[project]\nname='test'\n"}, head='bb70110bcc463d57b2bfcbe5052bf99a3b666510', dirty_file_hashes={})
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x000001CF1CCC35C0&gt;
+raw_input = None
+
+    @pytest.mark.parametrize("raw_input", [None, [], "{}", False], ids=["null", "array", "string", "boolean"])
+    def test_provider_preserves_malformed_input_until_protocol_rejection(
+        workspace, monkeypatch, raw_input
+    ):
+        client = AnthropicCompatibleModelClient("fixture", "https://example.invalid", "fixture")
+        data = {
+            "content": [{"type": "tool_use", "id": "bad", "name": "list_files", "input": raw_input}],
+            "stop_reason": "tool_use",
+        }
+        monkeypatch.setattr(client, "_post_messages", lambda *args, **kwargs: (data, None))
+        turn = client.complete_turn(ModelTurnRequest("", [{"role": "user", "content": "inspect"}]))
+&gt;       assert turn.tool_calls[0].arguments == raw_input
+E       AssertionError: assert {} == None
+E        +  where {} = ToolCall(name='list_files', arguments={}, call_id='bad').arguments
+
+tests\test_native_batch_preflight.py:109: AssertionError</failure></testcase></testsuite></testsuites>

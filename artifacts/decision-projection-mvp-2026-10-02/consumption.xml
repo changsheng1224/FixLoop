@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="7" time="22.329" timestamp="2026-10-02T03:00:12.715704+08:00" hostname="DESKTOP-M8LE8SP"><testcase classname="tests.test_exploration_l2" name="test_owner_delegates_collects_reviews_updates_plan_and_alone_edits[native]" time="1.663"><failure message="AssertionError: ({'edit_mode': 'plan_blocked', 'model_call_ms': 0, 'parse_apply_ms': 0, 'plan_blocked': 'plan_edit_completion_not_conf...ess_replay_incomplete': True, 'turns': {}}, 'patcher_edit_mode': 'tools_empty', 'patcher_write_attempted': False, ...})&#10;assert []">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-decision-projection-consumption/test_owner_delegates_collects_0')
+native = True
+
+    @pytest.mark.parametrize("native", [False, True], ids=["text", "native"])
+    def test_owner_delegates_collects_reviews_updates_plan_and_alone_edits(tmp_path, native):
+        orch, state, _ = repair_fixture(tmp_path)
+        # Delegation exposes a wider native schema catalog than the basic patch
+        # fixture. Reserve room for its full protocol and protected task state.
+        if native:
+            orch.patcher.config.prompt_budget = 6000
+        barrier, clients = threading.Barrier(2), []
+        owner = NativeOwnerClient(tmp_path) if native else OwnerClient(tmp_path)
+        orch.patcher.model_client = owner
+    
+        def factory(task):
+            child = DiscoveryClient(task, barrier=barrier)
+            clients.append(child)
+            return child
+    
+        orch.patcher._exploration_client_factory = factory
+        try:
+            patches, meta = orch._run_patcher_toolized(
+                state, "Delegate source and test discovery, then fix answer()", {}
+            )
+&gt;           assert patches, (meta, state.agent_errors, state.node_timings)
+E           AssertionError: ({'edit_mode': 'plan_blocked', 'model_call_ms': 0, 'parse_apply_ms': 0, 'plan_blocked': 'plan_edit_completion_not_conf...ess_replay_incomplete': True, 'turns': {}}, 'patcher_edit_mode': 'tools_empty', 'patcher_write_attempted': False, ...})
+E           assert []
+
+tests\test_exploration_l2.py:89: AssertionError</failure></testcase><testcase classname="tests.test_decision_projection" name="test_only_latest_decision_reaches_actual_request_and_checkpoint[False]" time="14.340" /><testcase classname="tests.test_decision_projection" name="test_only_latest_decision_reaches_actual_request_and_checkpoint[True]" time="0.841" /><testcase classname="tests.test_decision_projection" name="test_confirmed_patch_ignores_stale_preimage_decision_without_replaying[False]" time="1.011" /><testcase classname="tests.test_decision_projection" name="test_confirmed_patch_ignores_stale_preimage_decision_without_replaying[True]" time="0.990" /><testcase classname="tests.test_decision_projection" name="test_resume_rebuilds_latest_decision_after_checkpoint_and_ignores_cache" time="1.074" /><testcase classname="tests.test_decision_projection" name="test_process_exit_after_decision_commit_restores_one_revision" time="1.530" /></testsuite></testsuites>

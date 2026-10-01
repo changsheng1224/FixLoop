@@ -125,8 +125,9 @@ def build_context_sections(
     ctx["skills"] = int(impl.get("skills", 0) or 0)
     ctx["memory"] = int(impl.get("memory", 0) or 0)
     ctx["knowledge"] = int(implementation_sections.get("knowledge", 0) or 0)
-    ctx["state"] = count_state_section(agent, budget)
-    ctx["history"] = int(implementation_sections.get("history", 0) or 0)
+    ctx["state"] = int(impl["state"]) if "state" in impl else count_state_section(agent, budget)
+    ctx["history"] = sum(int(impl.get(name, 0) or 0) for name in ("history", "feedback", "tail"))
+    ctx["knowledge"] += int(impl.get("source", 0) or 0)
     ctx["task"] = int(implementation_sections.get("request", 0) or 0)
     return ctx
 

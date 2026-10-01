@@ -9,8 +9,41 @@ from .validate import MAX_REPLANS, validate_plan
 from .workspace import snapshot
 
 
-def replan(session, candidate, *, reason: str, evidence_refs: list[str]):
+def check_replan(session):
+    """Cheap preflight before generation; submission repeats these gates."""
+    session._fence()
     old = session.plan
+    if old.plan_version > MAX_REPLANS:
+        raise ValueError("replan_budget_exceeded")
+    if any(n.status in {"running", "uncertain"} for n in old.nodes):
+        raise ValueError("replan_requires_quiescence")
+    if any(
+        a["phase"] != "reconciled" for a in session.store.latest("attempt", "attempt_id").values()
+    ):
+        raise ValueError("replan_active_attempt")
+    for previous in old.nodes:
+        if previous.kind == "edit" and previous.status == "succeeded":
+            rollbacks = [
+                e["payload"]
+                for e in session.store.events()
+                if e["kind"] == "rollback" and e["payload"].get("plan_version") == old.plan_version
+            ]
+            latest = rollbacks[-1] if rollbacks else {}
+            if not (
+                latest.get("completed") is True
+                and latest.get("workspace_after") == latest.get("expected_after")
+                and latest.get("workspace_after") == snapshot(session.workspace)
+            ):
+                raise ValueError("replan_rollback_unconfirmed")
+
+
+def replan(session, candidate, *, reason: str, evidence_refs: list[str]):
+    session._fence()
+    if reason.startswith("verification_failed:"):
+        check_replan(session)
+    old = session.plan
+    # Generic callers may retain completed writes. Their original submission
+    # checks below still permit that; fresh retry graphs require rollback.
     if old.plan_version > MAX_REPLANS:
         raise ValueError("replan_budget_exceeded")
     if any(n.status in {"running", "uncertain"} for n in old.nodes):
@@ -95,6 +128,9 @@ def replan(session, candidate, *, reason: str, evidence_refs: list[str]):
     session.emit(
         "replan_committed",
         reason=reason,
+        trigger_ref=reason.removeprefix("verification_failed:")
+        if reason.startswith("verification_failed:")
+        else "",
         evidence_refs=evidence_refs,
         parent_plan_checksum=old.plan_checksum,
     )

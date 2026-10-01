@@ -13,6 +13,7 @@ import sqlite3
 import tempfile
 import threading
 import time
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -256,6 +257,8 @@ class Observation:
     redaction_policy_version: str = "v2"
     error_code: str = ""
     evidence_refs: list[str] = field(default_factory=list)
+    retrieval_result: dict[str, Any] = field(default_factory=dict)
+    task_id: str = ""
 
 
 OBSERVATION_ERROR_CODES = frozenset(
@@ -318,6 +321,7 @@ class ObservationStore:
 
     def __init__(self, state: dict[str, Any], root: str = "", state_root: str = ""):
         self.state = state
+        self.workspace_root = Path(root).resolve() if root else None
         if root:
             from agent_runtime.state_root import state_root_for
 
@@ -331,7 +335,9 @@ class ObservationStore:
         if not self.workspace_id and self.root is not None:
             self.workspace_id = hashlib.sha256(str(self.root.resolve()).encode()).hexdigest()[:16]
         self.session_id = str(self.scope.get("session_id", state.get("id", "")) or "")
-        self.run_id = str(state.get("run_id", "") or "")
+        identity = state.get("session_identity") or {}
+        self.run_id = str(state.get("run_id") or identity.get("run_id", "") or "")
+        self.task_id = str(identity.get("task_id", "") or "")
         lock_key = str((self.root or Path("memory://observations")).resolve())
         with self._locks_guard:
             self._lock = self._locks.setdefault(lock_key, threading.RLock())
@@ -414,9 +420,13 @@ class ObservationStore:
         evidence_refs: list[str] | None = None,
         source_dependencies: dict[str, str] | None = None,
         retrieval_query_id: str = "",
+        retrieval_result: dict[str, Any] | None = None,
     ) -> Observation:
         with self._lock:
             args = dict(args or {})
+            retrieval_query_id = retrieval_query_id or str(
+                (retrieval_result or {}).get("query_id", "")
+            )
             args_hash = self._args_hash(args)
             key = self._dedup_key(
                 tool,
@@ -436,7 +446,7 @@ class ObservationStore:
                 raw_text,
                 summary or str(raw_text)[:500],
                 structured_facts or [],
-                provenance or {},
+                {**(provenance or {}), "_retrieval": retrieval_result or {}},
                 redact,
             )
             safe_facts = self._derive_facts(str(tool), args, safe_facts, source_version, safe_raw)
@@ -452,6 +462,11 @@ class ObservationStore:
                     [
                         *(dependencies or self._infer_dependencies(tool, args)),
                         *(source_dependencies or {}).keys(),
+                        *(
+                            hit.get("path", "")
+                            for hit in (retrieval_result or {}).get("hits", [])
+                            if isinstance(hit, dict) and hit.get("path")
+                        ),
                     ]
                 )
             )
@@ -473,6 +488,7 @@ class ObservationStore:
                 workspace_id=self.workspace_id,
                 session_id=self.session_id,
                 run_id=self.run_id,
+                task_id=self.task_id,
                 sensitivity=str(sensitivity or "internal"),
                 dependencies=deps,
                 supersedes=previous_id,
@@ -481,6 +497,7 @@ class ObservationStore:
                 redaction_policy_version=self.REDACTION_POLICY_VERSION,
                 error_code=normalize_observation_error(error_code),
                 evidence_refs=list(evidence_refs or safe_provenance.get("evidence_refs", []) or []),
+                retrieval_result=safe_provenance.pop("_retrieval", {}),
             )
             record = asdict(observation)
             self.registry[observation_id] = record
@@ -750,6 +767,8 @@ class ObservationStore:
         max_tokens: int = 2000,
         budget=None,
         actor: str = "context",
+        context=None,
+        source_checks=None,
     ) -> dict[str, Any]:
         """Expand a referenced observation through the governed context path.
 
@@ -759,11 +778,67 @@ class ObservationStore:
         metadata needed for provenance-aware prompts.
         """
         record = self.get(observation_id)
-        if record is None or record.stale or record.lifecycle != "active":
+        if record is None:
             return {"ok": False, "observation_id": observation_id, "reason": "stale_or_missing"}
+        if record.stale or record.lifecycle != "active":
+            return {
+                "ok": False,
+                "observation_id": observation_id,
+                "reason": record.invalidation_reason or "stale_or_missing",
+                "freshness": "stale",
+                "retrieval_result": record.retrieval_result,
+            }
+        freshness, reason = "unknown", ""
+        if record.retrieval_result:
+            from agent_runtime.code_exploration.consumption import SourceChecks
+            from agent_runtime.tool_context import ToolContext
+
+            if (
+                record.session_id != self.session_id
+                or record.run_id != self.run_id
+                or record.workspace_id != self.workspace_id
+                or record.task_id != self.task_id
+            ):
+                freshness, reason = "stale", "scope_mismatch"
+            else:
+                context = context or ToolContext(root=str(self.workspace_root or ""))
+                checks = source_checks or SourceChecks(context)
+                freshness, reason = checks.check_retrieval(
+                    record.retrieval_result, self.workspace_root
+                )
+            if freshness != "fresh":
+                if freshness == "stale":
+                    self.invalidate(
+                        lambda item: item.get("observation_id") == observation_id, reason
+                    )
+                self.state.setdefault("observation_audit", []).append(
+                    {
+                        "event": "code_evidence_rejected",
+                        "observation_id": observation_id,
+                        "reason": reason,
+                        "freshness": freshness,
+                        "actor": actor,
+                        "at": time.time(),
+                    }
+                )
+                self.state["observation_audit"] = self.state["observation_audit"][-500:]
+                return {
+                    "ok": False,
+                    "observation_id": observation_id,
+                    "reason": reason,
+                    "freshness": freshness,
+                    "retrieval_result": record.retrieval_result,
+                }
         raw = self.expand(observation_id)
         if not raw:
-            return {"ok": False, "observation_id": observation_id, "reason": "blob_unavailable"}
+            return {
+                "ok": False,
+                "observation_id": observation_id,
+                "reason": "blob_unavailable",
+                "freshness": "stale",
+                "retrieval_result": record.retrieval_result,
+            }
+        original = raw
         if budget is not None:
             raw = budget.fit(raw, max(1, int(max_tokens)))
         else:
@@ -785,6 +860,9 @@ class ObservationStore:
             "source_version": record.source_version,
             "checksum": record.checksum,
             "content": raw,
+            "freshness": freshness,
+            "output_truncated": raw != original,
+            "retrieval_result": record.retrieval_result,
         }
 
     def get(self, observation_id: str) -> Observation | None:
@@ -1002,6 +1080,22 @@ def build_context_manifest(
     return {
         "schema_version": str(metadata.get("schema_version", "context-v2")),
         "projection_hash": str(metadata.get("projection_hash", "")),
+        "required_state_ref": dict(metadata.get("required_state_ref", {}) or {}),
+        "decision_refs": deepcopy(metadata.get("decision_refs", [])),
+        "required_sections": dict(metadata.get("required_sections", {}) or {}),
+        "section_hashes": dict(metadata.get("section_hashes", {}) or {}),
+        "protocol_reserved_tokens": int(metadata.get("protocol_reserved_tokens", 0) or 0),
+        "request_hash": str(metadata.get("request_hash", "")),
+        "request_protocol": str(metadata.get("request_protocol", "")),
+        "stage": str(metadata.get("stage", "sections")),
+        "provider_input_tokens": int(metadata.get("provider_input_tokens", 0) or 0),
+        "elastic_budget": deepcopy(metadata.get("elastic_budget", {}) or {}),
+        "source_observation_refs": list(metadata.get("source_observation_refs", [])),
+        "feedback_observation_refs": list(metadata.get("feedback_observation_refs", [])),
+        "selected_tool_call_ids": list(metadata.get("selected_tool_call_ids", [])),
+        "dropped_tool_call_ids": list(metadata.get("dropped_tool_call_ids", [])),
+        "tool_tail_drops": deepcopy(metadata.get("tool_tail_drops", [])),
+        "evidence_consumption": deepcopy(metadata.get("evidence_consumption", [])),
         "policy_version": str(metadata.get("policy_version", ContextPolicyEngine.VERSION)),
         "selected_context_ids": list(
             metadata.get("selected_context_ids", state.get("selected_context_ids", []))

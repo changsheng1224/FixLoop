@@ -1,0 +1,27 @@
+{
+  "date": "2026-10-02",
+  "related_tests_passed_unique": 69,
+  "new_test_nodes": 26,
+  "full_suite_run": false,
+  "live_provider_measured": false,
+  "l2_host_pytest": {
+    "xml": 1,
+    "native": 1,
+    "owner_write_calls_per_run": 1
+  },
+  "process_exit_code": 74,
+  "artifacts": [
+    {
+      "artifact": "l2-xml.json",
+      "source": ".pytest-subagent-consistency-cleanup/test_owner_delegates_collects_0/.agent/plans/b820681cdc8b831320b19e45c135442a4eb11b9f611c0c0d4bd6f4d4edc9047f/subagent_acceptance.json"
+    },
+    {
+      "artifact": "l2-native.json",
+      "source": ".pytest-subagent-consistency-cleanup/test_owner_delegates_collects_1/.agent/plans/b820681cdc8b831320b19e45c135442a4eb11b9f611c0c0d4bd6f4d4edc9047f/subagent_acceptance.json"
+    },
+    {
+      "artifact": "delegation-recovery.json",
+      "source": ".pytest-subagent-consistency-recovery/test_process_recovery_reuses_d0/delegation-recovery.json"
+    }
+  ]
+}

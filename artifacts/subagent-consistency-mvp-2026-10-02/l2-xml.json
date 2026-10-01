@@ -1,0 +1,1183 @@
+{
+  "plan": {
+    "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+    "task_id": "plan-fixture-run",
+    "run_id": "plan-fixture-run",
+    "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4",
+    "session_id": "plan-b820681cdc8b831320b19e45",
+    "nodes": [
+      {
+        "node_id": "explore-1",
+        "kind": "explore",
+        "objective": "Inspect repository evidence: read_file",
+        "depends_on": [],
+        "tool_allowlist": [
+          "read_file"
+        ],
+        "side_effect": "read",
+        "completion": [
+          {
+            "kind": "observation_present",
+            "evidence_refs": []
+          }
+        ],
+        "input_evidence_refs": [],
+        "output_evidence_refs": [
+          "E-8c9680d296cd4fd2a97878a1733d959e"
+        ],
+        "status": "stale",
+        "attempt_id": "attempt-d312c11ac4b24bd8983db3e604ca2f04",
+        "failure": "patch_changed_source_version",
+        "receipt_refs": [],
+        "started_at": 1790887419.1055365,
+        "ended_at": 1790887419.1428702,
+        "tool_name": "read_file",
+        "arguments_json": "{\"path\": \"value.py\"}"
+      },
+      {
+        "node_id": "analyze",
+        "kind": "analyze",
+        "objective": "Record the repair hypothesis with repository evidence",
+        "depends_on": [
+          "explore-1"
+        ],
+        "tool_allowlist": [
+          "ast_parse",
+          "code_lookup",
+          "code_relations",
+          "find_test",
+          "finish_repair",
+          "git_blame",
+          "git_diff",
+          "grep",
+          "inspect_file",
+          "java_ast_parse",
+          "java_stack_parse",
+          "list_files",
+          "read_file",
+          "search",
+          "stack_parse",
+          "delegate_exploration",
+          "collect_exploration"
+        ],
+        "side_effect": "read",
+        "completion": [
+          {
+            "kind": "analysis_recorded",
+            "evidence_refs": []
+          }
+        ],
+        "input_evidence_refs": [
+          "E-8c9680d296cd4fd2a97878a1733d959e"
+        ],
+        "output_evidence_refs": [
+          "E-6777ffcc5d354f8db53cc054c3afebfd"
+        ],
+        "status": "stale",
+        "attempt_id": "attempt-6fa7d5599c874a7d874a71974b416c23",
+        "failure": "patch_changed_source_version",
+        "receipt_refs": [],
+        "started_at": 1790887419.213721,
+        "ended_at": 1790887419.26593,
+        "tool_name": "",
+        "arguments_json": "{}"
+      },
+      {
+        "node_id": "edit",
+        "kind": "edit",
+        "objective": "Fix value.py: answer() returns 1 but should return 2.",
+        "depends_on": [
+          "analyze"
+        ],
+        "tool_allowlist": [
+          "apply_patch",
+          "ast_parse",
+          "code_lookup",
+          "code_relations",
+          "expand_lock",
+          "find_test",
+          "finish_repair",
+          "git_blame",
+          "git_diff",
+          "grep",
+          "inspect_file",
+          "java_ast_parse",
+          "java_stack_parse",
+          "list_files",
+          "patch_file",
+          "read_file",
+          "search",
+          "stack_parse",
+          "write_file",
+          "delegate_exploration",
+          "collect_exploration"
+        ],
+        "side_effect": "write",
+        "completion": [
+          {
+            "kind": "patch_applied",
+            "evidence_refs": []
+          }
+        ],
+        "input_evidence_refs": [],
+        "output_evidence_refs": [
+          "E-bbb7320d9f204c80805ef3b54f887cd5"
+        ],
+        "status": "succeeded",
+        "attempt_id": "attempt-dfb0210fb12b491fa7cee935b787d1ef",
+        "failure": "",
+        "receipt_refs": [
+          "receipt-0a9e82ad1f4a612b0054",
+          "receipt-96babcc168d9bbd1fdf1",
+          "receipt-d32e13a4cb0598f14108",
+          "receipt-0afe8d95fa3883aee1e2",
+          "receipt-8821bb770a4876a7d91f"
+        ],
+        "started_at": 1790887419.3234324,
+        "ended_at": 1790887436.1834338,
+        "tool_name": "",
+        "arguments_json": "{}"
+      },
+      {
+        "node_id": "verify",
+        "kind": "verify",
+        "objective": "Run the existing final verifier against the applied patch",
+        "depends_on": [
+          "edit"
+        ],
+        "tool_allowlist": [],
+        "side_effect": "verify",
+        "completion": [
+          {
+            "kind": "tests_passed",
+            "evidence_refs": []
+          }
+        ],
+        "input_evidence_refs": [],
+        "output_evidence_refs": [
+          "E-2d9343f35a3140e78a138d2771ea9f44"
+        ],
+        "status": "succeeded",
+        "attempt_id": "attempt-32a7f83622424d49a5a4c16f759c723a",
+        "failure": "",
+        "receipt_refs": [],
+        "started_at": 1790887436.3658364,
+        "ended_at": 1790887437.4058473,
+        "tool_name": "",
+        "arguments_json": "{}"
+      }
+    ],
+    "schema_version": "1",
+    "plan_version": 1,
+    "state_revision": 14,
+    "created_at": 1790887418.9704008,
+    "status": "completed",
+    "plan_checksum": "488334be7962dbe15a746c740a43ea969e645b4609f3bd4d3de87c9781c50802",
+    "parent_plan_checksum": "",
+    "replan_reason": "",
+    "replan_evidence_refs": []
+  },
+  "owner_reviews": [
+    {
+      "attempt_id": "explore-attempt-2813073cf83548138ce1cf0712dfd044",
+      "candidate": {
+        "category": "implementation_location",
+        "claim_key": "implementation_location",
+        "file_hash": "708d57db8537b4ff41d1c6486d30a7b5d9f78b7032b258357f598a98886edee1",
+        "path": "value.py",
+        "range": {
+          "end_column": null,
+          "end_line": 3,
+          "exact": false,
+          "start_column": null,
+          "start_line": 1
+        },
+        "resolution": "parsed",
+        "review": "candidate",
+        "scope": [
+          "."
+        ],
+        "sources": [
+          {
+            "attempt_id": "explore-attempt-2813073cf83548138ce1cf0712dfd044",
+            "checksum": "1d0e3043a083919dc1c34b3f6d87b8c4bea8a3e1e54e7dbad0fef607189da2cb",
+            "observation_id": "OBS-cb0eed6b841fb778",
+            "task_id": "task-e1a2fba07bcd4b4a",
+            "tool": "read_file"
+          }
+        ],
+        "statement": "Observed answer source"
+      },
+      "decision": "owner_reinspected_source; statement remains a candidate",
+      "owner_evidence_refs": [
+        "E-d6ee481a001240d0941bc80780cf6a7a"
+      ],
+      "review_id": "719697d57d2d0b8012b38dc9a344afe8587c16d999bad1ff149d7dc35f69d60b",
+      "task_id": "task-e1a2fba07bcd4b4a"
+    },
+    {
+      "attempt_id": "explore-attempt-b1c58fa3d00c4dc6b81b2b5ac472f2ba",
+      "candidate": {
+        "category": "related_tests",
+        "claim_key": "related_tests",
+        "file_hash": "bfcd3a65cc51ffc4b81aaf70b5566ab3f2d413dda468fb27b03c9fbc083c1484",
+        "path": "test_value.py",
+        "range": {
+          "end_column": null,
+          "end_line": 4,
+          "exact": false,
+          "start_column": null,
+          "start_line": 1
+        },
+        "resolution": "parsed",
+        "review": "candidate",
+        "scope": [
+          "."
+        ],
+        "sources": [
+          {
+            "attempt_id": "explore-attempt-b1c58fa3d00c4dc6b81b2b5ac472f2ba",
+            "checksum": "f3939232b84f324ad367f540ae7921c6a5f57496aaa24378e3ba8bf578afb0c1",
+            "observation_id": "OBS-d36dcebb2c186d97",
+            "task_id": "task-58497d30470b4044",
+            "tool": "read_file"
+          }
+        ],
+        "statement": "Candidate test for answer; coverage unverified"
+      },
+      "decision": "owner_reinspected_source; statement remains a candidate",
+      "owner_evidence_refs": [
+        "E-ab309d20def346b2a703ee7079196a05"
+      ],
+      "review_id": "bca89d1329cd2b2c29a70bce162185c970fa6747d7d063fb174595318fcd14a2",
+      "task_id": "task-58497d30470b4044"
+    }
+  ],
+  "subagent_tasks": [
+    {
+      "task_id": "task-e1a2fba07bcd4b4a",
+      "run_id": "plan-fixture-run",
+      "role": "explorer",
+      "kind": "implementation_location",
+      "phase": "explore",
+      "payload": {
+        "exploration": {
+          "attempt_id": "explore-attempt-2813073cf83548138ce1cf0712dfd044",
+          "batch_id": "exploration-batch-57bf1ab7346743b8bb070187e5e1729c",
+          "charged_tokens": 300,
+          "cleanup_confirmed": true,
+          "delegation_context": {
+            "checksum": "1532880b7bdf8ab5949fbab064e9fa9f5fa628220b0caf5e42b9bfcd5c7ed60c",
+            "current_node": {
+              "block_or_failure_reason": "",
+              "completion": [
+                {
+                  "evidence_refs": [],
+                  "kind": "patch_applied"
+                }
+              ],
+              "dependency_statuses": {
+                "analyze": "succeeded"
+              },
+              "depends_on": [
+                "analyze"
+              ],
+              "input_evidence_refs": [],
+              "kind": "edit",
+              "node_id": "edit",
+              "objective": "Fix value.py: answer() returns 1 but should return 2.",
+              "output_evidence_refs": [],
+              "status": "running"
+            },
+            "goal": "Fix value.py: answer() returns 1 but should return 2.",
+            "hard_constraints": [],
+            "plan_view": {
+              "plan_checksum": "66d2c4bf8d9b440e128ba5fc2d2d96736ee03cd8aa4c299b0b18803db00e5448",
+              "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+              "plan_version": 1,
+              "run_id": "plan-fixture-run",
+              "selected_node_id": "edit",
+              "state_revision": 8,
+              "task_id": "plan-fixture-run",
+              "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4"
+            },
+            "schema_version": "delegation-context-v1",
+            "task_state_revision": 8
+          },
+          "emitted": [
+            "subagent_result_collected:explore-attempt-2813073cf83548138ce1cf0712dfd044"
+          ],
+          "ended_at": 1790887433.172576,
+          "input_observation_ids": [],
+          "input_summaries": [],
+          "kind": "implementation_location",
+          "lease_generation": 1,
+          "max_model_turns": 3,
+          "max_tool_calls": 4,
+          "node_id": "edit",
+          "owner": {
+            "generation": 134353610142281336,
+            "pid": 77092
+          },
+          "owner_prior_operations": [
+            "op-1908c91bc4e543bca17e231adececfad",
+            "op-ae493fc5dc6a488faf9608618b45ca52",
+            "op-37607d44f51141e4b35e84884a849445"
+          ],
+          "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+          "plan_version": 1,
+          "question": "Locate answer's implementation.",
+          "receipts": [
+            {
+              "attempt_id": "explore-attempt-2813073cf83548138ce1cf0712dfd044",
+              "charged_tokens": 300,
+              "lease_generation": 1,
+              "model_turns": 2,
+              "reserved_tokens": 24000,
+              "tool_calls": 1,
+              "usage_known": true
+            }
+          ],
+          "reservation_settled": true,
+          "result": {
+            "attempt_id": "explore-attempt-2813073cf83548138ce1cf0712dfd044",
+            "checksum": "9d29095a266cf9d0ee7d1b0dc8a044c65785889688d65826ce5d77ed2b04eb50",
+            "complete": true,
+            "coverage": [
+              {
+                "completeness": "complete_in_scope",
+                "observation_id": "OBS-cb0eed6b841fb778",
+                "scope": {
+                  "lines_seen": 2,
+                  "paths": [
+                    "value.py"
+                  ]
+                },
+                "tool": "read_file",
+                "truncation": []
+              }
+            ],
+            "ended_at": 1790887433.1563072,
+            "error_code": "",
+            "findings": [
+              {
+                "category": "implementation_location",
+                "claim_key": "implementation_location",
+                "file_hash": "708d57db8537b4ff41d1c6486d30a7b5d9f78b7032b258357f598a98886edee1",
+                "path": "value.py",
+                "range": {
+                  "end_column": null,
+                  "end_line": 3,
+                  "exact": false,
+                  "start_column": null,
+                  "start_line": 1
+                },
+                "resolution": "parsed",
+                "review": "candidate",
+                "scope": [
+                  "."
+                ],
+                "sources": [
+                  {
+                    "attempt_id": "explore-attempt-2813073cf83548138ce1cf0712dfd044",
+                    "checksum": "1d0e3043a083919dc1c34b3f6d87b8c4bea8a3e1e54e7dbad0fef607189da2cb",
+                    "observation_id": "OBS-cb0eed6b841fb778",
+                    "task_id": "task-e1a2fba07bcd4b4a",
+                    "tool": "read_file"
+                  }
+                ],
+                "statement": "Observed answer source"
+              }
+            ],
+            "lease_generation": 1,
+            "node_id": "edit",
+            "observations": [
+              {
+                "attempt_id": "explore-attempt-2813073cf83548138ce1cf0712dfd044",
+                "checksum": "1d0e3043a083919dc1c34b3f6d87b8c4bea8a3e1e54e7dbad0fef607189da2cb",
+                "complete": true,
+                "file_versions": {
+                  "value.py": "708d57db8537b4ff41d1c6486d30a7b5d9f78b7032b258357f598a98886edee1"
+                },
+                "hits": [
+                  {
+                    "content_hash": "708d57db8537b4ff41d1c6486d30a7b5d9f78b7032b258357f598a98886edee1",
+                    "excerpt_hash": "dd46cb2f80fe2d22e284d503f04d3f7c6a66956a171eaa0e8d128e7e2dee5a0e",
+                    "hit_id": "e7e9285bd75343ab8cd9446ad8f6841e:1",
+                    "kind": "source_excerpt",
+                    "observed_at": "2026-10-01T20:43:53.103097+00:00",
+                    "path": "value.py",
+                    "range": {
+                      "end_column": null,
+                      "end_line": 3,
+                      "exact": false,
+                      "start_column": null,
+                      "start_line": 1
+                    },
+                    "resolution": "syntactic",
+                    "server_id": null,
+                    "source": "filesystem",
+                    "summary": "lines 1-2"
+                  }
+                ],
+                "observation_id": "OBS-cb0eed6b841fb778",
+                "tool": "read_file"
+              }
+            ],
+            "parent_task_id": "plan-fixture-run",
+            "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+            "plan_version": 1,
+            "run_id": "plan-fixture-run",
+            "schema_version": "1",
+            "started_at": 1790887433.048102,
+            "status": "completed",
+            "summary": "Located source",
+            "task_id": "task-e1a2fba07bcd4b4a",
+            "unknowns": [],
+            "usage": {
+              "model_turns": 2,
+              "tokens": 300,
+              "tool_calls": 1
+            },
+            "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4"
+          },
+          "result_ref": "explore-result-a537144fe5f64f54acf12d0b91bc07e1",
+          "schema_version": "1",
+          "scope_paths": [
+            "."
+          ],
+          "started_at": 1790887433.048102,
+          "status": "completed",
+          "token_reservation": 24000,
+          "turn_id": "exploration-plan-fixture-run-1",
+          "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4",
+          "workspace_revision": {
+            "test_value.py": "bfcd3a65cc51ffc4b81aaf70b5566ab3f2d413dda468fb27b03c9fbc083c1484",
+            "value.py": "708d57db8537b4ff41d1c6486d30a7b5d9f78b7032b258357f598a98886edee1"
+          }
+        }
+      },
+      "input_refs": [],
+      "depends_on": [],
+      "priority": 0,
+      "deadline_at": 1790887493.0244608,
+      "budget": {
+        "tokens": 24000,
+        "tools": 4
+      },
+      "parent_task_id": "plan-fixture-run",
+      "attempt": 1,
+      "max_attempts": 1,
+      "status": "completed",
+      "version": 4,
+      "lease_owner": "",
+      "lease_expires_at": 0,
+      "retry_at": 0.0,
+      "created_at": 1790887433.0246997,
+      "updated_at": 1790887433.5474973
+    },
+    {
+      "task_id": "task-58497d30470b4044",
+      "run_id": "plan-fixture-run",
+      "role": "explorer",
+      "kind": "related_tests",
+      "phase": "explore",
+      "payload": {
+        "exploration": {
+          "attempt_id": "explore-attempt-b1c58fa3d00c4dc6b81b2b5ac472f2ba",
+          "batch_id": "exploration-batch-57bf1ab7346743b8bb070187e5e1729c",
+          "charged_tokens": 300,
+          "cleanup_confirmed": true,
+          "delegation_context": {
+            "checksum": "1532880b7bdf8ab5949fbab064e9fa9f5fa628220b0caf5e42b9bfcd5c7ed60c",
+            "current_node": {
+              "block_or_failure_reason": "",
+              "completion": [
+                {
+                  "evidence_refs": [],
+                  "kind": "patch_applied"
+                }
+              ],
+              "dependency_statuses": {
+                "analyze": "succeeded"
+              },
+              "depends_on": [
+                "analyze"
+              ],
+              "input_evidence_refs": [],
+              "kind": "edit",
+              "node_id": "edit",
+              "objective": "Fix value.py: answer() returns 1 but should return 2.",
+              "output_evidence_refs": [],
+              "status": "running"
+            },
+            "goal": "Fix value.py: answer() returns 1 but should return 2.",
+            "hard_constraints": [],
+            "plan_view": {
+              "plan_checksum": "66d2c4bf8d9b440e128ba5fc2d2d96736ee03cd8aa4c299b0b18803db00e5448",
+              "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+              "plan_version": 1,
+              "run_id": "plan-fixture-run",
+              "selected_node_id": "edit",
+              "state_revision": 8,
+              "task_id": "plan-fixture-run",
+              "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4"
+            },
+            "schema_version": "delegation-context-v1",
+            "task_state_revision": 8
+          },
+          "emitted": [
+            "subagent_result_collected:explore-attempt-b1c58fa3d00c4dc6b81b2b5ac472f2ba"
+          ],
+          "ended_at": 1790887433.1904774,
+          "input_observation_ids": [],
+          "input_summaries": [],
+          "kind": "related_tests",
+          "lease_generation": 1,
+          "max_model_turns": 3,
+          "max_tool_calls": 4,
+          "node_id": "edit",
+          "owner": {
+            "generation": 134353610142281336,
+            "pid": 77092
+          },
+          "owner_prior_operations": [
+            "op-1908c91bc4e543bca17e231adececfad",
+            "op-ae493fc5dc6a488faf9608618b45ca52",
+            "op-37607d44f51141e4b35e84884a849445"
+          ],
+          "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+          "plan_version": 1,
+          "question": "Find existing tests for answer.",
+          "receipts": [
+            {
+              "attempt_id": "explore-attempt-b1c58fa3d00c4dc6b81b2b5ac472f2ba",
+              "charged_tokens": 300,
+              "lease_generation": 1,
+              "model_turns": 2,
+              "reserved_tokens": 24000,
+              "tool_calls": 1,
+              "usage_known": true
+            }
+          ],
+          "reservation_settled": true,
+          "result": {
+            "attempt_id": "explore-attempt-b1c58fa3d00c4dc6b81b2b5ac472f2ba",
+            "checksum": "ec61136a51e4fef79f081321c9c4735ddacab78e278fcf67704b41c95d11b293",
+            "complete": true,
+            "coverage": [
+              {
+                "completeness": "complete_in_scope",
+                "observation_id": "OBS-d36dcebb2c186d97",
+                "scope": {
+                  "lines_seen": 3,
+                  "paths": [
+                    "test_value.py"
+                  ]
+                },
+                "tool": "read_file",
+                "truncation": []
+              }
+            ],
+            "ended_at": 1790887433.172815,
+            "error_code": "",
+            "findings": [
+              {
+                "category": "related_tests",
+                "claim_key": "related_tests",
+                "file_hash": "bfcd3a65cc51ffc4b81aaf70b5566ab3f2d413dda468fb27b03c9fbc083c1484",
+                "path": "test_value.py",
+                "range": {
+                  "end_column": null,
+                  "end_line": 4,
+                  "exact": false,
+                  "start_column": null,
+                  "start_line": 1
+                },
+                "resolution": "parsed",
+                "review": "candidate",
+                "scope": [
+                  "."
+                ],
+                "sources": [
+                  {
+                    "attempt_id": "explore-attempt-b1c58fa3d00c4dc6b81b2b5ac472f2ba",
+                    "checksum": "f3939232b84f324ad367f540ae7921c6a5f57496aaa24378e3ba8bf578afb0c1",
+                    "observation_id": "OBS-d36dcebb2c186d97",
+                    "task_id": "task-58497d30470b4044",
+                    "tool": "read_file"
+                  }
+                ],
+                "statement": "Candidate test for answer; coverage unverified"
+              }
+            ],
+            "lease_generation": 1,
+            "node_id": "edit",
+            "observations": [
+              {
+                "attempt_id": "explore-attempt-b1c58fa3d00c4dc6b81b2b5ac472f2ba",
+                "checksum": "f3939232b84f324ad367f540ae7921c6a5f57496aaa24378e3ba8bf578afb0c1",
+                "complete": true,
+                "file_versions": {
+                  "test_value.py": "bfcd3a65cc51ffc4b81aaf70b5566ab3f2d413dda468fb27b03c9fbc083c1484"
+                },
+                "hits": [
+                  {
+                    "content_hash": "bfcd3a65cc51ffc4b81aaf70b5566ab3f2d413dda468fb27b03c9fbc083c1484",
+                    "excerpt_hash": "2398d1e312e7c5b6962d89d4717023c9eee1a339bf951fd2cb900ea2d5e91b95",
+                    "hit_id": "65fbbef4d8b0486fb3cc3600c0088855:1",
+                    "kind": "source_excerpt",
+                    "observed_at": "2026-10-01T20:43:53.107257+00:00",
+                    "path": "test_value.py",
+                    "range": {
+                      "end_column": null,
+                      "end_line": 4,
+                      "exact": false,
+                      "start_column": null,
+                      "start_line": 1
+                    },
+                    "resolution": "syntactic",
+                    "server_id": null,
+                    "source": "filesystem",
+                    "summary": "lines 1-3"
+                  }
+                ],
+                "observation_id": "OBS-d36dcebb2c186d97",
+                "tool": "read_file"
+              }
+            ],
+            "parent_task_id": "plan-fixture-run",
+            "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+            "plan_version": 1,
+            "run_id": "plan-fixture-run",
+            "schema_version": "1",
+            "started_at": 1790887433.0643222,
+            "status": "completed",
+            "summary": "Located source",
+            "task_id": "task-58497d30470b4044",
+            "unknowns": [
+              "Tests were discovered only; execution and coverage are unverified."
+            ],
+            "usage": {
+              "model_turns": 2,
+              "tokens": 300,
+              "tool_calls": 1
+            },
+            "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4"
+          },
+          "result_ref": "explore-result-ffe013ad692a466fbe8484e09ba869d7",
+          "schema_version": "1",
+          "scope_paths": [
+            "."
+          ],
+          "started_at": 1790887433.0643222,
+          "status": "completed",
+          "token_reservation": 24000,
+          "turn_id": "exploration-plan-fixture-run-1",
+          "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4",
+          "workspace_revision": {
+            "test_value.py": "bfcd3a65cc51ffc4b81aaf70b5566ab3f2d413dda468fb27b03c9fbc083c1484",
+            "value.py": "708d57db8537b4ff41d1c6486d30a7b5d9f78b7032b258357f598a98886edee1"
+          }
+        }
+      },
+      "input_refs": [],
+      "depends_on": [],
+      "priority": 0,
+      "deadline_at": 1790887493.0247154,
+      "budget": {
+        "tokens": 24000,
+        "tools": 4
+      },
+      "parent_task_id": "plan-fixture-run",
+      "attempt": 1,
+      "max_attempts": 1,
+      "status": "completed",
+      "version": 4,
+      "lease_owner": "",
+      "lease_expires_at": 0,
+      "retry_at": 0.0,
+      "created_at": 1790887433.02492,
+      "updated_at": 1790887433.5602527
+    }
+  ],
+  "events": [
+    {
+      "attempt_id": "",
+      "budget": {
+        "tokens": 24000,
+        "tools": 4
+      },
+      "call_id": "task-e1a2fba07bcd4b4a",
+      "duration_ms": 0,
+      "event": "subagent_queued",
+      "lease_generation": 0,
+      "node_id": "edit",
+      "parent_task_id": "plan-fixture-run",
+      "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+      "plan_version": 1,
+      "run_id": "plan-fixture-run",
+      "status": "queued",
+      "task_id": "task-e1a2fba07bcd4b4a",
+      "tool_name": "implementation_location",
+      "turn_id": "exploration-plan-fixture-run-1",
+      "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4",
+      "event_seq": 1
+    },
+    {
+      "attempt_id": "",
+      "budget": {
+        "tokens": 24000,
+        "tools": 4
+      },
+      "call_id": "task-58497d30470b4044",
+      "duration_ms": 0,
+      "event": "subagent_queued",
+      "lease_generation": 0,
+      "node_id": "edit",
+      "parent_task_id": "plan-fixture-run",
+      "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+      "plan_version": 1,
+      "run_id": "plan-fixture-run",
+      "status": "queued",
+      "task_id": "task-58497d30470b4044",
+      "tool_name": "related_tests",
+      "turn_id": "exploration-plan-fixture-run-1",
+      "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4",
+      "event_seq": 2
+    },
+    {
+      "attempt_id": "",
+      "budget": {
+        "tokens": 24000,
+        "tools": 4
+      },
+      "call_id": "task-e1a2fba07bcd4b4a",
+      "duration_ms": 0,
+      "event": "exploration_batch_submitted",
+      "lease_generation": 0,
+      "node_id": "edit",
+      "parent_task_id": "plan-fixture-run",
+      "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+      "plan_version": 1,
+      "run_id": "plan-fixture-run",
+      "status": "queued",
+      "task_id": "task-e1a2fba07bcd4b4a",
+      "tool_name": "implementation_location",
+      "turn_id": "exploration-plan-fixture-run-1",
+      "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4",
+      "event_seq": 3
+    },
+    {
+      "attempt_id": "explore-attempt-2813073cf83548138ce1cf0712dfd044",
+      "budget": {
+        "tokens": 24000,
+        "tools": 4
+      },
+      "call_id": "task-e1a2fba07bcd4b4a",
+      "duration_ms": 0,
+      "event": "subagent_started",
+      "lease_generation": 1,
+      "node_id": "edit",
+      "parent_task_id": "plan-fixture-run",
+      "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+      "plan_version": 1,
+      "run_id": "plan-fixture-run",
+      "status": "running",
+      "task_id": "task-e1a2fba07bcd4b4a",
+      "tool_name": "implementation_location",
+      "turn_id": "exploration-plan-fixture-run-1",
+      "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4",
+      "event_seq": 4
+    },
+    {
+      "attempt_id": "explore-attempt-2813073cf83548138ce1cf0712dfd044",
+      "budget": {
+        "tokens": 24000,
+        "tools": 4
+      },
+      "call_id": "task-e1a2fba07bcd4b4a",
+      "duration_ms": 9,
+      "event": "subagent_model_started",
+      "lease_generation": 1,
+      "model_turn": 1,
+      "node_id": "edit",
+      "parent_task_id": "plan-fixture-run",
+      "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+      "plan_version": 1,
+      "run_id": "plan-fixture-run",
+      "status": "running",
+      "task_id": "task-e1a2fba07bcd4b4a",
+      "tool_name": "implementation_location",
+      "turn_id": "exploration-plan-fixture-run-1",
+      "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4",
+      "event_seq": 5
+    },
+    {
+      "attempt_id": "explore-attempt-b1c58fa3d00c4dc6b81b2b5ac472f2ba",
+      "budget": {
+        "tokens": 24000,
+        "tools": 4
+      },
+      "call_id": "task-58497d30470b4044",
+      "duration_ms": 0,
+      "event": "subagent_started",
+      "lease_generation": 1,
+      "node_id": "edit",
+      "parent_task_id": "plan-fixture-run",
+      "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+      "plan_version": 1,
+      "run_id": "plan-fixture-run",
+      "status": "running",
+      "task_id": "task-58497d30470b4044",
+      "tool_name": "related_tests",
+      "turn_id": "exploration-plan-fixture-run-1",
+      "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4",
+      "event_seq": 6
+    },
+    {
+      "attempt_id": "explore-attempt-b1c58fa3d00c4dc6b81b2b5ac472f2ba",
+      "budget": {
+        "tokens": 24000,
+        "tools": 4
+      },
+      "call_id": "task-58497d30470b4044",
+      "duration_ms": 8,
+      "event": "subagent_model_started",
+      "lease_generation": 1,
+      "model_turn": 1,
+      "node_id": "edit",
+      "parent_task_id": "plan-fixture-run",
+      "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+      "plan_version": 1,
+      "run_id": "plan-fixture-run",
+      "status": "running",
+      "task_id": "task-58497d30470b4044",
+      "tool_name": "related_tests",
+      "turn_id": "exploration-plan-fixture-run-1",
+      "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4",
+      "event_seq": 7
+    },
+    {
+      "attempt_id": "explore-attempt-2813073cf83548138ce1cf0712dfd044",
+      "budget": {
+        "tokens": 24000,
+        "tools": 4
+      },
+      "call_id": "task-e1a2fba07bcd4b4a",
+      "duration_ms": 30,
+      "event": "subagent_model_completed",
+      "lease_generation": 1,
+      "model_turn": 1,
+      "node_id": "edit",
+      "parent_task_id": "plan-fixture-run",
+      "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+      "plan_version": 1,
+      "run_id": "plan-fixture-run",
+      "status": "running",
+      "task_id": "task-e1a2fba07bcd4b4a",
+      "tool_name": "implementation_location",
+      "turn_id": "exploration-plan-fixture-run-1",
+      "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4",
+      "event_seq": 8
+    },
+    {
+      "attempt_id": "explore-attempt-b1c58fa3d00c4dc6b81b2b5ac472f2ba",
+      "budget": {
+        "tokens": 24000,
+        "tools": 4
+      },
+      "call_id": "task-58497d30470b4044",
+      "duration_ms": 15,
+      "event": "subagent_model_completed",
+      "lease_generation": 1,
+      "model_turn": 1,
+      "node_id": "edit",
+      "parent_task_id": "plan-fixture-run",
+      "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+      "plan_version": 1,
+      "run_id": "plan-fixture-run",
+      "status": "running",
+      "task_id": "task-58497d30470b4044",
+      "tool_name": "related_tests",
+      "turn_id": "exploration-plan-fixture-run-1",
+      "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4",
+      "event_seq": 9
+    },
+    {
+      "attempt_id": "explore-attempt-2813073cf83548138ce1cf0712dfd044",
+      "budget": {
+        "tokens": 24000,
+        "tools": 4
+      },
+      "call_id": "task-e1a2fba07bcd4b4a",
+      "duration_ms": 48,
+      "event": "subagent_tool_started",
+      "lease_generation": 1,
+      "node_id": "edit",
+      "parent_task_id": "plan-fixture-run",
+      "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+      "plan_version": 1,
+      "run_id": "plan-fixture-run",
+      "status": "running",
+      "task_id": "task-e1a2fba07bcd4b4a",
+      "tool_call": 1,
+      "tool_name": "implementation_location",
+      "turn_id": "exploration-plan-fixture-run-1",
+      "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4",
+      "event_seq": 10
+    },
+    {
+      "attempt_id": "explore-attempt-b1c58fa3d00c4dc6b81b2b5ac472f2ba",
+      "budget": {
+        "tokens": 24000,
+        "tools": 4
+      },
+      "call_id": "task-58497d30470b4044",
+      "duration_ms": 34,
+      "event": "subagent_tool_started",
+      "lease_generation": 1,
+      "node_id": "edit",
+      "parent_task_id": "plan-fixture-run",
+      "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+      "plan_version": 1,
+      "run_id": "plan-fixture-run",
+      "status": "running",
+      "task_id": "task-58497d30470b4044",
+      "tool_call": 1,
+      "tool_name": "related_tests",
+      "turn_id": "exploration-plan-fixture-run-1",
+      "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4",
+      "event_seq": 11
+    },
+    {
+      "attempt_id": "explore-attempt-2813073cf83548138ce1cf0712dfd044",
+      "budget": {
+        "tokens": 24000,
+        "tools": 4
+      },
+      "call_id": "task-e1a2fba07bcd4b4a",
+      "duration_ms": 78,
+      "event": "subagent_tool_completed",
+      "lease_generation": 1,
+      "node_id": "edit",
+      "parent_task_id": "plan-fixture-run",
+      "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+      "plan_version": 1,
+      "run_id": "plan-fixture-run",
+      "status": "running",
+      "task_id": "task-e1a2fba07bcd4b4a",
+      "tool_call": 1,
+      "tool_name": "implementation_location",
+      "turn_id": "exploration-plan-fixture-run-1",
+      "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4",
+      "event_seq": 12
+    },
+    {
+      "attempt_id": "explore-attempt-b1c58fa3d00c4dc6b81b2b5ac472f2ba",
+      "budget": {
+        "tokens": 24000,
+        "tools": 4
+      },
+      "call_id": "task-58497d30470b4044",
+      "duration_ms": 80,
+      "event": "subagent_tool_completed",
+      "lease_generation": 1,
+      "node_id": "edit",
+      "parent_task_id": "plan-fixture-run",
+      "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+      "plan_version": 1,
+      "run_id": "plan-fixture-run",
+      "status": "running",
+      "task_id": "task-58497d30470b4044",
+      "tool_call": 1,
+      "tool_name": "related_tests",
+      "turn_id": "exploration-plan-fixture-run-1",
+      "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4",
+      "event_seq": 13
+    },
+    {
+      "attempt_id": "explore-attempt-2813073cf83548138ce1cf0712dfd044",
+      "budget": {
+        "tokens": 24000,
+        "tools": 4
+      },
+      "call_id": "task-e1a2fba07bcd4b4a",
+      "duration_ms": 100,
+      "event": "subagent_model_started",
+      "lease_generation": 1,
+      "model_turn": 2,
+      "node_id": "edit",
+      "parent_task_id": "plan-fixture-run",
+      "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+      "plan_version": 1,
+      "run_id": "plan-fixture-run",
+      "status": "running",
+      "task_id": "task-e1a2fba07bcd4b4a",
+      "tool_name": "implementation_location",
+      "turn_id": "exploration-plan-fixture-run-1",
+      "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4",
+      "event_seq": 14
+    },
+    {
+      "attempt_id": "explore-attempt-b1c58fa3d00c4dc6b81b2b5ac472f2ba",
+      "budget": {
+        "tokens": 24000,
+        "tools": 4
+      },
+      "call_id": "task-58497d30470b4044",
+      "duration_ms": 89,
+      "event": "subagent_model_started",
+      "lease_generation": 1,
+      "model_turn": 2,
+      "node_id": "edit",
+      "parent_task_id": "plan-fixture-run",
+      "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+      "plan_version": 1,
+      "run_id": "plan-fixture-run",
+      "status": "running",
+      "task_id": "task-58497d30470b4044",
+      "tool_name": "related_tests",
+      "turn_id": "exploration-plan-fixture-run-1",
+      "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4",
+      "event_seq": 15
+    },
+    {
+      "attempt_id": "explore-attempt-2813073cf83548138ce1cf0712dfd044",
+      "budget": {
+        "tokens": 24000,
+        "tools": 4
+      },
+      "call_id": "task-e1a2fba07bcd4b4a",
+      "duration_ms": 107,
+      "event": "subagent_model_completed",
+      "lease_generation": 1,
+      "model_turn": 2,
+      "node_id": "edit",
+      "parent_task_id": "plan-fixture-run",
+      "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+      "plan_version": 1,
+      "run_id": "plan-fixture-run",
+      "status": "running",
+      "task_id": "task-e1a2fba07bcd4b4a",
+      "tool_name": "implementation_location",
+      "turn_id": "exploration-plan-fixture-run-1",
+      "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4",
+      "event_seq": 16
+    },
+    {
+      "attempt_id": "explore-attempt-b1c58fa3d00c4dc6b81b2b5ac472f2ba",
+      "budget": {
+        "tokens": 24000,
+        "tools": 4
+      },
+      "call_id": "task-58497d30470b4044",
+      "duration_ms": 106,
+      "event": "subagent_model_completed",
+      "lease_generation": 1,
+      "model_turn": 2,
+      "node_id": "edit",
+      "parent_task_id": "plan-fixture-run",
+      "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+      "plan_version": 1,
+      "run_id": "plan-fixture-run",
+      "status": "running",
+      "task_id": "task-58497d30470b4044",
+      "tool_name": "related_tests",
+      "turn_id": "exploration-plan-fixture-run-1",
+      "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4",
+      "event_seq": 17
+    },
+    {
+      "attempt_id": "explore-attempt-2813073cf83548138ce1cf0712dfd044",
+      "budget": {
+        "tokens": 24000,
+        "tools": 4
+      },
+      "call_id": "task-e1a2fba07bcd4b4a",
+      "duration_ms": 124,
+      "event": "subagent_completed",
+      "lease_generation": 1,
+      "node_id": "edit",
+      "parent_task_id": "plan-fixture-run",
+      "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+      "plan_version": 1,
+      "run_id": "plan-fixture-run",
+      "status": "completed",
+      "task_id": "task-e1a2fba07bcd4b4a",
+      "tool_name": "implementation_location",
+      "turn_id": "exploration-plan-fixture-run-1",
+      "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4",
+      "event_seq": 18
+    },
+    {
+      "attempt_id": "explore-attempt-b1c58fa3d00c4dc6b81b2b5ac472f2ba",
+      "budget": {
+        "tokens": 24000,
+        "tools": 4
+      },
+      "call_id": "task-58497d30470b4044",
+      "duration_ms": 126,
+      "event": "subagent_completed",
+      "lease_generation": 1,
+      "node_id": "edit",
+      "parent_task_id": "plan-fixture-run",
+      "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+      "plan_version": 1,
+      "run_id": "plan-fixture-run",
+      "status": "completed",
+      "task_id": "task-58497d30470b4044",
+      "tool_name": "related_tests",
+      "turn_id": "exploration-plan-fixture-run-1",
+      "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4",
+      "event_seq": 19
+    },
+    {
+      "attempt_id": "explore-attempt-2813073cf83548138ce1cf0712dfd044",
+      "budget": {
+        "tokens": 24000,
+        "tools": 4
+      },
+      "call_id": "task-e1a2fba07bcd4b4a",
+      "duration_ms": 124,
+      "event": "subagent_result_collected",
+      "lease_generation": 1,
+      "node_id": "edit",
+      "parent_task_id": "plan-fixture-run",
+      "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+      "plan_version": 1,
+      "run_id": "plan-fixture-run",
+      "status": "completed",
+      "task_id": "task-e1a2fba07bcd4b4a",
+      "tool_name": "implementation_location",
+      "turn_id": "exploration-plan-fixture-run-1",
+      "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4",
+      "event_seq": 20
+    },
+    {
+      "attempt_id": "explore-attempt-b1c58fa3d00c4dc6b81b2b5ac472f2ba",
+      "budget": {
+        "tokens": 24000,
+        "tools": 4
+      },
+      "call_id": "task-58497d30470b4044",
+      "duration_ms": 126,
+      "event": "subagent_result_collected",
+      "lease_generation": 1,
+      "node_id": "edit",
+      "parent_task_id": "plan-fixture-run",
+      "plan_id": "plan-46dc8e6857d345e29eef02f01da79571",
+      "plan_version": 1,
+      "run_id": "plan-fixture-run",
+      "status": "completed",
+      "task_id": "task-58497d30470b4044",
+      "tool_name": "related_tests",
+      "turn_id": "exploration-plan-fixture-run-1",
+      "workspace_id": "5c5a26f3d771f66916d4d6104582e407a1de48feb08c23e7cc552c0609cbffd4",
+      "event_seq": 21
+    }
+  ],
+  "owner_write_calls": 1,
+  "pytest_tests": 1,
+  "model_mode": "controlled ModelClient responses; real Agent/tool/Plan loops"
+}

@@ -165,17 +165,280 @@ class PlanSession:
         self.long_task._touch()
         self._persist_long_task_state()
 
-    def record_decision(self, decision: str, *, rationale: str = "", source: str = "") -> None:
-        self.long_task.record_decision(decision, rationale=rationale, source=source)
-        self._persist_long_task_state()
+    def record_decision(
+        self,
+        decision: str,
+        *,
+        evidence_refs,
+        node_id: str,
+        expected_plan_version: int,
+        rationale: str = "",
+        source: str = "",
+        decision_id=None,
+        expected_revision=None,
+    ) -> dict:
+        """Owner-only explicit append, with a compare-and-set revision for replacement."""
+        from copy import deepcopy
+
+        from .decisions import new_decision
+
+        with self._mutex:
+            self._fence()
+            if threading.get_ident() != self.owner_thread:
+                raise ValueError("owner_thread_required")
+            if (
+                not self.plan
+                or not self.plan.verify()
+                or type(expected_plan_version) is not int
+                or self.plan.plan_version != expected_plan_version
+            ):
+                raise ValueError("decision_plan_version_conflict")
+            node = next((node for node in self.plan.nodes if node.node_id == node_id), None)
+            if node is None or node.status in {"succeeded", "uncertain", "cancelled"}:
+                raise ValueError("decision_node_unavailable")
+            if any(n.status == "uncertain" for n in self.plan.nodes) or any(
+                op["phase"] != "result_recorded"
+                or not op.get("execution_stopped")
+                or (op.get("changed_paths") and op.get("status") != "success")
+                for op in self.store.latest("operation", "operation_id").values()
+            ):
+                raise ValueError("decision_execution_not_quiescent")
+            if any(n.status == "running" for n in self.plan.nodes) and (
+                (getattr(self.local, "attempt", None) or {}).get("node_id") != node_id
+            ):
+                raise ValueError("decision_active_attempt_mismatch")
+            raw = self.long_task_state.to_dict()
+            raw["state_id"] = self.identity["session_id"]
+            durable = self.store.latest("long_task_state", "state_id").get(raw["state_id"])
+            if not durable or durable.get("state_checksum") != digest(raw):
+                raise ValueError("decision_state_mismatch")
+            record = new_decision(
+                self.long_task_state.key_decisions,
+                self.plan,
+                self.evidence,
+                decision,
+                rationale=rationale,
+                source=source,
+                evidence_refs=evidence_refs,
+                node_id=node_id,
+                decision_id=decision_id,
+                expected_revision=expected_revision,
+            )
+            self._fence()
+            self.long_task_state.key_decisions.append(record)
+            self.long_task._touch()
+            self._persist_long_task_state()
+            self.cut("decision_recorded")
+            return deepcopy(record)
+
+    def replace_decision(
+        self, decision_id: str, expected_revision: int, decision: str, **kwargs
+    ) -> dict:
+        return self.record_decision(
+            decision, decision_id=decision_id, expected_revision=expected_revision, **kwargs
+        )
 
     def build_long_task_context(self, node_id: str = "") -> dict:
         self.long_task.plan = self.plan
+        attempt = getattr(self.local, "attempt", None)
+        if attempt and attempt["plan_version"] > 0:
+            if node_id and node_id != attempt["node_id"]:
+                raise ValueError("plan_context_node_mismatch")
+            node_id = attempt["node_id"]
+        elif self.plan and sum(n.status == "running" for n in self.plan.nodes) > 1 and not node_id:
+            raise ValueError("plan_context_node_required")
         return self.long_task.build(node_id)
 
+    def plan_view(self, node_id: str = "") -> dict:
+        from .view import plan_view
+
+        with self._mutex:
+            if self.plan is None:
+                raise ValueError("plan_view_not_created")
+            return plan_view(self.plan, node_id)
+
+    def validate_plan_view(self, view: dict) -> None:
+        current = self.plan_view(view.get("selected_node_id", ""))
+        if view != current:
+            raise ValueError("plan_view_stale_or_modified")
+
+    def _tool_plan_view(self, attempt: dict) -> dict:
+        if attempt["plan_version"] == 0:
+            if self.plan is not None:
+                raise ValueError("preplan_attempt_after_plan_created")
+            return {}
+        view = self.plan_view(attempt["node_id"])
+        node = self.plan.node(attempt["node_id"])
+        if (
+            attempt["plan_id"] != view["plan_id"]
+            or attempt["plan_version"] != view["plan_version"]
+            or node.attempt_id != attempt["attempt_id"]
+            or node.status != "running"
+        ):
+            raise ValueError("plan_tool_attempt_stale")
+        return view
+
     def render_long_task_context(self, node_id: str = "") -> str:
-        self.long_task.plan = self.plan
-        return self.long_task.render(node_id)
+        import json
+
+        return json.dumps(
+            self.build_long_task_context(node_id), ensure_ascii=False, sort_keys=True, indent=2
+        )
+
+    def build_required_context(self, node_id: str = "") -> dict:
+        """Detach one durable task/Plan snapshot and check only this node's inputs."""
+        from agent_runtime.errors import ContextBuildBlockedError
+
+        with self._mutex:
+            self._fence()
+            if self.plan is None or not self.plan.verify():
+                raise ContextBuildBlockedError("state_mismatch")
+            raw = self.long_task_state.to_dict()
+            raw["state_id"] = self.identity["session_id"]
+            latest = self.store.latest("long_task_state", "state_id").get(raw["state_id"])
+            if (
+                not latest
+                or latest.get("state_checksum") != digest(raw)
+                or raw["task_id"] != self.identity["task_id"]
+                or raw["run_id"] != self.identity["run_id"]
+            ):
+                raise ContextBuildBlockedError("state_mismatch")
+            if not raw["original_request"]:
+                raise ContextBuildBlockedError("task_request_missing")
+            if any(node.status == "uncertain" for node in self.plan.nodes):
+                raise ContextBuildBlockedError("action_uncertain")
+            attempt = getattr(self.local, "attempt", None)
+            if attempt and any(
+                op["phase"] != "result_recorded"
+                or not op.get("execution_stopped")
+                or (op.get("changed_paths") and op.get("status") != "success")
+                for op in self.operations(attempt["attempt_id"])
+            ):
+                raise ContextBuildBlockedError("action_uncertain")
+            if attempt and attempt["plan_version"] > 0:
+                view = self._tool_plan_view(attempt)
+                if node_id and node_id != attempt["node_id"]:
+                    raise ContextBuildBlockedError("state_mismatch")
+                node_id = attempt["node_id"]
+            else:
+                running = [node.node_id for node in self.plan.nodes if node.status == "running"]
+                if not node_id and len(running) == 1:
+                    node_id = running[0]
+                if not node_id and len(running) > 1:
+                    raise ContextBuildBlockedError("plan_context_node_required")
+                if not node_id:
+                    ready = [node.node_id for node in self.plan.nodes if node.status == "ready"]
+                    if not ready:
+                        ready = [
+                            node.node_id
+                            for node in self.plan.nodes
+                            if node.status == "pending" and not node.depends_on
+                        ]
+                    if len(ready) == 1:
+                        node_id = ready[0]
+                if not node_id and self.plan.status == "completed":
+                    node_id = self.long_task_state.current_node_id
+                view = self.plan_view(node_id)
+            if not node_id:
+                raise ContextBuildBlockedError("plan_context_node_required")
+            node = self.plan.node(node_id)
+            required = list(node.input_evidence_refs)
+            if node.kind != "explore":
+                required.extend(
+                    ref
+                    for dep in node.depends_on
+                    for ref in self.plan.node(dep).output_evidence_refs
+                )
+            # After a confirmed effect, its receipt is current evidence. Do not
+            # require fresh preimage inputs or replay an edit to refresh them.
+            effects = []
+            if not attempt and node.status == "succeeded" and node.kind in {"edit", "verify"}:
+                effects = [ref for ref in node.output_evidence_refs if self.evidence.valid(ref)]
+            if attempt and node.kind in {"edit", "verify"}:
+                wanted = "patch_applied" if node.kind == "edit" else "tests_passed"
+                effects = [
+                    ref
+                    for op in self.operations(attempt["attempt_id"])
+                    for ref in op.get("evidence_refs", [])
+                    if (self.evidence.get(ref) or {}).get("kind") == wanted
+                    and self.evidence.valid(ref)
+                ]
+            required = list(dict.fromkeys(effects or required))
+            from .decisions import project_decisions
+
+            decisions = project_decisions(raw["key_decisions"], self.plan, self.evidence, node_id)
+            review = [check for check in decisions["checks"] if check["status"] == "needs_review"]
+            if review and not effects:
+                raise ContextBuildBlockedError(
+                    "decision_needs_review",
+                    metadata={"node_id": node_id, "decision_checks": review},
+                )
+            if not effects:
+                required = list(
+                    dict.fromkeys(
+                        [
+                            *required,
+                            *(
+                                ref
+                                for decision in decisions["active"]
+                                for ref in decision["evidence_refs"]
+                            ),
+                        ]
+                    )
+                )
+            checks = [self.evidence.inspect(ref) for ref in required]
+            invalid = [check["evidence_ref"] for check in checks if check["status"] != "valid"]
+            if invalid:
+                raise ContextBuildBlockedError(
+                    "needs_retrieval",
+                    metadata={
+                        "node_id": node_id,
+                        "evidence_refs": invalid,
+                        "evidence_checks": [
+                            check for check in checks if check["status"] != "valid"
+                        ],
+                    },
+                )
+            selected = next(item for item in view["nodes"] if item["node_id"] == node_id)
+            from .evidence_view import evidence_summary
+
+            context = {
+                "task": dict(self.identity),
+                "original_request": raw["original_request"],
+                "original_request_checksum": digest(raw["original_request"]),
+                "hard_constraints": list(raw["hard_constraints"]),
+                "current_node": selected,
+                "plan_view": view,
+                "state_revision": raw["state_revision"],
+                "state_checksum": latest["state_checksum"],
+                "evidence_refs": required,
+                "evidence_checks": checks,
+                "evidence_summaries": [
+                    evidence_summary(self.evidence.get(check["evidence_ref"]), check)
+                    for check in checks
+                ],
+                "stale_evidence": [],
+                "needs_evidence_refresh": False,
+                "evidence_phase": "after_effect" if effects else "before_effect",
+            }
+            if decisions["checks"]:
+                context["decisions"] = decisions["active"]
+                context["decision_checks"] = decisions["checks"]
+            return context
+
+    def validate_required_context(self, context: dict) -> None:
+        """Recheck the reference immediately before handing a request to a model."""
+        from agent_runtime.errors import ContextBuildBlockedError
+
+        with self._mutex:
+            try:
+                self._fence()
+                self.validate_plan_view(context["plan_view"])
+                rebuilt = self.build_required_context(context["current_node"]["node_id"])
+            except (ValueError, OSError, KeyError) as exc:
+                raise ContextBuildBlockedError("state_mismatch") from exc
+            if rebuilt != context:
+                raise ContextBuildBlockedError("state_mismatch")
 
     def verify_long_task_checkpoint(self, checkpoint: dict) -> None:
         self.verify_checkpoint(checkpoint)
@@ -230,7 +493,12 @@ class PlanSession:
             item for item in self.long_task_state.stale_evidence if item != ref
         ]
         self.long_task_state.key_decisions.append(
-            {"id": new_id("evidence"), "supersedes": ref, "replacement": new_ref}
+            {
+                "record_type": "evidence_replacement",
+                "id": new_id("evidence"),
+                "supersedes": ref,
+                "replacement": new_ref,
+            }
         )
         self.long_task_state.state_revision += 1
         self._persist_long_task_state()
@@ -359,6 +627,7 @@ class PlanSession:
         attempt = getattr(self.local, "attempt", None)
         if attempt is None:
             raise ValueError("plan_tool_outside_active_attempt")
+        view = self._tool_plan_view(attempt)
         if name not in attempt["allowed_tools"]:
             return ToolResult(
                 content=f"Error: Plan node disallows {name}",
@@ -397,6 +666,7 @@ class PlanSession:
             "effect": effect,
             "workspace_before": before,
             "phase": "prepared",
+            "plan_view": view,
             **(
                 {
                     "batch_id": call_context.batch_id,
@@ -416,6 +686,9 @@ class PlanSession:
             raise ValueError("workspace_execution_uncertain")
         if before != snapshot(self.workspace):
             raise ValueError("workspace_changed_before_dispatch")
+        # A legitimate owner transition may advance the revision while reads
+        # are prepared. Rebuild, but never dispatch an obsolete node/attempt.
+        operation["plan_view"] = self._tool_plan_view(attempt)
         # Bind the canonical identity consumed by the existing ToolExecutor.
         if call_context is None:
             pending = agent.session.get("_pending_canonical_tool_call", {})
@@ -451,6 +724,7 @@ class PlanSession:
             "id": self.identity["session_id"],
             "run_id": self.identity["run_id"],
             "session_scope": {"session_id": self.identity["session_id"]},
+            "session_identity": self.identity,
         }
         observations = ObservationStore(state, self.workspace, self.state_root)
         try:
@@ -462,6 +736,7 @@ class PlanSession:
                 provenance={"call_id": call_id, "plan_attempt_id": attempt["attempt_id"]},
                 source_dependencies=after,
                 dependencies=list(after),
+                retrieval_result=result.metadata.get("retrieval_result"),
             )
             safe_text = observations.expand(stored.observation_id)
         finally:

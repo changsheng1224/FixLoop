@@ -208,7 +208,16 @@ class RunCoordinator:
         return result
 
     def request_cancel(self, request_id: str = "") -> str:
-        return self.store.request_cancel(self._require_lease(), request_id)
+        lease = self._require_lease()
+        current = self.store.snapshot(self.run_id)
+        if (
+            current.generation == lease.generation
+            and not current.owner_token
+            and current.status in {"cancelled", "recovery_required"}
+            and current.cancel_request_id
+        ):
+            return current.cancel_request_id
+        return self.store.request_cancel(lease, request_id)
 
     def cancel(self, request_id: str = "", *, finalize: bool = True) -> CancelReport:
         """Confirm cleanup; callers may retain the closed fence for safe rollback."""
@@ -224,6 +233,30 @@ class RunCoordinator:
                     )
                     for r in current.resources
                 ),
+            )
+        if (
+            current.status == "recovery_required"
+            and current.cancel_request_id
+            and not current.owner_token
+            and current.generation == self._require_lease().generation
+        ):
+            # The failed cleanup released the fence. Repeated cancellation only
+            # returns persisted facts; another cleanup attempt needs a new owner.
+            return CancelReport(
+                self.run_id,
+                current.cancel_request_id,
+                current.status,
+                tuple(
+                    ResourceResult(
+                        r.resource_id,
+                        r.status,
+                        cleanup=r.cleanup,
+                        receipt_ref=r.receipt_ref,
+                        error_code=r.error_code,
+                    )
+                    for r in current.resources
+                ),
+                "resource_cleanup_failed",
             )
         lease = self._require_lease()
         request_id = self.store.request_cancel(lease, request_id)

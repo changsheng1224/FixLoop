@@ -1167,14 +1167,22 @@ def tool_expand_observation(context: ToolContext, args: dict) -> str:
             observation_id,
             max_tokens=max(1, min(int(args.get("max_tokens", 2000) or 2000), 8000)),
             actor="tool:expand_observation",
+            context=context,
         )
     finally:
         store.close()
+    from agent_runtime.code_exploration.consumption import retrieval_header
+
+    contract = result.get("retrieval_result")
+    header = retrieval_header(contract, result.get("freshness", "unknown")) if contract else ""
     if not result.get("ok"):
-        return f"Observation unavailable: {result.get('reason', 'unknown')}"
+        reason = result.get("reason", "unknown")
+        return f"{header}Observation unavailable: {reason}; reread required."
     return (
         f"[{result['observation_id']}] tool={result.get('tool', '')} "
-        f"source_version={result.get('source_version', '')}\n{result.get('content', '')}"
+        f"source_version={result.get('source_version', '')} "
+        f"output_truncated={str(result['output_truncated']).lower()}\n"
+        f"{header}{result.get('content', '')}"
     )
 
 

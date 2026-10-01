@@ -2,11 +2,12 @@
 
 按 model/provider 选择 tokenizer（DeepSeek HF / OpenAI tiktoken），中文计数更准确。
 
-裁剪优先级（后填先裁）：history → relevant → memory → workspace；system 与 request 优先保留。
+Plan 请求保护完整必需内容，可选段使用软配额与回收池；普通 L1 沿用固定段预算。
 """
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -34,7 +35,7 @@ from agent_runtime.context_runtime import (
     ContextSelectionResult,
     ContextViewPolicy,
 )
-from agent_runtime.errors import ContextTooLargeError
+from agent_runtime.errors import ContextBuildBlockedError, ContextTooLargeError
 from agent_runtime.message_projection import (
     get_sealed_history,
     run_memory_snapshot,
@@ -153,7 +154,9 @@ class _DiskCache(dict):
 class ContextManager:
     """Prompt 组装器：按预算拼接 section，超限时自动裁剪。
 
-    Sections（填充顺序）:
+    prepare_request 是主循环的调用前边界，含最终编码、预算与 manifest。
+    Plan 路径先填必需内容，再按节点阶段弹性分配可选段。
+    普通 L1 sections（填充顺序）:
     1. system     — persona / rules（stable，可缓存）
     2. tools      — 工具签名（stable，可缓存）
     3. skills     — 调用示例 + L2 role
@@ -172,11 +175,21 @@ class ContextManager:
         "memory",
         "knowledge",  # 持久知识检索（episodic notes + durable facts）
         "source",
+        "feedback",
         "history",
         "state",
     )
     NATIVE_SYSTEM_ORDER = ("system", "tools")
-    DYNAMIC_ORDER = ("skills", "workspace", "memory", "knowledge", "source", "history", "state")
+    DYNAMIC_ORDER = (
+        "skills",
+        "workspace",
+        "memory",
+        "knowledge",
+        "source",
+        "feedback",
+        "history",
+        "state",
+    )
 
     def __init__(
         self,
@@ -234,7 +247,17 @@ class ContextManager:
         result_parts = [sections[name] for name in self.SECTION_ORDER if sections.get(name)]
         if sections.get("request"):
             result_parts.append(sections["request"])
-        return "\n".join(result_parts), metadata
+        text = "\n".join(result_parts)
+        if metadata.get("required_state_ref"):
+            actual = self.budget.count(text)
+            limit = min(self.budget.total_limit, self.hard_cap)
+            if actual > limit:
+                raise ContextBuildBlockedError(
+                    "context_required_over_budget",
+                    metadata={"actual_tokens": actual, "available_tokens": limit},
+                )
+            metadata["provider_input_tokens"] = actual
+        return text, metadata
 
     def build_dynamic_context(self, user_message: str) -> tuple[str, dict]:
         """组装动态上下文（不含 system / request）。
@@ -280,6 +303,240 @@ class ContextManager:
             "prefix_hashes": prefix_hashes,
         }
 
+    def prepare_request(
+        self,
+        user_message,
+        *,
+        protocol,
+        tools=(),
+        native_tail=(),
+        tail_refs=None,
+        directives=(),
+        action_required=False,
+        tool_choice=None,
+        max_output_tokens=4096,
+        deadline=None,
+        user_override=None,
+    ):
+        """One model request boundary: select, encode, fit, validate and seal."""
+        from agent_runtime.context_preparation import native_groups, project_tail, request_hash
+        from agent_runtime.model_turn import ModelTurnRequest
+
+        if protocol not in {"xml", "native"}:
+            raise ValueError("unknown_context_protocol")
+        tools = copy.deepcopy(list(tools))
+        all_groups = native_groups(list(native_tail)) if protocol == "native" else []
+        groups = [] if action_required else all_groups
+        # Keep at most the recent three complete groups, never slice messages.
+        groups = groups[-3:]
+        metadata = self._base_metadata()
+        protocol_tokens = (
+            self.budget.count(json.dumps(tools, ensure_ascii=False)) + 64
+            if protocol == "native"
+            else 32
+        )
+        sections = self._fill_sections(
+            user_message,
+            metadata,
+            native_tools=protocol == "native",
+            protocol_tokens=protocol_tokens,
+            directives="\n\n".join(filter(None, directives)),
+            tail_groups=groups,
+            tail_refs=tail_refs,
+        )
+        governed = bool(metadata.get("required_state_ref"))
+        if user_override is not None:
+            if governed:
+                raise ContextBuildBlockedError("context_required_overwrite")
+            for name in self.DYNAMIC_ORDER:
+                sections.pop(name, None)
+                metadata["sections"][name] = 0
+            sections["request"] = user_override
+            metadata["sections"]["request"] = self.budget.count(user_override)
+        self._check_hard_cap(metadata["total_tokens"], metadata)
+        chosen_tail = (
+            getattr(self, "_selected_tail", [])
+            if governed
+            else project_tail(groups, tail_refs or {}, metadata)
+        )
+        chosen_ids = {
+            block["id"]
+            for group in chosen_tail
+            for block in group[0]["content"]
+            if block.get("type") == "tool_use"
+        }
+        retained = [
+            group
+            for group in groups
+            if any(block.get("id") in chosen_ids for block in group[0]["content"])
+        ]
+
+        def encode():
+            if protocol == "xml":
+                text = "\n".join(
+                    sections[name] for name in self.SECTION_ORDER if sections.get(name)
+                )
+                text += "\n" + sections.get("request", "")
+                return ModelTurnRequest(
+                    "",
+                    [{"role": "user", "content": text}],
+                    max_output_tokens=max_output_tokens,
+                    deadline=deadline,
+                )
+            system = "\n\n".join(
+                sections[name] for name in self.NATIVE_SYSTEM_ORDER if sections.get(name)
+            )
+            user = "\n\n".join(
+                sections[name] for name in (*self.DYNAMIC_ORDER, "request") if sections.get(name)
+            )
+            projected = project_tail(retained, tail_refs or {}, metadata)
+            messages = [
+                {"role": "user", "content": user},
+                *[message for group in projected for message in group],
+            ]
+            return ModelTurnRequest(
+                system, messages, tools, tool_choice, max_output_tokens, deadline
+            )
+
+        def count(request):
+            if protocol == "xml":
+                return self.budget.count(request.messages[0]["content"])
+            return self.budget.count(request.system_prompt) + self.budget.count(
+                json.dumps(
+                    {"messages": request.messages, "tools": request.tools}, ensure_ascii=False
+                )
+            )
+
+        limit = min(self.budget.total_limit, self.hard_cap, self.agent.config.prompt_budget)
+        request = encode()
+        actual = count(request)
+        if governed:
+            # Protocol encoding may add a few tokens. Drop lowest-priority whole
+            # optional sections; required sections never enter this list.
+            for name in reversed(metadata["elastic_budget"]["priority"]):
+                if actual <= limit:
+                    break
+                if not sections.get(name):
+                    continue
+                sections.pop(name)
+                metadata["sections"][name] = 0
+                metadata["cuts"].append(f"elastic:{name}:protocol_budget")
+                metadata["elastic_budget"]["allocations"][name]["reason"] = "protocol_budget"
+                if name == "tail":
+                    retained = []
+                elif name == "source":
+                    metadata["_source_observation_refs"] = []
+                    selection = metadata.get("source_selection", {})
+                    lost = selection.get("selected_ids", [])
+                    metadata["_selected_context_ids"] = [
+                        item
+                        for item in metadata.get("_selected_context_ids", [])
+                        if item not in lost
+                    ]
+                    metadata.setdefault("_dropped_context_ids", []).extend(lost)
+                    selection["selected_ids"] = []
+                    selection["selected_items"] = []
+                    selection["used_tokens"] = 0
+                    selection.setdefault("dropped", []).extend(
+                        {"item_id": item, "reason": "protocol_budget", "utility": 0}
+                        for item in lost
+                    )
+                    metadata["_context_selection"] = copy.deepcopy(selection)
+                elif name == "feedback":
+                    metadata["feedback_observation_refs"] = []
+                request = encode()
+                actual = count(request)
+            if actual > limit:
+                raise ContextBuildBlockedError(
+                    "context_required_over_budget",
+                    metadata={"actual_tokens": actual, "available_tokens": limit},
+                )
+            self.agent._plan_session.validate_required_context(metadata["long_task_context"])
+        projected = project_tail(retained, tail_refs or {}, metadata)
+        if retained:
+            sections["tail"] = json.dumps(projected, ensure_ascii=False)
+        for name, allocation in metadata.get("elastic_budget", {}).get("allocations", {}).items():
+            allocation["used_tokens"] = self.budget.count(sections.get(name, ""))
+            allocation["borrowed_tokens"] = max(
+                0, allocation["used_tokens"] - allocation["soft_quota"]
+            )
+            allocation["released_tokens"] = max(
+                0, allocation["soft_quota"] - allocation["used_tokens"]
+            )
+            metadata["sections"][name] = allocation["used_tokens"]
+        if governed:
+            elastic = metadata["elastic_budget"]
+            elastic["unused_tokens"] = elastic["pool_tokens"] - sum(
+                item["used_tokens"] for item in elastic["allocations"].values()
+            )
+        metadata["provider_input_tokens"] = actual
+        metadata["total_tokens"] = actual
+        metadata["request_protocol"] = protocol
+        metadata["request_hash"] = request_hash(request, protocol)
+        metadata["selected_tool_call_ids"] = [
+            block["id"]
+            for group in projected
+            for block in group[0]["content"]
+            if block.get("type") == "tool_use"
+        ]
+        metadata["dropped_tool_call_ids"] = [
+            block["id"]
+            for group in all_groups
+            for block in group[0]["content"]
+            if block.get("type") == "tool_use"
+            and block["id"] not in metadata["selected_tool_call_ids"]
+        ]
+        eligible_ids = {
+            block["id"]
+            for group in groups
+            for block in group[0]["content"]
+            if block.get("type") == "tool_use"
+        }
+        metadata["tool_tail_drops"] = [
+            {
+                "call_id": call_id,
+                "reason": (
+                    "forced_action"
+                    if action_required
+                    else "recency_limit"
+                    if call_id not in eligible_ids
+                    else "protocol_budget"
+                    if "elastic:tail:protocol_budget" in metadata["cuts"]
+                    else "elastic_budget"
+                ),
+            }
+            for call_id in metadata["dropped_tool_call_ids"]
+        ]
+        if governed:
+            from agent_runtime.plan_runtime.evidence_view import consumption_manifest
+
+            metadata["evidence_consumption"] = consumption_manifest(
+                metadata["long_task_context"],
+                metadata,
+                sections,
+                tail=projected,
+                tail_refs=tail_refs,
+            )
+        metadata["sections"]["prefix"] = sum(
+            metadata["sections"].get(name, 0) for name in ("system", "tools", "skills", "workspace")
+        )
+        metadata["_context_prefix_text"] = "\n".join(
+            sections[name] for name in self.SECTION_ORDER if sections.get(name)
+        )
+        attach_context_projection(metadata, agent=self.agent, budget=self.budget)
+        self._record_context_manifest(metadata, sections)
+        history = self.agent.read_history()
+        seal_history_at_build(self.agent.session, len(history), sections.get("history", ""))
+        return request, metadata
+
+    def validate_prepared_request(self, request, metadata):
+        from agent_runtime.context_preparation import request_hash
+
+        if metadata["request_hash"] != request_hash(request, metadata["request_protocol"]):
+            raise ContextBuildBlockedError("context_request_changed")
+        if metadata.get("required_state_ref"):
+            self.agent._plan_session.validate_required_context(metadata["long_task_context"])
+
     def _fill_sections(
         self,
         user_message: str,
@@ -288,22 +545,38 @@ class ContextManager:
         include_system: bool = True,
         include_request: bool = True,
         native_tools: bool = False,
+        protocol_tokens: int = 0,
+        directives: str = "",
+        tail_groups=None,
+        tail_refs=None,
     ) -> dict[str, str]:
         """按预算填充各 section，返回 name → 文本。"""
         total = self.budget.total_limit
+        governed = getattr(self.agent, "_plan_session", None) is not None
+        state_text = self._get_long_task(metadata) if governed else self._get_state()
+        if governed and not native_tools:
+            # Reserve delimiters before optional filling, then count the joined
+            # XML prompt too. No mandatory text is cut to make room.
+            protocol_tokens = 32
+        if governed:
+            total = max(0, min(total, self.hard_cap) - protocol_tokens)
         request_text = ""
         request_tokens = 0
         section_cap = total
 
         if include_request:
-            processed = apply_l1_to_request_text(user_message, self.budget)
+            processed = (
+                user_message if governed else apply_l1_to_request_text(user_message, self.budget)
+            )
             request_text, tpl_meta = render_task_message(
                 processed,
                 repo_root=self._agent_repo_root(),
             )
             metadata.update(tpl_meta)
+            if directives:
+                request_text += "\n\n" + directives
             request_tokens = self.budget.count(request_text)
-            if request_tokens > total:
+            if request_tokens > total and not governed:
                 original_tokens = request_tokens
                 target = max(256, int(total * 0.60))
                 request_text = self._compact_oversized_request(request_text, target)
@@ -323,7 +596,7 @@ class ContextManager:
             if metadata.get("emergency_compaction"):
                 metadata["request_preserved"] = False
                 metadata["task_budget_overflow"] = True
-            section_cap = reserve_section_budget(total, request_tokens)
+            section_cap = total if governed else reserve_section_budget(total, request_tokens)
 
         filler = SectionFiller(
             self.budget,
@@ -333,30 +606,78 @@ class ContextManager:
             scaled_budget=scaled_section_budget,
         )
         self._active_metadata = metadata
+        self._prepare_code_evidence(metadata, (tail_refs or {}).values())
 
-        if include_system:
+        if governed:
+            required = {"state": state_text}
+            if include_request:
+                required["request"] = request_text
+            if include_system:
+                required["system"] = (
+                    self._get_system_for_native() if native_tools else self._get_system()
+                )
+                # Native schemas are reserved and supplied through the provider
+                # protocol; repeating their text here wastes protected budget.
+                if not native_tools:
+                    required["tools"] = self._get_tools()
+                # Role instructions are mandatory. Generic invocation examples
+                # are redundant with the rules/schemas and omitted on Plan runs.
+                required["skills"] = getattr(self.agent._prefix, "role_text", "") or ""
+            filler.add_required(required)
+            metadata["protocol_reserved_tokens"] = protocol_tokens
+        elif include_system:
             if native_tools:
-                filler.add_stable_section(
-                    "system", self._get_system_for_native(), BUDGET_SYSTEM
-                )
+                filler.add_stable_section("system", self._get_system_for_native(), BUDGET_SYSTEM)
                 filler.add_stable_section("tools", self._get_tools(), BUDGET_TOOLS)
-                filler.add_stable_section(
-                    "skills", self._get_skills_for_native(), BUDGET_SKILLS
-                )
+                filler.add_stable_section("skills", self._get_skills_for_native(), BUDGET_SKILLS)
             else:
                 filler.add_stable_section("system", self._get_system(), BUDGET_SYSTEM)
                 filler.add_stable_section("tools", self._get_tools(), BUDGET_TOOLS)
                 filler.add_stable_section("skills", self._get_skills(), BUDGET_SKILLS)
+        if governed:
+            self._fill_elastic_sections(
+                filler, metadata, user_message, tail_groups or [], tail_refs or {}
+            )
+        else:
+            self._fill_legacy_sections(
+                filler, metadata, user_message, section_cap, total, state_text
+            )
+
+        sections = dict(filler.sections)
+        used = filler.used
+
+        if include_request:
+            sections["request"] = request_text
+            if not governed:
+                used += request_tokens
+
+        metadata["_context_prefix_text"] = "\n".join(
+            sections[name] for name in self.SECTION_ORDER if sections.get(name)
+        )
+        prefix_names = ("system", "tools", "skills", "workspace")
+        metadata["sections"]["prefix"] = sum(
+            metadata["sections"].get(name, 0) for name in prefix_names
+        )
+        metadata["total_tokens"] = used
+        metadata["budget"] = self.budget.total_limit
+        if governed:
+            self.agent._plan_session.validate_required_context(metadata["long_task_context"])
+        metadata["tokenizer_backend"] = self.budget.backend
+        attach_context_projection(metadata, agent=self.agent, budget=self.budget)
+        self._record_context_manifest(metadata, sections)
+        history = self.agent.read_history()
+        if history and sections.get("history"):
+            seal_history_at_build(self.agent.session, len(history), sections["history"])
+        return sections
+
+    def _fill_legacy_sections(self, filler, metadata, user_message, section_cap, total, state_text):
+        """Keep the established standalone L1 context contract."""
         filler.add_section(
             "workspace",
             self._get_workspace(),
             scaled_section_budget(BUDGET_PREFIX, section_cap or total),
         )
-        filler.add_section(
-            "state",
-            self._get_state(),
-            200,  # state 段固定 200 token 预算
-        )
+        filler.add_section("state", state_text, 200)
         degradation = self.agent.session.get("runtime_degradation", {}) or {}
         if degradation.get("skip_optional_context"):
             metadata.setdefault("cuts", []).append("degradation:optional_context")
@@ -372,14 +693,7 @@ class ContextManager:
                 scaled_section_budget(BUDGET_KNOWLEDGE, section_cap or total),
             )
             available = max(0, min(BUDGET_SOURCE, section_cap - filler.used))
-            filler.add_section(
-                "source", self._get_source(metadata, available), BUDGET_SOURCE
-            )
-        filler.add_section(
-            "state",
-            self._get_long_task(metadata),
-            scaled_section_budget(BUDGET_MEMORY, section_cap or total),
-        )
+            filler.add_section("source", self._get_source(metadata, available), BUDGET_SOURCE)
         # Keep the current request available to the integrity check.  The
         # request is intentionally not part of projected history, so checking
         # the goal against history alone incorrectly reports goal loss on every
@@ -403,35 +717,143 @@ class ContextManager:
             history_window_budget(section_cap or total),
         )
 
-        sections = dict(filler.sections)
-        used = filler.used
+    def _fill_elastic_sections(self, filler, metadata, user_message, groups, refs):
+        from dataclasses import replace
 
-        if include_request:
-            sections["request"] = request_text
-            used += request_tokens
+        from agent_runtime.context_preparation import pack_units, project_tail
+        from agent_runtime.context_runtime import ContextDecision
 
-        metadata["_context_prefix_text"] = "\n".join(
-            sections[name] for name in self.SECTION_ORDER if sections.get(name)
-        )
+        pool = max(0, filler.section_cap - filler.used)
+        kind = metadata["long_task_context"]["current_node"]["kind"]
+        priority = (
+            ["tail", "feedback", "source"] if kind == "verify" else ["source", "tail", "feedback"]
+        ) + ["history", "memory", "knowledge", "workspace"]
+        weights = {
+            "source": 50,
+            "tail": 20,
+            "feedback": 20,
+            "history": 4,
+            "memory": 2,
+            "knowledge": 2,
+            "workspace": 2,
+        }
+        if kind == "verify":
+            weights.update(source=20, tail=35, feedback=35)
+        self._source_selection = None
+        self._selected_source = []
+        self._selected_tail = []
+        self._selected_feedback = []
+        candidates = {}
+        fitters = {}
+        if pool:
+            candidates["workspace"] = self._get_workspace()
+            skip = (self.agent.session.get("runtime_degradation") or {}).get(
+                "skip_optional_context"
+            )
+            if not skip:
+                candidates["memory"] = self._get_memory()
+                candidates["knowledge"] = self._get_knowledge(user_message)
+                candidates["source"] = self._get_source(metadata, pool, elastic=True)
+            feedback = []
+            for item in (
+                []
+                if groups
+                else [item for item in self.agent.read_history() if item.get("role") == "tool"][-3:]
+            ):
+                oid = str(item.get("observation_id", ""))
+                view = metadata.get("code_evidence", {}).get(oid)
+                content = (
+                    view.get("content", view.get("diagnostic", ""))
+                    if view
+                    else str(item.get("content", ""))
+                )
+                feedback.append((oid, f"[recent_tool_feedback observation_ref={oid}]\n{content}"))
 
-        sys_tokens = metadata["sections"].get("system", 0)
-        tools_tokens = metadata["sections"].get("tools", 0)
-        skills_tokens = metadata["sections"].get("skills", 0)
-        ws_tokens = metadata["sections"].get("workspace", 0)
-        if sys_tokens or tools_tokens or skills_tokens or ws_tokens:
-            metadata["sections"]["prefix"] = sys_tokens + tools_tokens + skills_tokens + ws_tokens
+            def render_feedback(units):
+                return "\n\n".join(text for _, text in units)
 
-        metadata["total_tokens"] = used
-        metadata["budget"] = self.budget.total_limit
-        metadata["tokenizer_backend"] = self.budget.backend
-        attach_context_projection(metadata, agent=self.agent, budget=self.budget)
-        self._record_context_manifest(metadata, sections)
-        history = self.agent.read_history()  # JSONL 优先，build 不写回
-        if history and history_text:
-            seal_history_at_build(self.agent.session, len(history), history_text)
-        return sections
+            def fit_feedback(_text, limit):
+                self._selected_feedback = pack_units(
+                    feedback, limit, self.budget, render_feedback, newest=True
+                )
+                return render_feedback(self._selected_feedback)
 
-    def _get_source(self, metadata: dict, token_limit: int) -> str:
+            candidates["feedback"] = render_feedback(feedback)
+            fitters["feedback"] = fit_feedback
+
+            def render_tail(units):
+                return json.dumps(units, ensure_ascii=False) if units else ""
+
+            projected = project_tail(groups, refs, metadata)
+
+            def fit_tail(_text, limit):
+                self._selected_tail = pack_units(
+                    projected, limit, self.budget, render_tail, newest=True
+                )
+                return render_tail(self._selected_tail)
+
+            candidates["tail"] = render_tail(projected)
+            fitters["tail"] = fit_tail
+            if self._source_selection:
+                source_items = self._source_selection.selected
+
+                def render_source(units):
+                    return (
+                        ("## 当前代码片段\n" + "\n\n".join(item.content for item in units))
+                        if units
+                        else ""
+                    )
+
+                def fit_source(_text, limit):
+                    self._selected_source = pack_units(
+                        source_items, limit, self.budget, render_source
+                    )
+                    return render_source(self._selected_source)
+
+                fitters["source"] = fit_source
+            candidates["history"] = self._get_compressed_history(metadata)
+        filler.add_elastic(candidates, weights, priority, fitters=fitters)
+        if self._source_selection:
+            selection = self._source_selection
+            chosen = {item.item_id for item in self._selected_source}
+            selection = replace(
+                selection,
+                selected=self._selected_source,
+                used_tokens=sum(item.token_cost for item in self._selected_source),
+                dropped=[
+                    *selection.dropped,
+                    *(
+                        ContextDecision(item.item_id, "elastic_budget")
+                        for item in selection.selected
+                        if item.item_id not in chosen
+                    ),
+                ],
+            )
+            self._record_selection_result(metadata, selection)
+            metadata["source_selection"] = selection.to_dict()
+            metadata["_source_observation_refs"] = [item.source_ref for item in selection.selected]
+        metadata["feedback_observation_refs"] = [oid for oid, _ in self._selected_feedback if oid]
+        history = filler.sections.get("history", "")
+        for oid in set(
+            metadata.get("_source_observation_refs", []) + metadata["feedback_observation_refs"]
+        ):
+            history = re.sub(
+                rf"(?ms)^\*\*tool\*\*: \[{re.escape(oid)}\].*?"
+                r"(?=^\*\*(?:user|assistant|tool|system)\*\*:|\Z)",
+                f"**tool**: [source selected in current context: {oid}]\n",
+                history,
+            )
+        if "history" in filler.sections:
+            old = metadata["sections"]["history"]
+            filler.sections["history"] = history
+            metadata["sections"]["history"] = self.budget.count(history)
+            filler.used += metadata["sections"]["history"] - old
+            metadata["elastic_budget"]["unused_tokens"] += old - metadata["sections"]["history"]
+            metadata["elastic_budget"]["allocations"]["history"]["used_tokens"] = metadata[
+                "sections"
+            ]["history"]
+
+    def _get_source(self, metadata: dict, token_limit: int, *, elastic: bool = False) -> str:
         context = getattr(self.agent, "tool_context", None)
         service = getattr(context, "exploration_service", None)
         if service is None or getattr(service, "mode", "") != "relations":
@@ -439,19 +861,111 @@ class ContextManager:
         from agent_runtime.code_exploration.context import select_source_context
 
         text, selection = select_source_context(
-            service, self.budget,
+            service,
+            self.budget,
             role=str(getattr(self.agent, "agent_name", "") or ""),
             phase=str(getattr(self.agent, "_l2_phase", "repair") or "repair"),
             token_limit=max(0, token_limit - 16),
+            source_checks=getattr(self, "_code_source_checks", None),
+            elastic=elastic,
         )
         if selection is not None:
-            self._record_selection_result(metadata, selection)
-            metadata["source_selection"] = selection.to_dict()
-            metadata["_source_observation_refs"] = [
-                item.source_ref for item in selection.selected
-            ]
+            if elastic:
+                self._source_selection = selection
+            else:
+                self._record_selection_result(metadata, selection)
+                metadata["source_selection"] = selection.to_dict()
+                metadata["_source_observation_refs"] = [
+                    item.source_ref for item in selection.selected
+                ]
             metadata["source_epoch"] = service.epoch
         return text
+
+    def _prepare_code_evidence(self, metadata: dict, tail_refs=()) -> None:
+        """Validate once per build, sharing bounded I/O across history and tail."""
+        from agent_runtime.code_exploration.consumption import (
+            SourceChecks,
+            retrieval_header,
+            unavailable_evidence,
+        )
+        from agent_runtime.context_runtime import ObservationStore
+
+        context = getattr(self.agent, "tool_context", None)
+        if context is None or not getattr(context, "root", ""):
+            return
+        checks = SourceChecks(context)
+        self._code_source_checks = checks
+        store = ObservationStore(self.agent.session, context.root, context.state_root)
+        views = metadata.setdefault("code_evidence", {})
+        blocked_paths = set()
+        try:
+            references = {str(item.get("observation_id", "")) for item in self.agent.read_history()}
+            references.update(str(oid) for oid in tail_refs)
+            references.update(
+                str(item.get("observation_id", ""))
+                for item in self.agent.session.get("tool_observations", [])[-50:]
+            )
+            records = sorted(
+                (
+                    record
+                    for oid in references
+                    if (record := store.get(oid)) and record.retrieval_result
+                ),
+                key=lambda record: record.created_at,
+                reverse=True,
+            )
+            for record in records:
+                oid = record.observation_id
+                result = store.expand_for_context(
+                    oid,
+                    max_tokens=8000,
+                    context=context,
+                    source_checks=checks,
+                    actor="model_context",
+                )
+                failure = next(
+                    (
+                        str(fact.get("error_code", ""))
+                        for fact in reversed(record.structured_facts)
+                        if fact.get("error_code")
+                    ),
+                    record.error_code,
+                )
+                receipt = f"[tool_status={record.status} error_code={failure[:80]}]\n"
+                if result.get("ok"):
+                    content = f"[{oid}] " + retrieval_header(
+                        record.retrieval_result, result["freshness"]
+                    )
+                    content += result["content"]
+                    if result["output_truncated"]:
+                        content += f"\n[output_truncated=true observation_id={oid}]"
+                    views[oid] = {
+                        "ok": True,
+                        "freshness": result["freshness"],
+                        "content": content + "\n" + receipt,
+                        "body": result["content"],
+                    }
+                else:
+                    reason = result.get("reason", "unknown")
+                    freshness = result.get("freshness", "stale")
+                    views[oid] = {
+                        "ok": False,
+                        "reason": reason,
+                        "freshness": freshness,
+                        "diagnostic": receipt
+                        + retrieval_header(record.retrieval_result, freshness)
+                        + unavailable_evidence(oid, reason, freshness),
+                    }
+                    blocked_paths.update(record.dependencies)
+            metadata["code_evidence_checks"] = {
+                "bytes_read": checks.bytes_read,
+                "files_checked": checks.checked_files,
+            }
+            metadata["_blocked_code_paths"] = sorted(blocked_paths)
+            if any(not view["ok"] for view in views.values()):
+                seal_history_at_build(self.agent.session, 0, "")
+        finally:
+            store.close()
 
     def _compact_oversized_request(self, text: str, target_tokens: int) -> str:
         """Keep the issue head and runtime/feedback tail in one deterministic pass."""
@@ -487,6 +1001,17 @@ class ContextManager:
             "selected_context_ids": selected,
             "policy_version": selection.get("policy_version", ContextPolicyEngine.VERSION),
             "sections": metadata.get("sections", {}),
+            "section_hashes": {
+                name: hashlib.sha256(text.encode()).hexdigest() for name, text in sections.items()
+            },
+            "required_state_ref": metadata.get("required_state_ref", {}),
+            "decision_refs": copy.deepcopy(metadata.get("decision_refs", [])),
+            "request_hash": metadata.get("request_hash", ""),
+            "request_protocol": metadata.get("request_protocol", ""),
+            "code_evidence": {
+                oid: {key: view[key] for key in ("ok", "freshness", "reason") if key in view}
+                for oid, view in metadata.get("code_evidence", {}).items()
+            },
         }
         projection_hash = hashlib.sha256(
             json.dumps(canonical, sort_keys=True, ensure_ascii=True).encode("utf-8")
@@ -501,6 +1026,24 @@ class ContextManager:
             "observation_refs": list(metadata.get("_observation_refs", []) or []),
             "total_tokens": int(metadata.get("total_tokens", 0) or 0),
             "budget": int(metadata.get("budget", self.budget.total_limit) or 0),
+            "code_evidence": canonical["code_evidence"],
+            "code_evidence_checks": metadata.get("code_evidence_checks", {}),
+            "required_state_ref": canonical["required_state_ref"],
+            "decision_refs": canonical["decision_refs"],
+            "required_sections": metadata.get("required_sections", {}),
+            "protocol_reserved_tokens": metadata.get("protocol_reserved_tokens", 0),
+            "section_hashes": canonical["section_hashes"],
+            "stage": "prepared" if metadata.get("request_hash") else "sections",
+            "request_hash": canonical["request_hash"],
+            "request_protocol": canonical["request_protocol"],
+            "provider_input_tokens": metadata.get("provider_input_tokens", 0),
+            "elastic_budget": copy.deepcopy(metadata.get("elastic_budget", {})),
+            "source_observation_refs": list(metadata.get("_source_observation_refs", [])),
+            "feedback_observation_refs": list(metadata.get("feedback_observation_refs", [])),
+            "selected_tool_call_ids": list(metadata.get("selected_tool_call_ids", [])),
+            "dropped_tool_call_ids": list(metadata.get("dropped_tool_call_ids", [])),
+            "tool_tail_drops": copy.deepcopy(metadata.get("tool_tail_drops", [])),
+            "evidence_consumption": copy.deepcopy(metadata.get("evidence_consumption", [])),
         }
         metadata["context_manifest"] = manifest
         metadata["context_policy_version"] = manifest["policy_version"]
@@ -612,7 +1155,23 @@ class ContextManager:
 
         snap = run_memory_snapshot(self.agent.session)
         mem = snap if snap is not None else self.agent.session.get("memory", {})
+        blocked = set(getattr(self, "_active_metadata", {}).get("_blocked_code_paths", []))
+        if blocked:
+            mem = copy.deepcopy(mem)
+            mem["file_summaries"] = {
+                path: info
+                for path, info in mem.get("file_summaries", {}).items()
+                if path not in blocked
+            }
+            working_copy = mem.setdefault("working", {})
+            working_copy["evidence_ledger"] = [
+                {**item, "summary": "source requires reread", "stale": True}
+                if item.get("path") in blocked
+                else item
+                for item in working_copy.get("evidence_ledger", [])
+            ]
         working = mem.get("working", {})
+        getattr(self, "_active_metadata", {})["_memory_state"] = mem
         parts = []
 
         task = working.get("task_summary", "")
@@ -645,16 +1204,44 @@ class ContextManager:
     def _get_long_task(self, metadata: dict) -> str:
         """Project PlanSession state into a compression-protected section."""
         plan_session = getattr(self.agent, "_plan_session", None)
-        if plan_session is None or not hasattr(plan_session, "build_long_task_context"):
+        if plan_session is None:
             return ""
         try:
-            context = plan_session.build_long_task_context(str(metadata.get("plan_node_id", "")))
+            context = plan_session.build_required_context(str(metadata.get("plan_node_id", "")))
         except (ValueError, OSError):
-            return ""
+            raise ContextBuildBlockedError("state_mismatch") from None
         metadata["long_task_context"] = context
+        metadata["decision_refs"] = [
+            {key: check[key] for key in ("decision_id", "revision", "checksum", "status")}
+            for check in context.get("decision_checks", [])
+        ]
         self.agent.session["long_task_context"] = context
-        return "长任务状态（压缩保护）:\n" + json.dumps(
-            context, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        view = context["plan_view"]
+        metadata["required_state_ref"] = {
+            key: view[key]
+            for key in (
+                "task_id",
+                "run_id",
+                "workspace_id",
+                "plan_id",
+                "plan_version",
+                "state_revision",
+                "plan_checksum",
+            )
+        }
+        metadata["required_state_ref"].update(
+            node_id=context["current_node"]["node_id"],
+            task_state_revision=context["state_revision"],
+            state_checksum=context["state_checksum"],
+        )
+        compact = {
+            key: value
+            for key, value in context.items()
+            if key not in {"plan_view", "evidence_checks", "decision_checks"}
+        }
+        compact["plan_ref"] = metadata["required_state_ref"]
+        return "长任务状态（必需内容，压缩保护）:\n" + json.dumps(
+            compact, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         )
 
     def _get_knowledge(self, query: str = "") -> str:
@@ -728,9 +1315,7 @@ class ContextManager:
             governed_result = policy.select_with_result(governed_items, request)
             governed_items = governed_result.selected
             self._record_selection_result(metadata=None, result=governed_result)
-            mem["recalled_memory_ids"] = [
-                item.source_ref for item in governed_items
-            ]
+            mem["recalled_memory_ids"] = [item.source_ref for item in governed_items]
             for item in governed_items:
                 governed.record_usage_stage(
                     item.source_ref,
@@ -772,9 +1357,7 @@ class ContextManager:
             store = DurableMemoryStore(root=self.agent._cwd)
             durable_results = store.retrieval(query, limit=2)
             if durable_results:
-                recalled_ids.extend(
-                    str(item.get("memory_id", "")) for item in durable_results
-                )
+                recalled_ids.extend(str(item.get("memory_id", "")) for item in durable_results)
                 lines = ["持久知识候选（仅项目/用户事实；冲突时不得采用）:"]
                 for r in durable_results:
                     lines.append(f"  - {str(r.get('text', ''))[:150]}")
@@ -825,6 +1408,13 @@ class ContextManager:
         history = self.agent.read_history()
         if not history:
             return ""
+        views = (metadata or {}).get("code_evidence", {})
+        history = [
+            {**item, "content": view.get("content", view.get("diagnostic", ""))}
+            if item.get("role") == "tool" and (view := views.get(item.get("observation_id")))
+            else item
+            for item in history
+        ]
 
         sealed_count, sealed_text = get_sealed_history(self.agent.session)
         if sealed_count > 0 and sealed_text:
@@ -844,7 +1434,7 @@ class ContextManager:
             return ""
 
         meta = metadata if metadata is not None else {}
-        meta["_memory_state"] = self.agent.session.get("memory", {})
+        meta.setdefault("_memory_state", self.agent.session.get("memory", {}))
         sealed_count, sealed_text = get_sealed_history(self.agent.session)
         include_header = not (sealed_count > 0 and sealed_text)
 
@@ -853,7 +1443,11 @@ class ContextManager:
             self.budget,
             metadata=meta,
             summarizer=make_summarizer(self.agent),
-            summary_cache=self._summary_cache,
+            summary_cache=(
+                {}
+                if any(not view["ok"] for view in meta.get("code_evidence", {}).values())
+                else self._summary_cache
+            ),
             history_window=history_window_budget(self.budget.total_limit),
             tier_policy=self.tier_policy,
         )
@@ -866,19 +1460,21 @@ class ContextManager:
                     continue
                 content = str(item.get("content", ""))
                 reference = next(
-                    (oid for oid in source_refs if item.get("observation_id") == oid
-                     or content.startswith(f"[{oid}]")),
+                    (
+                        oid
+                        for oid in source_refs
+                        if item.get("observation_id") == oid or content.startswith(f"[{oid}]")
+                    ),
                     "",
                 )
                 redacted.append(
                     {**item, "content": f"[source selected in current context: {reference}]"}
-                    if reference else item
+                    if reference
+                    else item
                 )
             projected = redacted
         observation_refs = [
-            str(item.get("observation_id"))
-            for item in projected
-            if item.get("observation_id")
+            str(item.get("observation_id")) for item in projected if item.get("observation_id")
         ]
         meta.setdefault("_selected_context_ids", []).extend(observation_refs)
         meta["_observation_refs"] = list(dict.fromkeys(observation_refs))

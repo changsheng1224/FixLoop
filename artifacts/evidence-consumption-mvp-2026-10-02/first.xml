@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="18" time="5.666" timestamp="2026-10-02T02:27:51.750198+08:00" hostname="DESKTOP-M8LE8SP"><testcase classname="tests.test_evidence_consumption" name="test_inspection_explains_rejection_without_promoting_unknown[missing-invalid-evidence_missing]" time="0.082" /><testcase classname="tests.test_evidence_consumption" name="test_inspection_explains_rejection_without_promoting_unknown[checksum-invalid-evidence_checksum_mismatch]" time="0.077" /><testcase classname="tests.test_evidence_consumption" name="test_inspection_explains_rejection_without_promoting_unknown[scope-invalid-evidence_scope_mismatch]" time="0.078" /><testcase classname="tests.test_evidence_consumption" name="test_inspection_explains_rejection_without_promoting_unknown[source-stale-source_changed]" time="0.078" /><testcase classname="tests.test_evidence_consumption" name="test_inspection_explains_rejection_without_promoting_unknown[blob-invalid-blob_unavailable]" time="0.080" /><testcase classname="tests.test_evidence_consumption" name="test_inspection_explains_rejection_without_promoting_unknown[versions-unknown-file_versions_missing]" time="0.078" /><testcase classname="tests.test_evidence_consumption" name="test_inspection_explains_rejection_without_promoting_unknown[io-unknown-workspace_unverifiable]" time="0.077" /><testcase classname="tests.test_evidence_consumption" name="test_analysis_dependency_rejection_keeps_the_actual_cause" time="0.112" /><testcase classname="tests.test_evidence_consumption" name="test_receipt_after_patch_uses_historical_inputs_without_replaying" time="0.240" /><testcase classname="tests.test_evidence_consumption" name="test_required_summary_reaches_actual_request_even_when_optional_bodies_are_empty[False]" time="1.142" /><testcase classname="tests.test_evidence_consumption" name="test_required_summary_reaches_actual_request_even_when_optional_bodies_are_empty[True]" time="0.703" /><testcase classname="tests.test_evidence_consumption" name="test_stale_required_evidence_returns_reason_and_zero_model_calls[False]" time="0.578" /><testcase classname="tests.test_evidence_consumption" name="test_stale_required_evidence_returns_reason_and_zero_model_calls[True]" time="0.588" /><testcase classname="tests.test_evidence_consumption" name="test_long_fields_are_explicit_previews_without_changing_durable_conclusion" time="0.129" /><testcase classname="tests.test_evidence_consumption" name="test_verification_explanation_is_bound_to_tested_versions" time="0.283" /><testcase classname="tests.test_evidence_consumption" name="test_required_summaries_do_not_bypass_total_input_budget[False]" time="0.108"><failure message="pydantic_core._pydantic_core.ValidationError: 1 validation error for AgentConfig&#10;prompt_budget&#10;  Input should be greater than or equal to 512 [type=greater_than_equal, input_value=256, input_type=int]&#10;    For further information visit https://errors.pydantic.dev/2.12/v/greater_than_equal">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-evidence-consumption-first/test_required_summaries_do_not0')
+native = False
+
+    @pytest.mark.parametrize("native", [False, True])
+    def test_required_summaries_do_not_bypass_total_input_budget(tmp_path, native):
+        (tmp_path / "value.py").write_text("value = 1\n")
+        with session_for(tmp_path) as session:
+            session.create(simple_plan(session))
+            session.configure_long_task("fix value")
+            through_analysis(session)
+&gt;           agent, client = _agent(tmp_path, session, native=native, budget=256)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_evidence_consumption.py:210: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+root = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-evidence-consumption-first/test_required_summaries_do_not0')
+session = &lt;agent_runtime.plan_runtime.session.PlanSession object at 0x0000020AD0846350&gt;
+
+    def _agent(root, session, *, native=False, budget=6000):
+        client_type = FakeNativeToolClient if native else FakeModelClient
+        client = client_type(["&lt;final&gt;done&lt;/final&gt;"])
+        if native:
+            client.requests = []
+            original = client.complete_turn
+    
+            def capture(request):
+                client.requests.append(request)
+                return original(request)
+    
+            client.complete_turn = capture
+        agent = Agent(
+&gt;           config=AgentConfig(provider="fake", max_steps=3, prompt_budget=budget),
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            model_client=client,
+            workspace=WorkspaceContext.build(str(root)),
+            cwd=str(root),
+        )
+E       pydantic_core._pydantic_core.ValidationError: 1 validation error for AgentConfig
+E       prompt_budget
+E         Input should be greater than or equal to 512 [type=greater_than_equal, input_value=256, input_type=int]
+E           For further information visit https://errors.pydantic.dev/2.12/v/greater_than_equal
+
+tests\test_required_long_task_context.py:33: ValidationError</failure></testcase><testcase classname="tests.test_evidence_consumption" name="test_required_summaries_do_not_bypass_total_input_budget[True]" time="0.107"><failure message="pydantic_core._pydantic_core.ValidationError: 1 validation error for AgentConfig&#10;prompt_budget&#10;  Input should be greater than or equal to 512 [type=greater_than_equal, input_value=256, input_type=int]&#10;    For further information visit https://errors.pydantic.dev/2.12/v/greater_than_equal">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-evidence-consumption-first/test_required_summaries_do_not1')
+native = True
+
+    @pytest.mark.parametrize("native", [False, True])
+    def test_required_summaries_do_not_bypass_total_input_budget(tmp_path, native):
+        (tmp_path / "value.py").write_text("value = 1\n")
+        with session_for(tmp_path) as session:
+            session.create(simple_plan(session))
+            session.configure_long_task("fix value")
+            through_analysis(session)
+&gt;           agent, client = _agent(tmp_path, session, native=native, budget=256)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_evidence_consumption.py:210: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+root = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-evidence-consumption-first/test_required_summaries_do_not1')
+session = &lt;agent_runtime.plan_runtime.session.PlanSession object at 0x0000020AD0845750&gt;
+
+    def _agent(root, session, *, native=False, budget=6000):
+        client_type = FakeNativeToolClient if native else FakeModelClient
+        client = client_type(["&lt;final&gt;done&lt;/final&gt;"])
+        if native:
+            client.requests = []
+            original = client.complete_turn
+    
+            def capture(request):
+                client.requests.append(request)
+                return original(request)
+    
+            client.complete_turn = capture
+        agent = Agent(
+&gt;           config=AgentConfig(provider="fake", max_steps=3, prompt_budget=budget),
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            model_client=client,
+            workspace=WorkspaceContext.build(str(root)),
+            cwd=str(root),
+        )
+E       pydantic_core._pydantic_core.ValidationError: 1 validation error for AgentConfig
+E       prompt_budget
+E         Input should be greater than or equal to 512 [type=greater_than_equal, input_value=256, input_type=int]
+E           For further information visit https://errors.pydantic.dev/2.12/v/greater_than_equal
+
+tests\test_required_long_task_context.py:33: ValidationError</failure></testcase><testcase classname="tests.test_evidence_consumption" name="test_projection_failure_does_not_silently_drop_an_evidence_explanation" time="0.531" /></testsuite></testsuites>

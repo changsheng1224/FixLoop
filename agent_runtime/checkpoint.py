@@ -12,6 +12,7 @@
 
 import hashlib
 import time
+from copy import deepcopy
 from pathlib import Path
 from typing import Literal
 
@@ -195,12 +196,10 @@ def create_checkpoint(
             checkpoint["context_manifest"].get("selected_context_ids", [])
         ),
     }
-    from copy import deepcopy
-
     checkpoint["turn_progress"] = deepcopy(agent.session.get("turn_progress", {}))
     checkpoint["action_ledger"] = list(agent.session.get("action_ledger", []) or [])[-100:]
     if agent.session.get("long_task_context"):
-        checkpoint["long_task_context"] = dict(agent.session["long_task_context"])
+        checkpoint["long_task_context"] = deepcopy(agent.session["long_task_context"])
         checkpoint["long_task_context_checksum"] = _long_task_digest(
             checkpoint["long_task_context"]
         )
@@ -379,14 +378,42 @@ def evaluate_resume_state(agent) -> dict:
     if saved_long_task:
         if last.get("long_task_context_checksum") != _long_task_digest(saved_long_task):
             return _emit_resume_result(agent, _resume_result("integrity-failure", last))
+    required = (last.get("context_manifest") or {}).get("required_state_ref")
+    if required:
+        from agent_runtime.errors import ContextBuildBlockedError
+
+        plan_session = getattr(agent, "_plan_session", None)
+        if plan_session is None:
+            return _emit_resume_result(agent, _resume_result("plan-resume-required", last))
+        try:
+            rebuilt = plan_session.build_required_context()
+            if any(
+                required.get(key) != rebuilt["plan_view"].get(key)
+                for key in ("task_id", "run_id", "workspace_id", "plan_id")
+            ):
+                raise ContextBuildBlockedError("state_mismatch")
+        except (ValueError, OSError, ContextBuildBlockedError) as exc:
+            agent.session.pop("long_task_context", None)
+            result = _resume_result("partial-stale", last)
+            result["context_resume_reason"] = getattr(exc, "reason", "state_mismatch")
+            result["context_resume_details"] = deepcopy(getattr(exc, "metadata", {}))
+            return _emit_resume_result(agent, result)
+        # Journal/owner reconciliation happens before this entry. Cached context
+        # is an audit object; it cannot become the restored task authority.
+        agent.session["long_task_context"] = rebuilt
     current_long_task = agent.session.get("long_task_context") or {}
     long_task_diff = []
-    for key in ("original_request", "hard_constraints", "current_node", "state_revision"):
+    comparison_keys = (
+        ("original_request", "hard_constraints")
+        if required
+        else ("original_request", "hard_constraints", "current_node", "state_revision")
+    )
+    for key in comparison_keys:
         if saved_long_task.get(key) and current_long_task.get(key) != saved_long_task.get(key):
             long_task_diff.append(key)
     result["long_task_diff"] = long_task_diff
     plan_session = getattr(agent, "_plan_session", None)
-    if plan_session is not None and saved_long_task:
+    if plan_session is not None and saved_long_task and not required:
         try:
             checked = plan_session.build_long_task_context(
                 str(saved_long_task.get("current_node", {}).get("node_id", ""))

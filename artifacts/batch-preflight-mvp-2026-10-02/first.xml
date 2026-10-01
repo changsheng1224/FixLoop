@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="14" time="22.195" timestamp="2026-10-02T03:48:24.865797+08:00" hostname="DESKTOP-M8LE8SP"><testcase classname="tests.test_native_batch_preflight" name="test_missing_argument_is_paired_without_dispatch_or_budget_reservation" time="13.996" /><testcase classname="tests.test_native_batch_preflight" name="test_raw_protocol_mismatch_rejects_batch_before_any_real_effect[id]" time="0.583" /><testcase classname="tests.test_native_batch_preflight" name="test_raw_protocol_mismatch_rejects_batch_before_any_real_effect[name]" time="0.576" /><testcase classname="tests.test_native_batch_preflight" name="test_raw_protocol_mismatch_rejects_batch_before_any_real_effect[arguments]" time="0.572" /><testcase classname="tests.test_native_batch_preflight" name="test_raw_protocol_mismatch_rejects_batch_before_any_real_effect[missing]" time="0.577" /><testcase classname="tests.test_native_batch_preflight" name="test_raw_protocol_mismatch_rejects_batch_before_any_real_effect[duplicate]" time="0.576" /><testcase classname="tests.test_native_batch_preflight" name="test_raw_protocol_mismatch_rejects_batch_before_any_real_effect[order]" time="0.573" /><testcase classname="tests.test_native_batch_preflight" name="test_raw_protocol_mismatch_rejects_batch_before_any_real_effect[block]" time="0.602" /><testcase classname="tests.test_native_batch_preflight" name="test_raw_protocol_mismatch_rejects_batch_before_any_real_effect[root]" time="0.587" /><testcase classname="tests.test_native_batch_preflight" name="test_provider_preserves_malformed_input_until_protocol_rejection[null]" time="0.587" /><testcase classname="tests.test_native_batch_preflight" name="test_provider_preserves_malformed_input_until_protocol_rejection[array]" time="0.601" /><testcase classname="tests.test_native_batch_preflight" name="test_provider_preserves_malformed_input_until_protocol_rejection[string]" time="0.752" /><testcase classname="tests.test_native_batch_preflight" name="test_provider_preserves_malformed_input_until_protocol_rejection[boolean]" time="0.594" /><testcase classname="tests.test_native_batch_preflight" name="test_truncated_turn_discards_even_complete_write_candidates" time="0.696"><failure message="assert 'discarded' not in &quot;[{'role': '...\ninspect'}]&quot;&#10;  &#10;  'discarded' is contained here:&#10;  ?           ^&#10;    d and was discarded. Do not continue or repeat that analysis. Complete this turn with exactly one apply_patch/patch_file call, or call finish_repair with a grounded cannot_patch/needs_more_context reason. Do not perform more broad exploration.\n[REPAIR TASK]\ninspect'}]&#10;  ?           ^^^^^^^^^^">workspace = WorkspaceContext(cwd='C:\\Users\\haoyu\\AppData\\Local\\Temp\\tmp55i1cj76', repo_root='C:\\Users\\haoyu\\AppData\\Loca..., 'pyproject.toml': "[project]\nname='test'\n"}, head='c8b540301d6e35fce8f9c7c920d92178da20501f', dirty_file_hashes={})
+temp_workspace = WindowsPath('C:/Users/haoyu/AppData/Local/Temp/tmp55i1cj76')
+
+    def test_truncated_turn_discards_even_complete_write_candidates(workspace, temp_workspace):
+        calls = [ToolCall("write_file", {"path": "README.md", "content": "unsafe"}, "discarded")]
+        agent, _ = make_agent(workspace, [])
+        client = TurnClient(
+            ModelTurnResult(
+                tool_calls=calls,
+                content=raw_blocks(calls),
+                finish=ProviderFinish(FinishKind.MAX_OUTPUT_TOKENS, "max_tokens"),
+            )
+        )
+        agent.model_client = client
+        before = (temp_workspace / "README.md").read_text()
+        AgentLoop(agent).run("inspect", skip_plan=True)
+        assert len(client.requests) == 2
+        assert (temp_workspace / "README.md").read_text() == before
+        assert not agent.session.get("tool_observations")
+        assert not agent.session.get("action_ledger")
+&gt;       assert "discarded" not in str(client.requests[1].messages)
+E       assert 'discarded' not in "[{'role': '...\ninspect'}]"
+E         
+E         'discarded' is contained here:
+E         ?           ^
+E           d and was discarded. Do not continue or repeat that analysis. Complete this turn with exactly one apply_patch/patch_file call, or call finish_repair with a grounded cannot_patch/needs_more_context reason. Do not perform more broad exploration.\n[REPAIR TASK]\ninspect'}]
+E         ?           ^^^^^^^^^^
+
+tests\test_native_batch_preflight.py:137: AssertionError</failure></testcase></testsuite></testsuites>

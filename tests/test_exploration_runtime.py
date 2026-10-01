@@ -689,7 +689,9 @@ def test_plan_revision_change_excludes_old_findings(tmp_path):
         runtime.plan_session = SimpleNamespace(
             plan=SimpleNamespace(plan_id="new", plan_version=2), local=threading.local()
         )
-        assert runtime.collect([handle])["tasks"][0]["status"] == "stale"
+        task = runtime.collect([handle])["tasks"][0]
+        assert task["status"] == "stale"
+        assert task["validation"] == {"status": "stale", "reason": "plan_changed"}
         assert not runtime.collect([handle])["findings"]
     finally:
         runtime.close()

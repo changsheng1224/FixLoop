@@ -17,6 +17,7 @@ class RepairRunContext:
 
     phase_timeout_config: PhaseTimeoutConfig | None = None
     cancel_token: Any = None
+    resume_checkpoint: dict | None = field(default=None, repr=False)
     repair_started_at: float | None = None
     blackboard: Blackboard | None = None
     repair_tracer: Any = field(default=None, repr=False)

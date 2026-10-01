@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="9" time="21.804" timestamp="2026-10-02T02:43:37.783643+08:00" hostname="DESKTOP-M8LE8SP"><testcase classname="tests.test_evidence_consumption" name="test_manifest_does_not_label_historical_dependency_as_current_summary" time="15.119"><failure message="RuntimeError: generator raised StopIteration">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-evidence-consumption-usage/test_manifest_does_not_label_h0')
+
+    def test_manifest_does_not_label_historical_dependency_as_current_summary(tmp_path):
+        (tmp_path / "value.py").write_text("value = 1\n")
+        with session_for(tmp_path) as session:
+            session.create(simple_plan(session))
+            session.configure_long_task("fix value")
+            through_analysis(session)
+            session.run_node("edit", lambda attempt: write(session, attempt))
+            agent, _ = _agent(tmp_path, session)
+            assert agent.ask("continue", skip_plan=True) == "done"
+            records = agent.session["context_manifest"]["evidence_consumption"]
+&gt;           current = next(
+                item for item in records if item["kind"] == "observation_present" and item["use"] == "current"
+            )
+E           StopIteration
+
+tests\test_evidence_consumption.py:348: StopIteration
+
+The above exception was the direct cause of the following exception:
+
+cls = &lt;class '_pytest.runner.CallInfo'&gt;
+func = &lt;function call_and_report.&lt;locals&gt;.&lt;lambda&gt; at 0x0000019B2FE98C20&gt;
+when = 'call'
+reraise = (&lt;class '_pytest.outcomes.Exit'&gt;, &lt;class 'KeyboardInterrupt'&gt;)
+
+    @classmethod
+    def from_call(
+        cls,
+        func: Callable[[], TResult],
+        when: Literal["collect", "setup", "call", "teardown"],
+        reraise: type[BaseException] | tuple[type[BaseException], ...] | None = None,
+    ) -&gt; CallInfo[TResult]:
+        """Call func, wrapping the result in a CallInfo.
+    
+        :param func:
+            The function to call. Called without arguments.
+        :type func: Callable[[], _pytest.runner.TResult]
+        :param when:
+            The phase in which the function is called.
+        :param reraise:
+            Exception or exceptions that shall propagate if raised by the
+            function, instead of being wrapped in the CallInfo.
+        """
+        excinfo = None
+        instant = timing.Instant()
+        try:
+&gt;           result: TResult | None = func()
+                                     ^^^^^^
+
+..\..\anaconda3\Lib\site-packages\_pytest\runner.py:344: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+..\..\anaconda3\Lib\site-packages\_pytest\runner.py:246: in &lt;lambda&gt;
+    lambda: runtest_hook(item=item, **kwds), when=when, reraise=reraise
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\..\anaconda3\Lib\site-packages\pluggy\_hooks.py:513: in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\..\anaconda3\Lib\site-packages\pluggy\_manager.py:120: in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\..\anaconda3\Lib\site-packages\_pytest\logging.py:850: in pytest_runtest_call
+    yield
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;CaptureManager _method='fd' _global_capturing=&lt;MultiCapture out=&lt;FDCapture 1 oldfd=5 _state='suspended' tmpfile=&lt;Enco..._io.TextIOWrapper name='nul' mode='r' encoding='utf-8'&gt;&gt; _state='suspended' _in_suspended=False&gt; _capture_fixture=None&gt;
+item = &lt;Function test_manifest_does_not_label_historical_dependency_as_current_summary&gt;
+
+    @hookimpl(wrapper=True)
+    def pytest_runtest_call(self, item: Item) -&gt; Generator[None]:
+        with self.item_capture("call", item):
+&gt;           return (yield)
+                    ^^^^^
+E           RuntimeError: generator raised StopIteration
+
+..\..\anaconda3\Lib\site-packages\_pytest\capture.py:900: RuntimeError</failure></testcase><testcase classname="tests.test_evidence_consumption" name="test_required_summary_reaches_actual_request_even_when_optional_bodies_are_empty[False]" time="0.722" /><testcase classname="tests.test_evidence_consumption" name="test_required_summary_reaches_actual_request_even_when_optional_bodies_are_empty[True]" time="0.723" /><testcase classname="tests.test_evidence_consumption" name="test_actual_request_distinguishes_checked_source_summary_and_retained_body[False-False]" time="0.751" /><testcase classname="tests.test_evidence_consumption" name="test_actual_request_distinguishes_checked_source_summary_and_retained_body[False-True]" time="0.758" /><testcase classname="tests.test_evidence_consumption" name="test_actual_request_distinguishes_checked_source_summary_and_retained_body[True-False]" time="0.923" /><testcase classname="tests.test_evidence_consumption" name="test_actual_request_distinguishes_checked_source_summary_and_retained_body[True-True]" time="0.915" /><testcase classname="tests.test_evidence_consumption" name="test_native_consumption_tracks_retained_groups_after_forced_action[False]" time="0.672" /><testcase classname="tests.test_evidence_consumption" name="test_native_consumption_tracks_retained_groups_after_forced_action[True]" time="0.664" /></testsuite></testsuites>

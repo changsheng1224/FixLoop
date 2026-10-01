@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="4" time="42.163" timestamp="2026-10-02T03:25:42.660346+08:00" hostname="DESKTOP-M8LE8SP"><testcase classname="tests.test_native_tool_batch" name="test_native_cancel_keeps_all_result_receipts" time="12.374"><failure message="threading.BrokenBarrierError">workspace = WorkspaceContext(cwd='C:\\Users\\haoyu\\AppData\\Local\\Temp\\tmpkba6684z', repo_root='C:\\Users\\haoyu\\AppData\\Loca..., 'pyproject.toml': "[project]\nname='test'\n"}, head='52f76e6655a4f437b1525f48154403785bcc9a30', dirty_file_hashes={})
+
+    def test_native_cancel_keeps_all_result_receipts(workspace):
+        agent, _ = make_agent(
+            workspace,
+            [ToolCall("read_file", {"path": "README.md", "start": i}, f"c{i}") for i in range(1, 5)],
+        )
+        token = CancellationToken()
+        agent.cancel_token = token
+        barrier = threading.Barrier(3)
+        executed = []
+    
+        def slow(ctx, args):
+            executed.append(args["start"])
+            barrier.wait(timeout=3)
+            while not ctx.cancel_token.is_cancelled:
+                threading.Event().wait(0.005)
+            return ToolResult(
+                content="stopped", status="cancelled", metadata={"termination_guaranteed": True}
+            )
+    
+        agent.tools["read_file"]["run_with_context"] = slow
+        with ThreadPoolExecutor(max_workers=1) as owner:
+            future = owner.submit(AgentLoop(agent).run, "inspect", skip_plan=True)
+&gt;           barrier.wait(timeout=3)
+
+tests\test_native_tool_batch.py:193: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+..\..\anaconda3\Lib\threading.py:729: in wait
+    self._wait(timeout)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;threading.Barrier at 0x1dee68701a0: broken&gt;, timeout = 3
+
+    def _wait(self, timeout):
+        if not self._cond.wait_for(lambda : self._state != 0, timeout):
+            #timed out.  Break the barrier
+            self._break()
+&gt;           raise BrokenBarrierError
+E           threading.BrokenBarrierError
+
+..\..\anaconda3\Lib\threading.py:767: BrokenBarrierError</failure></testcase><testcase classname="tests.test_native_tool_batch" name="test_native_file_version_change_is_partial_and_does_not_grant_edit_lock" time="0.753" /><testcase classname="tests.test_native_tool_batch_crash" name="test_native_process_exit_uses_plan_receipts_not_ui_for_recovery[read-tool_result_recorded]" time="14.101" /><testcase classname="tests.test_native_tool_batch_crash" name="test_native_process_exit_uses_plan_receipts_not_ui_for_recovery[write-tool_dispatched]" time="14.234" /></testsuite></testsuites>

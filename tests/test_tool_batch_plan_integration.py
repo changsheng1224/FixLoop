@@ -21,6 +21,7 @@ def test_two_plan_nodes_each_native_batch_never_create_four_readers(tmp_path):
     active = peak = 0
     with session_for(tmp_path) as session:
         session.create(simple_plan(session, reads=2))
+        session.configure_long_task("inspect both ranges")
         agents = [
             make_agent(
                 workspace,

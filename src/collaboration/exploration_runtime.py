@@ -26,7 +26,8 @@ from src.collaboration.exploration_contracts import (
     in_scope,
     validate_requests,
 )
-from src.collaboration.exploration_results import merge_findings
+from src.collaboration.exploration_projection import context_valid, delegation_context
+from src.collaboration.exploration_results import collection_diagnostics, merge_findings
 from src.collaboration.exploration_store import ExplorationStore
 from src.collaboration.store import LeaseConflictError
 
@@ -160,6 +161,16 @@ class ExplorationRuntime:
         try:
             validated = validate_requests(self.root, requests)
             versions, plan = snapshot(self.root), self._plan()
+            context = delegation_context(self.plan_session, plan)
+            if context:
+                view = context["plan_view"]
+                if (
+                    view["task_id"] != self.parent_task_id
+                    or view["run_id"] != self.run_id
+                    or view["workspace_id"] != workspace_id(self.root)
+                ):
+                    raise ValueError("exploration_plan_context_scope_mismatch")
+                plan["node_id"] = context["current_node"]["node_id"]
             batch = new_id("exploration-batch")
             tasks = []
             for request in validated:
@@ -190,6 +201,7 @@ class ExplorationRuntime:
                             "workspace_id": workspace_id(self.root),
                             "workspace_revision": versions,
                             **plan,
+                            "delegation_context": context,
                             **request,
                             "input_summaries": inputs,
                             "max_model_turns": self.limits.model_turns,
@@ -297,12 +309,16 @@ class ExplorationRuntime:
                 token.check()
                 claimed = self.store.claim(task_id, process_identity(os.getpid()) or {})
                 data = claimed.payload["exploration"]
+                context = data.get("delegation_context", {})
+                if not context_valid(context, data):
+                    raise ValueError("exploration_plan_context_invalid")
                 projection = {
                     "kind": claimed.kind,
                     "question": data["question"],
                     "scope_paths": data["scope_paths"],
                     "plan": {k: data[k] for k in ("plan_id", "plan_version", "node_id")},
                     "inputs": data["input_summaries"],
+                    "context": context,
                 }
                 child = create_explorer_agent(
                     self.client_factory(claimed),
@@ -323,14 +339,17 @@ class ExplorationRuntime:
                 self.store.finish(claimed, result)
         except LeaseConflictError:
             pass  # An invalidated generation cannot publish a late result.
-        except Exception:
+        except Exception as exc:
             if claimed:
                 result = {
                     "status": "failed",
                     "usage": {"tokens": None},
                     "findings": [],
                     "unknowns": ["Worker failed before a confirmed result."],
-                    "error_code": "exploration_worker_failed",
+                    "error_code": "exploration_plan_context_invalid"
+                    if isinstance(exc, ValueError)
+                    and str(exc) == "exploration_plan_context_invalid"
+                    else "exploration_worker_failed",
                 }
                 try:
                     self.store.finish(claimed, result)
@@ -385,9 +404,23 @@ class ExplorationRuntime:
                 result_ref=data.get("result_ref", ""),
                 cleanup_confirmed=data.get("cleanup_confirmed", False),
             )
-            if data["status"] == "completed" and not self._fresh(task, result, versions):
+            reason = (
+                self._freshness_reason(task, result, versions)
+                if data["status"] == "completed"
+                else ""
+            )
+            if reason:
                 result["status"] = "stale"
                 self._once(task, "subagent_evidence_stale")
+            result["validation"] = {
+                "status": "stale"
+                if reason
+                else "valid"
+                if data["status"] == "completed"
+                else "not_applicable",
+                "reason": reason,
+            }
+            result["diagnostics"] = collection_diagnostics(data, result, reason)
             self._once(task, "subagent_result_collected", only_terminal=True)
             results.append(result)
         findings = merge_findings(results)
@@ -398,10 +431,13 @@ class ExplorationRuntime:
         return {"tasks": results, "findings": findings, "review_required": bool(findings)}
 
     def _fresh(self, task, result, versions):
+        return not self._freshness_reason(task, result, versions)
+
+    def _freshness_reason(self, task, result, versions):
         data = task.payload["exploration"]
         stored = data.get("result") or {}
         if stored.get("checksum") != digest({k: v for k, v in stored.items() if k != "checksum"}):
-            return False
+            return "result_checksum_invalid"
         if (
             result.get("task_id") != task.task_id
             or result.get("parent_task_id") != self.parent_task_id
@@ -409,20 +445,34 @@ class ExplorationRuntime:
             or result.get("workspace_id") != workspace_id(self.root)
             or result.get("attempt_id") != data.get("attempt_id")
             or result.get("lease_generation") != data["lease_generation"]
-            or not result.get("complete")
-            or data["workspace_revision"] != versions
-            or any(data[k] != self._plan()[k] for k in ("plan_id", "plan_version"))
         ):
-            return False
+            return "result_scope_mismatch"
+        if not result.get("complete"):
+            return "result_incomplete"
+        if data["workspace_revision"] != versions:
+            return "workspace_changed"
+        if any(data[k] != self._plan()[k] for k in ("plan_id", "plan_version")):
+            return "plan_changed"
+        context = data.get("delegation_context", {})
+        if not context_valid(context, data):
+            return "delegation_context_invalid"
+        if context and self.plan_session:
+            state = self.plan_session.long_task_state
+            if (
+                context["goal"] != state.original_request
+                or context["hard_constraints"] != state.hard_constraints
+            ):
+                return "task_context_changed"
         observations = self._observations(data)
         try:
             for source in result.get("observations", []):
                 observation = observations.get(source["observation_id"])
-                if not self._valid_observation(observation, source, observations, data, versions):
-                    return False
+                reason = self._observation_reason(observation, source, observations, data, versions)
+                if reason:
+                    return reason
         finally:
             observations.close()
-        return True
+        return ""
 
     def _observations(self, data):
         state = {
@@ -435,22 +485,30 @@ class ExplorationRuntime:
         }
         return ObservationStore(state, self.root, self.agent.state_root)
 
-    def _valid_observation(self, observation, source, store, data, versions):
-        return bool(
-            observation
-            and not observation.stale
-            and observation.lifecycle == "active"
-            and observation.run_id == self.run_id
-            and observation.workspace_id == data["workspace_id"]
-            and observation.session_id == data["attempt_id"]
-            and source.get("complete")
-            and observation.checksum == source["checksum"]
-            and hashlib.sha256(
+    def _observation_reason(self, observation, source, store, data, versions):
+        if not observation:
+            return "observation_missing"
+        if observation.stale or observation.lifecycle != "active":
+            return "observation_inactive"
+        if (
+            observation.run_id != self.run_id
+            or observation.workspace_id != data["workspace_id"]
+            or observation.session_id != data["attempt_id"]
+        ):
+            return "observation_scope_mismatch"
+        if not source.get("complete"):
+            return "observation_incomplete"
+        if (
+            observation.checksum != source["checksum"]
+            or hashlib.sha256(
                 store.expand(observation.observation_id).encode("utf-8", "replace")
             ).hexdigest()
-            == source["checksum"]
-            and all(versions.get(p) == h for p, h in source["file_versions"].items())
-        )
+            != source["checksum"]
+        ):
+            return "observation_checksum_invalid"
+        if any(versions.get(p) != h for p, h in source["file_versions"].items()):
+            return "observation_version_changed"
+        return ""
 
     def _once(self, task, event, only_terminal=False):
         def collect(current, conn):
@@ -557,9 +615,11 @@ class ExplorationRuntime:
                             "decision": "owner_reinspected_source; statement remains a candidate",
                         },
                     )
-                    session.long_task.record_decision(
+                    session.long_task.record_fact(
                         "Owner reinspected exploration source before editing: " + finding["path"],
+                        kind="source_review",
                         source=key,
+                        evidence_refs=selected,
                     )
                     refs.extend(selected)
         if refs:

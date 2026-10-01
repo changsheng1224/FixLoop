@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="1.238" timestamp="2026-10-02T02:18:03.293368+08:00" hostname="DESKTOP-M8LE8SP"><testcase classname="tests.test_context_assembly" name="test_source_removed_by_protocol_budget_is_absent_from_final_selection" time="0.782"><failure message="AssertionError: assert ['source:test'] == []&#10;  &#10;  Left contains one more item: 'source:test'&#10;  Use -v to get more diff">tmp_path = WindowsPath('C:/Users/haoyu/Documents/FixLoop/.pytest-context-assembly-source-trim/test_source_removed_by_protoco0')
+
+    def test_source_removed_by_protocol_budget_is_absent_from_final_selection(tmp_path):
+        from agent_runtime.context_runtime import ContextItem, ContextSelectionResult
+    
+        (tmp_path / "value.py").write_text("value = 1\n")
+        with session_for(tmp_path) as session:
+            session.create(simple_plan(session))
+            session.configure_long_task("task")
+            agent, _ = _agent(tmp_path, session, native=True, budget=1800)
+            manager = ContextManager(agent)
+            manager._get_workspace = lambda: ""
+            manager._get_memory = lambda: ""
+            manager._get_knowledge = lambda query: ""
+            manager._get_compressed_history = lambda metadata: ""
+    
+            def source(metadata, pool, *, elastic):
+                body = manager.budget.fit('"' * 20000, pool - 50)
+                item = ContextItem(
+                    "source:test",
+                    "source",
+                    body,
+                    source_ref="OBS-test",
+                    token_cost=manager.budget.count(body),
+                )
+                manager._source_selection = ContextSelectionResult(
+                    selected=[item], token_budget=pool, used_tokens=item.token_cost
+                )
+                return "## 当前代码片段\n" + body
+    
+            manager._get_source = source
+            _, metadata = manager.prepare_request("continue", protocol="native")
+            manifest = agent.session["context_manifest"]
+            assert "elastic:source:protocol_budget" in metadata["cuts"]
+            assert "source:test" not in manifest["selected_context_ids"]
+            assert "source:test" in manifest["dropped_context_ids"]
+            assert manifest["source_observation_refs"] == []
+&gt;           assert manifest["selection"]["selected_ids"] == []
+E           AssertionError: assert ['source:test'] == []
+E             
+E             Left contains one more item: 'source:test'
+E             Use -v to get more diff
+
+tests\test_context_assembly.py:421: AssertionError</failure></testcase></testsuite></testsuites>
