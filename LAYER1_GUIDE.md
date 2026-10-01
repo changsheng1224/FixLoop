@@ -55,7 +55,9 @@ Agent (runtime.py) — 对外唯一接口
 | 文件 | 行数 | M | 职责 |
 |------|:--:|:--:|------|
 | `runtime.py` | 310 | M1/M3/M4 | Agent 类：构造装配、ask()、parse()、记忆钩子、from_session |
-| `agent_loop.py` | 180 | M1/M3/M4/B | AgentLoop：while 循环、停机条件、trace、retry 退避、node_timings |
+| `agent_loop.py` | ~1960 | M1/M3/M4/B | AgentLoop：单一主循环、生命周期、预算、停止决策和回调装配 |
+| `loop_protocols.py` | ~800 | M8 | Native/XML 单轮模型调用、上下文、输出恢复与答案校验 |
+| `tool_step_runtime.py` | ~860 | M8 | 工具预检、执行暂停边界、观察记录、补丁恢复和进展更新 |
 
 ### 2.4 模型后端
 
@@ -113,70 +115,39 @@ Agent (runtime.py) — 对外唯一接口
 
 ### 3.1 一次 ask() 的完整路径
 
-```
-cli.py main()
-  → _make_agent(args)
-      ├── _load_dotenv()
-      ├── _make_config(args) → AgentConfig (pydantic 校验)
-      ├── WorkspaceContext.build(cwd) → git info + docs
-      ├── _build_model_client(args) → AnthropicCompatibleClient (urllib)
-      └── Agent(config, client, workspace,
-                light_client, dry_run, quota)
-            │
-            ├── ToolContext(root) + build_tool_registry → 6 tools
-            ├── default_memory_state() → session.memory
-            ├── build_prompt_prefix() → _prefix (缓存)
-            ├── CircuitBreaker() + QuotaEnforcer() + SemanticMemory()
-            │
-            └── agent.ask("问题", callback=CLIProgressCallback())
-                  │
-                  ▼
-AgentLoop.run(user_message, callback)
-  │
-  ├── TaskState.create() → run_id="20260702-143025"
-  ├── emit("run_started")
-  ├── record({"role":"user", ...})
-  ├── _gen_task_summary(user_message) → light_client 生成摘要
-  │
-  └── while True:
-        ├── [停机检查: tool_steps>max? attempts超?]
-        │
-        ├── prompt = agent.prompt(user_message)
-        │     └── ContextManager.build()
-        │           ├── _get_prefix()        → System Prompt
-        │           ├── _get_memory()        → task + files + summaries
-        │           ├── _get_relevant()      → episodic + durable retrieval
-        │           └── _get_compressed_history()
-        │                 ├── _maybe_summarize_history() → LLM 摘要
-        │                 └── _compress_old_entries()    → 规则压缩
-        │
-        ├── raw = circuit_breaker.call(client.complete)(prompt, cache_key)
-        │     → POST https://api.deepseek.com/anthropic/v1/messages
-        │
-        ├── kind, payload = Agent.parse(raw)
-        │     → "tool" / "final" / "retry"
-        │
-        ├── [final] → record → finish_success → emit → _finalize_run → return
-        │
-        ├── [tool] → execute_tool(name, args)
-        │     └── ToolExecutor.execute()
-        │           ├─ ① allowed_tools ② exists ③ validate ④ quota
-        │           ├─ ⑤ duplicate ⑥ dry_run ⑦ approval ⑧ snapshot
-        │           └─ ⑨ execute → snapshot diff
-        │     → update_memory_after_tool → record → emit → callback (耗时+彩色)
-        │
-        └── [retry] → 指数退避 sleep → record 纠错 → user_message=纠错提示
+普通运行和 checkpoint 恢复统一进入 `_run_loop()`：检查停止条件 → 获取规范化回复 → 执行工具、恢复或接受答案 → 记录并继续／结束。
+`loop_protocols.native_model_turn()` 和 `xml_model_turn()` 各处理一次模型交互，使用现有 `CanonicalResponse` 表达工具调用、最终答案和异常；适配函数自身不控制循环。
+Native 按模型轮次计数，XML 保留工具步数和解析尝试计数。恢复入口按 checkpoint 的协议选择适配函数，避免因客户端支持 Native 而切换已有 XML 会话。
+Native 的截断和空输出共享一次恢复机会，不将不完整内容写入历史；XML 的 JSON 校验沿用有上限的解析恢复。答案和终态工具统一通过 `_finish_answer()` → `_complete_run()` 收尾。
+上下文、工具批次和落盘继续使用已有模块；预算、取消、验证和终态契约不增加新的状态机或调度层。
 
-_finalize_run(ts):
-  ├── create_checkpoint → session.checkpoints
-  ├── write_task_state   → .agent/runs/{id}/task_state.json (含 node_timings)
-  ├── write_report       → .agent/runs/{id}/report.json (含 token_usage)
-  ├── promote_durable_memory → .agent/memory/topics/
-  └── SessionStore.save  → .agent/sessions/{id}.json
+`tool_step_runtime` 负责工具预检 → 暂停并交给执行器 → 提交观察 → 恢复/进展记录。
+Native 批次与 XML 单工具共用该流程，保留 generator 的 yield/send/throw 边界和 owner 提交顺序。
+协议和工具模块接收明确的状态、资源和回调，不持有整个 `AgentLoop`；状态在一次运行中共享，checkpoint/report 的字段不变。
 
-每次 API 调用后:
-  ├── _save_request → .agent/last_request.json
-  └── latency_stats 更新 → /session 显示 avg/p50/p99
+```text
+Agent.ask(user_message, callback)
+  → AgentLoop.run()
+      ├── 普通运行：创建 TaskState、初始化上下文、可选 Plan
+      ├── step resume：恢复 TaskState / 预算 / deadline，保留 checkpoint 协议
+      └── _run_loop()
+            ├── 检查取消、期限、轮次 / 工具步数、预算
+            ├── 获取 CanonicalResponse
+            │     ├── loop_protocols.native_model_turn()：Native 消息与 complete_turn()
+            │     └── loop_protocols.xml_model_turn()：文本调用与 parse_model_response()
+            ├── 工具调用 → 执行、记录观察 → 下一轮
+            │     ├── Native：ToolBatchRunner，按调用 ID 配对结果
+            │     └── XML：单个 _run_tool_step，更新后续消息
+            │           （两者共用 tool_step_runtime.tool_step_flow）
+            ├── 回复异常 → 有限恢复 → 下一轮或停止
+            └── 最终答案 / 终态工具 → _finish_answer()
+                                      → _complete_run()
+                                          ├── 关闭 turn progress、提交唯一终态
+                                          ├── 回调、run_terminal / run_finished
+                                          └── _finalize_run() → finalize_agent_run()
+                                                ├── checkpoint / task_state / report
+                                                ├── 记忆反馈与维护
+                                                └── SessionStore.save()
 ```
 
 ### 3.2 各模块编写顺序

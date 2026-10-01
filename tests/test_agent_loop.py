@@ -24,6 +24,58 @@ def _make_agent(outputs: list[str], config, workspace):
     return Agent(config=config, model_client=client, workspace=workspace)
 
 
+@pytest.mark.parametrize("native", [False, True], ids=["xml", "native"])
+@pytest.mark.parametrize("terminal_tool", [False, True], ids=["answer", "terminal_tool"])
+def test_accepted_answer_is_recorded_and_finalized_once(tmp_path, native, terminal_tool):
+    import json
+
+    from agent_runtime.agent_loop import AgentLoop
+    from agent_runtime.callbacks import AgentCallback
+    from agent_runtime.run_store import RunStore
+
+    output = (
+        '<tool>{"name":"finish_repair","args":{"status":"needs_more_context",'
+        '"reason":"implementation unavailable"}}</tool>'
+        if terminal_tool
+        else "<final>done</final>"
+    )
+    client_type = FakeNativeToolClient if native else FakeModelClient
+    agent = Agent(
+        config=AgentConfig(provider="fake", approval="auto"),
+        model_client=client_type([output]),
+        workspace=WorkspaceContext.build(str(tmp_path)),
+        cwd=str(tmp_path),
+    )
+    loop = AgentLoop(agent)
+    answers = []
+
+    class Tracker(AgentCallback):
+        def on_final_answer(self, text):
+            answers.append(text)
+
+    answer = loop.run("inspect implementation", callback=Tracker(), skip_plan=True)
+    accepted = [
+        item
+        for item in agent.session["history"]
+        if item["role"] == "assistant" and item.get("content") == answer
+    ]
+    assert len(accepted) == 1
+    if not terminal_tool:
+        assert answers == [answer]
+    run_dir = RunStore(str(tmp_path)).runs_dir / loop._task_state.run_id
+    state = json.loads((run_dir / "task_state.json").read_text(encoding="utf-8"))
+    report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
+    assert state["final_answer"] == answer
+    assert state["status"] == report["status"] == "completed"
+    assert state["stop_reason"] == report["stop_reason"] == "final"
+    events = [
+        json.loads(line)["event"]
+        for line in (run_dir / "trace.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert events.count("run_terminal") == events.count("run_finished") == 1
+    assert events.count("terminal_tool_accepted") == int(terminal_tool)
+
+
 class TestAgentAsk:
     """Agent.ask() 集成测试。"""
 
@@ -101,6 +153,78 @@ class TestAgentAsk:
         )
         answer = agent.ask("你好")
         assert "你好" in answer
+
+
+@pytest.mark.parametrize("native", [False, True], ids=["xml", "native"])
+def test_loop_preserves_protocol_step_limit(tmp_path, native):
+    from agent_runtime.agent_loop import AgentLoop
+
+    client_type = FakeNativeToolClient if native else FakeModelClient
+    client = client_type(
+        [
+            '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
+            '<tool>{"name":"read_file","args":{"path":"README.md"}}</tool>',
+            "<final>done</final>",
+        ]
+    )
+    (tmp_path / "README.md").write_text("hello\n", encoding="utf-8")
+    agent = Agent(
+        config=AgentConfig(provider="fake", max_steps=2, approval="auto"),
+        model_client=client,
+        workspace=WorkspaceContext.build(str(tmp_path)),
+        cwd=str(tmp_path),
+    )
+    loop = AgentLoop(agent)
+
+    answer = loop.run("inspect files", skip_plan=True)
+
+    assert loop._task_state.tool_steps == 2
+    assert loop._task_state.attempts == (2 if native else 3)
+    assert loop.stop_reason == ("step_limit" if native else "final")
+    assert (answer == "done") is (not native)
+
+
+@pytest.mark.parametrize("checkpoint_path", ["xml", "native"])
+def test_resume_keeps_checkpoint_protocol_with_native_capable_client(tmp_path, checkpoint_path):
+    from agent_runtime.agent_loop import AgentLoop
+    from agent_runtime.callbacks import AgentCallback
+    from agent_runtime.checkpoint import evaluate_resume_state
+    from agent_runtime.session_store import SessionStore
+    from agent_runtime.task_state import TaskState
+
+    config = AgentConfig(provider="fake", max_steps=5, approval="auto")
+    workspace = WorkspaceContext.build(str(tmp_path))
+    first = Agent(config, FakeModelClient([]), workspace, cwd=str(tmp_path))
+    loop = AgentLoop(first)
+    ts = TaskState.create(user_request="inspect files")
+    ts.advance_runtime("reasoning")
+    loop._task_state = ts
+    loop._run_tool_step(ts, "list_files", {"path": "."}, step=1, path=checkpoint_path)
+    client = FakeNativeToolClient(["<final>resumed</final>"])
+    restored = Agent.from_session(
+        client,
+        workspace,
+        SessionStore(str(tmp_path)),
+        first.session["id"],
+        config=config,
+        cwd=str(tmp_path),
+    )
+    assert restored is not None
+    restored.session["resume_state"] = evaluate_resume_state(restored)
+    assert restored.session["resume_state"]["status"] == "step-resumable"
+    model_paths = []
+
+    class Tracker(AgentCallback):
+        def on_pre_model(self, step, prompt_preview, *, path=""):
+            model_paths.append(path)
+
+    resumed_loop = AgentLoop(restored)
+    answer = resumed_loop.run("ignored", callback=Tracker(), skip_plan=True)
+
+    assert answer == "resumed"
+    assert model_paths == [checkpoint_path]
+    assert len(client.prompts) == 1
+    assert resumed_loop._task_state.tool_steps == 1
 
 
 class TestAgentLoopStopConditions:
@@ -630,60 +754,60 @@ class TestCoTStripping:
 
     def test_strips_think_tags(self):
         """移除 <think>...</think> 标签块。"""
-        from agent_runtime.agent_loop import AgentLoop
+        from agent_runtime.loop_protocols import strip_cot
 
         raw = "<think>Let me analyze first...</think>\n<final>done</final>"
-        cleaned = AgentLoop._strip_cot(raw)
+        cleaned = strip_cot(raw)
         assert "<think>" not in cleaned
         assert "analyze" not in cleaned
         assert "<final>done</final>" in cleaned
 
     def test_strips_text_before_first_tag(self):
         """移除第一个结构化标签前的自然语言前缀。"""
-        from agent_runtime.agent_loop import AgentLoop
+        from agent_runtime.loop_protocols import strip_cot
 
         raw = 'I need to read the file first.\n\n<tool>{"name":"read_file","args":{"path":"app.py"}}</tool>'
-        cleaned = AgentLoop._strip_cot(raw)
+        cleaned = strip_cot(raw)
         assert "I need to read" not in cleaned
         assert "<tool>" in cleaned
 
     def test_preserves_plain_final_when_no_tags(self):
         """纯文本 final answer（无标签）：保留原样。"""
-        from agent_runtime.agent_loop import AgentLoop
+        from agent_runtime.loop_protocols import strip_cot
 
         raw = "The bug is in app.py line 42."
-        cleaned = AgentLoop._strip_cot(raw)
+        cleaned = strip_cot(raw)
         assert cleaned == raw
 
     def test_strips_think_and_prefix_together(self):
         """同时移除 <think> 和前缀文本。"""
-        from agent_runtime.agent_loop import AgentLoop
+        from agent_runtime.loop_protocols import strip_cot
 
         raw = (
             "<think>reasoning step 1</think>\n"
             "Now I'll search for the error...\n"
             '<tool>{"name":"search","args":{"pattern":"error"}}</tool>'
         )
-        cleaned = AgentLoop._strip_cot(raw)
+        cleaned = strip_cot(raw)
         assert "reasoning" not in cleaned
         assert "Now I'll search" not in cleaned
         assert "<tool>" in cleaned
 
     def test_empty_after_strip_returns_original(self):
         """清洗后为空时回退到原始文本。"""
-        from agent_runtime.agent_loop import AgentLoop
+        from agent_runtime.loop_protocols import strip_cot
 
         raw = "<think>only thinking, no action</think>"
-        cleaned = AgentLoop._strip_cot(raw)
+        cleaned = strip_cot(raw)
         # 清洗后只剩空白 → 返回原始文本
         assert "only thinking" in cleaned
 
     def test_multiline_think_tag(self):
         """多行 <think> 块正确剥离。"""
-        from agent_runtime.agent_loop import AgentLoop
+        from agent_runtime.loop_protocols import strip_cot
 
         raw = '<think>\nline 1\nline 2\nline 3\n</think>\n<final>{"ok":true}</final>'
-        cleaned = AgentLoop._strip_cot(raw)
+        cleaned = strip_cot(raw)
         assert "line 1" not in cleaned
         assert "line 2" not in cleaned
         assert "ok" in cleaned

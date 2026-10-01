@@ -4,7 +4,7 @@ from pathlib import Path
 
 from agent_runtime.agent_loop import AgentLoop
 from agent_runtime.cancellation import CancellationToken
-from agent_runtime.checkpoint import evaluate_resume_state
+from agent_runtime.checkpoint import create_checkpoint, evaluate_resume_state
 from agent_runtime.config import AgentConfig
 from agent_runtime.providers.clients import FakeModelClient
 from agent_runtime.runtime import Agent
@@ -57,6 +57,35 @@ def test_successful_tool_step_is_persisted_as_resumable_checkpoint(temp_workspac
     assert checkpoint["tool_result"]
     assert checkpoint["next_user_message"] == next_message
     assert checkpoint["task_state"]["tool_steps"] == 1
+
+
+def test_checkpoint_preserves_protocol_and_tool_control_counters(temp_workspace):
+    agent = _agent(temp_workspace, [])
+    loop = AgentLoop(agent)
+    loop._protocol_state.retry_count = 2
+    loop._protocol_state.json_retry_count = 1
+    loop._protocol_state.empty_retries = 2
+    loop._tool_state.no_progress_steps = 3
+    ts = TaskState.create(user_request="repair")
+
+    checkpoint = create_checkpoint(agent, ts, "repair")
+    control = checkpoint["runtime_control"]
+    assert {
+        key: control[key]
+        for key in ("retry_count", "json_retry_count", "empty_retries", "no_progress_steps")
+    } == {
+        "retry_count": 2,
+        "json_retry_count": 1,
+        "empty_retries": 2,
+        "no_progress_steps": 3,
+    }
+
+    resumed = AgentLoop(_agent(temp_workspace, []))
+    resumed._restore_runtime_control(control)
+    assert resumed._protocol_state.retry_count == 2
+    assert resumed._protocol_state.json_retry_count == 1
+    assert resumed._protocol_state.empty_retries == 2
+    assert resumed._tool_state.no_progress_steps == 3
 
 
 def test_resume_continues_after_last_successful_tool_step(temp_workspace):

@@ -13,7 +13,7 @@ def test_canonical_tool_call_is_stable():
 
 
 def test_schema_is_shared_by_provider_and_validator():
-    from agent_runtime.agent_loop import _build_anthropic_tools
+    from agent_runtime.loop_protocols import build_native_tools
     from agent_runtime.tool_schema import validate_tool_arguments
 
     registry = {
@@ -22,10 +22,12 @@ def test_schema_is_shared_by_provider_and_validator():
             "description": "read",
         }
     }
-    provider = _build_anthropic_tools(registry)[0]["input_schema"]
+    provider = build_native_tools(registry)[0]["input_schema"]
     assert provider["required"] == ["path"]
     assert provider["additionalProperties"] is False
-    normalized, errors = validate_tool_arguments(registry["read_file"]["schema"], {"path": "x", "start": "2"})
+    normalized, errors = validate_tool_arguments(
+        registry["read_file"]["schema"], {"path": "x", "start": "2"}
+    )
     assert errors == []
     assert normalized["start"] == 2
 

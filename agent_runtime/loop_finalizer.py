@@ -18,7 +18,9 @@ def finalize_agent_run(loop, ts) -> None:
         session_usage = getattr(agent.model_client, "session_usage", None) or {}
         from agent_runtime.token_accounting import build_report_token_fields
 
-        report_token = build_report_token_fields(session_usage, loop._last_token_meta)
+        report_token = build_report_token_fields(
+            session_usage, loop._protocol_state.last_token_meta
+        )
         report_latency = build_report_latency_fields(loop._call_timings)
         agent._last_run_node_timings = dict(ts.node_timings)
         agent._last_call_timings = list(loop._call_timings)
@@ -44,8 +46,7 @@ def finalize_agent_run(loop, ts) -> None:
             "failure_attribution": getattr(ts, "failure_attribution", {}),
             "runtime_contract": dict(getattr(ts, "runtime_contract", {}) or {}),
             "terminal_contract": {
-                "terminal": str(getattr(ts, "status", ""))
-                in {"completed", "failed", "stopped"},
+                "terminal": str(getattr(ts, "status", "")) in {"completed", "failed", "stopped"},
                 "stop_reason": str(getattr(ts, "stop_reason", "") or ""),
                 "unresolved_side_effects": [
                     item
@@ -68,13 +69,11 @@ def finalize_agent_run(loop, ts) -> None:
             },
             "context_summary": context_summary,
             "runtime_metrics": {
-                "parse_retry_count": loop._retry_count,
+                "parse_retry_count": loop._protocol_state.retry_count,
                 "tool_steps": ts.tool_steps,
                 "cache_hit_rate": context_summary.get("cache_hit_rate", 0.0),
-                "llm_calls": loop._llm_call_count,
-                "llm_call_limit": int(
-                    getattr(agent.config, "max_llm_calls_per_repair", 0) or 0
-                ),
+                "llm_calls": loop._protocol_state.llm_call_count,
+                "llm_call_limit": int(getattr(agent.config, "max_llm_calls_per_repair", 0) or 0),
                 "repair_budget": loop._repair_budget.summary(),
                 "budget_manager": loop._budget_manager.summary(),
                 "tool_observations": tool_observation_summary(
@@ -83,7 +82,7 @@ def finalize_agent_run(loop, ts) -> None:
                 "last_tool_observation": agent.session.get("_last_tool_observation", {}),
             },
             "retry_summary": {
-                "parse_retries": loop._retry_count,
+                "parse_retries": loop._protocol_state.retry_count,
                 "model_attempts": ts.attempts,
                 "tool_steps": ts.tool_steps,
             },
@@ -220,9 +219,7 @@ def _feedback_recalled_memories(agent, ts) -> None:
                 and event.get("usage") in {"applied", "verified"}
             ]
             outcome = "supported" if succeeded and applied else "inconclusive"
-            event_refs = [
-                ref for event in applied for ref in event.get("evidence_refs", [])
-            ]
+            event_refs = [ref for event in applied for ref in event.get("evidence_refs", [])]
             governance.record_usage(
                 str(memory_id),
                 outcome=outcome,

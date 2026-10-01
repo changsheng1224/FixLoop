@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from agent_runtime.agent_loop import _tool_target_paths
+import pytest
+
 from agent_runtime.config import AgentConfig
 from agent_runtime.model_turn import (
     FinishKind,
@@ -11,6 +12,7 @@ from agent_runtime.model_turn import (
 from agent_runtime.runtime import Agent
 from agent_runtime.step_guard import StepContext, StepGuard
 from agent_runtime.tool_executor import QuotaEnforcer
+from agent_runtime.tool_step_runtime import tool_target_paths
 from agent_runtime.workspace import WorkspaceContext
 
 
@@ -21,7 +23,7 @@ def test_apply_patch_recovery_extracts_exact_envelope_paths():
 -old
 +new
 *** End Patch"""
-    assert _tool_target_paths("apply_patch", {"patch": patch}) == [
+    assert tool_target_paths("apply_patch", {"patch": patch}) == [
         "django/contrib/auth/validators.py"
     ]
 
@@ -36,7 +38,7 @@ def test_apply_patch_recovery_extracts_all_unique_paths():
 +created = True
 *** Delete File: c.py
 *** End Patch"""
-    assert _tool_target_paths("apply_patch", {"patch": patch}) == [
+    assert tool_target_paths("apply_patch", {"patch": patch}) == [
         "a.py",
         "b.py",
         "c.py",
@@ -44,7 +46,7 @@ def test_apply_patch_recovery_extracts_all_unique_paths():
 
 
 def test_apply_patch_recovery_does_not_fallback_to_wildcard_on_invalid_patch():
-    assert _tool_target_paths("apply_patch", {"patch": "not a patch"}) == []
+    assert tool_target_paths("apply_patch", {"patch": "not a patch"}) == []
 
 
 def test_targeted_read_reserve_matches_absolute_model_path():
@@ -64,10 +66,7 @@ def test_targeted_read_reserve_matches_absolute_model_path():
 def test_targeted_read_reserve_does_not_match_similar_filename():
     quota = QuotaEnforcer()
     quota.grant_read_reserve("pkg/a.py", kind="targeted")
-    assert (
-        quota.matching_read_reserve("read_file", {}, {"path": "pkg/not_a.py"})
-        is None
-    )
+    assert quota.matching_read_reserve("read_file", {}, {"path": "pkg/not_a.py"}) is None
 
 
 class ScriptedNativeClient:
@@ -181,6 +180,34 @@ def test_second_truncation_has_deterministic_terminal_reason(tmp_path):
     assert len([name for name, _payload in events if name == "model_output_truncated"]) == 2
 
 
+@pytest.mark.parametrize(
+    "kinds",
+    [
+        (FinishKind.EMPTY_OUTPUT, FinishKind.EMPTY_OUTPUT),
+        (FinishKind.EMPTY_OUTPUT, FinishKind.MAX_OUTPUT_TOKENS),
+        (FinishKind.MAX_OUTPUT_TOKENS, FinishKind.EMPTY_OUTPUT),
+    ],
+)
+def test_empty_and_truncated_outputs_share_one_recovery_attempt(tmp_path, kinds):
+    results = [
+        _truncated() if kind == FinishKind.MAX_OUTPUT_TOKENS else ModelTurnResult()
+        for kind in kinds
+    ]
+    loop, agent, client, events = _native_loop(tmp_path, [*results, _final("unused")])
+
+    answer = loop.run("fix issue", skip_plan=True)
+
+    assert len(client.requests) == 2
+    assert "unused" not in answer
+    assert loop._task_state.status == "failed"
+    assert loop.stop_reason == (
+        "model_output_truncated" if kinds[-1] == FinishKind.MAX_OUTPUT_TOKENS else "parse_fail"
+    )
+    assert not any(item["role"] == "assistant" for item in agent.session["history"])
+    names = [name for name, _ in events]
+    assert names.count("run_terminal") == names.count("run_finished") == 1
+
+
 def test_scoped_read_reserve_is_one_use_and_does_not_open_other_paths():
     quota = QuotaEnforcer(group_limits={"read": 1, "write": 1, "verify": 0, "recovery": 0})
     spec = {"budget_group": "read"}
@@ -212,9 +239,7 @@ def test_post_lock_reserve_only_allows_exact_read_file_and_returns_receipt():
     assert quota.check("read_file", spec, {"path": "pkg/a.py"})
     assert not quota.check("grep", spec, {"path": "pkg/a.py", "pattern": "x"})
     assert not quota.check("read_file", spec, {"path": "pkg/b.py"})
-    consumed = quota.record(
-        "read_file", spec, {"path": "pkg/a.py"}, succeeded=True
-    )
+    consumed = quota.record("read_file", spec, {"path": "pkg/a.py"}, succeeded=True)
     assert consumed == {"path": "pkg/a.py", "kind": "post_lock", "generation": 3}
     assert not quota.check("read_file", spec, {"path": "pkg/a.py"})
 
@@ -334,7 +359,7 @@ def test_patch_decision_gate_filters_reads_at_request_projection(tmp_path):
     loop, agent, _client, _events = _native_loop(tmp_path, [_final()])
     agent._agent_name = "patcher"
     loop._step_guard.enter_convergence("read_limit_without_write")
-    loop._patch_decision_required = True
+    loop._tool_state.patch_decision_required = True
 
     names = loop._native_tool_names(action_required=True)
 
@@ -357,12 +382,18 @@ def test_reading_editable_implementation_syncs_grounding_and_forces_patch(tmp_pa
     set_active_edit_lock(tmp_path, lock)
     try:
         lock.mark_read("module.py", auto_allow_impl=True)
-        result = ToolResult(content="module.py", status="success", metadata={"tool_status": "success"})
+        result = ToolResult(
+            content="module.py", status="success", metadata={"tool_status": "success"}
+        )
         loop._sync_patcher_grounding("read_file", {"path": "module.py"}, result)
         assert state.node_timings["patcher_grounded"] is True
         assert state.node_timings["patch_required"] is True
-        assert loop._patch_decision_required is True
-        assert loop._patch_recovery_allowed_tools == {"apply_patch", "patch_file", "finish_repair"}
+        assert loop._tool_state.patch_decision_required is True
+        assert loop._tool_state.patch_recovery_allowed_tools == {
+            "apply_patch",
+            "patch_file",
+            "finish_repair",
+        }
         assert any(name == "patcher_grounded" for name, _payload in events)
     finally:
         set_active_edit_lock(tmp_path, None)
@@ -376,11 +407,14 @@ def test_grounded_patcher_cannot_finish_with_needs_more_context(tmp_path):
     agent.session["_patcher_runtime"] = {"grounded": True}
     result = ToolResult(content="", status="success", metadata={"tool_status": "success"})
 
-    assert loop._block_grounded_finish(
-        "finish_repair",
-        {"status": "needs_more_context", "reason": "need more context"},
-        result,
-    ) is True
+    assert (
+        loop._block_grounded_finish(
+            "finish_repair",
+            {"status": "needs_more_context", "reason": "need more context"},
+            result,
+        )
+        is True
+    )
     assert result.metadata["tool_error_code"] == "grounded_finish_blocked"
     assert result.metadata["required_next_action"] == "apply_patch_or_cannot_patch"
 
@@ -401,7 +435,7 @@ def test_targeted_reread_reserve_overrides_patch_decision_for_exact_read(tmp_pat
     loop, agent, _client, _events = _native_loop(tmp_path, [_final()])
     agent._agent_name = "patcher"
     loop._step_guard.enter_convergence("stale_preimage")
-    loop._patch_decision_required = True
+    loop._tool_state.patch_decision_required = True
     agent.quota.grant_read_reserve("pkg/a.py", kind="targeted")
 
     names = loop._native_tool_names(action_required=True)
@@ -429,7 +463,7 @@ def test_patcher_localization_window_keeps_reads_after_action_gate(tmp_path):
     agent._agent_name = "patcher"
     loop._step_guard.reset("fix issue", localization_mode=True)
     loop._step_guard.enter_convergence("read_limit_without_write")
-    loop._patch_decision_required = True
+    loop._tool_state.patch_decision_required = True
 
     names = loop._native_tool_names(action_required=True)
 
@@ -498,9 +532,7 @@ def test_thinking_only_recovery_accepts_structured_terminal_tool(tmp_path):
 
 
 def test_finish_repair_has_terminal_reserve_when_recovery_budget_is_exhausted():
-    quota = QuotaEnforcer(
-        group_limits={"read": 0, "write": 0, "verify": 0, "recovery": 0}
-    )
+    quota = QuotaEnforcer(group_limits={"read": 0, "write": 0, "verify": 0, "recovery": 0})
     spec = {"budget_group": "recovery"}
     args = {"status": "needs_more_context", "reason": "evidence is incomplete"}
 
