@@ -260,6 +260,8 @@ def _runtime_control_snapshot(agent, task_state) -> dict:
     budget = getattr(agent, "_repair_budget", None)
     deadline = getattr(agent, "_repair_deadline", None)
     loop = getattr(agent, "_loop", None)
+    protocol = getattr(loop, "_protocol_state", None)
+    tool_state = getattr(loop, "_tool_state", None)
     control = {
         "max_steps": int(
             getattr(loop, "max_steps", 0) or getattr(agent.config, "max_steps", 0) or 0
@@ -271,10 +273,10 @@ def _runtime_control_snapshot(agent, task_state) -> dict:
             else {}
         ),
         "deadline": deadline.snapshot() if deadline is not None else {"remaining_s": None},
-        "retry_count": int(getattr(loop, "_retry_count", 0) or 0),
-        "no_progress_steps": int(getattr(loop, "_no_progress_steps", 0) or 0),
-        "json_retry_count": int(getattr(loop, "_json_retry_count", 0) or 0),
-        "empty_retries": int(getattr(loop, "_empty_retries", 0) or 0),
+        "retry_count": int(getattr(protocol, "retry_count", 0) or 0),
+        "no_progress_steps": int(getattr(tool_state, "no_progress_steps", 0) or 0),
+        "json_retry_count": int(getattr(protocol, "json_retry_count", 0) or 0),
+        "empty_retries": int(getattr(protocol, "empty_retries", 0) or 0),
         "turn": int(getattr(task_state, "turn", 0) or 0),
         "tool_steps": int(getattr(task_state, "tool_steps", 0) or 0),
     }

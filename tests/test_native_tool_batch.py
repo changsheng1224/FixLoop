@@ -288,7 +288,7 @@ def test_native_serial_side_effect_retains_inflight_action_and_sequential_steps(
     original = agent.tools["write_file"]["run"]
 
     def writing(args):
-        assert loop._in_flight_tool == "write_file"
+        assert loop._tool_state.in_flight_tool == "write_file"
         action = agent.session["_in_flight_action"]
         assert action["status"] == "dispatched"
         assert ":write:" in action["idempotency_key"]
