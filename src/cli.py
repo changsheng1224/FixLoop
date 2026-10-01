@@ -6,11 +6,6 @@ from pathlib import Path
 
 from agent_runtime.bootstrap import load_dotenv
 from agent_runtime.logging_setup import add_log_level_argument, setup_logging_from_args
-from src.cli_exit_codes import (
-    REPAIR_EXIT_CONFIG,
-    repair_config_error,
-    repair_exit_code,
-)
 from src.eval.cli_helpers import (
     print_ablation_report,
     print_eval_report,
@@ -74,16 +69,20 @@ def _add_eval_run_args(parser: argparse.ArgumentParser) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(prog="src.cli", description="多 Agent 代码修复")
+    parser = argparse.ArgumentParser(prog="fixloop", description="多 Agent 代码修复")
     add_log_level_argument(parser)
     sub = parser.add_subparsers(dest="command")
 
     p_repair = sub.add_parser("repair", help="执行修复")
-    p_repair.add_argument("--issue", required=True, help="Issue 描述（含堆栈）")
-    p_repair.add_argument("--repo", default=".", help="仓库路径")
+    issue_input = p_repair.add_mutually_exclusive_group(required=True)
+    issue_input.add_argument("--issue", help="问题描述（可附堆栈、复现步骤和预期行为）")
+    issue_input.add_argument("--issue-file", help="UTF-8 问题描述文件")
+    p_repair.add_argument("--repo", default=".", help="本地目录、GitHub URL 或 owner/repo")
+    p_repair.add_argument("--ref", help="GitHub 仓库的分支、tag 或 commit SHA")
+    p_repair.add_argument("--output", help="新的结果目录（默认 .fixloop/runs/<id>）")
     p_repair.add_argument("--verbose", action="store_true", help="详细输出")
     p_repair.add_argument("--dry-run", action="store_true", help="演习模式")
-    p_repair.add_argument("--skip-verify", action="store_true", help="跳过 Docker 验证")
+    p_repair.add_argument("--skip-verify", action="store_true", help="跳过独立验证，交付待验证补丁")
     p_repair.add_argument(
         "--code-exploration-mode",
         choices=["text", "lsp", "relations"],
@@ -100,7 +99,7 @@ def main() -> int:
         choices=["auto", "container", "host", "static"],
         default="auto",
         help=(
-            "验证执行层：auto=优先 Docker 不可用降级 host；"
+            "验证执行层：auto=GitHub 要求 Docker，本地优先 Docker 可降级 host；"
             "container=只用 Docker；host=本地 pytest；static=仅静态编译检查"
         ),
     )
@@ -252,21 +251,21 @@ def main() -> int:
 
 
 def _repair(args) -> int:
-    if getattr(args, "execution_backend", "legacy") == "wsl_bwrap":
-        if args.execution_tier != "auto" or args.require_sandbox:
-            print("错误: wsl_bwrap conflicts with legacy tier/require-sandbox", file=sys.stderr)
-            return REPAIR_EXIT_CONFIG
-        if args.code_exploration_mode != "text" or args.pylsp_path:
-            print("错误: wsl_bwrap does not support LSP", file=sys.stderr)
-            return REPAIR_EXIT_CONFIG
-        print("错误: wsl_bwrap repair requires P3 external state_root isolation", file=sys.stderr)
-        return REPAIR_EXIT_CONFIG
-    load_dotenv()
-    repo = str(Path(args.repo).resolve())
-    config_err = repair_config_error(repo)
-    if config_err:
-        print(config_err, file=sys.stderr)
-        return REPAIR_EXIT_CONFIG
+    from src.repair_cli import run_repair_cli
+
+    return run_repair_cli(
+        args,
+        lambda repo, token: _execute_repair(args, repo, token),
+        on_result=lambda state: _print_repair_result(
+            state,
+            verbose=args.verbose,
+            dry_run=args.dry_run,
+        ),
+    )
+
+
+def _execute_repair(args, repo: str, cancel_token):
+    from src.repair_workspace import RepairInputError
 
     try:
         factory = make_orchestrator_factory(
@@ -280,8 +279,11 @@ def _repair(args) -> int:
         )
         orch = factory(repo)
     except Exception as exc:
-        print(f"错误: 配置/初始化失败: {exc}", file=sys.stderr)
-        return REPAIR_EXIT_CONFIG
+        from src.repair_factory import RequiredVerifierError
+
+        if isinstance(exc, RequiredVerifierError):
+            raise
+        raise RepairInputError("configuration_failed", f"配置/初始化失败: {exc}") from exc
 
     if args.metrics is not None:
         from agent_runtime.metrics import start_metrics_server
@@ -308,23 +310,13 @@ def _repair(args) -> int:
             print("[Orchestrator] Docker 不可用，跳过验证", file=sys.stderr)
         print("[Orchestrator] 开始修复...", file=sys.stderr)
 
-    from agent_runtime.cancellation import CancellationToken
-    from agent_runtime.signal_cancel import sigint_cancel_scope
+    state = orch.repair(
+        args.issue,
+        cancel_token=cancel_token,
+        resume_run_id=getattr(args, "resume_repair", None) or "",
+    )
 
-    cancel_token = CancellationToken()
-
-    with sigint_cancel_scope(
-        cancel_token,
-        first_message="[Orchestrator] 取消中…",
-    ):
-        state = orch.repair(
-            args.issue,
-            cancel_token=cancel_token,
-            resume_run_id=getattr(args, "resume_repair", None) or "",
-        )
-
-    _print_repair_result(state, verbose=args.verbose)
-    return repair_exit_code(state)
+    return state
 
 
 def _eval(args) -> int:
@@ -406,7 +398,7 @@ def _skills_validate(args) -> int:
     return 0 if report.ok else 1
 
 
-def _print_repair_result(state, verbose: bool) -> None:
+def _print_repair_result(state, verbose: bool, *, dry_run: bool = False) -> None:
     if verbose:
         plan = state.repair_plan
         variants = ""
@@ -487,9 +479,10 @@ def _print_repair_result(state, verbose: bool) -> None:
             print(f"--- Trace: .agent/runs/{state.repair_run_id}/trace.jsonl ---", file=sys.stderr)
 
     if has_actionable_patch(state):
-        skipped = state.node_timings.get("verify_skipped")
-        suffix = " (未验证)" if skipped else ""
-        pending = state.status == "pending_verify"
+        vr = state.verification_result
+        verified = bool(vr and vr.all_passed and vr.total_tests > 0 and not dry_run)
+        pending = state.status == "pending_verify" or not verified
+        suffix = " (未验证)" if pending else ""
         emoji = "⚠" if pending or state.status == "patched" else "✅"
         label = "补丁已生成，等待验证" if pending else "修复完成"
         print(f"\n{emoji} {label}! 状态={state.status}{suffix}")

@@ -104,6 +104,61 @@ bash demo/demo_repair.sh calculator
 # SKIP_VERIFY=1 bash demo/demo_repair.sh   # 无 Docker
 ```
 
+### 4. GitHub 仓库 + 问题描述
+
+安装 CLI 与容器验证依赖，配置 `DEEPSEEK_API_KEY`，并构建上述沙箱镜像：
+
+```bash
+pip install -e ".[sandbox]"
+fixloop repair --repo https://github.com/owner/project --issue "复现步骤……实际行为……预期行为……"
+```
+
+`--repo` 也接受 `owner/project`、`git@github.com:owner/project.git` 或本地目录。
+已有本地目录优先按路径解释；GitHub 输入会克隆到独立目录并固定基线 commit。
+Git 复用本机已有认证和代理配置，不在 URL 中填写 token。私有仓库可使用已配置的 SSH 身份。
+
+长问题和指定版本：
+
+```bash
+fixloop repair --repo owner/project --ref v1.2.0 --issue-file issue.md
+fixloop repair --repo owner/project --issue "……" --output ../repair-result
+```
+
+`issue.md` 使用 UTF-8，可包含堆栈、复现步骤、预期结果和修改约束。
+`--issue` 与 `--issue-file` 二选一；`--ref` 支持分支、tag 或 commit SHA。
+`--output` 必须是新的目录，默认 `.fixloop/runs/<id>/`。结果目录包括：
+
+```text
+result.json   # 状态、基线 SHA、验证结果、错误分类和进度记录
+report.md     # 可读报告
+patch.diff    # 最终工作树修改，含新增/删除文件和 Git 二进制补丁
+repo/         # GitHub 输入的独立工作目录
+```
+
+首期 GitHub 入口支持 Python/pytest 项目。默认要求 Docker 验证；容器或镜像不可用时
+报告 `verification_environment_failed`。项目依赖必须在现有验证环境中可用，自动准备
+任意仓库依赖属于后续范围。`--execution-tier` 描述独立 Verifier 的执行层，Patcher
+继续使用现有运行时及工具权限机制。
+
+显式 `--execution-tier host` 使用本地验证；`--execution-tier static` 只做静态检查；
+`--skip-verify` 生成待验证补丁。静态检查、零测试和跳过验证不会在结果报告中显示为
+已经验证的修复。测试通过会注明实际验证范围，不代表整个仓库的全量测试通过。
+
+应用补丁前，在对应基线版本的干净仓库中检查：
+
+```bash
+git apply --check /path/to/result/patch.diff
+git apply /path/to/result/patch.diff
+```
+
+本地目录保留原有原地修复方式，补丁以启动时工作树为基线，排除预先存在的未跟踪
+文件、`.agent`、`.fixloop`、缓存和 `.env`。非 Git 目录支持文本补丁导出。
+Ctrl+C 会协作取消并保留报告、工作目录和可导出的已有修改。
+退出码：`0` 有可交付补丁（需检查报告是否已验证）、`1` 修复或导出失败、
+`2` 输入/配置/准备失败、`3` 超时、`130` 用户取消。
+
+详细输入、结果与失败边界见 [CLI 使用指南](docs/GITHUB_REPAIR_CLI.md)。
+
 ## Demo 脚本
 
 M8 录屏 / 面试演示用三段式脚本（仓库根目录、Git Bash / Linux）：
