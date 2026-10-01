@@ -124,6 +124,8 @@ def supervise(policy: SandboxPolicy, request: SandboxRequest, digest: str) -> Sa
     started = time.monotonic()
     store.transition(request.call_id, "running", supervisor_identity=process_identity(os.getpid()))
     try:
+        from agent_runtime.linux_sandbox.backend import _validate_owner_envelope
+        _validate_owner_envelope(policy, request)
         proc = subprocess.Popen(
             policy.argv(request),
             stdin=subprocess.DEVNULL,
@@ -134,14 +136,22 @@ def supervise(policy: SandboxPolicy, request: SandboxRequest, digest: str) -> Sa
             env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
             cwd="/",
         )
-    except OSError:
+    except (OSError, ValueError) as exc:
         result = SandboxResult(
-            "start_failed",
-            error_code="tool_start_failed",
+            "rejected" if isinstance(exc, ValueError) else "start_failed",
+            error_code=str(exc).split(":", 1)[0]
+            if isinstance(exc, ValueError) else "tool_start_failed",
+            cleanup="confirmed",
+            mutation_status="not_started",
             receipt_id=request.call_id,
             policy_digest=digest,
+            owner_token=request.owner_token,
+            generation=request.generation,
+            coordination_revision=request.coordination_revision,
         )
-        store.transition(request.call_id, "terminal", result=result.to_wire())
+        store.transition(
+            request.call_id, "terminal", result=result.to_wire(), no_target_started=True
+        )
         return result
     store.attach_target_identity(request.call_id, process_identity(proc.pid))
     startup_ms = int((time.monotonic() - started) * 1000)
@@ -172,6 +182,9 @@ def supervise(policy: SandboxPolicy, request: SandboxRequest, digest: str) -> Sa
         cleanup_ms=cleanup_ms,
         actual_backend="linux_sandbox",
         mutation_status="pending",
+        owner_token=request.owner_token,
+        generation=request.generation,
+        coordination_revision=request.coordination_revision,
     )
     store.transition(request.call_id, "terminal", result=result.to_wire())
     return result

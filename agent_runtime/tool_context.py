@@ -43,8 +43,14 @@ class ToolContext:
     sandbox_task_id: str = "task"
     sandbox_run_id: str = "run"
     sandbox_uncertain: bool = False
+    execution_uncertain: bool = False
     state_root: str = ""
     sandbox_identity: dict = field(default_factory=dict)
+    run_coordinator: object | None = None
+    sandbox_owner_token: str = ""
+    sandbox_generation: int = 0
+    sandbox_coordination_revision: int = 0
+    sandbox_parent_resource_id: str = ""
 
     def __post_init__(self):
         if self.path_resolver is None:

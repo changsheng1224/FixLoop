@@ -14,7 +14,28 @@ from dataclasses import asdict
 
 from .models import SandboxRequest, SandboxResult
 from .policy import SandboxPolicy
-from .receipts import ReceiptStore, receipt_checksum
+from .receipts import ReceiptStore
+
+
+def _validate_owner_envelope(policy: SandboxPolicy, request: SandboxRequest) -> None:
+    """Fail closed for coordination-bound requests before a supervisor starts."""
+    if not (request.owner_token or request.generation or request.coordination_revision):
+        return
+    if not request.owner_token or request.generation <= 0:
+        raise ValueError("stale_generation: incomplete owner envelope")
+    from agent_runtime.run_coordination.store import CoordinationError, RunCoordinationStore
+
+    try:
+        RunCoordinationStore(
+            str(policy.workspace), state_root=str(policy.state_root)
+        ).assert_request_owner(
+            request.run_id,
+            request.owner_token,
+            request.generation,
+            request.coordination_revision,
+        )
+    except CoordinationError as exc:
+        raise ValueError(exc.code) from exc
 
 
 class LinuxSandboxBackend:
@@ -104,10 +125,14 @@ class LinuxSandboxBackend:
         with self.store.lock():
             return self.store.reconcile(digest)
 
+    def inspect_receipt(self, call_id: str) -> dict | None:
+        return self.store.inspect(call_id)
+
     def execute(self, request: SandboxRequest) -> SandboxResult:
         try:
             digest = self.preflight()
             self.policy.validate_request(request)
+            _validate_owner_envelope(self.policy, request)
             with self.store.lock():
                 self.store.reconcile(digest)
                 self.store.transition(
@@ -117,6 +142,9 @@ class LinuxSandboxBackend:
                     task_id=request.task_id,
                     run_id=request.run_id,
                     workspace_id=request.workspace_id,
+                    owner_token=request.owner_token,
+                    generation=request.generation,
+                    coordination_revision=request.coordination_revision,
                     mapping_id=str(self.policy.workspace.resolve()),
                     distribution_id="wsl2",
                 )
@@ -153,8 +181,13 @@ class LinuxSandboxBackend:
             result = SandboxResult(
                 "start_failed",
                 error_code="tool_start_failed",
+                cleanup="confirmed",
+                mutation_status="not_started",
                 receipt_id=request.call_id,
                 policy_digest=digest,
+                owner_token=request.owner_token,
+                generation=request.generation,
+                coordination_revision=request.coordination_revision,
             )
             self.store.transition(
                 request.call_id, "terminal", result=result.to_wire(), no_target_started=True
@@ -174,7 +207,11 @@ class LinuxSandboxBackend:
                 payload = json.loads(raw)
                 if proc.returncode == 0 and payload.get("receipt_id") == request.call_id:
                     receipt = self.store.reconcile(digest)
-                    if receipt and receipt.get("result") == payload:
+                    if (
+                        receipt
+                        and receipt.get("result") == payload
+                        and self._receipt_matches_request(receipt, request)
+                    ):
                         result = SandboxResult(**payload)
                         return result
             return SandboxResult(
@@ -182,6 +219,9 @@ class LinuxSandboxBackend:
                 error_code="execution_uncertain",
                 receipt_id=request.call_id,
                 policy_digest=digest,
+                owner_token=request.owner_token,
+                generation=request.generation,
+                coordination_revision=request.coordination_revision,
             )
         except (OSError, ValueError, subprocess.TimeoutExpired, json.JSONDecodeError):
             return SandboxResult(
@@ -189,6 +229,9 @@ class LinuxSandboxBackend:
                 error_code="execution_uncertain",
                 receipt_id=request.call_id,
                 policy_digest=digest,
+                owner_token=request.owner_token,
+                generation=request.generation,
+                coordination_revision=request.coordination_revision,
             )
         finally:
             with self._guard:
@@ -206,6 +249,20 @@ class LinuxSandboxBackend:
                         proc.kill()
                         proc.wait(timeout=3)
                 proc.stdout.close()
+
+    @staticmethod
+    def _receipt_matches_request(receipt: dict, request: SandboxRequest) -> bool:
+        return all(
+            receipt.get(key) == request.__dict__[key]
+            for key in (
+                "task_id",
+                "run_id",
+                "workspace_id",
+                "owner_token",
+                "generation",
+                "coordination_revision",
+            )
+        )
 
     @staticmethod
     def _read_response(proc: subprocess.Popen, timeout_s: float) -> bytes | None:

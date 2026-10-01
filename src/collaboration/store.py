@@ -163,6 +163,9 @@ class CollaborationStore:
                 conn.rollback()
                 raise KeyError(task_id)
             task = AgentTask.from_dict(json.loads(row["payload"]))
+            if task.payload.get("cancel_request_id"):
+                conn.rollback()
+                raise LeaseConflictError("task cancellation is pending")
             lease_expired = float(row["lease_expires_at"] or 0.0) <= now
             if task.status not in {TaskStatus.PENDING, TaskStatus.READY, TaskStatus.RUNNING}:
                 conn.rollback()
@@ -201,6 +204,42 @@ class CollaborationStore:
             )
             self._event(conn, task.run_id, task.task_id, "task_claimed", task.to_dict())
             conn.commit()
+        return task
+
+    def request_cancel_task(self, task_id: str, request_id: str) -> AgentTask | None:
+        """Stop new claims without treating a running worker as terminated."""
+        with closing(self._connect()) as conn, conn:
+            # Serialize with claim_task: cancellation must not be lost when a
+            # worker claims between a detached read and an optimistic update.
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT payload FROM task_records WHERE task_id=?", (str(task_id),)
+            ).fetchone()
+            if row is None:
+                return None
+            task = AgentTask.from_dict(json.loads(row["payload"]))
+            if task.payload.get("cancel_request_id") or task.status in {
+                TaskStatus.COMPLETED,
+                TaskStatus.FAILED,
+                TaskStatus.CANCELLED,
+            }:
+                return task
+            task.payload = {**task.payload, "cancel_request_id": request_id}
+            if task.status in {TaskStatus.PENDING, TaskStatus.READY}:
+                task.status = TaskStatus.CANCELLED
+            task.updated_at = time.time()
+            task.version += 1
+            conn.execute(
+                "UPDATE task_records SET payload=?,version=?,status=?,updated_at=? WHERE task_id=?",
+                (
+                    self._json(task.to_dict()),
+                    task.version,
+                    task.status.value,
+                    task.updated_at,
+                    task.task_id,
+                ),
+            )
+            self._event(conn, task.run_id, task.task_id, "task_cancel_requested", task.to_dict())
         return task
 
     def heartbeat(self, task_id: str, worker: str, *, lease_seconds: float = 60.0) -> AgentTask:
@@ -246,8 +285,10 @@ class CollaborationStore:
             row = conn.execute(
                 "SELECT version, lease_owner FROM task_records WHERE task_id = ?", (task.task_id,)
             ).fetchone()
-            if row is None or int(row["version"]) != expected_version or (
-                worker and row["lease_owner"] != worker
+            if (
+                row is None
+                or int(row["version"]) != expected_version
+                or (worker and row["lease_owner"] != worker)
             ):
                 conn.rollback()
                 raise LeaseConflictError("task changed while updating")

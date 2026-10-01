@@ -9,17 +9,19 @@ from dataclasses import asdict
 from pathlib import Path
 
 from agent_runtime.context_runtime import ObservationStore
+from agent_runtime.run_coordination.models import OwnerLease
+from agent_runtime.run_coordination.store import RunCoordinationStore
 from agent_runtime.state_root import state_root_for
 from agent_runtime.tool_result import ToolResult, attach_tool_receipt, normalize_tool_result
 
 from .evidence import EvidenceLedger
 from .journal import PlanStore
+from .long_task import LongTaskContext, LongTaskState
 from .models import NodeAttempt, Plan, digest, new_id
 from .processes import process_identity
 from .reducer import refresh, transition
 from .validate import tool_effect, validate_plan
 from .workspace import changes, snapshot, workspace_id, workspace_lease
-from .long_task import LongTaskContext, LongTaskState
 
 
 class PlanSession:
@@ -34,6 +36,8 @@ class PlanSession:
         observation_state: dict | None = None,
         event_sink=None,
         fault=None,
+        owner_lease: OwnerLease | None = None,
+        coordination_store: RunCoordinationStore | None = None,
     ):
         self.workspace = str(Path(workspace).resolve())
         self.registry = registry
@@ -54,23 +58,38 @@ class PlanSession:
             self.plan = self.store.load_plan()
             if self.plan:
                 validate_plan(self.plan, registry, identity=self.identity)
+            self.observation_state = observation_state if observation_state is not None else {}
+            self.evidence = EvidenceLedger(
+                self.store, workspace, self.observation_state, state_root
+            )
+            raw_long_task = self.store.latest("long_task_state", "state_id")
+            latest_long_task = next(iter(raw_long_task.values()), None)
+            self.long_task_state = (
+                LongTaskState.verify(latest_long_task)
+                if latest_long_task
+                else LongTaskState(task_id=task_id, run_id=run_id)
+            )
+            self.long_task = LongTaskContext(self.long_task_state, self.plan, self.evidence)
         except BaseException:
             if hasattr(self, "store"):
                 self.store.close()
             self._lease.__exit__(None, None, None)
             raise
-        self.observation_state = observation_state if observation_state is not None else {}
-        self.evidence = EvidenceLedger(self.store, workspace, self.observation_state, state_root)
-        raw_long_task = self.store.latest("long_task_state", "state_id")
-        latest_long_task = next(iter(raw_long_task.values()), None)
-        self.long_task_state = LongTaskState.verify(latest_long_task) if latest_long_task else LongTaskState(task_id=task_id, run_id=run_id)
-        self.long_task = LongTaskContext(self.long_task_state, self.plan, self.evidence)
         self.event_sink = event_sink
         self.fault = fault
+        self.owner_lease = owner_lease
+        self.coordination_store = coordination_store
         self.local = threading.local()
         self._mutex = threading.RLock()
         self.owner_thread = threading.get_ident()
         self._closed = False
+        self.resource_parent = None
+
+    def _fence(self, *, allow_cancelling: bool = False) -> None:
+        if self.owner_lease is not None and self.coordination_store is not None:
+            self.coordination_store.assert_lease(
+                self.owner_lease, allow_cancelling=allow_cancelling
+            )
 
     def close(self):
         if not self._closed:
@@ -85,6 +104,7 @@ class PlanSession:
         self.close()
 
     def cut(self, point: str):
+        self._fence(allow_cancelling=True)
         if self.fault:
             self.fault(point)
 
@@ -101,6 +121,7 @@ class PlanSession:
             self.event_sink(event, body)
 
     def commit(self, plan: Plan):
+        self._fence(allow_cancelling=True)
         validate_plan(plan, self.registry, identity=self.identity)
         self.store.save_plan(plan)
         self.plan = plan
@@ -119,15 +140,23 @@ class PlanSession:
         self.checkpoint()
 
     def checkpoint(self) -> dict:
+        self._fence(allow_cancelling=True)
         self.cut("before_checkpoint")
         self._persist_long_task_state()
-        seal = self.store.checkpoint(self.plan, self.long_task_state.seal())
+        coordination_seal = None
+        if self.coordination_store is not None and self.owner_lease is not None:
+            coordination_seal = self.coordination_store.checkpoint_seal(self.owner_lease)
+        seal = self.store.checkpoint(self.plan, self.long_task_state.seal(), coordination_seal)
         self.cut("checkpoint_saved")
         return seal
 
     def _persist_long_task_state(self) -> None:
-        raw = self.long_task_state.seal()
+        # ``state_id`` is part of the durable identity and must be included in
+        # the checksum.  Appending it after ``seal()`` makes every restored
+        # state fail verification even though the journal bytes are intact.
+        raw = self.long_task_state.to_dict()
         raw["state_id"] = self.identity["session_id"]
+        raw["state_checksum"] = digest(raw)
         self.store.append("long_task_state", raw)
 
     def configure_long_task(self, original_request: str, *, hard_constraints=None) -> None:
@@ -149,8 +178,30 @@ class PlanSession:
         return self.long_task.render(node_id)
 
     def verify_long_task_checkpoint(self, checkpoint: dict) -> None:
-        self.store.verify_checkpoint(checkpoint)
+        self.verify_checkpoint(checkpoint)
         LongTaskState.verify(checkpoint.get("long_task_state") or {})
+
+    def verify_checkpoint(self, checkpoint: dict) -> None:
+        if self.coordination_store is not None and self.owner_lease is not None:
+            seal = checkpoint.get("coordination_seal") or {}
+            required = {
+                "run_id",
+                "workspace_id",
+                "owner_token",
+                "generation",
+                "coordination_revision",
+                "resource_ref_checksum",
+            }
+            if not required.issubset(seal):
+                raise ValueError("checkpoint_coordination_missing")
+            if (
+                seal.get("run_id") != self.identity["run_id"]
+                or seal.get("workspace_id") != self.owner_lease.workspace_id
+                or int(seal.get("generation", 0)) > self.owner_lease.generation
+            ):
+                raise ValueError("checkpoint_coordination_mismatch")
+            self.coordination_store.verify_checkpoint_seal(self.owner_lease, seal)
+        self.store.verify_checkpoint(checkpoint)
 
     def refresh_evidence(self, ref: str, fetcher) -> str:
         """Refresh a stale evidence ref through a caller-supplied fetcher."""
@@ -172,9 +223,15 @@ class PlanSession:
         if not candidates:
             raise ValueError("refresh_node_missing_valid_evidence")
         new_ref = candidates[0]
-        self.long_task_state.evidence_refs = [new_ref if item == ref else item for item in self.long_task_state.evidence_refs]
-        self.long_task_state.stale_evidence = [item for item in self.long_task_state.stale_evidence if item != ref]
-        self.long_task_state.key_decisions.append({"id": new_id("evidence"), "supersedes": ref, "replacement": new_ref})
+        self.long_task_state.evidence_refs = [
+            new_ref if item == ref else item for item in self.long_task_state.evidence_refs
+        ]
+        self.long_task_state.stale_evidence = [
+            item for item in self.long_task_state.stale_evidence if item != ref
+        ]
+        self.long_task_state.key_decisions.append(
+            {"id": new_id("evidence"), "supersedes": ref, "replacement": new_ref}
+        )
         self.long_task_state.state_revision += 1
         self._persist_long_task_state()
         return new_ref
@@ -190,6 +247,7 @@ class PlanSession:
 
     def prepare(self, node_id: str) -> dict:
         with self._mutex:
+            self._fence()
             self.refresh()
             node = self.plan.node(node_id)
             if node.status != "ready" or any(n.status == "uncertain" for n in self.plan.nodes):
@@ -215,6 +273,15 @@ class PlanSession:
                 kind=node.kind,
                 owner=process_identity(os.getpid()) or {},
             )
+            if self.coordination_store is not None and self.owner_lease is not None:
+                self.coordination_store.register_resource(
+                    self.owner_lease,
+                    resource_id=attempt.attempt_id,
+                    kind="plan_attempt",
+                    effect="write" if node.kind in {"edit", "verify"} else "read",
+                    parent_id=self.resource_parent(node.kind) if self.resource_parent else "",
+                    payload={"node_id": node_id, "plan_version": self.plan.plan_version},
+                )
             self.long_task.set_node(node_id, "running")
             self._persist_long_task_state()
             raw = asdict(attempt)
@@ -227,6 +294,7 @@ class PlanSession:
             return {**raw, "phase": "dispatched"}
 
     def preplan_read(self, callback, allowed_tools: tuple[str, ...]) -> dict:
+        self._fence()
         if self.plan is not None:
             raise ValueError("preplan_after_plan_created")
         attempts = self.store.latest("attempt", "attempt_id")
@@ -245,6 +313,15 @@ class PlanSession:
                 owner=process_identity(os.getpid()) or {},
             )
         )
+        if self.coordination_store is not None and self.owner_lease is not None:
+            self.coordination_store.register_resource(
+                self.owner_lease,
+                resource_id=attempt["attempt_id"],
+                kind="plan_attempt",
+                effect="read",
+                parent_id=self.resource_parent("explore") if self.resource_parent else "",
+                payload={"node_id": attempt["node_id"], "plan_version": 0},
+            )
         self.store.append("attempt", attempt)
         self.cut("prepared")
         attempt = {**attempt, "phase": "dispatched"}
@@ -257,11 +334,16 @@ class PlanSession:
         self.store.append(
             "attempt", {**result, "phase": "reconciled", "terminal_status": "succeeded"}
         )
+        if self.coordination_store is not None and self.owner_lease is not None:
+            self.coordination_store.transition_resource(
+                self.owner_lease, attempt["attempt_id"], "completed", cleanup="confirmed"
+            )
         self.checkpoint()
         return result["result"]
 
     def execute_tool(self, agent, name: str, arguments: dict, raw_execute):
         """Called inside Agent.execute_tool, encompassing Gateway and Executor gates."""
+        self._fence()
         attempt = getattr(self.local, "attempt", None)
         if attempt is None:
             raise ValueError("plan_tool_outside_active_attempt")
@@ -309,6 +391,8 @@ class PlanSession:
         # Bind the canonical identity consumed by the existing ToolExecutor.
         pending = agent.session.get("_pending_canonical_tool_call", {})
         agent.session["_pending_canonical_tool_call"] = {**pending, "call_id": call_id}
+        if self.coordination_store is not None:
+            setattr(agent.tool_context, "sandbox_parent_resource_id", attempt["attempt_id"])
         self.store.append("operation", {**operation, "phase": "dispatched"})
         self.cut("tool_dispatched")
         result = normalize_tool_result(raw_execute(), tool_name=name)
@@ -421,6 +505,7 @@ class PlanSession:
         ]
 
     def record_result(self, attempt: dict, result: dict):
+        self._fence(allow_cancelling=True)
         after = snapshot(self.workspace)
         raw = {**attempt, "phase": "result_recorded", "workspace_after": after, "result": result}
         self.store.append("attempt", raw)
@@ -429,6 +514,7 @@ class PlanSession:
 
     def settle(self, attempt: dict) -> str:
         with self._mutex:
+            self._fence(allow_cancelling=True)
             node = self.plan.node(attempt["node_id"])
             if (
                 attempt["plan_version"] != self.plan.plan_version
@@ -476,6 +562,27 @@ class PlanSession:
             self.store.append(
                 "attempt", {**attempt, "phase": "reconciled", "terminal_status": status}
             )
+            if self.coordination_store is not None and self.owner_lease is not None:
+                resource_status = (
+                    "completed"
+                    if status == "succeeded"
+                    else (
+                        "cancelled"
+                        if status == "cancelled"
+                        else "unknown"
+                        if status == "uncertain"
+                        else "failed"
+                    )
+                )
+                self.coordination_store.transition_resource(
+                    self.owner_lease,
+                    attempt["attempt_id"],
+                    resource_status,
+                    cleanup="confirmed"
+                    if resource_status in {"completed", "cancelled", "failed"}
+                    else "unknown",
+                    error_code="" if resource_status != "unknown" else "action_uncertain",
+                )
             self.cut("reconciled")
             if status == "succeeded" and node.kind == "edit":
                 for prior in self.plan.nodes:
@@ -513,6 +620,20 @@ class PlanSession:
             return status
 
     def invoke(self, attempt: dict, callback) -> dict:
+        if (
+            self.coordination_store is not None
+            and self.owner_lease is not None
+            and attempt.get("attempt_id")
+        ):
+            if any(
+                item.resource_id == attempt["attempt_id"]
+                for item in self.coordination_store.resources(self.identity["run_id"])
+            ):
+                self.coordination_store.transition_resource(
+                    self.owner_lease,
+                    attempt["attempt_id"],
+                    "running",
+                )
         self.local.attempt = attempt
         try:
             result = callback(attempt)

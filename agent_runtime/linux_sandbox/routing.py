@@ -43,7 +43,38 @@ def execute_sandbox(
         operation=operation,
         argv=argv,
         timeout_s=timeout_s,
+        owner_token=str(getattr(context, "sandbox_owner_token", "") or ""),
+        generation=int(getattr(context, "sandbox_generation", 0) or 0),
+        coordination_revision=int(getattr(context, "sandbox_coordination_revision", 0) or 0),
     )
+    coordinator = getattr(context, "run_coordinator", None)
+    resource = None
+    if coordinator is not None:
+        coordinator.assert_can_dispatch()
+        lease = coordinator.lease
+        from dataclasses import replace
+
+        request = replace(
+            request,
+            run_id=lease.run_id,
+            task_id=lease.task_id,
+            owner_token=lease.owner_token,
+            generation=lease.generation,
+            coordination_revision=lease.coordination_revision,
+        )
+        resource = coordinator.register_resource(
+            resource_id=request.call_id,
+            kind="sandbox_call",
+            effect="write" if operation in {"command", "pytest"} else "read",
+            parent_id=str(getattr(context, "sandbox_parent_resource_id", "") or ""),
+            receipt_ref=request.call_id,
+            payload={
+                "operation": operation,
+                "owner_token": request.owner_token,
+                "generation": request.generation,
+            },
+        )
+        coordinator.transition_resource(resource.resource_id, "running")
     cancel_token = getattr(context, "cancel_token", None)
     done = threading.Event()
 
@@ -59,7 +90,19 @@ def execute_sandbox(
         watcher = threading.Thread(target=cancel_when_requested, daemon=True)
         watcher.start()
     try:
-        result = backend.execute(request)
+        if cancel_token is not None and cancel_token.is_cancelled:
+            if coordinator is not None:
+                coordinator.request_cancel()
+            result = SandboxResult(
+                "cancelled",
+                cleanup="confirmed",
+                receipt_id=request.call_id,
+                mutation_status="not_started",
+            )
+        else:
+            if coordinator is not None:
+                coordinator.assert_can_dispatch()
+            result = backend.execute(request)
     except BaseException:
         context.sandbox_uncertain = True
         raise
@@ -67,6 +110,37 @@ def execute_sandbox(
         done.set()
         if watcher is not None:
             watcher.join(timeout=1)
+    if coordinator is not None and resource is not None:
+        status = (
+            "completed"
+            if result.execution_status == "completed"
+            else (
+                "cancelled"
+                if result.execution_status == "cancelled"
+                else "failed"
+                if result.execution_status in {"rejected", "start_failed"}
+                else "unknown"
+            )
+        )
+        from agent_runtime.run_coordination import StaleGenerationError
+
+        try:
+            coordinator.transition_resource(
+                resource.resource_id,
+                status,
+                cleanup="confirmed" if status == "failed" else result.cleanup,
+                receipt_ref=result.receipt_id,
+                error_code=result.error_code,
+                payload={"execution_status": result.execution_status},
+            )
+        except StaleGenerationError:
+            current = coordinator.store.snapshot(request.run_id)
+            if current.status != "cancelled" or current.generation != request.generation:
+                from dataclasses import replace
+
+                result = replace(
+                    result, execution_status="uncertain", error_code="stale_generation"
+                )
     if (
         result.execution_status == "uncertain"
         or (

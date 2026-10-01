@@ -115,6 +115,15 @@ class ToolExecutor:
         if tool_spec is None:
             return self._rejected(2, "not_found", f"Error: 工具 '{name}' 未注册。")
         ctx = self.agent.tool_context
+        coordinator = getattr(ctx, "run_coordinator", None)
+        if coordinator is not None:
+            coordinator.assert_can_dispatch()
+        if getattr(ctx, "execution_uncertain", False) and (
+            name in self._high_risk_tools or tool_spec.get("side_effect") in {"write", "process"}
+        ):
+            return self._rejected(
+                2, "execution_uncertain", "Error: previous cleanup unverified; resume required."
+            )
         if getattr(ctx, "sandbox_backend", None) is not None:
             from agent_runtime.linux_sandbox.tool_policy import (
                 SandboxToolAccess,
@@ -230,6 +239,11 @@ class ToolExecutor:
         )
 
         # ---- Gate 9: 执行工具 ----
+        coordinator = getattr(self.agent.tool_context, "run_coordinator", None)
+        if token is not None and token.is_cancelled:
+            return self._rejected_cancel("Error: 任务已取消，跳过工具执行。")
+        if coordinator is not None:
+            coordinator.assert_can_dispatch()
         execution_result = normalize_tool_result(
             self._run_tool(name, args, tool_spec, token), tool_name=name
         )
@@ -274,7 +288,16 @@ class ToolExecutor:
             patch_preview_meta,
         )
         if is_risky:
-            if sandbox_command and (
+            cleanup_unconfirmed = (
+                result.status == ToolStatus.UNCERTAIN.value
+                or result.metadata.get("termination_guaranteed") is False
+                or (result.error_code in {"tool_timeout", "tool_cancelled", "deadline_exceeded"}
+                    and result.metadata.get("termination_guaranteed") is not True)
+            )
+            if cleanup_unconfirmed:
+                self.agent.tool_context.execution_uncertain = True
+                result.metadata["workspace_diff_status"] = "pending_cleanup"
+            elif sandbox_command and (
                 result.status == ToolStatus.UNCERTAIN.value
                 or getattr(self.agent.tool_context, "sandbox_uncertain", False)
             ):
@@ -295,7 +318,12 @@ class ToolExecutor:
                 after_snapshot = self._capture_snapshot()
                 result.metadata.update(self._diff_snapshots(before_snapshot, after_snapshot))
             affected_paths = result.metadata.get("affected_paths") or []
-            if result.ok and not affected_paths and not sandbox_command:
+            if (
+                result.ok
+                and not affected_paths
+                and not sandbox_command
+                and not result.metadata.get("cancel_restored")
+            ):
                 result.status = ToolStatus.NO_CHANGE.value
                 result.error_code = "no_change"
                 result.retryable = True

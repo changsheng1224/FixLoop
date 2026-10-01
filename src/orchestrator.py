@@ -231,6 +231,7 @@ class Orchestrator(RepairPipelineMixin):
         self.l1_prompt_cache_key = l1_prompt_cache_key or self._resolve_l1_prompt_cache_key()
         self._repair_ctx: RepairRunContext | None = None
         self._collaboration_runtime = None
+        self._plan_binding = None
         self._log_run_id_token = None
         # 修复目标目录：优先 --repo / Agent cwd，而非 git 顶层仓库
         self._repo_root = str(Path.cwd())
@@ -351,6 +352,10 @@ class Orchestrator(RepairPipelineMixin):
         )
         self._set_collaboration_context(state)
         try:
+            if token.is_cancelled and not resume_run_id:
+                state.node_timings["user_cancel"] = True
+                state.set_status("user_cancel", "cancelled_before_execution")
+                return state
             with self._repair_cancel_scope(token):
                 if repair_timeout_s <= 0:
                     return self._repair_impl(state, initial_snapshot=initial_snapshot)
@@ -805,6 +810,30 @@ class Orchestrator(RepairPipelineMixin):
         return answer, {"total_ms": elapsed_ms, "internal": dict(internal)}
 
     def _begin_repair_trace(self, state: RepairState) -> None:
+        import uuid
+
+        from agent_runtime.run_coordination import RunCoordinator
+
+        if not state.repair_run_id:
+            state.repair_run_id = "repair-" + uuid.uuid4().hex
+        coordinator = RunCoordinator(
+            self._repo_root, state.repair_run_id, state.repair_run_id,
+            state_root=str(getattr(self.patcher.tool_context, "state_root", "") or ""),
+        )
+        coordinator.acquire()
+        self._entry_coordinator = coordinator
+        try:
+            self._initialize_repair_trace(state)
+        except BaseException:
+            current = coordinator.store.snapshot(state.repair_run_id)
+            if current.owner_token == coordinator.lease.owner_token:
+                current = coordinator.finish(
+                    "recovery_required", error_code="repair_initialization_interrupted"
+                )
+                state.node_timings["coordination_status"] = current.status
+            raise
+
+    def _initialize_repair_trace(self, state: RepairState) -> None:
         from agent_runtime.log_context import bind_run_id
         from agent_runtime.tokenizers import resolve_tokenizer_spec
         from src.repair.run_trace import RepairRunTracer
@@ -929,6 +958,8 @@ class Orchestrator(RepairPipelineMixin):
         self._maybe_enter_worktree(state, tracer)
         if self._repair_ctx is not None and self._repair_ctx.worktree_handle is not None:
             self._repair_ctx.worktree_initial_snapshot = self._snapshot_repo()
+        from src.repair.plan_binding import RepairPlanBinding
+        self._plan_binding = RepairPlanBinding(self, state, defer_plan=True)
 
     def _maybe_enter_worktree(self, state: RepairState, tracer) -> None:
         """可选：FIXLOOP_USE_WORKTREE=1 时创建独立 worktree 并重定向 Agent 工具根。"""
@@ -1016,11 +1047,62 @@ class Orchestrator(RepairPipelineMixin):
             self._repo_root = ctx.original_repo_root
             ctx.original_repo_root = ""
 
+    def _cancel_run_resources(
+        self, state: RepairState, *, phase_returned: bool = True, finalize: bool = False
+    ) -> bool:
+        binding = getattr(self, "_plan_binding", None)
+        if binding is None:
+            coordinator = getattr(self, "_entry_coordinator", None)
+            if not phase_returned and coordinator is not None and coordinator.lease is not None:
+                coordinator.store.mark_recovery_required(
+                    coordinator.lease, error_code="repair_worker_unconfirmed"
+                )
+                state.node_timings["coordination_status"] = "recovery_required"
+                state.set_status("recovery_required", "repair_worker_unconfirmed")
+                return False
+            return state.node_timings.get("coordination_status") != "recovery_required"
+        runtime = getattr(self, "_collaboration_runtime", None)
+        if runtime is not None and phase_returned:
+            try:
+                runtime.finish_cancelled(state)
+            except Exception as exc:
+                state.agent_errors["collaboration_cleanup"] = str(exc)[:500]
+        report = binding.coordinator.cancel(finalize=finalize)
+        state.node_timings["coordination_cancel"] = report.to_dict()
+        state.node_timings["coordination_status"] = report.status
+        if not report.confirmed:
+            state.set_status("recovery_required", "cleanup_or_write_unconfirmed")
+        return report.confirmed
+
     def _end_repair_trace(self, state: RepairState) -> None:
         from agent_runtime.log_context import reset_run_id
 
-        self._maybe_leave_worktree(cancelled=False)
         ctx = self._repair_ctx
+        binding = getattr(self, "_plan_binding", None)
+        coordinator = getattr(binding, "coordinator", None)
+        if coordinator is not None and getattr(coordinator, "lease", None) is not None:
+            try:
+                token = coordinator.cancel_token or (
+                    getattr(ctx, "cancel_token", None) if ctx is not None else None
+                )
+                if token is not None and token.is_cancelled:
+                    self._cancel_run_resources(state, finalize=True)
+                elif str(getattr(state, "status", "") or "").lower() in {"failed", "error"}:
+                    snapshot = coordinator.finish("failed", error_code="repair_failed")
+                    state.node_timings["coordination_status"] = snapshot.status
+                else:
+                    snapshot = coordinator.finish("released")
+                    state.node_timings["coordination_status"] = snapshot.status
+                if state.node_timings.get("coordination_status") == "recovery_required":
+                    state.set_status("recovery_required", "cleanup_or_write_unconfirmed")
+            except Exception as exc:
+                state.agent_errors.setdefault("coordination_finalize", str(exc)[:500])
+                state.node_timings["coordination_status"] = "recovery_required"
+                state.set_status("recovery_required", "coordination_finalize_unconfirmed")
+        if state.node_timings.get("coordination_status") != "recovery_required":
+            self._maybe_leave_worktree(cancelled=False)
+        elif ctx is not None and ctx.worktree_handle is not None:
+            state.node_timings["worktree_recovery"] = ctx.worktree_handle.as_dict()
         tracer = ctx.repair_tracer if ctx is not None else None
         if tracer is None:
             return
@@ -1278,6 +1360,8 @@ class Orchestrator(RepairPipelineMixin):
         prompt: str,
         tpl_meta: dict,
     ) -> tuple[list[CandidatePatch], dict]:
+        from agent_runtime.cancellation import CancelledError
+        from agent_runtime.run_coordination import CoordinationError
         from src.repair.plan_binding import RepairPlanBinding
 
         try:
@@ -1288,7 +1372,11 @@ class Orchestrator(RepairPipelineMixin):
                 tpl_meta,
                 lambda p, m: self._run_patcher_agent(state, p, m),
             )
-        except (ValueError, OSError) as exc:
+        except CancelledError:
+            return [], {"user_cancel": True, "edit_mode": "cancelled", "total_ms": 0}
+        except (ValueError, OSError, CoordinationError) as exc:
+            if self._is_repair_cancelled():
+                return [], {"user_cancel": True, "edit_mode": "cancelled", "total_ms": 0}
             state.agent_errors["plan_runtime"] = str(exc)
             state.node_timings["plan_blocked"] = True
             return [], {
@@ -1334,6 +1422,18 @@ class Orchestrator(RepairPipelineMixin):
             l2_phase="patch",
             l2_attempt=state.retry_count,
         )
+        context = self.patcher.tool_context
+        if context.execution_uncertain or context.sandbox_uncertain:
+            state.node_timings["coordination_status"] = "recovery_required"
+            state.set_status("recovery_required", "patcher_write_unconfirmed")
+            total_ms = int((time.time() - t_start) * 1000)
+            return [], {
+                "total_ms": total_ms,
+                "model_call_ms": int(agent_timing.get("total_ms") or total_ms),
+                "parse_apply_ms": 0,
+                "edit_mode": "recovery_required",
+                "execution_uncertain": True,
+            }
         after = self._snapshot_repo()
         observations = list(
             (getattr(self.patcher, "session", {}) or {}).get("tool_observations", [])

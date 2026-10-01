@@ -79,6 +79,10 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         ctx = self._active_repair_ctx()
         if ctx.cancel_token is not None:
             ctx.cancel_token.cancel("timeout")
+        if not self._cancel_run_resources(state):
+            state.node_timings["phase_timeout"] = exc.phase
+            state.agent_errors["orchestrator"] = str(exc)
+            return
         # E14 / P1：超时前尽量从磁盘 salvage 非空 diff，避免回滚成 empty_model_patch
         keep_patches = bool(state.candidate_patches)
         if not keep_patches:
@@ -363,6 +367,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         """记录空补丁并决定是否重试；True 表示继续下一轮。"""
         from src.repair.stop_loss import apply_stop_loss
 
+        if state.node_timings.get("coordination_status") == "recovery_required":
+            state.set_status("recovery_required", "cleanup_or_write_unconfirmed")
+            return False
         if state.node_timings.get("plan_blocked"):
             state.set_status(RepairTerminalStatus.FAILED, "plan_runtime_blocked")
             self._checkpoint_progress(state)
@@ -414,8 +421,22 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         state: RepairState,
         initial_snapshot: dict | None = None,
     ) -> RepairState:
+        from agent_runtime.cancellation import CancelledError
+        from src.repair.plan_binding import ResumeRecoveryRequiredError
+
         try:
             return self._repair_impl_with_plan(state, initial_snapshot)
+        except CancelledError:
+            state.node_timings["user_cancel"] = True
+            state.set_status("user_cancel", "persisted_cancel_completed")
+            self._end_repair_trace(state)
+            return state
+        except ResumeRecoveryRequiredError as exc:
+            state.node_timings["coordination_status"] = "recovery_required"
+            state.agent_errors["plan_runtime"] = str(exc)
+            state.set_status("recovery_required", "cleanup_or_write_unconfirmed")
+            self._end_repair_trace(state)
+            return state
         finally:
             binding = getattr(self, "_plan_binding", None)
             if binding is not None:
@@ -799,7 +820,8 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         finally:
             if not phase_timed_out and (cancelled or self._is_repair_cancelled()):
                 state.node_timings["user_cancel"] = True
-                self._restore_repo_snapshot(initial_snapshot)
+                if self._cancel_run_resources(state):
+                    self._restore_repo_snapshot(initial_snapshot)
                 self._emit_repair_cancelled(state)
 
         finalize_repair_state(state)
@@ -1024,7 +1046,8 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         finally:
             if cancelled or self._is_repair_cancelled():
                 state.node_timings["user_cancel"] = True
-                self._restore_repo_snapshot(initial_snapshot)
+                if self._cancel_run_resources(state):
+                    self._restore_repo_snapshot(initial_snapshot)
                 self._emit_repair_cancelled(state)
 
         return self._finalize_repair_run(state, t_start)

@@ -74,7 +74,14 @@ class WindowsWslBackend:
                 proc.wait(timeout=3)
                 if proc.returncode == 0 and answer and len(answer[0]) <= 2_000_000:
                     result = SandboxResult(**json.loads(answer[0]))
-                    if result.receipt_id == request.call_id:
+                    if result.receipt_id == request.call_id and (
+                        not request.owner_token
+                        or (
+                            result.owner_token == request.owner_token
+                            and result.generation == request.generation
+                            and result.coordination_revision == request.coordination_revision
+                        )
+                    ):
                         return result
         except (OSError, ValueError, TypeError, subprocess.TimeoutExpired, json.JSONDecodeError):
             pass
@@ -98,3 +105,21 @@ class WindowsWslBackend:
                 return False
             proc.stdin.close()
             return True
+
+    def inspect_receipt(self, call_id: str) -> dict | None:
+        """Ask the trusted controller for an exact durable receipt."""
+        import re
+
+        if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}", call_id):
+            raise ValueError("receipt_invalid: call_id")
+        result = subprocess.run(
+            self.config.argv(),
+            input=json.dumps({"control": "inspect_receipt", "call_id": call_id}) + "\n",
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if result.returncode != 0 or len(result.stdout) > 2_000_000:
+            raise ValueError("sandbox_receipt_unavailable")
+        return json.loads(result.stdout)["receipt"]

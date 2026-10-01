@@ -51,6 +51,7 @@ class RepairStatus(StrEnum):
     EXHAUSTED = "exhausted"
     TIMEOUT = "timeout"
     USER_CANCEL = "user_cancel"
+    RECOVERY_REQUIRED = "recovery_required"
     REGRESSION = "regression"
 
 

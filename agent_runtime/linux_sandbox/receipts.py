@@ -151,6 +151,28 @@ class ReceiptStore:
             _write(self.receipt_path(call_id), data)
         return data
 
+    def inspect(self, call_id: str) -> dict | None:
+        """Read the exact call's durable receipt, including historical calls."""
+        if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}", call_id):
+            raise ValueError("receipt_invalid: call_id")
+        current = self.current()
+        if current and current["call_id"] == call_id:
+            if current["state"] == "terminal":
+                return self.reconcile(current["policy_digest"])
+            return current
+        receipt = _read(self.receipt_path(call_id))
+        if receipt is not None and (
+            receipt.get("call_id") != call_id
+            or receipt.get("workspace") != str(self.workspace)
+            or receipt.get("state") != "terminal"
+            or (
+                receipt.get("result", {}).get("cleanup") != "confirmed"
+                and receipt.get("result", {}).get("execution_status") != "start_failed"
+            )
+        ):
+            raise ValueError("receipt_invalid: historical receipt")
+        return receipt
+
     def attach_target_identity(self, call_id: str, identity: dict | None) -> None:
         current = self.current()
         if not current or current["call_id"] != call_id or current["state"] != "running":

@@ -2,6 +2,9 @@
 
 import io
 import json
+from dataclasses import replace
+
+import pytest
 
 from agent_runtime.linux_sandbox import SandboxRequest, WindowsWslBackend, WslLauncherConfig
 
@@ -86,3 +89,58 @@ def test_launcher_rejects_untrusted_paths():
             pass
         else:
             raise AssertionError(path)
+
+
+@pytest.mark.parametrize(
+    "field", ["owner_token", "generation", "coordination_revision", "receipt_id"]
+)
+def test_bound_launcher_rejects_response_from_other_execution(monkeypatch, field):
+    from agent_runtime.linux_sandbox import wsl_launcher
+    from agent_runtime.linux_sandbox.models import SandboxResult
+
+    request = SandboxRequest(
+        "ws",
+        "task",
+        "run",
+        "call",
+        "command",
+        ("/toolchain/bin/python", "-I", "-c", "pass"),
+        owner_token="owner",
+        generation=2,
+        coordination_revision=5,
+    )
+    response = SandboxResult(
+        "completed",
+        cleanup="confirmed",
+        receipt_id="call",
+        actual_backend="linux_sandbox",
+        owner_token="owner",
+        generation=2,
+        coordination_revision=5,
+    )
+    response = replace(
+        response, **{field: "wrong" if field in {"owner_token", "receipt_id"} else 99}
+    )
+    process = Process(response.to_wire())
+    monkeypatch.setattr(wsl_launcher.subprocess, "Popen", lambda *a, **kw: process)
+    backend = WindowsWslBackend(WslLauncherConfig("Ubuntu", "/python", "/controller", "/config"))
+    assert backend.execute(request).execution_status == "uncertain"
+
+
+def test_receipt_inspection_uses_exact_call_read_only_message(monkeypatch):
+    from types import SimpleNamespace
+
+    from agent_runtime.linux_sandbox import wsl_launcher
+
+    captured = {}
+    receipt = {"call_id": "historical", "state": "terminal"}
+
+    def inspect(argv, **kwargs):
+        captured.update(argv=argv, **kwargs)
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"receipt": receipt}))
+
+    monkeypatch.setattr(wsl_launcher.subprocess, "run", inspect)
+    config = WslLauncherConfig("Ubuntu", "/python", "/controller", "/config")
+    assert WindowsWslBackend(config).inspect_receipt("historical") == receipt
+    assert captured["argv"] == config.argv()
+    assert json.loads(captured["input"]) == {"control": "inspect_receipt", "call_id": "historical"}

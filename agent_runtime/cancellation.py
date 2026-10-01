@@ -48,6 +48,7 @@ class CancellationToken:
         self._reason = ""
         self._lock = threading.Lock()
         self._cause = None
+        self._callbacks: list[Callable[[], None]] = []
 
     def cancel(self, reason: str = "user") -> None:
         from agent_runtime.repair_run import CancellationCause
@@ -56,6 +57,34 @@ class CancellationToken:
             self._cancelled = True
             self._reason = reason or "user"
             self._cause = CancellationCause(kind=self._reason, reason=self._reason)
+            callbacks = list(self._callbacks)
+        first_error = None
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception as exc:
+                first_error = first_error or exc
+        if first_error is not None:
+            raise first_error
+
+    def add_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
+        """Subscribe a durable dispatch gate; invoke immediately if cancelled."""
+        with self._lock:
+            self._callbacks.append(callback)
+            cancelled = self._cancelled
+
+        def unsubscribe():
+            with self._lock:
+                if callback in self._callbacks:
+                    self._callbacks.remove(callback)
+
+        if cancelled:
+            try:
+                callback()
+            except BaseException:
+                unsubscribe()
+                raise
+        return unsubscribe
 
     @property
     def cause(self):
