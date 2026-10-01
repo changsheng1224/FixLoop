@@ -47,9 +47,13 @@ def handle_repair_wall_timeout(
     if grace > 0:
         time.sleep(grace)
 
+    cleanup_confirmed = True
+    if hasattr(orch, "_cancel_run_resources"):
+        cleanup_confirmed = orch._cancel_run_resources(state, phase_returned=False)
+
     keep_patches = bool(getattr(state, "candidate_patches", None))
     salvaged: list = []
-    if not keep_patches:
+    if not keep_patches and cleanup_confirmed:
         try:
             salvaged = orch._salvage_patches_from_disk(state, initial_snapshot) or []
         except Exception as e:
@@ -64,13 +68,17 @@ def handle_repair_wall_timeout(
     if keep_patches:
         state.node_timings["phase_timeout_kept_patches"] = True
         # 保留已登记/salvage 的 diff；不整仓回滚（避免抹掉 model_patch）
-    else:
+    elif cleanup_confirmed:
         try:
             orch._restore_repo_snapshot(initial_snapshot)
         except Exception as e:
             log.warning("[timeout] restore failed: %s", e)
 
-    state.set_status(RepairTerminalStatus.TIMEOUT, "repair_wall_timeout")
+    state.set_status(
+        RepairTerminalStatus.TIMEOUT
+        if cleanup_confirmed else RepairTerminalStatus.RECOVERY_REQUIRED,
+        "repair_wall_timeout",
+    )
     state.agent_errors["orchestrator"] = f"repair timeout ({repair_timeout_s}s)"
     state.node_timings["repair_timeout"] = repair_timeout_s
     # overshoot：相对「timeout 触发时刻」的额外耗时（grace + salvage），目标 ≤ MAX_WALL_OVERSHOOT_S

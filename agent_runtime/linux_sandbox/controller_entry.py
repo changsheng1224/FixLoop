@@ -5,9 +5,13 @@ from __future__ import annotations
 import json
 import sys
 import threading
+import types
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+package = types.ModuleType("agent_runtime")
+package.__path__ = [str(Path(__file__).resolve().parents[2] / "agent_runtime")]
+sys.modules["agent_runtime"] = package
 
 from agent_runtime.linux_sandbox.backend import LinuxSandboxBackend  # noqa: E402
 from agent_runtime.linux_sandbox.models import SandboxRequest  # noqa: E402
@@ -25,7 +29,15 @@ def main() -> int:
         SandboxPolicy(**{key: Path(value) for key, value in config.items()})
     )
     backend.policy.validate()
-    request = SandboxRequest.from_wire(json.loads(sys.stdin.readline()))
+    raw_request = json.loads(sys.stdin.readline())
+    if (
+        isinstance(raw_request, dict)
+        and set(raw_request) == {"control", "call_id"}
+        and raw_request["control"] == "inspect_receipt"
+    ):
+        print(json.dumps({"receipt": backend.inspect_receipt(raw_request["call_id"])}), flush=True)
+        return 0
+    request = SandboxRequest.from_wire(raw_request)
     done = threading.Event()
 
     def cancel_on_eof():

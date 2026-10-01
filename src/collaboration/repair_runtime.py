@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from agent_runtime.run_coordination.models import process_owner_identity
 from src.collaboration.contracts import AgentResult, AgentTask, TaskStatus
 from src.collaboration.effects import EffectLedger
 from src.collaboration.scheduler import TaskScheduler
@@ -23,6 +24,76 @@ class RepairCollaborationRuntime:
         self.run_id = run_id
         self.worker = "orchestrator"
         self._ensure_plan(state)
+
+    def _owns_phase(self, task: AgentTask) -> bool:
+        return task.task_id in {
+            f"{self.run_id}:{phase}" for phase in ("context", "patch", "verify")
+        }
+
+    def attach_coordinator(self, coordinator) -> None:
+        """Expose durable AgentTask records in the run resource DAG."""
+        self.coordinator = coordinator
+        existing = {item.resource_id for item in coordinator.store.resources(self.run_id)}
+        tasks = self.store.list_tasks(self.run_id)
+        for task in tasks:
+            resource_id = f"agent:{task.task_id}"
+            if resource_id in existing:
+                continue
+            coordinator.register_recovery_resource(
+                resource_id=resource_id,
+                kind="agent_task",
+                effect="write",
+                payload={
+                    "task_id": task.task_id,
+                    "role": task.role,
+                    "phase": task.phase,
+                    "depends_on": list(task.depends_on),
+                    # These tasks are phase workers owned by this runtime
+                    # process.  A replacement can distinguish a crashed
+                    # owner from a still-running external subagent.
+                    "owner": process_owner_identity()
+                    if self._owns_phase(task)
+                    else task.payload.get("owner", {}),
+                    "execution_mode": "local_phase" if self._owns_phase(task) else "subagent",
+                },
+            )
+            existing.add(resource_id)
+        self._sync_resources()
+
+    def _sync_resources(self) -> None:
+        coordinator = getattr(self, "coordinator", None)
+        if coordinator is None:
+            return
+        if coordinator.store.snapshot(self.run_id).status in {
+            "released",
+            "failed",
+            "cancelled",
+            "recovery_required",
+        }:
+            return
+        by_id = {r.resource_id: r for r in coordinator.store.resources(self.run_id)}
+        for task in self.store.list_tasks(self.run_id):
+            resource_id = f"agent:{task.task_id}"
+            resource = by_id.get(resource_id)
+            if resource is None:
+                continue
+            status = str(task.status)
+            if status == "running":
+                cleanup = "unverified"
+            elif status in {"completed", "failed", "cancelled"}:
+                cleanup = "confirmed"
+            elif status == "expired":
+                status, cleanup = "unknown", "unknown"
+            else:
+                status, cleanup = "planned", "unverified"
+            if resource.status == status and resource.cleanup == cleanup:
+                continue
+            coordinator.transition_resource(
+                resource_id,
+                status,
+                cleanup=cleanup,
+                payload=resource.payload,
+            )
 
     def _ensure_plan(self, state) -> None:
         tasks = self.store.list_tasks(self.run_id)
@@ -82,6 +153,12 @@ class RepairCollaborationRuntime:
     def advance(self, phase: str, state, *, terminal_status: str = "") -> None:
         """Claim the current phase and complete its predecessor."""
         normalized = str(phase)
+        coordinator = getattr(self, "coordinator", None)
+        if coordinator is not None:
+            if coordinator.cancel_token is not None and coordinator.cancel_token.is_cancelled:
+                self.finish_cancelled(state)
+                return
+            coordinator.assert_can_dispatch()
         if normalized == "patch":
             context = self._task("context")
             if context:
@@ -110,7 +187,18 @@ class RepairCollaborationRuntime:
         self.scheduler.refresh(self.run_id)
         self.sync_state(state)
 
+    def finish_cancelled(self, state) -> None:
+        """Called after this runtime's phase callback has returned."""
+        for task in self.store.list_tasks(self.run_id):
+            if not self._owns_phase(task):
+                self.store.request_cancel_task(task.task_id, "phase_cancelled")
+                continue
+            if task.status in {TaskStatus.PENDING, TaskStatus.READY, TaskStatus.RUNNING}:
+                self._complete(task, TaskStatus.CANCELLED)
+        self.sync_state(state)
+
     def sync_state(self, state) -> None:
+        self._sync_resources()
         tasks = self.store.list_tasks(self.run_id)
         state.collaboration_tasks = [task.to_dict() for task in tasks]
         state.task_dag_snapshot = self.scheduler.dag.snapshot()

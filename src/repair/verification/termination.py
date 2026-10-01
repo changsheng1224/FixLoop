@@ -83,6 +83,9 @@ def introduced_regression(state: RepairState) -> bool:
 
 def apply_terminal_status(state: RepairState) -> None:
     """将 RepairState.status 规范为终态枚举值。"""
+    if state.node_timings.get("coordination_status") == "recovery_required":
+        state.set_status(RepairTerminalStatus.RECOVERY_REQUIRED, "cleanup_or_write_unconfirmed")
+        return
     if state.node_timings.get("user_cancel"):
         state.set_status(RepairTerminalStatus.USER_CANCEL, "user_cancel")
         return

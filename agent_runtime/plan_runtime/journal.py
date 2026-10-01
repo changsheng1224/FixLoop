@@ -163,15 +163,25 @@ class PlanStore:
                         raise ValueError("journal_receipt_checksum_invalid")
             mapping[key] = value
 
-    def checkpoint(self, plan: Plan | None, long_task_state: dict | None = None) -> dict:
+    def checkpoint(
+        self,
+        plan: Plan | None,
+        long_task_state: dict | None = None,
+        coordination_seal: dict | None = None,
+    ) -> dict:
         with self._lock:
-            return self._checkpoint(plan, long_task_state)
+            return self._checkpoint(plan, long_task_state, coordination_seal)
 
-    def _checkpoint(self, plan: Plan | None, long_task_state: dict | None = None) -> dict:
+    def _checkpoint(
+        self,
+        plan: Plan | None,
+        long_task_state: dict | None = None,
+        coordination_seal: dict | None = None,
+    ) -> dict:
         events = self.events()
         attempts = self.latest("attempt", "attempt_id")
         payload = {
-            "schema_version": "1",
+            "schema_version": "2" if coordination_seal else "1",
             "identity": self.identity,
             "plan_checksum": plan.plan_checksum if plan else "",
             "plan_version": plan.plan_version if plan else 0,
@@ -181,6 +191,8 @@ class PlanStore:
             "active_attempts": sorted(k for k, v in attempts.items() if v["phase"] != "reconciled"),
             "long_task_state": dict(long_task_state or {}),
         }
+        if coordination_seal is not None:
+            payload["coordination_seal"] = dict(coordination_seal)
         seal = {**payload, "checksum": digest(payload)}
         self.append("checkpoint", seal)
         return seal
@@ -212,13 +224,17 @@ class PlanStore:
             raise ValueError("blob_checksum_invalid")
         return raw.decode("utf-8")
 
-    def verify_checkpoint(self, checkpoint: dict) -> None:
+    def verify_checkpoint(self, checkpoint: dict, coordination_seal: dict | None = None) -> None:
         payload = {k: v for k, v in checkpoint.items() if k != "checksum"}
         if (
             checkpoint.get("checksum") != digest(payload)
             or payload.get("identity") != self.identity
         ):
             raise ValueError("checkpoint_identity_or_checksum_invalid")
+        if coordination_seal is not None:
+            saved = payload.get("coordination_seal")
+            if not saved or saved != coordination_seal:
+                raise ValueError("checkpoint_coordination_mismatch")
         events = self.events()
         sequence = payload.get("journal_sequence", 0)
         if not isinstance(sequence, int) or not 1 <= sequence <= len(events):

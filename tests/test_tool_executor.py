@@ -45,6 +45,22 @@ class TestToolExecutionResult:
         assert "rejected" in result.metadata["tool_status"]
 
 
+def test_unknown_write_keeps_disk_and_blocks_followup_writes(agent, executor, temp_workspace):
+    from agent_runtime.tool_result import ToolResult
+    target = temp_workspace / "unknown.txt"
+    def uncertain_write(args):
+        target.write_text("unconfirmed change")
+        return ToolResult(content="lost process receipt", status="uncertain", metadata={"termination_guaranteed": False})
+    agent.tools["write_file"]["run"] = uncertain_write
+    result = executor.execute_gated("write_file", {"path": "unknown.txt", "content": "change"})
+    assert result.status == "uncertain"
+    assert target.read_text() == "unconfirmed change"
+    assert not result.metadata.get("rollback_attempted")
+    following = executor.execute_gated("write_file", {"path": "next.txt", "content": "next"})
+    assert following.error_code == "execution_uncertain"
+    assert not (temp_workspace / "next.txt").exists()
+
+
 class TestToolExecutorGates:
     """闸口逐道测试。"""
 

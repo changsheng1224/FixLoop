@@ -18,13 +18,32 @@ class SandboxRequest:
     timeout_s: float = 20
     output_limit_bytes: int = 1048576
     schema_version: str = "1"
+    owner_token: str = ""
+    generation: int = 0
+    coordination_revision: int = 0
 
     def to_wire(self) -> dict:
         return {**asdict(self), "argv": list(self.argv)}
 
     @classmethod
     def from_wire(cls, raw: dict) -> SandboxRequest:
-        if not isinstance(raw, dict) or set(raw) != set(cls.__dataclass_fields__):
+        required = {
+            "workspace_id",
+            "task_id",
+            "run_id",
+            "call_id",
+            "operation",
+            "argv",
+            "cwd_relative",
+            "timeout_s",
+            "output_limit_bytes",
+            "schema_version",
+        }
+        if (
+            not isinstance(raw, dict)
+            or not required.issubset(raw)
+            or set(raw) - set(cls.__dataclass_fields__)
+        ):
             raise ValueError("invalid request fields")
         argv = raw["argv"]
         if (
@@ -54,6 +73,9 @@ class SandboxResult:
     requested_backend: str = "wsl_bwrap"
     actual_backend: str = "none"
     mutation_status: str = "unknown"
+    owner_token: str = ""
+    generation: int = 0
+    coordination_revision: int = 0
 
     def to_wire(self) -> dict:
         return asdict(self)

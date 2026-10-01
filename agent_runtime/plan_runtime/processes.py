@@ -46,7 +46,13 @@ def process_identity(pid: int) -> dict | None:
 
 
 def confirmed_exited(identity: dict) -> bool:
-    if not identity or identity.get("generation") in {None, "unknown"}:
+    if (
+        not isinstance(identity, dict)
+        or not identity
+        or identity.get("generation") in {None, "unknown"}
+    ):
+        return False
+    if not isinstance(identity.get("pid"), int) or identity["pid"] <= 0:
         return False
     current = process_identity(identity["pid"])
     return current is None or (current.get("generation") != "unknown" and current != identity)
