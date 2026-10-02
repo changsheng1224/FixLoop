@@ -12,6 +12,7 @@ from agent_runtime.repair_budget import RepairBudgetContext
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.warm_context import create_warm_context
 from agent_runtime.workspace import WorkspaceContext
+from src.agents.factory import load_repair_agent_config
 from src.agents.patcher import create_patcher
 from src.agents.verifier import create_verifier
 from src.middleware import build_repair_gateway
@@ -85,17 +86,35 @@ def wire_orchestrator(
         root=repo, exploration_mode=code_exploration_mode, lsp_argv=code_exploration_server_argv
     )
     tools = build_repair_canonical_tools(ctx)
+    policies = {
+        role: load_repair_agent_config(
+            role,
+            repo,
+            code_exploration={
+                "mode": code_exploration_mode,
+                "server_argv": code_exploration_server_argv,
+            },
+        )
+        for role in ("patcher", "verifier")
+    }
+    policy = policies["patcher"]
+    client = create_model_client(
+        client,
+        model=policy.model,
+        provider=policy.provider,
+        temperature=policy.temperature,
+    )
     l1 = build_repair_l1_prefix(
         ws,
         tools,
         dry_run=dry_run,
-        approval="auto",
+        approval=policy.approval,
         repo_root=repo,
     )
 
     # 预热 tokenizer + 创建共享预算上下文
-    wc = create_warm_context(model="deepseek-v4-pro", provider="deepseek")
-    budget_ctx = RepairBudgetContext.create(model="deepseek-v4-pro", provider="deepseek")
+    wc = create_warm_context(model=policy.model, provider=policy.provider)
+    budget_ctx = RepairBudgetContext.create(model=policy.model, provider=policy.provider)
     gateway = build_repair_gateway(repo)
 
     base_kw: dict = {
@@ -111,6 +130,7 @@ def wire_orchestrator(
         """构建角色专属 kwargs（含子预算）。配额由 Agent._role_quota 按角色分配。"""
         kw = dict(base_kw)
         kw["budget"] = budget_ctx.sub_budget(role)
+        kw["runtime_policy"] = policies[role]
         return kw
 
     patcher = create_patcher(client, ws, cwd=repo, **_agent_kw("patcher"))
@@ -156,11 +176,9 @@ def make_orchestrator_factory(
 ) -> Callable[[str], Orchestrator]:
     """返回 `(repo_path) -> Orchestrator` 工厂。"""
 
-    client = create_model_client(model_client)
-
     def factory(repo_path: str) -> Orchestrator:
         return wire_orchestrator(
-            client,
+            model_client,
             repo_path,
             skip_verify=skip_verify,
             dry_run=dry_run,

@@ -63,7 +63,7 @@ def save_repair_checkpoint(state, repo_root: str, *, state_root: str = "") -> Pa
             "tool_budget": state_payload.get("tool_budget", {}),
             "phase": state_payload.get("phase", ""),
             "state_revision": state_payload.get("state_revision", 0),
-            "plan_checkpoint": state_payload.get("node_timings", {}).get("plan_checkpoint", {}),
+            "plan_checkpoint": state_payload.get("control", {}).get("plan_checkpoint", {}),
         },
         task_state=state_payload,
         context_manifest={
@@ -152,7 +152,14 @@ def load_repair_checkpoint(
             or not isinstance(data.get("node_timings"), dict)
         ):
             return reject("resume_checkpoint_malformed")
-        return data
+        from src.repair.control_state import RepairControl
+        from src.state import migrate_state_payload
+
+        migrated = migrate_state_payload(data)
+        RepairControl.model_validate(migrated.get("control", {}))
+        if set(migrated.get("node_timings", {})) & set(RepairControl.model_fields):
+            return reject("resume_checkpoint_malformed")
+        return migrated
     except RepairCheckpointError:
         raise
     except (json.JSONDecodeError, UnicodeError, TypeError, ValueError, AttributeError):

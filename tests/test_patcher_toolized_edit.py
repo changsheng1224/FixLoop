@@ -88,7 +88,7 @@ class TestPatcherToolizedOrchestrator:
             assert "--- a/v.py" in applied[0].diff and "+++ b/v.py" in applied[0].diff
             assert meta.get("edit_mode") == "tools"
             assert state.node_timings.get("patcher_edit_mode") == "tools"
-            assert state.node_timings["patcher_write_attempted"]
+            assert state.control.patcher_write_attempted
             session = orch._plan_binding.session
             assert session.plan.node("edit").status == "succeeded"
             writes = [

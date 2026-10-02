@@ -153,10 +153,10 @@ def _patch_retry_fingerprint(patch: CandidatePatch) -> str:
 
 
 def _record_patch_retry_fingerprints(state: RepairState) -> str:
-    raw_counts = state.node_timings.setdefault("patch_retry_fingerprints", {})
+    raw_counts = state.control.patch_retry_fingerprints
     if not isinstance(raw_counts, dict):
         raw_counts = {}
-        state.node_timings["patch_retry_fingerprints"] = raw_counts
+        state.control.patch_retry_fingerprints = raw_counts
 
     repeated_files: list[str] = []
     for patch in state.candidate_patches:
@@ -193,17 +193,20 @@ class Orchestrator(RepairPipelineMixin):
         allow_static_verify_fallback: bool = False,
         l1_prompt_cache_key: str = "",
         sandbox_context=None,
+        repair_config=None,
     ):
         self.patcher = patcher
         self.verifier = verifier
         self.use_pytest_verify = use_pytest_verify
-        configured_policy = (
-            str(sandbox_policy or os.environ.get("FIXLOOP_SANDBOX_POLICY", "preferred"))
-            .strip()
-            .lower()
+        from src.repair.config import load_repair_config
+
+        self.repair_config = repair_config or load_repair_config(
+            workspace_root=getattr(patcher, "cwd", None),
+            cli_overrides={"sandbox_policy": "required" if require_sandbox else sandbox_policy}
+            if require_sandbox or sandbox_policy
+            else None,
         )
-        if configured_policy not in {"required", "preferred", "disabled"}:
-            configured_policy = "preferred"
+        configured_policy = self.repair_config.sandbox_policy
         self.sandbox_policy = configured_policy
         self.require_sandbox = bool(require_sandbox or configured_policy == "required")
         self.allow_static_verify_fallback = allow_static_verify_fallback
@@ -381,7 +384,7 @@ class Orchestrator(RepairPipelineMixin):
         self._set_collaboration_context(state)
         try:
             if token.is_cancelled and not resume_run_id:
-                state.node_timings["user_cancel"] = True
+                state.control.user_cancel = True
                 state.set_status("user_cancel", "cancelled_before_execution")
                 publish_recovery_outcome(
                     state,
@@ -439,9 +442,7 @@ class Orchestrator(RepairPipelineMixin):
                     mode=str(state.intent.get("mode", "repair")),
                     phase=str(state.phase),
                     evidence=bool(state.evidence or state.suspect_locations),
-                    read_before_write=bool(
-                        state.node_timings.get("allowed_edit") or state.suspect_locations
-                    ),
+                    read_before_write=bool(state.control.allowed_edit or state.suspect_locations),
                     control_mode=control_mode,
                     approved_tools=approved_tools,
                 )
@@ -886,7 +887,7 @@ class Orchestrator(RepairPipelineMixin):
                 current = coordinator.finish(
                     "recovery_required", error_code="repair_initialization_interrupted"
                 )
-                state.node_timings["coordination_status"] = current.status
+                state.control.coordination_status = current.status
             raise
         finally:
             # RepairPlanBinding starts its normal heartbeat before handoff.
@@ -1118,7 +1119,7 @@ class Orchestrator(RepairPipelineMixin):
                 coordinator.store.mark_recovery_required(
                     coordinator.lease, error_code="repair_worker_unconfirmed"
                 )
-                state.node_timings["coordination_status"] = "recovery_required"
+                state.control.coordination_status = "recovery_required"
                 state.set_status("recovery_required", "repair_worker_unconfirmed")
                 from src.repair.recovery_outcome import publish_recovery_outcome
 
@@ -1130,7 +1131,7 @@ class Orchestrator(RepairPipelineMixin):
                     emitter=self._progress_emitter(),
                 )
                 return False
-            return state.node_timings.get("coordination_status") != "recovery_required"
+            return state.control.coordination_status != "recovery_required"
         runtime = getattr(self, "_collaboration_runtime", None)
         if runtime is not None and phase_returned:
             try:
@@ -1139,7 +1140,7 @@ class Orchestrator(RepairPipelineMixin):
                 state.agent_errors["collaboration_cleanup"] = str(exc)[:500]
         report = binding.coordinator.cancel(finalize=finalize)
         state.node_timings["coordination_cancel"] = report.to_dict()
-        state.node_timings["coordination_status"] = report.status
+        state.control.coordination_status = report.status
         if not report.confirmed:
             state.set_status("recovery_required", "cleanup_or_write_unconfirmed")
         binding.publish_recovery(stage="cancel", reason_code=report.error_code)
@@ -1160,22 +1161,22 @@ class Orchestrator(RepairPipelineMixin):
                     self._cancel_run_resources(state, finalize=True)
                 elif str(getattr(state, "status", "") or "").lower() in {"failed", "error"}:
                     snapshot = coordinator.finish("failed", error_code="repair_failed")
-                    state.node_timings["coordination_status"] = snapshot.status
+                    state.control.coordination_status = snapshot.status
                 else:
                     snapshot = coordinator.finish("released")
-                    state.node_timings["coordination_status"] = snapshot.status
-                if state.node_timings.get("coordination_status") == "recovery_required":
+                    state.control.coordination_status = snapshot.status
+                if state.control.coordination_status == "recovery_required":
                     state.set_status("recovery_required", "cleanup_or_write_unconfirmed")
             except Exception as exc:
                 state.agent_errors.setdefault("coordination_finalize", str(exc)[:500])
-                state.node_timings["coordination_status"] = "recovery_required"
+                state.control.coordination_status = "recovery_required"
                 state.set_status("recovery_required", "coordination_finalize_unconfirmed")
             previous = state.recovery_outcome
             binding.publish_recovery(
                 stage=previous.get("stage", "resources"),
                 reason_code=previous.get("reason_code", ""),
             )
-        if state.node_timings.get("coordination_status") != "recovery_required":
+        if state.control.coordination_status != "recovery_required":
             self._maybe_leave_worktree(cancelled=False)
         elif ctx is not None and ctx.worktree_handle is not None:
             state.node_timings["worktree_recovery"] = ctx.worktree_handle.as_dict()
@@ -1202,7 +1203,7 @@ class Orchestrator(RepairPipelineMixin):
                     code=HarnessFailureCode.TIMEOUT,
                     evidence_refs=[f"trace:{state.repair_run_id}"],
                 )
-            elif status == "user_cancel" or state.node_timings.get("user_cancel"):
+            elif status == "user_cancel" or state.control.user_cancel:
                 target = HarnessStatus.CANCELLED
                 attribution = attribute_harness_failure(
                     code=HarnessFailureCode.CANCELLED,
@@ -1311,7 +1312,6 @@ class Orchestrator(RepairPipelineMixin):
 
     def _run_patcher(self, state: RepairState) -> tuple[list[CandidatePatch], dict]:
         """Run the sole patch path: governed tools mutate disk, Runtime snapshots the diff."""
-        import os
 
         plan = state.repair_plan
         self._merge_blackboard_for_patch(state)
@@ -1337,28 +1337,28 @@ class Orchestrator(RepairPipelineMixin):
         begin_patcher_attempt(state)
 
         surface = build_fail_surface(state, repo_root=self._repo_root)
-        bucket = str(state.node_timings.get("verify_bucket") or "")
+        bucket = str(state.control.verify_bucket or "")
         fail_block = build_fail_surface_prompt_block(surface, bucket=bucket)
         if fail_block:
             state.node_timings["fail_surface_target"] = surface.verify_target
             state.node_timings["fail_surface_nodeids"] = list(surface.nodeids)
             feedback = f"{fail_block}\n\n{feedback}".strip() if feedback else fail_block
 
-        structured_feedback = state.node_timings.get("structured_verify_feedback")
+        structured_feedback = state.control.structured_verify_feedback
         if not isinstance(structured_feedback, dict) and state.verification_result is not None:
             payload = build_verify_feedback_payload(
                 state,
                 repo_root=self._repo_root,
                 result=state.verification_result,
             )
-            state.node_timings["structured_verify_feedback"] = payload.to_dict()
+            state.control.structured_verify_feedback = payload.to_dict()
             structured_feedback = payload.to_dict()
         if isinstance(structured_feedback, dict):
             feedback_block = render_verify_feedback_block(structured_feedback)
             if feedback_block and feedback_block not in feedback:
                 feedback = f"{feedback_block}\n\n{feedback}".strip() if feedback else feedback_block
 
-        allowed = list(state.node_timings.get("allowed_edit") or [])
+        allowed = list(state.control.allowed_edit or [])
         runtime_bits = [
             "【repair runtime】read → apply_patch"
             "（*** Begin/End Patch，Update 须含 - 上下文）→ quick_test。",
@@ -1370,11 +1370,9 @@ class Orchestrator(RepairPipelineMixin):
         feedback = f"{block}\n\n{feedback}".strip() if feedback else block
 
         suspects_for_prompt = state.suspect_locations
-        raw_steps = (os.environ.get("FIXLOOP_PATCHER_MAX_STEPS") or "24").strip()
-        try:
-            patch_steps = max(10, int(raw_steps))
-        except ValueError:
-            patch_steps = 24
+        patch_steps = self.repair_config.patcher_max_steps
+        if self.repair_config.snapshot()["provenance"]["patcher_max_steps"] == "default":
+            patch_steps = self.patcher.config.max_steps
         depth_token = push_patcher_depth(self.patcher, patch_steps)
         state.node_timings["patch_steps"] = patch_steps
 
@@ -1454,7 +1452,7 @@ class Orchestrator(RepairPipelineMixin):
             if self._is_repair_cancelled():
                 return [], {"user_cancel": True, "edit_mode": "cancelled", "total_ms": 0}
             state.agent_errors["plan_runtime"] = str(exc)
-            state.node_timings["plan_blocked"] = True
+            state.control.plan_blocked = True
             return [], {
                 "total_ms": 0,
                 "model_call_ms": 0,
@@ -1470,20 +1468,11 @@ class Orchestrator(RepairPipelineMixin):
         tpl_meta: dict,
     ) -> tuple[list[CandidatePatch], dict]:
         """Agent loop：工具改盘 → 快照 diff 成 CandidatePatch（不再二次 apply）。"""
-        import os
-
         from src.repair.execution.edit_from_disk import patches_from_snapshot_diff
         from src.repair.failure_tags import check_patch_faithfulness
 
         t_start = time.time()
-        compact_enabled = (
-            os.environ.get("FIXLOOP_PATCHER_COMPACT") or "1"
-        ).strip().lower() not in (
-            "0",
-            "false",
-            "off",
-            "no",
-        )
+        compact_enabled = self.repair_config.patcher_compact
         if compact_enabled:
             self._compact_patcher_history(state)
         before = self._snapshot_repo()
@@ -1502,7 +1491,7 @@ class Orchestrator(RepairPipelineMixin):
             self._plan_binding.exploration.drain(cancel=True)
         context = self.patcher.tool_context
         if context.execution_uncertain or context.sandbox_uncertain:
-            state.node_timings["coordination_status"] = "recovery_required"
+            state.control.coordination_status = "recovery_required"
             state.set_status("recovery_required", "patcher_write_unconfirmed")
             total_ms = int((time.time() - t_start) * 1000)
             return [], {
@@ -1521,7 +1510,7 @@ class Orchestrator(RepairPipelineMixin):
             str(item.get("tool") or item.get("tool_name") or "") in write_tools
             for item in observations
         )
-        state.node_timings["patcher_write_attempted"] = bool(write_attempted)
+        state.control.patcher_write_attempted = bool(write_attempted)
         lock = getattr(self, "_edit_lock", None)
         if lock is not None:
             state.node_timings["apply_patch_ok_count"] = int(
@@ -1556,9 +1545,9 @@ class Orchestrator(RepairPipelineMixin):
                 or getattr(lock, "apply_path_reject_count", 0)
                 or getattr(lock, "edit_lint_reject_count", 0)
             ):
-                state.node_timings["patcher_write_rejected"] = True
+                state.control.patcher_write_rejected = True
             else:
-                state.node_timings["patcher_export_failed"] = True
+                state.control.patcher_export_failed = True
         patches, rejected = check_patch_faithfulness(
             patches, state, soft_keep=False, repo_root=str(self._repo_root or "")
         )
@@ -1885,10 +1874,10 @@ class Orchestrator(RepairPipelineMixin):
 
         diagnosis = diagnose_verification(result)
         if state is not None:
-            state.node_timings["verify_bucket"] = diagnosis.bucket.value
+            state.control.verify_bucket = diagnosis.bucket.value
             state.node_timings["verify_bucket_reason"] = diagnosis.reason
             if diagnosis.failed_nodeids:
-                state.node_timings["verify_failed_nodeids"] = list(diagnosis.failed_nodeids)
+                state.control.verify_failed_nodeids = list(diagnosis.failed_nodeids)
             from src.repair.verification.failure_decision import (
                 apply_failure_decision,
                 decide_verification_failure,

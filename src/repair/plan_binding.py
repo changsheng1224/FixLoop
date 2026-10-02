@@ -112,12 +112,12 @@ class RepairPlanBinding:
                     ):
                         report = self.coordinator.cancel()
                         state.node_timings["coordination_cancel"] = report.to_dict()
-                        state.node_timings["coordination_status"] = report.status
+                        state.control.coordination_status = report.status
                     else:
                         current = self.coordinator.finish(
                             "recovery_required", error_code="binding_initialization_interrupted"
                         )
-                        state.node_timings["coordination_status"] = current.status
+                        state.control.coordination_status = current.status
                     self.publish_recovery(stage="resources")
             finally:
                 self.close()
@@ -206,14 +206,14 @@ class RepairPlanBinding:
         coordination = self.coordinator.reconcile()
         self.publish_recovery(stage="resources")
         if coordination.get("status") != "active":
-            state.node_timings["coordination_status"] = coordination["status"]
+            state.control.coordination_status = coordination["status"]
             if coordination["status"] == "cancelled":
                 raise CancelledError("persisted_cancel_completed")
             raise ResumeRecoveryRequiredError(
                 "resume_coordination_" + str(coordination.get("status"))
             )
         self.session.owner_lease = self.coordinator.lease
-        self.exploration.restore(state.node_timings.get("exploration_checkpoint"))
+        self.exploration.restore(state.control.exploration_checkpoint)
 
         # Register the tasks created by the current orchestrator only after
         # recovery has fenced and reconciled resources from an older owner.
@@ -231,7 +231,7 @@ class RepairPlanBinding:
             raise ValueError("resume_task_objective_mismatch")
         if not requests:
             self.session.store.append("request", {"checksum": request_hash})
-        saved_seal = state.node_timings.get("plan_checkpoint")
+        saved_seal = state.control.plan_checkpoint
         if saved_seal:
             self.session.verify_checkpoint(saved_seal)
         self.report = recover(self.session)
@@ -325,9 +325,9 @@ class RepairPlanBinding:
 
     def sync(self):
         seal = self.session.checkpoint()
-        self.state.node_timings["plan_checkpoint"] = seal
+        self.state.control.plan_checkpoint = seal
         if self.exploration is not None:
-            self.state.node_timings["exploration_checkpoint"] = self.exploration.checkpoint()
+            self.state.control.exploration_checkpoint = self.exploration.checkpoint()
             self.state.node_timings["exploration_progress"] = self.exploration.progress()
         view = self.session.plan_view()
         self.state.node_timings["plan_progress"] = {
@@ -370,7 +370,7 @@ class RepairPlanBinding:
                     current = self.coordinator.finish(
                         "recovery_required", error_code="binding_closed_before_cleanup"
                     )
-                self.state.node_timings["coordination_status"] = current.status
+                self.state.control.coordination_status = current.status
                 if current.status == "recovery_required":
                     self.state.set_status("recovery_required", "cleanup_or_write_unconfirmed")
             if current.generation == self.coordinator.lease.generation:
@@ -473,7 +473,7 @@ class RepairPlanBinding:
             self.state.issue_input, hard_constraints=self.state.hard_constraints
         )
         # Persist before entering any modifying tool loop.
-        self.state.node_timings["plan_checkpoint"] = session.checkpoint()
+        self.state.control.plan_checkpoint = session.checkpoint()
         self.orchestrator._checkpoint_progress(self.state)
 
     def _planning_client(self):

@@ -92,12 +92,12 @@ def prioritize_failed_nodeids(state: RepairState, nodeids: list[str]) -> None:
             seen.add(nid)
             ordered.append(nid)
     ctx.related_tests = ordered
-    state.node_timings["verify_failed_nodeids"] = list(nodeids)[:8]
+    state.control.verify_failed_nodeids = list(nodeids)[:8]
 
 
 def preferred_verify_targets(state: RepairState) -> list[str]:
     """下一轮 pytest target：失败 nodeid 优先。"""
-    raw = state.node_timings.get("verify_failed_nodeids") or []
+    raw = state.control.verify_failed_nodeids or []
     out: list[str] = []
     seen: set[str] = set()
     for item in raw:
@@ -213,7 +213,7 @@ def build_fail_surface(
 ) -> FailSurface:
     """从 state / 最近 verify 结果构建失败面。"""
     vr = result if result is not None else getattr(state, "verification_result", None)
-    nodeids = list(state.node_timings.get("verify_failed_nodeids") or [])
+    nodeids = list(state.control.verify_failed_nodeids or [])
     assertions: list[str] = []
     if vr is not None:
         from src.repair.verification.verify_diagnose import diagnose_verification
@@ -294,9 +294,7 @@ def build_fail_surface_prompt_block(
         lines.append(excerpt)
         lines.append("```")
     if bucket_l == "collect":
-        lines.append(
-            "动作: 先根据收集日志修导入/目标路径；确认能收集到测试后再 patch 业务逻辑。"
-        )
+        lines.append("动作: 先根据收集日志修导入/目标路径；确认能收集到测试后再 patch 业务逻辑。")
     else:
         lines.append(
             "动作: 1) read_file 打开上列测试 2) 定位被测实现 3) apply_patch 最小修改 "
@@ -368,7 +366,7 @@ def apply_verify_feedback_to_state(
 ) -> None:
     """Persist structured verifier feedback for prompts, trace, and reports."""
     data = payload.to_dict()
-    state.node_timings["structured_verify_feedback"] = data
+    state.control.structured_verify_feedback = data
     state.node_timings["verify_feedback_next_action"] = payload.next_action
     if payload.verify_target:
         state.node_timings["verify_feedback_target"] = payload.verify_target

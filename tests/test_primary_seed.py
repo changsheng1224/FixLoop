@@ -23,7 +23,7 @@ def test_primary_seed_uses_public_suspects_and_dedupes(monkeypatch, tmp_path):
     monkeypatch.setattr("src.repair.localization.localize_fastpath.seed_rule_first_suspects", seed)
     state = RepairState(issue_input="public issue")
     orch._seed_patcher_primary(state)
-    assert state.node_timings["allowed_edit"] == ["impl.py"]
+    assert state.control.allowed_edit == ["impl.py"]
     assert not any("f2p" in key for key in state.node_timings)
 
 

@@ -142,8 +142,7 @@ class StopLossTracker:
                 stop=True,
                 reason=StopLossReason.PARSE_THRASH,
                 hint=(
-                    f"连续 {self._parse_fail_streak} 次未产出可解析补丁。"
-                    "停止空转；需先探索再编辑。"
+                    f"连续 {self._parse_fail_streak} 次未产出可解析补丁。停止空转；需先探索再编辑。"
                 ),
                 meta=_no_progress_meta(self._no_progress_streak),
             )
@@ -217,8 +216,7 @@ class StopLossTracker:
                 reason=StopLossReason.ENV,
                 progress=False,
                 hint=(
-                    f"连续 {self._env_streak} 次验证环境失败（{diag.reason}），"
-                    "停止继续改业务补丁。"
+                    f"连续 {self._env_streak} 次验证环境失败（{diag.reason}），停止继续改业务补丁。"
                 ),
             )
         if self._no_progress_streak >= 3:
@@ -281,7 +279,7 @@ class StopLossTracker:
 def apply_stop_loss(state: RepairState, decision: StopLossDecision) -> None:
     """把止损写入 state，供终态 / degrade / tags 使用。"""
     if decision.reason == StopLossReason.NO_PROGRESS and decision.meta:
-        state.node_timings["no_progress_warning"] = dict(decision.meta)
+        state.control.no_progress_warning = dict(decision.meta)
         state.node_timings["no_progress_control"] = {
             "required_next_action": decision.meta.get("required_next_action", ""),
             "forbid_repeated_reads": bool(decision.meta.get("forbid_repeated_reads")),
@@ -289,8 +287,8 @@ def apply_stop_loss(state: RepairState, decision: StopLossDecision) -> None:
         }
     if not decision.stop:
         return
-    state.node_timings["stop_loss"] = decision.reason
-    state.node_timings["stop_loss_early"] = True
+    state.control.stop_loss = decision.reason
+    state.control.stop_loss_early = True
     if decision.meta:
         state.node_timings["stop_loss_meta"] = dict(decision.meta)
         if "no_progress_count" in decision.meta:
@@ -301,4 +299,4 @@ def apply_stop_loss(state: RepairState, decision: StopLossDecision) -> None:
 
 
 def has_stop_loss(state: RepairState) -> bool:
-    return bool(state.node_timings.get("stop_loss") or state.node_timings.get("stop_loss_early"))
+    return bool(state.control.stop_loss or state.control.stop_loss_early)

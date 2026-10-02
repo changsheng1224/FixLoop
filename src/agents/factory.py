@@ -6,6 +6,7 @@ import json
 from typing import Literal
 
 from agent_runtime.config import AgentConfig
+from agent_runtime.config_loader import load_runtime_policy
 from agent_runtime.repair_budget import _DEFAULT_ALLOCATIONS
 from agent_runtime.runtime import Agent
 from agent_runtime.tool_context import ToolContext
@@ -18,7 +19,7 @@ RepairAgentRole = Literal["patcher", "verifier"]
 # 分 Agent 预算表 — prompt_budget 从 RepairBudgetContext 统一来源读取
 _AGENT_DEFAULTS: dict[RepairAgentRole, dict] = {
     "patcher": {
-        "max_steps": 10,
+        "max_steps": 24,
         "max_new_tokens": 8192,
         "prompt_budget": _DEFAULT_ALLOCATIONS["patcher"],
         "max_json_retries": 0,
@@ -31,12 +32,29 @@ _AGENT_DEFAULTS: dict[RepairAgentRole, dict] = {
 }
 
 
+def load_repair_agent_config(
+    role: RepairAgentRole,
+    root: str,
+    *,
+    approval: str | None = None,
+    **overrides,
+) -> AgentConfig:
+    config = load_runtime_policy(
+        workspace_root=root,
+        defaults={"approval": "auto", **_AGENT_DEFAULTS[role]},
+        cli_overrides={"approval": approval, **overrides, "json_mode": role == "verifier"},
+    )
+    sources = config.snapshot()["provenance"]
+    sources["json_mode"] = "role_contract"
+    return config.set_provenance(sources)
+
+
 def create_repair_agent(
     role: RepairAgentRole,
     model_client,
     workspace,
     cwd: str = "",
-    approval: str = "auto",
+    approval: str | None = None,
     *,
     dry_run: bool = False,
     l1_prefix=None,
@@ -48,6 +66,7 @@ def create_repair_agent(
     sandbox_context: ToolContext | None = None,
     exploration_client_factory=None,
     exploration_limits=None,
+    runtime_policy: AgentConfig | None = None,
 ) -> Agent:
     """创建 Patcher 或 Verifier Agent。
 
@@ -57,6 +76,16 @@ def create_repair_agent(
             交互式 CLI 可传 ``ask`` 启用双层拦截。
     """
     root = cwd or workspace.repo_root
+    config = runtime_policy or load_repair_agent_config(
+        role,
+        root,
+        approval=approval,
+        code_exploration={
+            "mode": code_exploration_mode,
+            "server_argv": code_exploration_server_argv,
+        },
+    )
+    approval = config.approval
     if sandbox_context is not None and (
         code_exploration_mode != "text" or code_exploration_server_argv is not None
     ):
@@ -83,7 +112,6 @@ def create_repair_agent(
         delegation_tools = build_delegation_tools(ctx)
         tools.update(delegation_tools)
 
-    defaults = _AGENT_DEFAULTS[role]
     gw = gateway or build_repair_gateway(root, sandbox_mode=ctx.sandbox_backend is not None)
     system_prompt = load_system_prompt(role)
     agent_name = role
@@ -119,16 +147,7 @@ def create_repair_agent(
         return gw.dispatch(agent_name, name, execute)
 
     agent = Agent(
-        config=AgentConfig(
-            provider="deepseek",
-            approval=approval,
-            json_mode=json_mode,
-            code_exploration={
-                "mode": code_exploration_mode,
-                "server_argv": code_exploration_server_argv,
-            },
-            **defaults,
-        ),
+        config=config,
         model_client=model_client,
         workspace=workspace,
         cwd=root,
@@ -151,13 +170,13 @@ def create_repair_agent(
 
 
 def create_patcher(
-    model_client, workspace, cwd: str = "", approval: str = "auto", **kwargs
+    model_client, workspace, cwd: str = "", approval: str | None = None, **kwargs
 ) -> Agent:
     return create_repair_agent("patcher", model_client, workspace, cwd, approval=approval, **kwargs)
 
 
 def create_verifier(
-    model_client, workspace, cwd: str = "", approval: str = "auto", **kwargs
+    model_client, workspace, cwd: str = "", approval: str | None = None, **kwargs
 ) -> Agent:
     return create_repair_agent(
         "verifier", model_client, workspace, cwd, approval=approval, **kwargs

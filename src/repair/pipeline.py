@@ -49,14 +49,14 @@ def _record_pytest_exit(state: RepairState, repo_root: str, key: str, sandbox_co
         from src.repair.verification.verify import BwrapVerifyStrategy
 
         run = BwrapVerifyStrategy(sandbox_context).run(repo_root)
-        state.node_timings[key] = run.internal.get("pytest_exit_code")
+        setattr(state.control, key, run.internal.get("pytest_exit_code"))
         state.node_timings[key + "_category"] = run.internal["category"]
         state.node_timings[key + "_receipt_id"] = run.internal["receipt_id"]
         if run.internal["category"] not in {"passed", "failed"}:
             raise RuntimeError("sandbox pytest unavailable: " + run.internal["category"])
         return
     code, _ = run_pytest(Path(repo_root))
-    state.node_timings[key] = code
+    setattr(state.control, key, code)
 
 
 class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
@@ -80,7 +80,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         if ctx.cancel_token is not None:
             ctx.cancel_token.cancel("timeout")
         if not self._cancel_run_resources(state):
-            state.node_timings["phase_timeout"] = exc.phase
+            state.control.phase_timeout = exc.phase
             state.agent_errors["orchestrator"] = str(exc)
             return
         # E14 / P1：超时前尽量从磁盘 salvage 非空 diff，避免回滚成 empty_model_patch
@@ -96,7 +96,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         else:
             state.node_timings["phase_timeout_kept_patches"] = True
         state.set_status(RepairTerminalStatus.TIMEOUT, "phase_timeout")
-        state.node_timings["phase_timeout"] = exc.phase
+        state.control.phase_timeout = exc.phase
         if ctx.phase_timeout_config is not None:
             state.node_timings["phase_timeout_budgets"] = ctx.phase_timeout_config.budget_dict()
         state.node_timings["phase_timeout_consumed_s"] = exc.consumed_s
@@ -147,7 +147,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             return em
         from src.repair.progress import progress_emitter_from_env
 
-        em = progress_emitter_from_env()
+        em = progress_emitter_from_env(config=self.repair_config)
         self._progress = em
         return em
 
@@ -234,7 +234,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         lock.write_serial = False
         self._edit_lock = lock
         set_active_edit_lock(self._repo_root, lock)
-        state.node_timings["allowed_edit"] = sorted(lock.allowed_edit)
+        state.control.allowed_edit = sorted(lock.allowed_edit)
         state.node_timings["unread_write_reject_count"] = 0
         state.node_timings["apply_path_reject_count"] = 0
 
@@ -282,8 +282,8 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         lock = getattr(self, "_edit_lock", None)
         if lock is not None:
             allowed = set(lock.allowed_edit)
-        elif state.node_timings.get("allowed_edit"):
-            allowed = set(state.node_timings.get("allowed_edit") or [])
+        elif state.control.allowed_edit:
+            allowed = set(state.control.allowed_edit or [])
 
         self._emit_repair_span("critic_started", {"summary": f"mode={mode}"})
         state.node_timings["critic_input_projection"] = role_projection(state, "critic")
@@ -332,16 +332,16 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         """规范空输出归因，避免把明确终态误报成 JSON 解析失败。"""
         from src.repair.execution.patcher_contract import PATCHER_TERMINAL_STATUSES
 
-        terminal = str(state.node_timings.get("patcher_terminal_status") or "")
+        terminal = str(state.control.patcher_terminal_status or "")
         explicit = terminal in PATCHER_TERMINAL_STATUSES
         if (
             not state.candidate_patches
             and not state.agent_errors.get("patcher_apply")
             and not explicit
         ):
-            state.node_timings["patcher_parse_failed"] = True
+            state.control.patcher_parse_failed = True
         elif explicit:
-            state.node_timings.pop("patcher_parse_failed", None)
+            state.control.reset("patcher_parse_failed")
             state.agent_errors.pop("patcher_parse", None)
         return terminal
 
@@ -349,10 +349,10 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         """记录空补丁并决定是否重试；True 表示继续下一轮。"""
         from src.repair.stop_loss import apply_stop_loss
 
-        if state.node_timings.get("coordination_status") == "recovery_required":
+        if state.control.coordination_status == "recovery_required":
             state.set_status("recovery_required", "cleanup_or_write_unconfirmed")
             return False
-        if state.node_timings.get("plan_blocked"):
+        if state.control.plan_blocked:
             state.set_status(RepairTerminalStatus.FAILED, "plan_runtime_blocked")
             self._checkpoint_progress(state)
             return False
@@ -366,7 +366,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
         apply_err = state.agent_errors.get("patcher_apply")
         if apply_err:
-            state.node_timings["patcher_apply_failed"] = True
+            state.control.patcher_apply_failed = True
             state.feedback = (
                 "补丁 JSON 解析成功但未能写入文件。"
                 f" 原因: {apply_err}。"
@@ -382,12 +382,12 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             )
         else:
             state.agent_errors.pop("patcher_apply", None)
-            state.node_timings.pop("patcher_apply_failed", None)
+            state.control.reset("patcher_apply_failed")
             state.feedback = "补丁生成失败；请基于现有证据直接生成并应用补丁。"
 
         self._write_feedback_to_blackboard(state.feedback)
         sl = stop_loss.record_empty_patch(apply_failed=bool(apply_err))
-        state.node_timings["stop_loss_snapshot"] = stop_loss.snapshot()
+        state.control.stop_loss_snapshot = stop_loss.snapshot()
         state.retry_count += 1
         if sl.stop:
             apply_stop_loss(state, sl)
@@ -422,12 +422,12 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             )
             return state
         except CancelledError:
-            state.node_timings["user_cancel"] = True
+            state.control.user_cancel = True
             state.set_status("user_cancel", "persisted_cancel_completed")
             self._end_repair_trace(state)
             return state
         except ResumeRecoveryRequiredError as exc:
-            state.node_timings["coordination_status"] = "recovery_required"
+            state.control.coordination_status = "recovery_required"
             state.agent_errors["plan_runtime"] = str(exc)
             state.set_status("recovery_required", "cleanup_or_write_unconfirmed")
             previous = state.recovery_outcome
@@ -485,19 +485,11 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             "repair_started",
             summary=f"mode={state.node_timings['repair_mode']}",
         )
-        import os
-
-        if (os.environ.get("FIXLOOP_PROGRESS_HEARTBEAT") or "1").strip().lower() not in (
-            "0",
-            "false",
-            "off",
-            "no",
-        ):
-            try:
-                interval = float(os.environ.get("FIXLOOP_PROGRESS_HEARTBEAT_S") or "60")
-            except ValueError:
-                interval = 60.0
-            em0.start_heartbeat(interval_s=max(5.0, interval), summary="repair_alive")
+        state.node_timings["repair_config"] = self.repair_config.snapshot()
+        if self.repair_config.progress_heartbeat:
+            em0.start_heartbeat(
+                interval_s=self.repair_config.progress_heartbeat_s, summary="repair_alive"
+            )
 
         cancelled = False
         phase_timed_out = False
@@ -784,9 +776,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                         state.verification_result,
                         state.candidate_patches,
                     )
-                    state.node_timings["stop_loss_snapshot"] = stop_loss.snapshot()
+                    state.control.stop_loss_snapshot = stop_loss.snapshot()
                     if sl.reason == "no_progress" and not sl.stop:
-                        state.node_timings["no_progress_warning"] = dict(sl.meta or {})
+                        state.control.no_progress_warning = dict(sl.meta or {})
                         state.agent_errors["no_progress"] = sl.hint
                         warning = f"[无进展]\n{sl.hint}"
                         state.feedback = (
@@ -797,12 +789,12 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                         consecutive_env_fails += 1
                     else:
                         consecutive_env_fails = 0
-                    state.node_timings["consecutive_env_fails"] = consecutive_env_fails
+                    state.control.consecutive_env_fails = consecutive_env_fails
                     state.retry_count += 1
                     if sl.stop:
                         apply_stop_loss(state, sl)
                         if sl.reason == "env":
-                            state.node_timings["verify_env_early_stop"] = True
+                            state.control.verify_env_early_stop = True
                             state.agent_errors["verify_env"] = sl.hint
                         self._write_feedback_to_blackboard(state.feedback)
                         self._checkpoint_progress(state)
@@ -815,7 +807,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             phase_timed_out = True
         finally:
             if not phase_timed_out and (cancelled or self._is_repair_cancelled()):
-                state.node_timings["user_cancel"] = True
+                state.control.user_cancel = True
                 if self._cancel_run_resources(state):
                     self._restore_repo_snapshot(initial_snapshot)
                 self._emit_repair_cancelled(state)
@@ -1017,23 +1009,21 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     state.verification_result,
                     state.candidate_patches,
                 )
-                state.node_timings["stop_loss_snapshot"] = stop_loss.snapshot()
+                state.control.stop_loss_snapshot = stop_loss.snapshot()
                 if sl.reason == "no_progress" and not sl.stop:
-                    state.node_timings["no_progress_warning"] = dict(sl.meta or {})
+                    state.control.no_progress_warning = dict(sl.meta or {})
                     state.agent_errors["no_progress"] = sl.hint
                     warning = f"[无进展]\n{sl.hint}"
                     state.feedback = (
                         f"{warning}\n\n{state.feedback}".strip() if state.feedback else warning
                     )
                     self._write_feedback_to_blackboard(state.feedback)
-                state.node_timings["consecutive_env_fails"] = stop_loss.snapshot().get(
-                    "env_streak", 0
-                )
+                state.control.consecutive_env_fails = stop_loss.snapshot().get("env_streak", 0)
                 state.retry_count += 1
                 if sl.stop:
                     apply_stop_loss(state, sl)
                     if sl.reason == "env":
-                        state.node_timings["verify_env_early_stop"] = True
+                        state.control.verify_env_early_stop = True
                         state.agent_errors["verify_env"] = sl.hint
                     self._write_feedback_to_blackboard(state.feedback)
                     self._checkpoint_progress(state)
@@ -1041,7 +1031,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 self._checkpoint_progress(state)
         finally:
             if cancelled or self._is_repair_cancelled():
-                state.node_timings["user_cancel"] = True
+                state.control.user_cancel = True
                 if self._cancel_run_resources(state):
                     self._restore_repo_snapshot(initial_snapshot)
                 self._emit_repair_cancelled(state)
@@ -1051,7 +1041,18 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
     def _restore_state_from_repair_checkpoint(self, state: RepairState, checkpoint: dict) -> None:
         """从 checkpoint 恢复长程可续跑字段（含 timings / 策略 / 失败面）。"""
         from agent_runtime.session_contract import compare_workspace_manifest, workspace_manifest
-        from src.state import CandidatePatch, RepairPlan, VerificationResult
+        from src.repair.control_state import RepairControl
+        from src.state import CandidatePatch, RepairPlan, VerificationResult, migrate_state_payload
+
+        checkpoint = migrate_state_payload(checkpoint)
+        cancelled = state.control.user_cancel
+        coordination = state.control.coordination_status
+        state.control = RepairControl.model_validate(checkpoint.get("control") or {})
+        state.control.user_cancel = cancelled
+        state.control.coordination_status = coordination
+        state.control.repair_timeout = 0
+        state.control.phase_timeout = ""
+        state.control.resume_workspace_stale = False
 
         saved_manifest = checkpoint.get("workspace_manifest") or {}
         if saved_manifest:
@@ -1065,14 +1066,14 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             )
             resume_timings = {
                 "resume_workspace_manifest": manifest_diff,
-                "resume_workspace_stale": not manifest_diff["exact_match"],
             }
+            state.control.resume_workspace_stale = not manifest_diff["exact_match"]
         else:
             resume_timings = {}
 
         state.node_timings = {**dict(checkpoint.get("node_timings") or {}), **resume_timings}
         # A saved display projection cannot authorize this owner's recovery.
-        state.node_timings.pop("recovery_outcome", None)
+        state.control.reset("recovery_outcome")
         state.retry_count = checkpoint.get("retry_count", 0)
         state.max_retries = checkpoint.get("max_retries", state.max_retries)
         state.phase = checkpoint.get("phase", "patch")
@@ -1126,7 +1127,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         state.side_effects = list(checkpoint.get("side_effects") or [])
         state.checkpoint_id = str(checkpoint.get("checkpoint_id", "") or "")
         state.checkpoint_sequence = int(checkpoint.get("checkpoint_sequence", 0) or 0)
-        if state.node_timings.get("resume_workspace_stale"):
+        if state.control.resume_workspace_stale:
             state.retrieved_context = None
             state.candidate_patches = []
             state.verification_result = None
@@ -1136,9 +1137,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
     def _checkpoint_progress(self, state: RepairState) -> None:
         """patch/verify 回合中落盘，支持中断后续跑。"""
-        decision = state.node_timings.get("repair_failure_decision")
+        decision = state.control.repair_failure_decision
         if isinstance(decision, dict):
-            state.node_timings["checkpoint_next_action"] = decision.get("next_action", "")
+            state.control.checkpoint_next_action = decision.get("next_action", "")
         try:
             self._save_repair_checkpoint(state)
         except Exception:

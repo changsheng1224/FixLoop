@@ -6,16 +6,17 @@ from src.repair.localization.localize_fastpath import (
     suspects_from_test_evidence,
 )
 from src.state import RepairState
+from tests.repair_support import build_repository
 
 
 def _repo(root):
-    (root / "pkg").mkdir()
-    (root / "pkg" / "__init__.py").write_text("", encoding="utf-8")
-    (root / "pkg" / "worker.py").write_text("def work(x):\n    return x + 1\n", encoding="utf-8")
-    (root / "tests").mkdir()
-    (root / "tests" / "test_worker.py").write_text(
-        "from pkg.worker import work\n\ndef test_work():\n    assert work(1) == 2\n",
-        encoding="utf-8",
+    build_repository(
+        root,
+        {
+            "pkg/__init__.py": "",
+            "pkg/worker.py": "def work(x):\n    return x + 1\n",
+            "tests/test_worker.py": "from pkg.worker import work\n\ndef test_work():\n    assert work(1) == 2\n",
+        },
     )
     return "tests/test_worker.py::test_work"
 

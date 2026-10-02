@@ -410,5 +410,5 @@ class TestRepairCancel:
         token.cancel()
         state = orch.repair("TypeError at app.py:1", cancel_token=token, repair_timeout_s=0)
         assert state.status == RepairTerminalStatus.USER_CANCEL
-        assert state.node_timings.get("user_cancel")
+        assert state.control.user_cancel
         assert (temp_workspace / "app.py").read_text(encoding="utf-8") == "x = 1\n"

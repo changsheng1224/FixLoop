@@ -165,7 +165,7 @@ def test_gates_block_before_model(failed_binding, mode, reason):
             resource_id="unconfirmed-read", kind="exploration_task", effect="read"
         )
     elif mode == "stop_loss":
-        binding.state.node_timings["stop_loss"] = {"reason": "no_progress"}
+        binding.state.control.stop_loss = "no_progress"
     elif mode == "budget":
         binding.exploration.budget.restore({"limits": {"llm_calls": 1}, "used": {"llm_calls": 1}})
     else:

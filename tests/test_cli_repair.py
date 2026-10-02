@@ -164,7 +164,7 @@ class TestCliRepair:
         class _TimeoutOrch:
             def repair(self, issue, **kwargs):
                 state = RepairState(issue_input=issue, status="failed")
-                state.node_timings["repair_timeout"] = 180
+                state.control.repair_timeout = 180
                 state.agent_errors["orchestrator"] = "repair timeout (180s)"
                 return state
 

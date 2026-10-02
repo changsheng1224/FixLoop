@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -17,32 +16,23 @@ from src.repair.localization.localize_memory import (
     remember_negated_files,
 )
 from src.repair.localization.localize_tiers import SuspectTier, decide_patch_gate, tier_for_suspect
-from src.repair.localization.symbol_index import _INDEX_CACHE
 from src.state import RepairState, SuspectLocation
+from tests.repair_support import build_repository
 
 
-def _repo() -> Path:
-    raw = tempfile.mkdtemp(prefix="fixloop-loc-p0-")
-    root = Path(raw)
-    pkg = root / "pkg"
-    pkg.mkdir()
-    (pkg / "__init__.py").write_text("", encoding="utf-8")
-    (pkg / "core.py").write_text(
-        "def compute(x):\n    return x + 1\n",
-        encoding="utf-8",
+def _repo(root: Path) -> Path:
+    return build_repository(
+        root,
+        {
+            "pkg/__init__.py": "",
+            "pkg/core.py": "def compute(x):\n    return x + 1\n",
+            "tests/test_core.py": "from pkg.core import compute\n\ndef test_compute():\n    assert compute(1) == 2\n",
+        },
     )
-    tests = root / "tests"
-    tests.mkdir()
-    (tests / "test_core.py").write_text(
-        "from pkg.core import compute\n\ndef test_compute():\n    assert compute(1) == 2\n",
-        encoding="utf-8",
-    )
-    _INDEX_CACHE.clear()
-    return root
 
 
-def test_cheap_explore_grep_hits():
-    root = _repo()
+def test_cheap_explore_grep_hits(tmp_path):
+    root = _repo(tmp_path)
     issue = "Bug in compute function returning wrong value"
     with patch("agent_runtime.tools.tool_grep") as g:
         g.return_value = "pkg/core.py:1:def compute(x):"
@@ -52,8 +42,8 @@ def test_cheap_explore_grep_hits():
     assert hits[0].reason == "grep命中"
 
 
-def test_tier_gate_mid_forces_short():
-    root = _repo()
+def test_tier_gate_mid_forces_short(tmp_path):
+    root = _repo(tmp_path)
     mid = SuspectLocation(
         file_path="pkg/core.py",
         start_line=1,
@@ -66,8 +56,8 @@ def test_tier_gate_mid_forces_short():
     assert d.allow and d.force_short_repair
 
 
-def test_tier_gate_blocks_test_only():
-    root = _repo()
+def test_tier_gate_blocks_test_only(tmp_path):
+    root = _repo(tmp_path)
     low = SuspectLocation(
         file_path="tests/test_core.py",
         start_line=1,
@@ -80,8 +70,8 @@ def test_tier_gate_blocks_test_only():
     assert d.reason == "no_editable_impl"
 
 
-def test_tier_gate_low_impl_allows():
-    root = _repo()
+def test_tier_gate_low_impl_allows(tmp_path):
+    root = _repo(tmp_path)
     low = SuspectLocation(
         file_path="pkg/core.py",
         start_line=1,
@@ -93,8 +83,8 @@ def test_tier_gate_low_impl_allows():
     assert d.allow and d.force_short_repair
 
 
-def test_filter_llm_requires_disk():
-    root = _repo()
+def test_filter_llm_requires_disk(tmp_path):
+    root = _repo(tmp_path)
     llm = [
         SuspectLocation(file_path="pkg/core.py", start_line=1, end_line=1, reason="llm"),
         SuspectLocation(file_path="pkg/missing.py", start_line=1, end_line=1, reason="llm"),
@@ -103,8 +93,8 @@ def test_filter_llm_requires_disk():
     assert [s.file_path.replace("\\", "/") for s in kept] == ["pkg/core.py"]
 
 
-def test_landing_sets_line_from_symbol():
-    root = _repo()
+def test_landing_sets_line_from_symbol(tmp_path):
+    root = _repo(tmp_path)
     rough = [
         SuspectLocation(
             file_path="pkg/core.py",
@@ -119,8 +109,8 @@ def test_landing_sets_line_from_symbol():
     assert landed[0].function_name in (None, "compute") or landed[0].start_line == 1
 
 
-def test_memory_burn_and_confirm():
-    root = _repo()
+def test_memory_burn_and_confirm(tmp_path):
+    root = _repo(tmp_path)
     state = RepairState(issue_input="x")
     state.node_timings["failure_ledger"] = {"negated_files": ["pkg/bad.py"]}
     remember_negated_files(state)

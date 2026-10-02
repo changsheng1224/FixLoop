@@ -38,7 +38,7 @@ def decide_verification_failure(result, *, state=None) -> RepairFailureDecision:
     diagnosis = diagnose_verification(result)
     nodeids = list(diagnosis.failed_nodeids)
     if state is not None:
-        nodeids = list(state.node_timings.get("verify_failed_nodeids") or nodeids)
+        nodeids = list(state.control.verify_failed_nodeids or nodeids)
     if diagnosis.bucket == VerifyBucket.ENV:
         return RepairFailureDecision(
             RepairFailureClass.VERIFY_ENVIRONMENT.value,
@@ -99,7 +99,7 @@ def decide_tool_failure(metadata: dict[str, Any] | None) -> RepairFailureDecisio
 
 def apply_failure_decision(state, decision: RepairFailureDecision) -> None:
     data = decision.to_dict()
-    state.node_timings["repair_failure_decision"] = data
+    state.control.repair_failure_decision = data
     state.node_timings["required_next_action"] = decision.next_action
     state.agent_errors["repair_failure_class"] = decision.failure_class
 

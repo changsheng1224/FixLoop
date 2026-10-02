@@ -55,19 +55,19 @@ class TestApplyTerminalStatus:
 
     def test_user_cancel(self):
         state = RepairState(issue_input="x", status="pending")
-        state.node_timings["user_cancel"] = True
+        state.control.user_cancel = True
         apply_terminal_status(state)
         assert state.status == RepairTerminalStatus.USER_CANCEL
 
     def test_timeout_flag(self):
         state = RepairState(issue_input="x", status="failed")
-        state.node_timings["repair_timeout"] = 180
+        state.control.repair_timeout = 180
         apply_terminal_status(state)
         assert state.status == RepairTerminalStatus.TIMEOUT
 
     def test_phase_timeout_flag(self):
         state = RepairState(issue_input="x", status="failed")
-        state.node_timings["phase_timeout"] = "localize"
+        state.control.phase_timeout = "localize"
         state.agent_errors["orchestrator"] = "phase timeout (localize, 60s budget, consumed 61.0s)"
         apply_terminal_status(state)
         assert state.status == RepairTerminalStatus.TIMEOUT
@@ -84,11 +84,11 @@ class TestApplyTerminalStatus:
             retry_count=3,
             max_retries=3,
         )
-        state.node_timings["baseline_pytest_code"] = 0
-        state.node_timings["post_patch_pytest_code"] = 1
+        state.control.baseline_pytest_code = 0
+        state.control.post_patch_pytest_code = 1
         apply_terminal_status(state)
         assert state.status == RepairTerminalStatus.REGRESSION
-        assert state.node_timings["introduced_regression"] is True
+        assert state.control.introduced_regression is True
 
     def test_failed_fallback(self):
         state = RepairState(issue_input="x", status="pending", retry_count=0)
@@ -99,14 +99,14 @@ class TestApplyTerminalStatus:
 class TestIntroducedRegression:
     def test_detects_green_to_red(self):
         state = RepairState(issue_input="x")
-        state.node_timings["baseline_pytest_code"] = 0
-        state.node_timings["post_patch_pytest_code"] = 2
+        state.control.baseline_pytest_code = 0
+        state.control.post_patch_pytest_code = 2
         assert introduced_regression(state) is True
 
     def test_already_red_not_regression(self):
         state = RepairState(issue_input="x")
-        state.node_timings["baseline_pytest_code"] = 1
-        state.node_timings["post_patch_pytest_code"] = 1
+        state.control.baseline_pytest_code = 1
+        state.control.post_patch_pytest_code = 1
         assert introduced_regression(state) is False
 
 
@@ -124,7 +124,7 @@ class TestRegressionDetected:
 class TestFinalizeRepairState:
     def test_timeout_sets_failure_tag(self):
         state = RepairState(issue_input="x", status=RepairTerminalStatus.TIMEOUT)
-        state.node_timings["repair_timeout"] = 60
+        state.control.repair_timeout = 60
         state.agent_errors["orchestrator"] = "repair timeout (60s)"
         finalize_repair_state(state)
         assert state.status == RepairTerminalStatus.TIMEOUT

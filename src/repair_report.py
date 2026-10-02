@@ -42,7 +42,11 @@ class RepairReport:
         self.save()
 
     def record_state(self, state: RepairState, tier: str) -> None:
-        from src.repair.verification.verify_diagnose import diagnose_verification
+        from src.repair.verification.failure_decision import (
+            RepairFailureClass,
+            decide_verification_failure,
+        )
+        from src.repair.verification.termination import resolve_terminal_status
 
         vr = state.verification_result
         internal = (state.node_timings.get("phases_internal") or {}).get("verify") or {}
@@ -54,12 +58,13 @@ class RepairReport:
             and actual_tier not in {"static", "skipped", "none"}
             and not self.data.get("dry_run")
         )
-        status = str(state.status)
+        runtime_status = str(resolve_terminal_status(state))
+        status = runtime_status
         if status in {"fixed", "patched"} and not tested:
             status = "pending_verify"
         self.data.update(
             status=status,
-            runtime_status=str(state.status),
+            runtime_status=runtime_status,
             runtime_run_id=state.repair_run_id,
             recovery=state.recovery_outcome,
             verification=vr.to_dict() if vr else None,
@@ -71,12 +76,18 @@ class RepairReport:
             agent_errors=dict(state.agent_errors),
             verification_scope="runtime_selected_tests" if tested else "unverified",
         )
-        if vr and not vr.all_passed:
-            diagnosis = diagnose_verification(vr)
+        self.data.update(category="", error="")
+        if status in {"user_cancel", "recovery_required", "timeout", "regression"}:
+            self.data["category"] = status
+            self.data["error"] = "\n".join(str(error) for error in state.agent_errors.values())
+        elif vr and not vr.all_passed:
+            decision = decide_verification_failure(vr, state=state)
             self.data["category"] = (
-                "verification_environment_failed" if diagnosis.is_env else "verification_failed"
+                "verification_environment_failed"
+                if decision.failure_class == RepairFailureClass.VERIFY_ENVIRONMENT
+                else "verification_failed"
             )
-            self.data["error"] = "\n".join(vr.failure_logs) or diagnosis.guidance
+            self.data["error"] = "\n".join(vr.failure_logs) or decision.model_hint
         elif status not in {"fixed", "pending_verify"}:
             self.data["category"] = status
             self.data["error"] = "\n".join(str(error) for error in state.agent_errors.values())

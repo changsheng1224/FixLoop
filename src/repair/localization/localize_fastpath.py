@@ -228,7 +228,7 @@ def seed_rule_first_suspects(
     ctx = getattr(state, "retrieved_context", None)
     if ctx is not None:
         related = list(ctx.related_tests or [])
-    fail_nids = list(state.node_timings.get("verify_failed_nodeids") or [])
+    fail_nids = list(state.control.verify_failed_nodeids or [])
     suspects = rule_first_suspects(
         state.issue_input or "",
         repo_root,

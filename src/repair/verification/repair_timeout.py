@@ -76,11 +76,12 @@ def handle_repair_wall_timeout(
 
     state.set_status(
         RepairTerminalStatus.TIMEOUT
-        if cleanup_confirmed else RepairTerminalStatus.RECOVERY_REQUIRED,
+        if cleanup_confirmed
+        else RepairTerminalStatus.RECOVERY_REQUIRED,
         "repair_wall_timeout",
     )
     state.agent_errors["orchestrator"] = f"repair timeout ({repair_timeout_s}s)"
-    state.node_timings["repair_timeout"] = repair_timeout_s
+    state.control.repair_timeout = repair_timeout_s
     # overshoot：相对「timeout 触发时刻」的额外耗时（grace + salvage），目标 ≤ MAX_WALL_OVERSHOOT_S
     overshoot = max(0.0, time.monotonic() - t0)
     if wall_started is not None:

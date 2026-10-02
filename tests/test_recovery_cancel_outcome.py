@@ -344,7 +344,7 @@ def test_saved_recovery_display_is_discarded_when_restoring_checkpoint(tmp_path)
     from src.state import RepairState
 
     saved = RepairState(issue_input="issue", repair_run_id="run")
-    saved.node_timings["recovery_outcome"] = {"status": "active", "cleanup_confirmed": True}
+    saved.control.recovery_outcome = {"status": "active", "cleanup_confirmed": True}
     restored = RepairState(issue_input="issue", repair_run_id="run")
     mixin = RepairPipelineMixin()
     mixin._repo_root = str(tmp_path)

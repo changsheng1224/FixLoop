@@ -367,8 +367,6 @@ def test_patch_decision_gate_filters_reads_at_request_projection(tmp_path):
 
 
 def test_reading_editable_implementation_syncs_grounding_and_forces_patch(tmp_path):
-    from types import SimpleNamespace
-
     from agent_runtime.tool_result import ToolResult
     from src.repair.execution.edit_lock import EditLockState, set_active_edit_lock
 
@@ -376,7 +374,9 @@ def test_reading_editable_implementation_syncs_grounding_and_forces_patch(tmp_pa
     target.write_text("value = 1\n", encoding="utf-8")
     loop, agent, _client, events = _native_loop(tmp_path, [_final()])
     agent._agent_name = "patcher"
-    state = SimpleNamespace(node_timings={})
+    from src.state import RepairState
+
+    state = RepairState(issue_input="fix")
     agent._l2_repair_state = state
     lock = EditLockState(repo_root=tmp_path, allowed_edit=set())
     set_active_edit_lock(tmp_path, lock)
@@ -427,7 +427,7 @@ def test_patcher_terminal_classifies_no_write_attempt():
     from src.state import RepairState
 
     state = RepairState(issue_input="fix")
-    state.node_timings["patcher_write_attempted"] = False
+    state.control.patcher_write_attempted = False
     assert classify_patcher_attempt(state, []) is PatcherTerminalStatus.NO_WRITE_ATTEMPT
 
 

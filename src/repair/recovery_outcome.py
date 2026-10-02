@@ -93,7 +93,7 @@ def publish_recovery_outcome(
     outcome = build_recovery_outcome(
         source, stage=stage, plan_report=plan_report, reason_code=reason_code
     )
-    state.node_timings["recovery_outcome"] = outcome
+    state.control.recovery_outcome = outcome
     if emitter is not None:
         emitter.emit(
             "recovery_progress",

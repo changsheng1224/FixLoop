@@ -36,11 +36,11 @@ def role_projection(state, role: str, *, input_revision: int | None = None) -> d
     )
     if role == "critic":
         projection["candidate_patches"] = deepcopy(raw.get("candidate_patches") or [])
-        projection["allowed_edit"] = list((raw.get("node_timings") or {}).get("allowed_edit") or [])
+        projection["allowed_edit"] = list((raw.get("control") or {}).get("allowed_edit") or [])
     elif role == "verifier":
         projection["candidate_patches"] = deepcopy(raw.get("candidate_patches") or [])
         projection["changed_files"] = list(raw.get("changed_files") or [])
-        projection["verify_target"] = (raw.get("node_timings") or {}).get("verify_target", "")
+        projection["verify_target"] = (raw.get("control") or {}).get("verify_target", "")
     return projection
 
 

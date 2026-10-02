@@ -81,9 +81,7 @@ class SweBenchAdapter:
                 "allow_unverified_harness": cfg.allow_unverified_harness,
                 "repair_runtime": "patcher_v2",
                 "baseline_policy": "strict_preflight_v1",
-                "gold_patch_visibility": "assisted"
-                if cfg.allow_gold_patch_injection
-                else "strict",
+                "gold_patch_visibility": "assisted" if cfg.allow_gold_patch_injection else "strict",
                 "instances_sha256": cfg.instances_sha256,
                 "require_verifier_sandbox": cfg.require_verifier_sandbox,
             },
@@ -274,9 +272,9 @@ class SweBenchAdapter:
             manifest_data = json.loads(
                 (cfg.output_dir / "manifest.json").read_text(encoding="utf-8")
             )
-            meta["manifest_fingerprint"] = (
-                manifest_data.get("harness", {}) or {}
-            ).get("manifest_fingerprint", "")
+            meta["manifest_fingerprint"] = (manifest_data.get("harness", {}) or {}).get(
+                "manifest_fingerprint", ""
+            )
         except (OSError, TypeError, ValueError):
             meta["manifest_fingerprint"] = ""
         resolved_set = set(hr.resolved_ids or [])
@@ -484,7 +482,7 @@ class SweBenchAdapter:
                 repair_status=result.repair_status,
                 verified=result.verified,
                 skip_verify=cfg.skip_verify,
-                terminal_status=str(timings.get("patcher_terminal_status") or ""),
+                terminal_status=state.control.patcher_terminal_status,
             )
             result.failure_class = fc
             result.failure_detail = detail

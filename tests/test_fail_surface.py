@@ -58,7 +58,7 @@ class TestBuildFailSurface:
         rel = _write_test(tmp_path)
         nodeid = f"{rel}::test_add"
         state = RepairState(issue_input="bug")
-        state.node_timings["verify_failed_nodeids"] = [nodeid]
+        state.control.verify_failed_nodeids = [nodeid]
         state.verification_result = VerificationResult(
             all_passed=False,
             total_tests=1,
@@ -97,7 +97,7 @@ class TestPrioritizeAndPick:
 
     def test_preferred_targets_order(self):
         state = RepairState(issue_input="x")
-        state.node_timings["verify_failed_nodeids"] = ["fail.py::t1"]
+        state.control.verify_failed_nodeids = ["fail.py::t1"]
         state.retrieved_context = RetrievedContext(related_tests=["other.py::t2"])
         targets = preferred_verify_targets(state)
         assert targets[0] == "fail.py::t1"
@@ -110,7 +110,7 @@ class TestPrioritizeAndPick:
         orch._repo_root = str(tmp_path)
         orch._repair_ctx = None
         state = RepairState(issue_input="x")
-        state.node_timings["verify_failed_nodeids"] = [nodeid]
+        state.control.verify_failed_nodeids = [nodeid]
         state.retrieved_context = RetrievedContext(related_tests=["does/not/exist.py"])
         picked = orch._pick_test_path(state)
         assert picked == nodeid
@@ -140,7 +140,7 @@ class TestFeedbackIncludesFailSurface:
         rel = _write_test(tmp_path)
         nodeid = f"{rel}::test_add"
         state = RepairState(issue_input="x")
-        state.node_timings["verify_failed_nodeids"] = [nodeid]
+        state.control.verify_failed_nodeids = [nodeid]
         state.candidate_patches = [CandidatePatch(file_path="pkg/mod.py", diff="+x")]
         result = VerificationResult(
             all_passed=False,
@@ -159,7 +159,7 @@ class TestFeedbackIncludesFailSurface:
         assert payload.verify_target == nodeid
         assert payload.patch_files == ["pkg/mod.py"]
         assert "read_failed_test" in payload.next_action
-        assert state.node_timings["structured_verify_feedback"]["verify_target"] == nodeid
+        assert state.control.structured_verify_feedback["verify_target"] == nodeid
         assert "结构化验证反馈" in block
 
 

@@ -10,10 +10,84 @@ from src.state import RepairState, RepairStatus
 
 def test_repairstate_migrates_v1_and_rejects_unknown_schema():
     state = RepairState.from_dict({"issue_input": "x", "schema_version": "1.0"})
-    assert state.schema_version == "1.1"
+    assert state.schema_version == "1.2"
     assert state.status == RepairStatus.PENDING
     with pytest.raises(ValueError, match="unsupported"):
         RepairState.from_dict({"issue_input": "x", "schema_version": "9.0"})
+
+
+def test_v11_control_migration_roundtrip_and_snapshot_isolation():
+    payload = {
+        "schema_version": "1.1",
+        "issue_input": "x",
+        "node_timings": {"user_cancel": True, "allowed_edit": ["a.py"], "patch_ms": 7},
+    }
+    state = RepairState.from_dict(payload)
+    assert state.control.user_cancel
+    assert state.node_timings == {"patch_ms": 7}
+    snapshot = state.to_dict()
+    snapshot["control"]["allowed_edit"].append("b.py")
+    assert state.control.allowed_edit == ["a.py"]
+    assert "user_cancel" in payload["node_timings"]
+    assert RepairState.from_dict(state.to_dict()).control == state.control
+
+
+def test_control_rejects_unknown_fields_and_old_storage_on_new_schema():
+    with pytest.raises(ValueError):
+        RepairState(issue_input="x", control={"unrecognized_flag": True})
+    with pytest.raises(ValueError, match="node_timings"):
+        RepairState.from_dict({"schema_version": "1.2", "node_timings": {"user_cancel": True}})
+    state = RepairState(issue_input="x")
+    with pytest.raises(ValueError):
+        state.control.consecutive_env_fails = -1
+
+
+def test_resume_restores_controls_without_replaying_previous_cancellation():
+    from src.orchestrator import Orchestrator
+
+    previous = RepairState(
+        issue_input="x",
+        status="timeout",
+        control={
+            "user_cancel": True,
+            "repair_timeout": 60,
+            "allowed_edit": ["a.py"],
+            "plan_checkpoint": {"checkpoint_id": "saved"},
+        },
+    )
+    current = RepairState(issue_input="x")
+    Orchestrator(None)._restore_state_from_repair_checkpoint(current, previous.to_dict())
+    assert current.status == "pending"
+    assert current.control.allowed_edit == ["a.py"]
+    assert current.control.plan_checkpoint == {"checkpoint_id": "saved"}
+    assert not current.control.user_cancel and not current.control.repair_timeout
+
+
+def test_signed_legacy_checkpoint_is_verified_before_control_migration(tmp_path, monkeypatch):
+    from src.repair.checkpoint_load import load_repair_checkpoint, save_repair_checkpoint
+
+    state = RepairState(issue_input="x", repair_run_id="legacy-run", control={"user_cancel": True})
+    legacy = state.to_dict()
+    legacy["schema_version"] = "1.1"
+    legacy["node_timings"].update(legacy.pop("control"))
+    monkeypatch.setattr(
+        state,
+        "to_dict",
+        lambda: {
+            **legacy,
+            "checkpoint_id": state.checkpoint_id,
+            "checkpoint_sequence": state.checkpoint_sequence,
+        },
+    )
+    path = save_repair_checkpoint(state, str(tmp_path))
+    loaded = load_repair_checkpoint(str(tmp_path), "legacy-run", require_valid=True, issue="x")
+    assert loaded["schema_version"] == "1.2"
+    assert loaded["control"]["user_cancel"] is True
+    assert "user_cancel" not in loaded["node_timings"]
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["node_timings"]["user_cancel"] = False
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    assert load_repair_checkpoint(str(tmp_path), "legacy-run") is None
 
 
 def test_repairstate_invariants_are_checked_on_commit():

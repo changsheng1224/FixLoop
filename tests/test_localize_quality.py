@@ -13,16 +13,17 @@ from src.repair.localization.localize_quality import (
     suspects_from_issue,
 )
 from src.state import SuspectLocation
+from tests.repair_support import build_repository
 
 
 def _repo_with_bug(tmp: Path) -> Path:
-    src = tmp / "pkg" / "core.py"
-    src.parent.mkdir(parents=True)
-    src.write_text("def boom():\n    raise ValueError('x')\n", encoding="utf-8")
-    test = tmp / "tests" / "test_core.py"
-    test.parent.mkdir(parents=True)
-    test.write_text("def test_boom():\n    boom()\n", encoding="utf-8")
-    return tmp
+    return build_repository(
+        tmp,
+        {
+            "pkg/core.py": "def boom():\n    raise ValueError('x')\n",
+            "tests/test_core.py": "def test_boom():\n    boom()\n",
+        },
+    )
 
 
 class TestIssuePaths:
@@ -40,7 +41,7 @@ class TestSuspectsFromIssue:
     def test_stack_prefers_impl_over_test(self, tmp_path: Path):
         root = _repo_with_bug(tmp_path)
         issue = (
-            'Traceback (most recent call last):\n'
+            "Traceback (most recent call last):\n"
             f'  File "{root / "tests" / "test_core.py"}", line 2, in test_boom\n'
             "    boom()\n"
             f'  File "{root / "pkg" / "core.py"}", line 2, in boom\n'
@@ -57,10 +58,7 @@ class TestSuspectsFromIssue:
 class TestRefineSuspects:
     def test_drops_missing_and_ranks_stack(self, tmp_path: Path):
         root = _repo_with_bug(tmp_path)
-        issue = (
-            'File "pkg/core.py", line 2, in boom\n'
-            "ValueError: x\n"
-        )
+        issue = 'File "pkg/core.py", line 2, in boom\nValueError: x\n'
         noisy = [
             SuspectLocation(file_path="does/not/exist.py", start_line=1, end_line=1),
             SuspectLocation(
