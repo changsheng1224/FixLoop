@@ -58,7 +58,7 @@ def test_no_host_fallback_and_baseline_receipt(tmp_path, monkeypatch):
     ctx = ToolContext(root=str(tmp_path), sandbox_backend=backend)
     state = RepairState(issue_input="failure")
     _record_pytest_exit(state, str(tmp_path), "baseline_pytest_code", ctx)
-    assert state.node_timings["baseline_pytest_code"] == 1
+    assert state.control.baseline_pytest_code == 1
     assert state.node_timings["baseline_pytest_code_receipt_id"] == "baseline"
     backend.result = SandboxResult("rejected", error_code="namespace_unavailable")
     with pytest.raises(RuntimeError, match="sandbox pytest unavailable"):

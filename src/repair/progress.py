@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 import threading
 import time
@@ -62,38 +61,28 @@ class ProgressEvent:
 
 def _default_text_sink() -> TextIO:
     """默认 stdout，避免 PowerShell ``2>&1 | Tee-Object`` 把进度当错误。"""
-    raw = (os.environ.get("FIXLOOP_PROGRESS_STDOUT") or "1").strip().lower()
-    if raw in ("0", "false", "off", "no", "stderr"):
-        return sys.stderr
-    return sys.stdout
+    from src.repair.config import load_repair_config
+
+    return sys.stdout if load_repair_config().progress_stdout else sys.stderr
 
 
 def progress_emitter_from_env(
     *,
     text_sink: TextIO | None = None,
     record: Callable[[ProgressEvent], None] | None = None,
+    config=None,
 ) -> ProgressEmitter:
-    quiet = (os.environ.get("FIXLOOP_PROGRESS") or "1").strip().lower() in (
-        "0",
-        "false",
-        "off",
-        "quiet",
-        "no",
-    )
-    jsonl = (os.environ.get("FIXLOOP_PROGRESS_JSONL") or "").strip() or None
-    # 心跳默认只写 jsonl，减少控制台刷屏；FIXLOOP_PROGRESS_HEARTBEAT_TEXT=1 才打字面
-    hb_text = (os.environ.get("FIXLOOP_PROGRESS_HEARTBEAT_TEXT") or "0").strip().lower() in (
-        "1",
-        "true",
-        "on",
-        "yes",
-    )
+    from src.repair.config import load_repair_config
+
+    config = config or load_repair_config()
     return ProgressEmitter(
-        quiet=quiet,
-        text_sink=text_sink,
-        jsonl_path=jsonl,
+        quiet=not config.progress,
+        text_sink=text_sink
+        if text_sink is not None
+        else (sys.stdout if config.progress_stdout else sys.stderr),
+        jsonl_path=config.progress_jsonl.strip() or None,
         record=record,
-        heartbeat_to_text=hb_text,
+        heartbeat_to_text=config.progress_heartbeat_text,
     )
 
 

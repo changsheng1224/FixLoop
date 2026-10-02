@@ -110,9 +110,15 @@ class AgentConfig(RuntimePolicy):
 
     def effective_deadline(self) -> dict[str, float | int]:
         """Merge legacy scalar timeout fields with the canonical policy block."""
+
+        def limit(scalar, nested):
+            if scalar in self.model_fields_set:
+                return int(getattr(self, scalar))
+            return int(getattr(self.deadline, nested))
+
         return {
-            "repair_s": int(self.repair_wall_timeout_s or self.deadline.repair_s),
-            "step_s": int(self.step_timeout_s or self.deadline.step_s),
-            "tool_s": int(self.tool_timeout_s or self.deadline.tool_s),
+            "repair_s": limit("repair_wall_timeout_s", "repair_s"),
+            "step_s": limit("step_timeout_s", "step_s"),
+            "tool_s": limit("tool_timeout_s", "tool_s"),
             "retry_backoff_cap_s": float(self.deadline.retry_backoff_cap_s),
         }

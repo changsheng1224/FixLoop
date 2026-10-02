@@ -56,9 +56,7 @@ class TestE12DirtyExportGate:
             (modified / f"noise_{i}.py").write_text("y\n", encoding="utf-8")
 
         state = RepairState(issue_input="x", candidate_patches=[])
-        out = export_model_patch(
-            state=state, original_repo=original, modified_repo=modified
-        )
+        out = export_model_patch(state=state, original_repo=original, modified_repo=modified)
         assert out == ""
 
     def test_scoped_diff_only_candidate_paths(self, tmp_path):
@@ -78,9 +76,7 @@ class TestE12DirtyExportGate:
             ],
         )
         # cand 无 lines/diff → 走 scoped repo diff
-        out = export_model_patch(
-            state=state, original_repo=original, modified_repo=modified
-        )
+        out = export_model_patch(state=state, original_repo=original, modified_repo=modified)
         assert "keep.py" in out
         assert "noise.py" not in out
 
@@ -111,9 +107,7 @@ class TestE6aExportWithoutApply:
             issue_input="x",
             candidate_patches=[],
             agent_errors={"patcher_apply": "hunk_mismatch:x.py"},
-            node_timings={"patcher_apply_failed": True},
+            node_timings={},
+            control={"patcher_apply_failed": True},
         )
-        assert (
-            export_model_patch(state=state, original_repo=original, modified_repo=modified)
-            == ""
-        )
+        assert export_model_patch(state=state, original_repo=original, modified_repo=modified) == ""

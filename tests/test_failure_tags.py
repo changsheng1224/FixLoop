@@ -53,7 +53,8 @@ class TestClassifyFailureTags:
             status=RepairTerminalStatus.EXHAUSTED,
             retry_count=3,
             agent_errors={"patcher_apply": "hunk_mismatch:a.py"},
-            node_timings={"patcher_apply_failed": True},
+            node_timings={},
+            control={"patcher_apply_failed": True},
         )
         assert classify_failure_tags(state) == [FailureTag.APPLY_FAILED]
 
@@ -62,7 +63,8 @@ class TestClassifyFailureTags:
             issue_input="x",
             status=RepairTerminalStatus.EXHAUSTED,
             retry_count=3,
-            node_timings={"patcher_parse_failed": True},
+            node_timings={},
+            control={"patcher_parse_failed": True},
         )
         assert classify_failure_tags(state) == [FailureTag.PARSE_FAIL]
 
@@ -111,10 +113,8 @@ class TestClassifyFailureTags:
         state = RepairState(
             issue_input="x",
             status=RepairTerminalStatus.TIMEOUT,
-            node_timings={
-                "baseline_pytest_code": 0,
-                "post_patch_pytest_code": 1,
-            },
+            node_timings={},
+            control={"baseline_pytest_code": 0, "post_patch_pytest_code": 1},
         )
         assert classify_failure_tags(state) == [FailureTag.TIMEOUT]
 

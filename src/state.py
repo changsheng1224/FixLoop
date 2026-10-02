@@ -5,9 +5,12 @@ Agent 间通过结构化 dataclass 通信，不靠自然语言。
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from typing import Any
+
+from src.repair.control_state import RepairControl
 
 __all__ = [
     "AgentAskRef",
@@ -25,7 +28,7 @@ __all__ = [
 ]
 
 
-CURRENT_STATE_SCHEMA_VERSION = "1.1"
+CURRENT_STATE_SCHEMA_VERSION = "1.2"
 
 
 class RepairPhase(StrEnum):
@@ -68,9 +71,9 @@ def _coerce_enum(value, enum_type, default):
 
 def migrate_state_payload(data: dict[str, Any] | None) -> dict[str, Any]:
     """Migrate persisted RepairState payloads without guessing unknown versions."""
-    payload = dict(data or {})
+    payload = deepcopy(dict(data or {}))
     version = str(payload.get("schema_version", "1.0") or "1.0")
-    if version not in {"1.0", CURRENT_STATE_SCHEMA_VERSION}:
+    if version not in {"1.0", "1.1", CURRENT_STATE_SCHEMA_VERSION}:
         raise ValueError(f"unsupported RepairState schema_version: {version}")
     if version == "1.0":
         # v1 used an absent ``attempt`` and did not persist collaboration
@@ -88,6 +91,15 @@ def migrate_state_payload(data: dict[str, Any] | None) -> dict[str, Any]:
         payload.setdefault("harness_attribution", {})
         payload.setdefault("human_control", {})
         payload.setdefault("bad_cases", [])
+        payload["schema_version"] = CURRENT_STATE_SCHEMA_VERSION
+    if version in {"1.0", "1.1"}:
+        timings = payload.get("node_timings") or {}
+        control = dict(payload.get("control") or {})
+        for name in RepairControl.model_fields:
+            if name in timings:
+                control.setdefault(name, timings.pop(name))
+        payload["node_timings"] = timings
+        payload["control"] = control
         payload["schema_version"] = CURRENT_STATE_SCHEMA_VERSION
     return payload
 
@@ -488,6 +500,7 @@ class RepairState:
     status: RepairStatus | str = RepairStatus.PENDING
     failure_tags: list[str] = field(default_factory=list)
     node_timings: dict = field(default_factory=dict)
+    control: RepairControl = field(default_factory=RepairControl)
     agent_errors: dict = field(default_factory=dict)
     repair_run_id: str = ""
     agent_asks: list[AgentAskRef] = field(default_factory=list)
@@ -527,6 +540,12 @@ class RepairState:
 
     def __post_init__(self) -> None:
         """Normalize legacy strings while keeping the dataclass API compatible."""
+        self.control = RepairControl.model_validate(self.control).model_copy(deep=True)
+        misplaced = set(self.node_timings) & set(RepairControl.model_fields)
+        if misplaced:
+            raise ValueError(
+                f"repair controls belong in control, not node_timings: {sorted(misplaced)}"
+            )
         self.phase = _coerce_enum(self.phase, RepairPhase, RepairPhase.LOCALIZE)
         self.status = _coerce_enum(self.status, RepairStatus, RepairStatus.PENDING)
         self.retry_count = max(0, int(self.retry_count or 0))
@@ -538,16 +557,18 @@ class RepairState:
     def validate_invariants(self, *, strict: bool = False) -> list[str]:
         """Validate cross-field state invariants before a runtime commit."""
         errors: list[str] = []
+        self.control = RepairControl.model_validate(
+            self.control.model_dump() if isinstance(self.control, RepairControl) else self.control
+        )
+        if set(self.node_timings) & set(RepairControl.model_fields):
+            errors.append("repair controls must not be stored in node_timings")
         if self.retry_count > self.max_retries:
             errors.append("retry_count must be <= max_retries")
         if self.state_revision < 0 or self.blackboard_revision < 0:
             errors.append("revisions must be non-negative")
         if self.status == RepairStatus.FIXED:
             has_patch = bool(self.candidate_patches)
-            skipped = bool(
-                (self.node_timings or {}).get("verify_skipped_reason")
-                or (self.node_timings or {}).get("verify_skipped")
-            )
+            skipped = bool(self.control.verify_skipped_reason or self.control.verify_skipped)
             if strict and not has_patch and not skipped:
                 errors.append("fixed state requires candidate_patches or verify_skipped_reason")
         if self.verification_result and self.verification_result.all_passed:
@@ -660,7 +681,7 @@ class RepairState:
     def recovery_outcome(self) -> dict:
         from copy import deepcopy
 
-        return deepcopy(self.node_timings.get("recovery_outcome", {}))
+        return deepcopy(self.control.recovery_outcome)
 
     def to_dict(self) -> dict:
         """序列化为 JSON 可写 dict。"""
@@ -682,7 +703,8 @@ class RepairState:
             "phase": self.phase,
             "status": self.status,
             "failure_tags": list(self.failure_tags),
-            "node_timings": self.node_timings,
+            "node_timings": deepcopy(self.node_timings),
+            "control": self.control.model_dump(mode="json"),
             "agent_errors": self.agent_errors,
             "repair_run_id": self.repair_run_id,
             "agent_asks": [ref.to_dict() for ref in self.agent_asks],
@@ -753,6 +775,7 @@ class RepairState:
             status=data.get("status", "pending"),
             failure_tags=list(data.get("failure_tags", [])),
             node_timings=data.get("node_timings", {}),
+            control=data.get("control", {}),
             agent_errors=data.get("agent_errors", {}),
             repair_run_id=data.get("repair_run_id", ""),
             agent_asks=[AgentAskRef.from_dict(item) for item in data.get("agent_asks", [])],

@@ -182,7 +182,7 @@ class TestResumeSkipsParse:
 
         assert orch.patch_calls == 1
         assert result.status == "pending_verify"
-        assert result.node_timings.get("verify_skipped") is True
+        assert result.control.verify_skipped is True
 
     def test_skip_verify_retries_empty_truncated_patch(self, tmp_path, monkeypatch):
         """关闭 Verifier 也必须消费空补丁重试，而不是第一次就退出。"""
@@ -212,9 +212,9 @@ class TestResumeSkipsParse:
                 self.patch_calls += 1
                 timing = {"total_ms": 1, "model_call_ms": 1, "parse_apply_ms": 0}
                 if self.patch_calls == 1:
-                    repair_state.node_timings["patcher_terminal_status"] = "model_output_truncated"
+                    repair_state.control.patcher_terminal_status = "model_output_truncated"
                     return [], timing
-                repair_state.node_timings["patcher_terminal_status"] = "patch_produced"
+                repair_state.control.patcher_terminal_status = "patch_produced"
                 return [
                     CandidatePatch(
                         file_path="a.py",

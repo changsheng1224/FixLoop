@@ -60,12 +60,14 @@ class TestConvertAndDataset:
         assert inst.base_commit not in issue
         assert "FAIL_TO_PASS" not in issue
 
-    def test_assisted_issue_metadata_is_explicit_opt_in(self):
-        inst = load_instances_from_jsonl(FIXTURE)[0]
-        issue = instance_to_issue(inst, include_evaluation_metadata=True)
-        assert inst.instance_id in issue
-        assert inst.base_commit in issue
-        assert "FAIL_TO_PASS" in issue
+    def test_issue_conversion_never_reads_evaluation_metadata(self):
+        class PublicInstance:
+            problem_statement = "  public report  "
+
+            def __getattr__(self, name):
+                raise AssertionError(f"evaluation metadata accessed: {name}")
+
+        assert instance_to_issue(PublicInstance()) == "public report"
 
     def test_filter_preserves_order(self):
         instances = load_instances_from_jsonl(FIXTURE)

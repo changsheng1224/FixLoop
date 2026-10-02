@@ -34,7 +34,7 @@ def test_early_close_preserves_unknown_resources(tmp_path):
     binding.coordinator.register_resource(resource_id="leftover", kind="command", effect="write")
     binding.close()
     assert binding.coordinator.store.snapshot(state.repair_run_id).status == "recovery_required"
-    assert state.node_timings["coordination_status"] == "recovery_required"
+    assert state.control.coordination_status == "recovery_required"
 
 
 def test_session_open_failure_releases_fence_and_cancel_subscription(tmp_path, monkeypatch):
@@ -153,7 +153,7 @@ def test_public_resume_finishes_persisted_cancel_without_model_calls(tmp_path):
         state.issue_input, resume_run_id=state.repair_run_id, cancel_token=token, repair_timeout_s=0
     )
     assert result.status == "user_cancel"
-    assert result.node_timings["coordination_status"] == "cancelled"
+    assert result.control.coordination_status == "cancelled"
     assert client.session_usage["calls"] == 0
     assert orch.patcher.tool_context.run_coordinator is None
 

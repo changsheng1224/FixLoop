@@ -101,7 +101,7 @@ class TestBuildFeedbackBuckets:
         assert "[验证分桶]" in feedback
         assert "bucket=env" in feedback
         assert "验证环境" in feedback
-        assert state.node_timings.get("verify_bucket") == "env"
+        assert state.control.verify_bucket == "env"
 
     def test_logic_feedback_points_to_read_file(self):
         orch = Orchestrator.__new__(Orchestrator)

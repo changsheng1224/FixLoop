@@ -1,57 +1,35 @@
 """共享测试 fixtures：FakeClient, 临时 workspace 等。"""
 
-import tempfile
-from pathlib import Path
+import os
 
 import pytest
 
 from agent_runtime.providers.clients import FakeModelClient
 from agent_runtime.workspace import WorkspaceContext
+from tests.repair_support import build_repository
+
+
+@pytest.fixture(autouse=True)
+def isolate_repository_discovery(tmp_path, monkeypatch):
+    """A non-Git fixture must not inherit the developer's enclosing repository."""
+    ceiling = str(tmp_path.parent.resolve())
+    existing = os.environ.get("GIT_CEILING_DIRECTORIES", "")
+    monkeypatch.setenv(
+        "GIT_CEILING_DIRECTORIES", os.pathsep.join(filter(None, (existing, ceiling)))
+    )
 
 
 @pytest.fixture
-def temp_workspace():
-    """创建临时 git 仓库作为测试 workspace。"""
-    import subprocess
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        root = Path(tmpdir)
-        # git init
-        subprocess.run(
-            ["git", "init"],
-            cwd=str(root),
-            capture_output=True,
-            text=True,
-        )
-        subprocess.run(
-            ["git", "config", "user.email", "test@test.com"],
-            cwd=str(root),
-            capture_output=True,
-            text=True,
-        )
-        subprocess.run(
-            ["git", "config", "user.name", "Test"],
-            cwd=str(root),
-            capture_output=True,
-            text=True,
-        )
-        # Create files
-        (root / "README.md").write_text("# Test Project\n\nThis is a test repo.\n")
-        (root / "pyproject.toml").write_text("[project]\nname='test'\n")
-        # git add + commit
-        subprocess.run(
-            ["git", "add", "."],
-            cwd=str(root),
-            capture_output=True,
-            text=True,
-        )
-        subprocess.run(
-            ["git", "commit", "-m", "Initial commit"],
-            cwd=str(root),
-            capture_output=True,
-            text=True,
-        )
-        yield root
+def temp_workspace(tmp_path):
+    """A committed repository with pytest-managed lifetime."""
+    return build_repository(
+        tmp_path / "workspace",
+        {
+            "README.md": "# Test Project\n\nThis is a test repo.\n",
+            "pyproject.toml": "[project]\nname='test'\n",
+        },
+        git=True,
+    )
 
 
 @pytest.fixture
@@ -73,10 +51,7 @@ def ws(workspace):
 
 
 @pytest.fixture
-def non_git_dir(monkeypatch):
-    """创建非 git 目录。"""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        root = Path(tmpdir)
-        monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(root.parent.resolve()))
-        (root / "hello.txt").write_text("hello world")
-        yield root
+def non_git_dir(tmp_path, monkeypatch):
+    root = tmp_path / "non-git"
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.resolve()))
+    return build_repository(root, {"hello.txt": "hello world"})

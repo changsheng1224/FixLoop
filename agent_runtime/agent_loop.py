@@ -761,7 +761,7 @@ class AgentLoop:
             runtime["patch_required"] = True
             state = getattr(self.agent, "_l2_repair_state", None)
             if state is not None:
-                state.node_timings["allowed_edit"] = sorted(lock.allowed_edit)
+                state.control.allowed_edit = sorted(lock.allowed_edit)
                 state.node_timings["patcher_grounded"] = True
                 state.node_timings["patch_required"] = True
                 ledger = ((self.agent.session.get("memory") or {}).get("working") or {}).get(

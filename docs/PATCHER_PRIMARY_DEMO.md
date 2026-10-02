@@ -19,13 +19,13 @@ $env:FIXLOOP_PATCHER_COMPACT = "1"
 ## 口述轨迹（对照 CLI `[progress]` 行）
 
 1. **`repair_started` / `seed_ready`**
-   规则种子（test_patch / F2P）→ `allowed_edit`；**无 Loc/Ret LLM**。
+   公开 Issue、源码与实际失败测试的规则种子 → `allowed_edit`；**无 Loc/Ret LLM**。
 
 2. **`patcher_turn` / `tool_progress`**
    Patcher 同环：grep/read → **`apply_patch`**（须已读）→ 写后窗口 / lint。
 
 3. **`quick_test`（工具）**
-   优先 F2P nodeid；失败摘要进下一 turn（读结果再决策）。
+   优先实际失败 nodeid 或相关仓库测试；失败摘要进下一 turn（读结果再决策）。
 
 4. **`critic_progress` / `critic_finished`**
    空/越锁/纯测试 → reject 回灌；accept → Verifier。

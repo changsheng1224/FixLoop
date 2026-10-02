@@ -1,12 +1,10 @@
-from pathlib import Path
 
 import pytest
 
+from agent_runtime.checkpoint import create_checkpoint, evaluate_resume_state
 from agent_runtime.context_runtime import ObservationStore
 from agent_runtime.session_store import SessionStore
 from agent_runtime.state_root import state_root_for
-from agent_runtime.tool_context import ToolContext
-from agent_runtime.checkpoint import create_checkpoint, evaluate_resume_state
 from agent_runtime.task_state import TaskState
 
 
@@ -43,7 +41,6 @@ def test_observations_use_external_root(tmp_path):
 
 def test_sandbox_step_resume_is_uncertain(tmp_path):
     from types import SimpleNamespace
-    from agent_runtime.checkpoint import create_checkpoint, evaluate_resume_state
 
     class Prefix:
         tool_signature = "tools"

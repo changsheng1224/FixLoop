@@ -59,17 +59,15 @@ class TestRegressionShrink:
         state.candidate_patches = [
             CandidatePatch(file_path="bad.py", diff="+1", original_lines=["a"], patched_lines=["b"])
         ]
-        state.node_timings["baseline_pytest_code"] = 0
-        state.node_timings["post_patch_pytest_code"] = 1
+        state.control.baseline_pytest_code = 0
+        state.control.post_patch_pytest_code = 1
         vr = VerificationResult(
             all_passed=False,
             failed=2,
             total_tests=3,
             failure_logs=["FAILED other.py::test_y - AssertionError"],
         )
-        ledger = record_verify_into_ledger(
-            state, result=vr, bucket="logic", is_regression=True
-        )
+        ledger = record_verify_into_ledger(state, result=vr, bucket="logic", is_regression=True)
         assert "bad.py" in ledger.regression_files
         suspects = [
             SuspectLocation(file_path="bad.py", start_line=1, end_line=1),

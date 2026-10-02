@@ -1,10 +1,11 @@
-import pytest
 from types import SimpleNamespace
 
-from agent_runtime.plan_runtime import LongTaskState
-from agent_runtime.context_manager import ContextManager
+import pytest
+
 from agent_runtime.compression_pipeline import is_repair_state_item
-from tests.plan_support import session_for, simple_plan, read
+from agent_runtime.context_manager import ContextManager
+from agent_runtime.plan_runtime import LongTaskState
+from tests.plan_support import read, session_for, simple_plan
 
 
 def test_long_task_context_preserves_request_constraints_and_node(tmp_path):

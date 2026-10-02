@@ -126,20 +126,6 @@ def _summarize_failure_targets(failure_logs: list[str]) -> str:
     return "\n".join(parts)
 
 
-def _repair_constraint_hints(failure_logs: list[str]) -> str:
-    combined = "\n".join(str(log) for log in failure_logs[:5])
-    hints: list[str] = []
-    if re.search(r"invalid literal for int\(\).*['\"]N/A['\"]", combined, re.IGNORECASE):
-        hints.append(
-            "检测到 int() 转换非数字字符串 N/A。不要只写 dict.get/data.get(..., '0') 或 `or 0`，"
-            "因为 'N/A' 是 truthy；必须显式处理非数字字符串，例如先取 raw，"
-            "raw.isdigit() 时 int(raw)，否则按测试期望返回 0。"
-        )
-    if re.search(r"unsupported operand type\(s\).*['\"]int['\"].*['\"]str['\"]", combined):
-        hints.append("检测到 int 与 str 拼接；字符串输出场景应在拼接前对数值结果使用 str(...)。")
-    return "\n".join(hints)
-
-
 def _patch_retry_fingerprint(patch: CandidatePatch) -> str:
     body = "\n".join(
         [
@@ -153,10 +139,10 @@ def _patch_retry_fingerprint(patch: CandidatePatch) -> str:
 
 
 def _record_patch_retry_fingerprints(state: RepairState) -> str:
-    raw_counts = state.node_timings.setdefault("patch_retry_fingerprints", {})
+    raw_counts = state.control.patch_retry_fingerprints
     if not isinstance(raw_counts, dict):
         raw_counts = {}
-        state.node_timings["patch_retry_fingerprints"] = raw_counts
+        state.control.patch_retry_fingerprints = raw_counts
 
     repeated_files: list[str] = []
     for patch in state.candidate_patches:
@@ -193,17 +179,20 @@ class Orchestrator(RepairPipelineMixin):
         allow_static_verify_fallback: bool = False,
         l1_prompt_cache_key: str = "",
         sandbox_context=None,
+        repair_config=None,
     ):
         self.patcher = patcher
         self.verifier = verifier
         self.use_pytest_verify = use_pytest_verify
-        configured_policy = (
-            str(sandbox_policy or os.environ.get("FIXLOOP_SANDBOX_POLICY", "preferred"))
-            .strip()
-            .lower()
+        from src.repair.config import load_repair_config
+
+        self.repair_config = repair_config or load_repair_config(
+            workspace_root=getattr(patcher, "cwd", None),
+            cli_overrides={"sandbox_policy": "required" if require_sandbox else sandbox_policy}
+            if require_sandbox or sandbox_policy
+            else None,
         )
-        if configured_policy not in {"required", "preferred", "disabled"}:
-            configured_policy = "preferred"
+        configured_policy = self.repair_config.sandbox_policy
         self.sandbox_policy = configured_policy
         self.require_sandbox = bool(require_sandbox or configured_policy == "required")
         self.allow_static_verify_fallback = allow_static_verify_fallback
@@ -294,7 +283,6 @@ class Orchestrator(RepairPipelineMixin):
         phase_timeouts: PhaseTimeoutConfig | None = None,
         cancel_token=None,
         resume_run_id: str = "",
-        verify_test_patch: str = "",
         *,
         run_id: str = "",
     ) -> RepairState:
@@ -308,7 +296,6 @@ class Orchestrator(RepairPipelineMixin):
             cancel_token: 可选协作式取消 token（CLI Ctrl+C 注入）。
             resume_run_id: L2 续跑 run_id（从 repair_checkpoint.json 恢复，
                 跳过 parse/localize，直接进入 patch 循环）。
-            verify_test_patch: 可选；SWE 等官方 test_patch，仅在 verify 时临时应用。
             run_id: 新任务的可选 ID；不能与严格恢复 resume_run_id 同时使用。
 
         Returns:
@@ -379,12 +366,11 @@ class Orchestrator(RepairPipelineMixin):
             phase_timeout_config=phase_timeouts,
             cancel_token=token,
             resume_checkpoint=checkpoint,
-            verify_test_patch=verify_test_patch or "",
         )
         self._set_collaboration_context(state)
         try:
             if token.is_cancelled and not resume_run_id:
-                state.node_timings["user_cancel"] = True
+                state.control.user_cancel = True
                 state.set_status("user_cancel", "cancelled_before_execution")
                 publish_recovery_outcome(
                     state,
@@ -442,9 +428,7 @@ class Orchestrator(RepairPipelineMixin):
                     mode=str(state.intent.get("mode", "repair")),
                     phase=str(state.phase),
                     evidence=bool(state.evidence or state.suspect_locations),
-                    read_before_write=bool(
-                        state.node_timings.get("allowed_edit") or state.suspect_locations
-                    ),
+                    read_before_write=bool(state.control.allowed_edit or state.suspect_locations),
                     control_mode=control_mode,
                     approved_tools=approved_tools,
                 )
@@ -889,7 +873,7 @@ class Orchestrator(RepairPipelineMixin):
                 current = coordinator.finish(
                     "recovery_required", error_code="repair_initialization_interrupted"
                 )
-                state.node_timings["coordination_status"] = current.status
+                state.control.coordination_status = current.status
             raise
         finally:
             # RepairPlanBinding starts its normal heartbeat before handoff.
@@ -1121,7 +1105,7 @@ class Orchestrator(RepairPipelineMixin):
                 coordinator.store.mark_recovery_required(
                     coordinator.lease, error_code="repair_worker_unconfirmed"
                 )
-                state.node_timings["coordination_status"] = "recovery_required"
+                state.control.coordination_status = "recovery_required"
                 state.set_status("recovery_required", "repair_worker_unconfirmed")
                 from src.repair.recovery_outcome import publish_recovery_outcome
 
@@ -1133,7 +1117,7 @@ class Orchestrator(RepairPipelineMixin):
                     emitter=self._progress_emitter(),
                 )
                 return False
-            return state.node_timings.get("coordination_status") != "recovery_required"
+            return state.control.coordination_status != "recovery_required"
         runtime = getattr(self, "_collaboration_runtime", None)
         if runtime is not None and phase_returned:
             try:
@@ -1142,7 +1126,7 @@ class Orchestrator(RepairPipelineMixin):
                 state.agent_errors["collaboration_cleanup"] = str(exc)[:500]
         report = binding.coordinator.cancel(finalize=finalize)
         state.node_timings["coordination_cancel"] = report.to_dict()
-        state.node_timings["coordination_status"] = report.status
+        state.control.coordination_status = report.status
         if not report.confirmed:
             state.set_status("recovery_required", "cleanup_or_write_unconfirmed")
         binding.publish_recovery(stage="cancel", reason_code=report.error_code)
@@ -1163,22 +1147,22 @@ class Orchestrator(RepairPipelineMixin):
                     self._cancel_run_resources(state, finalize=True)
                 elif str(getattr(state, "status", "") or "").lower() in {"failed", "error"}:
                     snapshot = coordinator.finish("failed", error_code="repair_failed")
-                    state.node_timings["coordination_status"] = snapshot.status
+                    state.control.coordination_status = snapshot.status
                 else:
                     snapshot = coordinator.finish("released")
-                    state.node_timings["coordination_status"] = snapshot.status
-                if state.node_timings.get("coordination_status") == "recovery_required":
+                    state.control.coordination_status = snapshot.status
+                if state.control.coordination_status == "recovery_required":
                     state.set_status("recovery_required", "cleanup_or_write_unconfirmed")
             except Exception as exc:
                 state.agent_errors.setdefault("coordination_finalize", str(exc)[:500])
-                state.node_timings["coordination_status"] = "recovery_required"
+                state.control.coordination_status = "recovery_required"
                 state.set_status("recovery_required", "coordination_finalize_unconfirmed")
             previous = state.recovery_outcome
             binding.publish_recovery(
                 stage=previous.get("stage", "resources"),
                 reason_code=previous.get("reason_code", ""),
             )
-        if state.node_timings.get("coordination_status") != "recovery_required":
+        if state.control.coordination_status != "recovery_required":
             self._maybe_leave_worktree(cancelled=False)
         elif ctx is not None and ctx.worktree_handle is not None:
             state.node_timings["worktree_recovery"] = ctx.worktree_handle.as_dict()
@@ -1205,7 +1189,7 @@ class Orchestrator(RepairPipelineMixin):
                     code=HarnessFailureCode.TIMEOUT,
                     evidence_refs=[f"trace:{state.repair_run_id}"],
                 )
-            elif status == "user_cancel" or state.node_timings.get("user_cancel"):
+            elif status == "user_cancel" or state.control.user_cancel:
                 target = HarnessStatus.CANCELLED
                 attribution = attribute_harness_failure(
                     code=HarnessFailureCode.CANCELLED,
@@ -1314,7 +1298,6 @@ class Orchestrator(RepairPipelineMixin):
 
     def _run_patcher(self, state: RepairState) -> tuple[list[CandidatePatch], dict]:
         """Run the sole patch path: governed tools mutate disk, Runtime snapshots the diff."""
-        import os
 
         plan = state.repair_plan
         self._merge_blackboard_for_patch(state)
@@ -1340,28 +1323,28 @@ class Orchestrator(RepairPipelineMixin):
         begin_patcher_attempt(state)
 
         surface = build_fail_surface(state, repo_root=self._repo_root)
-        bucket = str(state.node_timings.get("verify_bucket") or "")
+        bucket = str(state.control.verify_bucket or "")
         fail_block = build_fail_surface_prompt_block(surface, bucket=bucket)
         if fail_block:
             state.node_timings["fail_surface_target"] = surface.verify_target
             state.node_timings["fail_surface_nodeids"] = list(surface.nodeids)
             feedback = f"{fail_block}\n\n{feedback}".strip() if feedback else fail_block
 
-        structured_feedback = state.node_timings.get("structured_verify_feedback")
+        structured_feedback = state.control.structured_verify_feedback
         if not isinstance(structured_feedback, dict) and state.verification_result is not None:
             payload = build_verify_feedback_payload(
                 state,
                 repo_root=self._repo_root,
                 result=state.verification_result,
             )
-            state.node_timings["structured_verify_feedback"] = payload.to_dict()
+            state.control.structured_verify_feedback = payload.to_dict()
             structured_feedback = payload.to_dict()
         if isinstance(structured_feedback, dict):
             feedback_block = render_verify_feedback_block(structured_feedback)
             if feedback_block and feedback_block not in feedback:
                 feedback = f"{feedback_block}\n\n{feedback}".strip() if feedback else feedback_block
 
-        allowed = list(state.node_timings.get("allowed_edit") or [])
+        allowed = list(state.control.allowed_edit or [])
         runtime_bits = [
             "【repair runtime】read → apply_patch"
             "（*** Begin/End Patch，Update 须含 - 上下文）→ quick_test。",
@@ -1373,11 +1356,9 @@ class Orchestrator(RepairPipelineMixin):
         feedback = f"{block}\n\n{feedback}".strip() if feedback else block
 
         suspects_for_prompt = state.suspect_locations
-        raw_steps = (os.environ.get("FIXLOOP_PATCHER_MAX_STEPS") or "24").strip()
-        try:
-            patch_steps = max(10, int(raw_steps))
-        except ValueError:
-            patch_steps = 24
+        patch_steps = self.repair_config.patcher_max_steps
+        if self.repair_config.snapshot()["provenance"]["patcher_max_steps"] == "default":
+            patch_steps = self.patcher.config.max_steps
         depth_token = push_patcher_depth(self.patcher, patch_steps)
         state.node_timings["patch_steps"] = patch_steps
 
@@ -1457,7 +1438,7 @@ class Orchestrator(RepairPipelineMixin):
             if self._is_repair_cancelled():
                 return [], {"user_cancel": True, "edit_mode": "cancelled", "total_ms": 0}
             state.agent_errors["plan_runtime"] = str(exc)
-            state.node_timings["plan_blocked"] = True
+            state.control.plan_blocked = True
             return [], {
                 "total_ms": 0,
                 "model_call_ms": 0,
@@ -1473,20 +1454,11 @@ class Orchestrator(RepairPipelineMixin):
         tpl_meta: dict,
     ) -> tuple[list[CandidatePatch], dict]:
         """Agent loop：工具改盘 → 快照 diff 成 CandidatePatch（不再二次 apply）。"""
-        import os
-
         from src.repair.execution.edit_from_disk import patches_from_snapshot_diff
         from src.repair.failure_tags import check_patch_faithfulness
 
         t_start = time.time()
-        compact_enabled = (
-            os.environ.get("FIXLOOP_PATCHER_COMPACT") or "1"
-        ).strip().lower() not in (
-            "0",
-            "false",
-            "off",
-            "no",
-        )
+        compact_enabled = self.repair_config.patcher_compact
         if compact_enabled:
             self._compact_patcher_history(state)
         before = self._snapshot_repo()
@@ -1505,7 +1477,7 @@ class Orchestrator(RepairPipelineMixin):
             self._plan_binding.exploration.drain(cancel=True)
         context = self.patcher.tool_context
         if context.execution_uncertain or context.sandbox_uncertain:
-            state.node_timings["coordination_status"] = "recovery_required"
+            state.control.coordination_status = "recovery_required"
             state.set_status("recovery_required", "patcher_write_unconfirmed")
             total_ms = int((time.time() - t_start) * 1000)
             return [], {
@@ -1524,7 +1496,7 @@ class Orchestrator(RepairPipelineMixin):
             str(item.get("tool") or item.get("tool_name") or "") in write_tools
             for item in observations
         )
-        state.node_timings["patcher_write_attempted"] = bool(write_attempted)
+        state.control.patcher_write_attempted = bool(write_attempted)
         lock = getattr(self, "_edit_lock", None)
         if lock is not None:
             state.node_timings["apply_patch_ok_count"] = int(
@@ -1559,9 +1531,9 @@ class Orchestrator(RepairPipelineMixin):
                 or getattr(lock, "apply_path_reject_count", 0)
                 or getattr(lock, "edit_lint_reject_count", 0)
             ):
-                state.node_timings["patcher_write_rejected"] = True
+                state.control.patcher_write_rejected = True
             else:
-                state.node_timings["patcher_export_failed"] = True
+                state.control.patcher_export_failed = True
         patches, rejected = check_patch_faithfulness(
             patches, state, soft_keep=False, repo_root=str(self._repo_root or "")
         )
@@ -1674,14 +1646,10 @@ class Orchestrator(RepairPipelineMixin):
     def _run_verifier_impl(self, state: RepairState) -> "VerificationResult":
         """Docker 沙箱或本地 pytest 验证（不走 LLM Agent loop）。"""
         from src.collaboration.isolation import role_projection
-        from src.repair.verification.verify_test_patch import VerifyTestPatchOverlay
 
         state.node_timings["verifier_input_projection"] = role_projection(state, "verifier")
 
         cancel_token = self._repair_ctx.cancel_token if self._repair_ctx else None
-        test_patch = ""
-        if self._repair_ctx is not None:
-            test_patch = getattr(self._repair_ctx, "verify_test_patch", "") or ""
         language = "python"
         if state.repair_plan is not None and state.repair_plan.language:
             language = state.repair_plan.language
@@ -1707,19 +1675,7 @@ class Orchestrator(RepairPipelineMixin):
             record_verify_timings(state, run)
             return run.result
 
-        try:
-            with VerifyTestPatchOverlay(self._repo_root, test_patch) as overlay:
-                if overlay.applied:
-                    state.node_timings["verify_test_patch_applied"] = True
-                return self._run_verifier_python(state, cancel_token=cancel_token)
-        except Exception as exc:
-            log.warning("[verifier] test_patch overlay failed: %s", exc)
-            return VerificationResult(
-                all_passed=False,
-                total_tests=0,
-                failed=1,
-                failure_logs=[f"verify_config: test_patch_apply_failed: {exc}"],
-            )
+        return self._run_verifier_python(state, cancel_token=cancel_token)
 
     def _run_verifier_python(
         self, state: RepairState, *, cancel_token=None
@@ -1795,92 +1751,23 @@ class Orchestrator(RepairPipelineMixin):
         return VerificationResult(all_passed=False, failure_logs=["verifier 未配置"])
 
     def _pick_test_path(self, state: RepairState) -> str:
-        """从失败面 / Retriever / FAIL_TO_PASS / test_patch 提取 pytest 可收集 target。"""
-        from src.benchmark.swebench.convert import (
-            extract_fail_to_pass_hints,
-            normalize_related_test_refs,
-            resolve_test_ref_for_pytest,
-        )
+        """Prefer actual failure targets, then public repository test references."""
         from src.repair.verification.fail_surface import preferred_verify_targets
-        from src.repair.verification.verify_test_patch import extract_targets_from_test_patch
+        from src.repair.verification.test_references import normalize_related_test_refs
 
-        candidates: list[str] = []
-        # 失败面优先：上一轮 FAILED nodeid
-        candidates.extend(preferred_verify_targets(state))
-        ctx = state.retrieved_context
-        if ctx and ctx.related_tests:
-            for item in ctx.related_tests:
-                if isinstance(item, str) and item.strip():
-                    candidates.append(item.strip())
+        candidates = list(preferred_verify_targets(state))
+        context = state.retrieved_context
+        if context is not None:
+            for item in context.related_tests or []:
+                if isinstance(item, str):
+                    candidates.append(item)
                 elif isinstance(item, dict):
                     for key in ("nodeid", "name", "path"):
-                        value = item.get(key, "")
-                        if value:
-                            candidates.append(str(value).strip())
+                        if value := item.get(key):
+                            candidates.append(str(value))
                             break
-        try:
-            candidates.extend(extract_fail_to_pass_hints(state.issue_input or ""))
-        except Exception:
-            pass
-        test_patch = ""
-        repair_ctx = getattr(self, "_repair_ctx", None)
-        if repair_ctx is not None:
-            test_patch = getattr(repair_ctx, "verify_test_patch", "") or ""
-        try:
-            candidates.extend(extract_targets_from_test_patch(test_patch))
-        except Exception:
-            pass
-
-        # 去重保序
-        deduped: list[str] = []
-        seen: set[str] = set()
-        for c in candidates:
-            key = c.strip().replace("\\", "/")
-            if key and key not in seen:
-                seen.add(key)
-                deduped.append(key)
-        candidates = deduped
-
-        repo_root = getattr(self, "_repo_root", "") or ""
-        normalized = normalize_related_test_refs(candidates, repo_root or None)
-        if repo_root:
-            root = Path(repo_root)
-            for ref in normalized:
-                file_part = ref.split("::", 1)[0]
-                if file_part and (root / file_part).is_file():
-                    return ref
-            # bare name：在仓内搜 def <name>
-            for ref in list(candidates) + list(normalized):
-                name = ref.strip()
-                if "::" in name or "/" in name or "\\" in name or not name.isidentifier():
-                    continue
-                if not name.startswith("test_"):
-                    continue
-                hit = self._find_test_def(root, name)
-                if hit:
-                    return hit
-        if normalized:
-            return normalized[0]
-        if candidates:
-            return resolve_test_ref_for_pytest(candidates[0], repo_root or None)
-        return ""
-
-    def _find_test_def(self, root: Path, test_name: str) -> str:
-        """裸 test 名 → 第一个匹配 ``def test_name`` 的 pytest nodeid。"""
-        needle = f"def {test_name}"
-        try:
-            for path in root.rglob("test_*.py"):
-                try:
-                    text = path.read_text(encoding="utf-8", errors="ignore")
-                except OSError:
-                    continue
-                if needle not in text:
-                    continue
-                rel = str(path.relative_to(root)).replace("\\", "/")
-                return f"{rel}::{test_name}"
-        except OSError:
-            return ""
-        return ""
+        targets = normalize_related_test_refs(candidates, self._repo_root or None)
+        return targets[0] if targets else ""
 
     def _revert_changes(self, state: RepairState):
         """回滚 Patcher 修改的文件（git checkout）。"""
@@ -1973,10 +1860,10 @@ class Orchestrator(RepairPipelineMixin):
 
         diagnosis = diagnose_verification(result)
         if state is not None:
-            state.node_timings["verify_bucket"] = diagnosis.bucket.value
+            state.control.verify_bucket = diagnosis.bucket.value
             state.node_timings["verify_bucket_reason"] = diagnosis.reason
             if diagnosis.failed_nodeids:
-                state.node_timings["verify_failed_nodeids"] = list(diagnosis.failed_nodeids)
+                state.control.verify_failed_nodeids = list(diagnosis.failed_nodeids)
             from src.repair.verification.failure_decision import (
                 apply_failure_decision,
                 decide_verification_failure,
@@ -2071,13 +1958,6 @@ class Orchestrator(RepairPipelineMixin):
                     _MAX_FAILURE_TARGET_CHARS,
                 )
             )
-
-        constraint_inputs = list(result.failure_logs)
-        if state is not None and state.issue_input:
-            constraint_inputs.append(state.issue_input)
-        constraint_hints = _repair_constraint_hints(constraint_inputs)
-        if constraint_hints:
-            sections.append(_FeedbackSection("修复约束", constraint_hints, 26, 700))
 
         # 3. failure logs
         if result.failure_logs:

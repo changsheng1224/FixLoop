@@ -9,6 +9,7 @@ from src.repair.verification.termination import (
     has_actionable_patch,
     has_repair_timeout,
     introduced_regression,
+    resolve_terminal_status,
 )
 from src.state import RepairState
 
@@ -23,6 +24,8 @@ __all__ = [
 
 
 class FailureTag(StrEnum):
+    USER_CANCEL = "user_cancel"
+    RECOVERY_REQUIRED = "recovery_required"
     PARSE_FAIL = "parse_fail"
     APPLY_FAILED = "apply_failed"
     WRONG_FILE = "wrong_file"
@@ -69,7 +72,7 @@ def _repo_root_hint(state: RepairState) -> str:
 
 
 def allowed_patch_files(state: RepairState) -> set[str]:
-    """补丁允许落盘的文件集合（suspect + plan + related_tests + F2P/test_patch）。
+    """补丁允许落盘的文件集合（suspect + plan + related_tests + 已确认扩展）。
 
     与 bonus §24 faithfulness（patch ⊆ allowed）共用；勿重复实现第二套集合逻辑。
     """
@@ -90,28 +93,6 @@ def allowed_patch_files(state: RepairState) -> set[str]:
         if extra:
             allowed.add(_normalize_path(str(extra)))
 
-    root = _repo_root_hint(state)
-    test_patch = str(state.node_timings.get("verify_test_patch") or "")
-    if test_patch and root:
-        try:
-            from src.repair.localization.localize_test_patch import suspects_from_test_patch
-
-            for s in suspects_from_test_patch(test_patch, root, max_keep=16):
-                if s.file_path:
-                    allowed.add(_normalize_path(s.file_path))
-        except Exception:
-            pass
-    if state.issue_input and root:
-        try:
-            from src.repair.localization.localize_fastpath import suspects_from_fail_to_pass
-
-            for s in suspects_from_fail_to_pass(
-                state.issue_input, root, max_keep=8
-            ):
-                if s.file_path:
-                    allowed.add(_normalize_path(s.file_path))
-        except Exception:
-            pass
     return allowed
 
 
@@ -130,9 +111,7 @@ def promote_paths_to_suspects(
     if not root:
         return []
     existing = {
-        _normalize_path(s.file_path)
-        for s in (state.suspect_locations or [])
-        if s.file_path
+        _normalize_path(s.file_path) for s in (state.suspect_locations or []) if s.file_path
     }
     extras = list(state.node_timings.get("allowed_patch_extra") or [])
     promoted: list[str] = []
@@ -167,15 +146,15 @@ def promote_paths_to_suspects(
 def _is_apply_fail(state: RepairState) -> bool:
     if state.agent_errors.get("patcher_apply"):
         return True
-    return bool(state.node_timings.get("patcher_apply_failed"))
+    return bool(state.control.patcher_apply_failed)
 
 
 def _is_parse_fail(state: RepairState) -> bool:
     from src.repair.execution.patcher_contract import PATCHER_TERMINAL_STATUSES
 
-    if state.node_timings.get("patcher_terminal_status") in PATCHER_TERMINAL_STATUSES:
+    if state.control.patcher_terminal_status in PATCHER_TERMINAL_STATUSES:
         return False
-    if state.node_timings.get("patcher_parse_failed"):
+    if state.control.patcher_parse_failed:
         return True
     if state.candidate_patches:
         return False
@@ -203,6 +182,9 @@ def _is_wrong_file(state: RepairState) -> bool:
 
 def classify_failure_tags(state: RepairState) -> list[FailureTag]:
     """按优先级推断主失败 tag；成功修复返回空列表。"""
+    status = resolve_terminal_status(state)
+    if status in {RepairTerminalStatus.USER_CANCEL, RepairTerminalStatus.RECOVERY_REQUIRED}:
+        return [FailureTag(status.value)]
     if has_actionable_patch(state):
         return []
     if has_repair_timeout(state):
@@ -213,17 +195,17 @@ def classify_failure_tags(state: RepairState) -> list[FailureTag]:
         return [FailureTag.APPLY_FAILED]
     from src.repair.execution.patcher_contract import PATCHER_TERMINAL_STATUSES
 
-    if state.node_timings.get("patcher_terminal_status") in PATCHER_TERMINAL_STATUSES:
+    if state.control.patcher_terminal_status in PATCHER_TERMINAL_STATUSES:
         return [FailureTag.NO_PROGRESS]
     # E17: 空收集/环境失败优先于笼统 parse_fail（有候选但 verify 配置坏时）
     if _is_verify_config_failure(state) and state.candidate_patches:
         return [FailureTag.VERIFY_CONFIG]
-    stop_reason = str(state.node_timings.get("stop_loss") or "")
+    stop_reason = str(state.control.stop_loss or "")
     if stop_reason == "env" or (
-        state.node_timings.get("verify_env_early_stop") and _is_verify_config_failure(state)
+        state.control.verify_env_early_stop and _is_verify_config_failure(state)
     ):
         return [FailureTag.VERIFY_CONFIG]
-    if stop_reason or state.node_timings.get("stop_loss_early"):
+    if stop_reason or state.control.stop_loss_early:
         if stop_reason in ("apply_thrash",) or _is_apply_fail(state):
             return [FailureTag.APPLY_FAILED]
         if stop_reason in ("parse_thrash",) or _is_parse_fail(state):

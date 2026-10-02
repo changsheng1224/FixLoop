@@ -12,6 +12,7 @@ from src.repair.l2_ask_mixin import L2AskMixin
 from src.repair.phase_clock import PhaseTimeoutError, RepairPhaseClock
 from src.repair.prompt_router import repair_plan_intent_snapshot
 from src.repair.run_context import RepairRunContext
+from src.repair.stop_loss import StopLossTracker
 from src.repair.timing_schema import (
     finalize_phases,
     set_phase_ms,
@@ -49,14 +50,14 @@ def _record_pytest_exit(state: RepairState, repo_root: str, key: str, sandbox_co
         from src.repair.verification.verify import BwrapVerifyStrategy
 
         run = BwrapVerifyStrategy(sandbox_context).run(repo_root)
-        state.node_timings[key] = run.internal.get("pytest_exit_code")
+        setattr(state.control, key, run.internal.get("pytest_exit_code"))
         state.node_timings[key + "_category"] = run.internal["category"]
         state.node_timings[key + "_receipt_id"] = run.internal["receipt_id"]
         if run.internal["category"] not in {"passed", "failed"}:
             raise RuntimeError("sandbox pytest unavailable: " + run.internal["category"])
         return
     code, _ = run_pytest(Path(repo_root))
-    state.node_timings[key] = code
+    setattr(state.control, key, code)
 
 
 class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
@@ -80,7 +81,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         if ctx.cancel_token is not None:
             ctx.cancel_token.cancel("timeout")
         if not self._cancel_run_resources(state):
-            state.node_timings["phase_timeout"] = exc.phase
+            state.control.phase_timeout = exc.phase
             state.agent_errors["orchestrator"] = str(exc)
             return
         # E14 / P1：超时前尽量从磁盘 salvage 非空 diff，避免回滚成 empty_model_patch
@@ -96,7 +97,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         else:
             state.node_timings["phase_timeout_kept_patches"] = True
         state.set_status(RepairTerminalStatus.TIMEOUT, "phase_timeout")
-        state.node_timings["phase_timeout"] = exc.phase
+        state.control.phase_timeout = exc.phase
         if ctx.phase_timeout_config is not None:
             state.node_timings["phase_timeout_budgets"] = ctx.phase_timeout_config.budget_dict()
         state.node_timings["phase_timeout_consumed_s"] = exc.consumed_s
@@ -147,7 +148,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             return em
         from src.repair.progress import progress_emitter_from_env
 
-        em = progress_emitter_from_env()
+        em = progress_emitter_from_env(config=self.repair_config)
         self._progress = em
         return em
 
@@ -204,17 +205,6 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         context = state.retrieved_context or RetrievedContext()
         state.retrieved_context = context
 
-        from src.repair.execution.lock_reflect import f2p_impl_paths, merge_f2p_paths_first
-        from src.repair.localization.fail_to_pass_hints import extract_fail_to_pass_hints
-
-        f2p = extract_fail_to_pass_hints(state.issue_input or "")
-        if f2p:
-            state.node_timings["f2p_hints"] = list(f2p)
-
-        f2p_impls = f2p_impl_paths(state.issue_input or "", self._repo_root, max_keep=8)
-        state.node_timings["f2p_impl_paths"] = list(f2p_impls)
-        state.node_timings["f2p_seeded"] = bool(f2p_impls)
-
         allowed: list[str] = []
         for s in state.suspect_locations or []:
             fp = (s.file_path or "").replace("\\", "/")
@@ -230,10 +220,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     continue
                 allowed.append(fp.replace("\\", "/"))
 
-        # F2P 置顶进锁；其余嫌疑不按目录硬过滤（交给模型）
-        allowed_unique = merge_f2p_paths_first(f2p_impls, allowed, max_keep=8)
-        if f2p and not f2p_impls:
-            state.node_timings["primary_seed_miss_f2p"] = True
+        allowed_unique = list(dict.fromkeys(allowed))[:8]
 
         lock = EditLockState(
             repo_root=self._repo_root,
@@ -248,7 +235,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         lock.write_serial = False
         self._edit_lock = lock
         set_active_edit_lock(self._repo_root, lock)
-        state.node_timings["allowed_edit"] = sorted(lock.allowed_edit)
+        state.control.allowed_edit = sorted(lock.allowed_edit)
         state.node_timings["unread_write_reject_count"] = 0
         state.node_timings["apply_path_reject_count"] = 0
 
@@ -264,15 +251,12 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
         em = self._progress_emitter()
         empty_note = " empty_lock→expand_lock" if not lock.allowed_edit else ""
-        miss = " miss_f2p" if state.node_timings.get("primary_seed_miss_f2p") else ""
         seed_payload = {
             "summary": (
                 f"allowed_edit={len(lock.allowed_edit)} "
-                f"suspects={len(state.suspect_locations or [])}{empty_note}{miss}"
+                f"suspects={len(state.suspect_locations or [])}{empty_note}"
             ),
             "allowed_edit": sorted(lock.allowed_edit),
-            "f2p": list(f2p)[:5],
-            "f2p_impls": list(f2p_impls)[:5],
         }
         em.emit("seed_ready", **seed_payload)
         self._emit_repair_span(
@@ -280,7 +264,6 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             {
                 "summary": seed_payload["summary"],
                 "allowed_edit_n": len(lock.allowed_edit),
-                "f2p_n": len(f2p),
             },
         )
         log.info(
@@ -300,8 +283,8 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         lock = getattr(self, "_edit_lock", None)
         if lock is not None:
             allowed = set(lock.allowed_edit)
-        elif state.node_timings.get("allowed_edit"):
-            allowed = set(state.node_timings.get("allowed_edit") or [])
+        elif state.control.allowed_edit:
+            allowed = set(state.control.allowed_edit or [])
 
         self._emit_repair_span("critic_started", {"summary": f"mode={mode}"})
         state.node_timings["critic_input_projection"] = role_projection(state, "critic")
@@ -350,16 +333,16 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         """规范空输出归因，避免把明确终态误报成 JSON 解析失败。"""
         from src.repair.execution.patcher_contract import PATCHER_TERMINAL_STATUSES
 
-        terminal = str(state.node_timings.get("patcher_terminal_status") or "")
+        terminal = str(state.control.patcher_terminal_status or "")
         explicit = terminal in PATCHER_TERMINAL_STATUSES
         if (
             not state.candidate_patches
             and not state.agent_errors.get("patcher_apply")
             and not explicit
         ):
-            state.node_timings["patcher_parse_failed"] = True
+            state.control.patcher_parse_failed = True
         elif explicit:
-            state.node_timings.pop("patcher_parse_failed", None)
+            state.control.reset("patcher_parse_failed")
             state.agent_errors.pop("patcher_parse", None)
         return terminal
 
@@ -367,10 +350,10 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         """记录空补丁并决定是否重试；True 表示继续下一轮。"""
         from src.repair.stop_loss import apply_stop_loss
 
-        if state.node_timings.get("coordination_status") == "recovery_required":
+        if state.control.coordination_status == "recovery_required":
             state.set_status("recovery_required", "cleanup_or_write_unconfirmed")
             return False
-        if state.node_timings.get("plan_blocked"):
+        if state.control.plan_blocked:
             state.set_status(RepairTerminalStatus.FAILED, "plan_runtime_blocked")
             self._checkpoint_progress(state)
             return False
@@ -384,7 +367,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
         apply_err = state.agent_errors.get("patcher_apply")
         if apply_err:
-            state.node_timings["patcher_apply_failed"] = True
+            state.control.patcher_apply_failed = True
             state.feedback = (
                 "补丁 JSON 解析成功但未能写入文件。"
                 f" 原因: {apply_err}。"
@@ -400,12 +383,12 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             )
         else:
             state.agent_errors.pop("patcher_apply", None)
-            state.node_timings.pop("patcher_apply_failed", None)
+            state.control.reset("patcher_apply_failed")
             state.feedback = "补丁生成失败；请基于现有证据直接生成并应用补丁。"
 
         self._write_feedback_to_blackboard(state.feedback)
         sl = stop_loss.record_empty_patch(apply_failed=bool(apply_err))
-        state.node_timings["stop_loss_snapshot"] = stop_loss.snapshot()
+        state.control.stop_loss_snapshot = stop_loss.snapshot()
         state.retry_count += 1
         if sl.stop:
             apply_stop_loss(state, sl)
@@ -440,12 +423,12 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             )
             return state
         except CancelledError:
-            state.node_timings["user_cancel"] = True
+            state.control.user_cancel = True
             state.set_status("user_cancel", "persisted_cancel_completed")
             self._end_repair_trace(state)
             return state
         except ResumeRecoveryRequiredError as exc:
-            state.node_timings["coordination_status"] = "recovery_required"
+            state.control.coordination_status = "recovery_required"
             state.agent_errors["plan_runtime"] = str(exc)
             state.set_status("recovery_required", "cleanup_or_write_unconfirmed")
             previous = state.recovery_outcome
@@ -463,31 +446,39 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             return state
         finally:
             binding = getattr(self, "_plan_binding", None)
-            if binding is not None:
-                binding.close()
+            try:
+                if binding is not None:
+                    binding.close()
+            finally:
                 self._plan_binding = None
+                self._release_repair_resources()
+
+    def _release_repair_resources(self) -> None:
+        """Release only this orchestrator's edit lock, including exceptional exits."""
+        from src.repair.execution.edit_lock import clear_active_edit_lock, get_active_edit_lock
+
+        lock = getattr(self, "_edit_lock", None)
+        try:
+            if lock is not None and get_active_edit_lock(lock.repo_root) is lock:
+                clear_active_edit_lock(lock.repo_root)
+        finally:
+            self._edit_lock = None
+            emitter = getattr(self, "_progress", None)
+            if emitter is not None:
+                emitter.stop_heartbeat()
 
     def _repair_impl_with_plan(
         self,
         state: RepairState,
         initial_snapshot: dict | None = None,
     ) -> RepairState:
-        """修复流水线主体（可被 repair() 超时包装）。
-
-        支持 --resume-repair：若有 resume_run_id 且 checkpoint 有效，
-        跳过 parse/localize，从 patch 循环重入。
-        """
+        """New and resumed runs share startup, attempt policy and finalization."""
         if initial_snapshot is None:
             initial_snapshot = self._snapshot_repo()
-
-        # Explicit resume was validated before owner/trace/task mutation.
-        cp = self._active_repair_ctx().resume_checkpoint
-        if cp is not None:
-            return self._repair_from_checkpoint(state, initial_snapshot, cp, state.repair_run_id)
-
-        max_retries = state.max_retries
-        issue = state.issue_input
         ctx = self._active_repair_ctx()
+        checkpoint = ctx.resume_checkpoint
+        if checkpoint is not None:
+            self._restore_state_from_repair_checkpoint(state, checkpoint)
 
         t_start = time.time()
         ctx.repair_started_at = t_start
@@ -496,26 +487,17 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         if ctx.worktree_initial_snapshot:
             initial_snapshot = ctx.worktree_initial_snapshot
         self._init_repair_blackboard()
-        log.info("Orchestrator 开始")
+        if checkpoint is not None:
+            self._restore_blackboard_snapshot(state.blackboard_snapshot)
+            log.info("[resume] 从 %s 恢复，跳过 parse/localize", state.repair_run_id)
         state.node_timings["repair_mode"] = "patcher_primary"
-        em0 = self._progress_emitter()
-        em0.emit(
-            "repair_started",
-            summary=f"mode={state.node_timings['repair_mode']}",
-        )
-        import os
-
-        if (os.environ.get("FIXLOOP_PROGRESS_HEARTBEAT") or "1").strip().lower() not in (
-            "0",
-            "false",
-            "off",
-            "no",
-        ):
-            try:
-                interval = float(os.environ.get("FIXLOOP_PROGRESS_HEARTBEAT_S") or "60")
-            except ValueError:
-                interval = 60.0
-            em0.start_heartbeat(interval_s=max(5.0, interval), summary="repair_alive")
+        state.node_timings["repair_config"] = self.repair_config.snapshot()
+        emitter = self._progress_emitter()
+        emitter.emit("repair_started", summary="mode=patcher_primary")
+        if self.repair_config.progress_heartbeat:
+            emitter.start_heartbeat(
+                interval_s=self.repair_config.progress_heartbeat_s, summary="repair_alive"
+            )
 
         cancelled = False
         phase_timed_out = False
@@ -524,552 +506,347 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             if self._abort_repair_if_cancelled(state):
                 cancelled = True
             else:
-                t0 = time.time()
-                state.repair_plan = self._parse_issue(issue)
-                # Planner Agent: LLM 单次 JSON → 覆盖规则解析结果
-                # 跳过 FakeClient（测试用）以避免输出序列耗尽
-                parse_ms = int((time.time() - t0) * 1000)
-                if state.repair_plan and state.repair_plan.language != "python":
-                    log.info(
-                        "检测到 language=%s（%s），Verifier 将使用语言感知静态验证",
-                        state.repair_plan.language,
-                        state.repair_plan.language_source,
-                    )
-                t_skill = time.time()
-                from src.skills.resolve import resolve_skill_for_plan, skill_matched_trace_payload
-
-                matched = None
-                skill_fallback = None
-                if state.repair_plan:
-                    matched, skill_fallback = resolve_skill_for_plan(
-                        state.repair_plan,
-                        issue,
-                        language=state.repair_plan.language,
-                        match_skill_fn=self._match_skill,
-                    )
-                skill_ms = int((time.time() - t_skill) * 1000)
-                tracer = ctx.repair_tracer
-                if state.repair_plan and tracer is not None:
-                    tracer.emit(
-                        "orchestrator",
-                        "prompt_routing",
-                        repair_plan_intent_snapshot(state.repair_plan),
-                    )
-                    tracer.emit(
-                        "orchestrator",
-                        "skill_matched",
-                        skill_matched_trace_payload(matched, skill_fallback)
-                        if skill_fallback is not None
-                        else {"matched_skill": None},
-                    )
-                    # 可执行 Skill Router（与策略 YAML Skill 并存；失败不影响主路径）
-                    try:
-                        from src.skills.decision import build_canonical_skill_decision
-                        from src.skills.router import SkillRouter
-
-                        decision = SkillRouter().route(issue)
-                        tracer.emit("orchestrator", "skill_routed", decision.to_trace_payload())
-                        canonical = build_canonical_skill_decision(matched, decision)
-                        state.repair_plan.skill.canonical_decision = canonical.to_dict()
-                        tracer.emit("orchestrator", "skill_decided", canonical.to_dict())
-                        if canonical.fallback:
-                            tracer.emit("orchestrator", "skill_fallback", canonical.to_dict())
-                    except Exception:
-                        pass
-                state.node_timings["parse_issue_ms"] = parse_ms
-                state.node_timings["skill_resolve_ms"] = skill_ms
-                log.info("parse_issue: %dms, skill_resolve: %dms", parse_ms, skill_ms)
-
-                # Skill suggested_tools only reorder prompt hints; ToolSpec owns access.
-
-                # 读取相似修复先例（repair precedent 读写一体）
-                if state.repair_plan and state.repair_plan.issue_type:
-                    from src.repair.precedent import RepairPrecedentStore
-
-                    store = RepairPrecedentStore(self._repo_root)
-                    similar = store.load_similar(
-                        state.repair_plan.issue_type,
-                        query="",
-                        use_semantic=False,
-                    )
-                    if similar:
-                        state.node_timings["similar_fixes"] = similar
-                    state.node_timings["precedent_semantic_skipped"] = True
-
-                skip_patch_loop = False
-                self._seed_patcher_primary(state)
-
-                if self._abort_repair_if_cancelled(state):
-                    cancelled = True
-                elif not skip_patch_loop and self._verification_enabled():
-                    _record_pytest_exit(
-                        state,
-                        self._repo_root,
-                        "baseline_pytest_code",
-                        getattr(self, "_sandbox_context", None),
-                    )
-
-                consecutive_env_fails = 0
-                stop_loss = getattr(self, "_stop_loss", None)
-                if stop_loss is None:
-                    from src.repair.stop_loss import StopLossTracker
-
-                    stop_loss = StopLossTracker()
-                    self._stop_loss = stop_loss
-                while not skip_patch_loop and not cancelled and state.retry_count < max_retries:
-                    if self._abort_repair_if_cancelled(state):
-                        cancelled = True
-                        break
-
-                    # Critic 与 Verifier 都可能拒绝已落盘补丁；复用 repair 起始快照，
-                    # 避免在大型仓库的每次重试前重新遍历全部文件。
-                    repo_snapshot = initial_snapshot
-                    log.info("Patcher 开始 (retry=%d)...", state.retry_count)
-                    self._progress_emitter().emit(
-                        "patcher_turn",
-                        summary=f"retry={state.retry_count}",
-                    )
-
-                    # 冷却轮：连续相同失败 → 降低 temperature（pipeline only）
-                    self._on_collaboration_phase(state, "patch", "patch attempt")
-                    if phase_clock is not None:
-                        phase_clock.ensure("patch")
-                    state.candidate_patches, patch_timing = self._run_patcher(state)
-
-                    if phase_clock is not None:
-                        phase_clock.consume("patch", patch_timing["total_ms"])
-                    if patch_timing.get("user_cancel") or self._abort_repair_if_cancelled(state):
-                        cancelled = True
-                        break
-
-                    set_phase_ms(
-                        state.node_timings,
-                        "patch",
-                        patch_timing["total_ms"],
-                        internal={
-                            "model_call_ms": patch_timing["model_call_ms"],
-                            "parse_apply_ms": patch_timing["parse_apply_ms"],
-                        },
-                    )
-                    ms = patch_timing["total_ms"]
-                    n = len(state.candidate_patches)
-                    log.info("Patcher 完成: %dms, %d个补丁", ms, n)
-
-                    if not state.candidate_patches:
-                        if self._handle_empty_patch(state, stop_loss):
-                            continue
-                        break
-
-                    # Critic 必须先于 skip-verify 分支；否则未验证运行会绕过廉价质量闸。
-                    if self._run_critic_gate(state):
-                        self._restore_repo_snapshot(repo_snapshot)
-                        state.candidate_patches = []
-                        state.retry_count += 1
-                        self._checkpoint_progress(state)
-                        continue
-
-                    if not self._verification_enabled():
-                        mark_pending_verify(state)
-                        break
-
-                    # ── AST 语义等价检查（V1.5-Bonus9）──
-                    # 仅检测函数/类签名变更（语法错误不算 drift）
-                    semantic_drift = False
-                    for patch in state.candidate_patches:
-                        try:
-                            from src.tools.ast_parser import check_semantic_equivalence
-
-                            result = check_semantic_equivalence(
-                                patch.original_lines,
-                                patch.patched_lines,
-                            )
-                            detail = result.get("detail", "")
-                            # 跳过 syntax error（非签名级变更，由 verifier 最终裁决）
-                            if result["status"] == "drift" and "syntax" not in detail:
-                                state.agent_errors["semantic_drift"] = detail
-                                semantic_drift = True
-                                tracer = ctx.repair_tracer
-                                if tracer:
-                                    tracer.emit(
-                                        "orchestrator",
-                                        "semantic_check",
-                                        {
-                                            "status": "drift",
-                                            "detail": detail,
-                                            "file": patch.file_path,
-                                        },
-                                    )
-                                log.warning("[semantic] drift: %s → %s", patch.file_path, detail)
-                                break
-                        except Exception:
-                            pass
-
-                    if semantic_drift:
-                        state.feedback = (
-                            f"AST 语义漂移检测拒绝补丁: {state.agent_errors['semantic_drift']}。"
-                            "补丁不得删除或新增函数/类定义。"
-                        )
-                        self._restore_repo_snapshot(repo_snapshot)
-                        state.candidate_patches = []
-                        state.retry_count += 1
-                        self._checkpoint_progress(state)
-                        continue
-
-                    log.info("Verifier 开始...")
-                    self._progress_emitter().emit(
-                        "verify_progress", summary=f"start retry={state.retry_count}"
-                    )
-                    if self._abort_repair_if_cancelled(state):
-                        cancelled = True
-                        break
-                    self._on_collaboration_phase(state, "verify", "verification attempt")
-                    if phase_clock is not None:
-                        phase_clock.ensure("verify")
-                    t0 = time.time()
-                    state.verification_result = self._run_verifier(state)
-                    if self._abort_repair_if_cancelled(state):
-                        cancelled = True
-                        break
-                    ms = int((time.time() - t0) * 1000)
-                    if phase_clock is not None:
-                        phase_clock.consume("verify", ms)
-                    self._record_l2_synthetic_ask(
-                        state,
-                        agent_name="verifier",
-                        phase="verify",
-                        attempt=state.retry_count,
-                        elapsed_ms=ms,
-                        stop_reason="verify_done",
-                    )
-                    set_phase_ms(state.node_timings, "verify", ms)
-                    vr = state.verification_result
-                    self._progress_emitter().emit(
-                        "verify_progress",
-                        summary=(
-                            f"done ms={ms} passed={getattr(vr, 'all_passed', None)} "
-                            f"failed={getattr(vr, 'failed', None)}"
-                        ),
-                    )
-                    log.info("Verifier 完成: %dms", ms)
-
-                    if state.verification_result.all_passed:
-                        state.set_status(RepairTerminalStatus.FIXED, "verification_passed")
-                        cooldown = getattr(self, "_verify_cooldown", None)
-                        if cooldown is not None:
-                            cooldown.record_success()
-                        break
-
-                    _record_pytest_exit(
-                        state,
-                        self._repo_root,
-                        "post_patch_pytest_code",
-                        getattr(self, "_sandbox_context", None),
-                    )
-
-                    if repo_snapshot is not None:
-                        self._restore_repo_snapshot(repo_snapshot)
-                    else:
-                        self._revert_changes(state)
-
-                    from src.repair.failure_ledger import (
-                        apply_ledger_to_state,
-                        record_verify_into_ledger,
-                    )
-                    from src.repair.stop_loss import apply_stop_loss
-                    from src.repair.verification.termination import introduced_regression
-                    from src.repair.verification.verify_diagnose import (
-                        diagnose_verification,
-                        enrich_related_tests_from_diagnosis,
-                    )
-
-                    diag = diagnose_verification(state.verification_result)
-                    enrich_related_tests_from_diagnosis(state, diag)
-                    is_reg = introduced_regression(state)
-                    ledger = record_verify_into_ledger(
-                        state,
-                        result=state.verification_result,
-                        bucket=diag.bucket.value,
-                        is_regression=is_reg,
-                    )
-                    apply_ledger_to_state(state, ledger)
-
-                    state.feedback = self._build_feedback(
-                        state.verification_result,
-                        state=state,
-                    )
-                    self._write_feedback_to_blackboard(state.feedback)
-                    sl = stop_loss.record_verify_failure(
-                        state.verification_result,
-                        state.candidate_patches,
-                    )
-                    state.node_timings["stop_loss_snapshot"] = stop_loss.snapshot()
-                    if sl.reason == "no_progress" and not sl.stop:
-                        state.node_timings["no_progress_warning"] = dict(sl.meta or {})
-                        state.agent_errors["no_progress"] = sl.hint
-                        warning = f"[无进展]\n{sl.hint}"
-                        state.feedback = (
-                            f"{warning}\n\n{state.feedback}".strip() if state.feedback else warning
-                        )
-                        self._write_feedback_to_blackboard(state.feedback)
-                    if diag.bucket.value == "env":
-                        consecutive_env_fails += 1
-                    else:
-                        consecutive_env_fails = 0
-                    state.node_timings["consecutive_env_fails"] = consecutive_env_fails
-                    state.retry_count += 1
-                    if sl.stop:
-                        apply_stop_loss(state, sl)
-                        if sl.reason == "env":
-                            state.node_timings["verify_env_early_stop"] = True
-                            state.agent_errors["verify_env"] = sl.hint
-                        self._write_feedback_to_blackboard(state.feedback)
-                        self._checkpoint_progress(state)
-                        log.warning("[stop_loss] %s", sl.reason)
-                        break
-                    self._checkpoint_progress(state)
-
+                if checkpoint is None:
+                    self._prepare_repair(state)
+                cancelled = self._run_repair_attempts(state, initial_snapshot, phase_clock)
         except PhaseTimeoutError as exc:
             self._apply_phase_timeout(state, initial_snapshot, exc)
             phase_timed_out = True
         finally:
             if not phase_timed_out and (cancelled or self._is_repair_cancelled()):
-                state.node_timings["user_cancel"] = True
-                if self._cancel_run_resources(state):
-                    self._restore_repo_snapshot(initial_snapshot)
-                self._emit_repair_cancelled(state)
-
-        finalize_repair_state(state)
-        self._on_collaboration_phase(
-            state,
-            (
-                "done"
-                if state.status in {RepairTerminalStatus.FIXED, RepairTerminalStatus.PENDING_VERIFY}
-                else "failed"
-            ),
-            "repair finalized",
-        )
-
-        # 修复成功 → 写入先例（repair precedent 读写一体）
-        if state.status == "fixed" and state.repair_plan and state.repair_plan.issue_type:
-            try:
-                from src.repair.precedent import RepairPrecedentStore
-
-                store = RepairPrecedentStore(self._repo_root)
-                summary = _build_precedent_summary(state)
-                case_id = getattr(self, "_case_id", "") or ""
-                store.upsert(state.repair_plan.issue_type, summary, case_id=case_id)
-            except Exception:
-                pass
-
-        total_ms = int((time.time() - t_start) * 1000)
-        set_repair_total_ms(state.node_timings, total_ms)
-        finalize_phases(state.node_timings)
-        self._save_repair_checkpoint(state)
-        self._attach_token_usage(state)
-        self._attach_rejection_stats(state)
-        # 保存 L2 checkpoint 供 --resume-repair 续跑
-        if state.repair_run_id:
-            try:
-                from src.repair.checkpoint_load import save_repair_checkpoint
-
-                save_repair_checkpoint(
-                    state,
-                    self._repo_root,
-                    state_root=str(
-                        getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""
-                    ),
-                )
-            except Exception:
-                pass
-        self._end_repair_trace(state)
-        # Harness finalization enriches state; persist once more so state,
-        # trace and report expose the same terminal control snapshot.
-        self._checkpoint_progress(state)
-        self._push_repair_metrics(state)
-        lock = getattr(self, "_edit_lock", None)
-        if lock is not None:
-            state.node_timings["unread_write_reject_count"] = int(
-                getattr(lock, "unread_write_reject_count", 0) or 0
-            )
-            state.node_timings["apply_path_reject_count"] = int(
-                getattr(lock, "apply_path_reject_count", 0) or 0
-            )
-        try:
-            from src.repair.execution.edit_lock import clear_active_edit_lock
-
-            clear_active_edit_lock(self._repo_root)
-        except Exception:
-            pass
-        em_done = self._progress_emitter()
-        try:
-            em_done.stop_heartbeat()
-        except Exception:
-            pass
-        em_done.emit(
-            "repair_finished",
-            summary=f"status={state.status} total_ms={total_ms}",
-        )
-        log.info("总耗时: %dms, status=%s", total_ms, state.status)
-        return state
-
-    def _repair_from_checkpoint(
-        self,
-        state: RepairState,
-        initial_snapshot: dict,
-        checkpoint: dict,
-        resume_run_id: str,
-    ) -> RepairState:
-        """Resume a repair checkpoint from the patch boundary."""
-        self._restore_state_from_repair_checkpoint(state, checkpoint)
-        t_start = time.time()
-        self._reset_token_tracking()
-        self._begin_repair_trace(state)
-        self._init_repair_blackboard()
-        self._restore_blackboard_snapshot(state.blackboard_snapshot)
-        log.info("[resume] 从 %s 恢复 repair state，跳过 parse/localize", resume_run_id)
-
-        cancelled = False
-        from src.repair.stop_loss import StopLossTracker, apply_stop_loss
-
-        stop_loss = getattr(self, "_stop_loss", None)
-        if stop_loss is None:
-            stop_loss = StopLossTracker()
-            self._stop_loss = stop_loss
-        try:
-            while not cancelled and state.retry_count < state.max_retries:
-                if self._abort_repair_if_cancelled(state):
-                    cancelled = True
-                    break
-
-                repo_snapshot = initial_snapshot
-                self._on_collaboration_phase(state, "patch", "resume patch attempt")
-                t0 = time.time()
-                state.candidate_patches, patch_timing = self._run_patcher(state)
-                patch_total_ms = patch_timing.get("total_ms")
-                if patch_total_ms is None:
-                    patch_total_ms = int((time.time() - t0) * 1000)
-                set_phase_ms(
-                    state.node_timings,
-                    "patch",
-                    int(patch_total_ms),
-                    internal={
-                        "model_call_ms": patch_timing.get("model_call_ms", 0),
-                        "parse_apply_ms": patch_timing.get("parse_apply_ms", 0),
-                    },
-                )
-
-                if patch_timing.get("user_cancel") or self._abort_repair_if_cancelled(state):
-                    cancelled = True
-                    break
-
-                if not state.candidate_patches:
-                    if self._handle_empty_patch(state, stop_loss):
-                        continue
-                    break
-
-                if self._run_critic_gate(state):
-                    self._restore_repo_snapshot(repo_snapshot)
-                    state.candidate_patches = []
-                    state.retry_count += 1
-                    self._checkpoint_progress(state)
-                    continue
-
-                if not self._verification_enabled():
-                    mark_pending_verify(state)
-                    break
-
-                self._on_collaboration_phase(state, "verify", "resume verification attempt")
-                t0 = time.time()
-                state.verification_result = self._run_verifier(state)
-                verify_ms = int((time.time() - t0) * 1000)
-                self._record_l2_synthetic_ask(
-                    state,
-                    agent_name="verifier",
-                    phase="verify",
-                    attempt=state.retry_count,
-                    elapsed_ms=verify_ms,
-                    stop_reason="verify_done",
-                )
-                set_phase_ms(state.node_timings, "verify", verify_ms)
-
-                if state.verification_result.all_passed:
-                    state.set_status(RepairTerminalStatus.FIXED, "verification_passed")
-                    break
-
-                _record_pytest_exit(
-                    state,
-                    self._repo_root,
-                    "post_patch_pytest_code",
-                    getattr(self, "_sandbox_context", None),
-                )
-                if repo_snapshot is not None:
-                    self._restore_repo_snapshot(repo_snapshot)
-                else:
-                    self._revert_changes(state)
-                state.feedback = self._build_feedback(state.verification_result, state=state)
-                self._write_feedback_to_blackboard(state.feedback)
-
-                from src.repair.verification.verify_diagnose import (
-                    diagnose_verification,
-                    enrich_related_tests_from_diagnosis,
-                )
-
-                diag = diagnose_verification(state.verification_result)
-                enrich_related_tests_from_diagnosis(state, diag)
-                from src.repair.failure_ledger import (
-                    apply_ledger_to_state,
-                    record_verify_into_ledger,
-                )
-                from src.repair.verification.termination import introduced_regression
-
-                is_reg = introduced_regression(state)
-                ledger = record_verify_into_ledger(
-                    state,
-                    result=state.verification_result,
-                    bucket=diag.bucket.value,
-                    is_regression=is_reg,
-                )
-                apply_ledger_to_state(state, ledger)
-                self._write_feedback_to_blackboard(state.feedback)
-                sl = stop_loss.record_verify_failure(
-                    state.verification_result,
-                    state.candidate_patches,
-                )
-                state.node_timings["stop_loss_snapshot"] = stop_loss.snapshot()
-                if sl.reason == "no_progress" and not sl.stop:
-                    state.node_timings["no_progress_warning"] = dict(sl.meta or {})
-                    state.agent_errors["no_progress"] = sl.hint
-                    warning = f"[无进展]\n{sl.hint}"
-                    state.feedback = (
-                        f"{warning}\n\n{state.feedback}".strip() if state.feedback else warning
-                    )
-                    self._write_feedback_to_blackboard(state.feedback)
-                state.node_timings["consecutive_env_fails"] = stop_loss.snapshot().get(
-                    "env_streak", 0
-                )
-                state.retry_count += 1
-                if sl.stop:
-                    apply_stop_loss(state, sl)
-                    if sl.reason == "env":
-                        state.node_timings["verify_env_early_stop"] = True
-                        state.agent_errors["verify_env"] = sl.hint
-                    self._write_feedback_to_blackboard(state.feedback)
-                    self._checkpoint_progress(state)
-                    break
-                self._checkpoint_progress(state)
-        finally:
-            if cancelled or self._is_repair_cancelled():
-                state.node_timings["user_cancel"] = True
+                state.control.user_cancel = True
                 if self._cancel_run_resources(state):
                     self._restore_repo_snapshot(initial_snapshot)
                 self._emit_repair_cancelled(state)
 
         return self._finalize_repair_run(state, t_start)
 
+    def _prepare_repair(self, state: RepairState) -> None:
+        """Prepare public issue context and baseline for a new repair."""
+        ctx = self._active_repair_ctx()
+        issue = state.issue_input
+        t0 = time.time()
+        state.repair_plan = self._parse_issue(issue)
+        parse_ms = int((time.time() - t0) * 1000)
+        if state.repair_plan and state.repair_plan.language != "python":
+            log.info(
+                "检测到 language=%s（%s），Verifier 将使用语言感知静态验证",
+                state.repair_plan.language,
+                state.repair_plan.language_source,
+            )
+        t_skill = time.time()
+        from src.skills.resolve import resolve_skill_for_plan, skill_matched_trace_payload
+
+        matched = None
+        skill_fallback = None
+        if state.repair_plan:
+            matched, skill_fallback = resolve_skill_for_plan(
+                state.repair_plan,
+                issue,
+                language=state.repair_plan.language,
+                match_skill_fn=self._match_skill,
+            )
+        skill_ms = int((time.time() - t_skill) * 1000)
+        tracer = ctx.repair_tracer
+        if state.repair_plan and tracer is not None:
+            tracer.emit(
+                "orchestrator",
+                "prompt_routing",
+                repair_plan_intent_snapshot(state.repair_plan),
+            )
+            tracer.emit(
+                "orchestrator",
+                "skill_matched",
+                skill_matched_trace_payload(matched, skill_fallback)
+                if skill_fallback is not None
+                else {"matched_skill": None},
+            )
+            # 可执行 Skill Router（与策略 YAML Skill 并存；失败不影响主路径）
+            try:
+                from src.skills.decision import build_canonical_skill_decision
+                from src.skills.router import SkillRouter
+
+                decision = SkillRouter().route(issue)
+                tracer.emit("orchestrator", "skill_routed", decision.to_trace_payload())
+                canonical = build_canonical_skill_decision(matched, decision)
+                state.repair_plan.skill.canonical_decision = canonical.to_dict()
+                tracer.emit("orchestrator", "skill_decided", canonical.to_dict())
+                if canonical.fallback:
+                    tracer.emit("orchestrator", "skill_fallback", canonical.to_dict())
+            except Exception:
+                pass
+        state.node_timings["parse_issue_ms"] = parse_ms
+        state.node_timings["skill_resolve_ms"] = skill_ms
+        log.info("parse_issue: %dms, skill_resolve: %dms", parse_ms, skill_ms)
+
+        # Skill suggested_tools only reorder prompt hints; ToolSpec owns access.
+
+        # 读取相似修复先例（repair precedent 读写一体）
+        if state.repair_plan and state.repair_plan.issue_type:
+            from src.repair.precedent import RepairPrecedentStore
+
+            store = RepairPrecedentStore(self._repo_root)
+            similar = store.load_similar(
+                state.repair_plan.issue_type,
+                query="",
+                use_semantic=False,
+            )
+            if similar:
+                state.node_timings["similar_fixes"] = similar
+            state.node_timings["precedent_semantic_skipped"] = True
+
+        self._seed_patcher_primary(state)
+
+        if not self._abort_repair_if_cancelled(state) and self._verification_enabled():
+            _record_pytest_exit(
+                state,
+                self._repo_root,
+                "baseline_pytest_code",
+                getattr(self, "_sandbox_context", None),
+            )
+
+    def _run_repair_attempts(
+        self, state: RepairState, initial_snapshot: dict, phase_clock: RepairPhaseClock | None
+    ) -> bool:
+        """Run shared policy gates; return whether execution was cancelled."""
+        stop_loss = getattr(self, "_stop_loss", None)
+        if stop_loss is None:
+            stop_loss = StopLossTracker()
+            self._stop_loss = stop_loss
+        while state.retry_count < state.max_retries:
+            if self._abort_repair_if_cancelled(state):
+                return True
+
+            # Critic 与 Verifier 都可能拒绝已落盘补丁；复用 repair 起始快照，
+            # 避免在大型仓库的每次重试前重新遍历全部文件。
+            repo_snapshot = initial_snapshot
+            log.info("Patcher 开始 (retry=%d)...", state.retry_count)
+            self._progress_emitter().emit(
+                "patcher_turn",
+                summary=f"retry={state.retry_count}",
+            )
+
+            # 冷却轮：连续相同失败 → 降低 temperature（pipeline only）
+            self._on_collaboration_phase(state, "patch", "patch attempt")
+            if phase_clock is not None:
+                phase_clock.ensure("patch")
+            patch_started = time.time()
+            state.candidate_patches, patch_timing = self._run_patcher(state)
+            patch_ms = patch_timing.get("total_ms")
+            if patch_ms is None:
+                patch_ms = int((time.time() - patch_started) * 1000)
+
+            if phase_clock is not None:
+                phase_clock.consume("patch", patch_ms)
+            if patch_timing.get("user_cancel") or self._abort_repair_if_cancelled(state):
+                return True
+
+            set_phase_ms(
+                state.node_timings,
+                "patch",
+                patch_ms,
+                internal={
+                    "model_call_ms": patch_timing.get("model_call_ms", 0),
+                    "parse_apply_ms": patch_timing.get("parse_apply_ms", 0),
+                },
+            )
+            log.info("Patcher 完成: %dms, %d个补丁", patch_ms, len(state.candidate_patches))
+
+            if not state.candidate_patches:
+                if self._handle_empty_patch(state, stop_loss):
+                    continue
+                break
+
+            # Critic 必须先于 skip-verify 分支；否则未验证运行会绕过廉价质量闸。
+            if self._run_critic_gate(state):
+                self._restore_repo_snapshot(repo_snapshot)
+                state.candidate_patches = []
+                state.retry_count += 1
+                self._checkpoint_progress(state)
+                continue
+
+            if not self._verification_enabled():
+                mark_pending_verify(state)
+                break
+
+            if self._reject_semantic_drift(state, initial_snapshot):
+                continue
+
+            log.info("Verifier 开始...")
+            self._progress_emitter().emit(
+                "verify_progress", summary=f"start retry={state.retry_count}"
+            )
+            if self._abort_repair_if_cancelled(state):
+                return True
+            self._on_collaboration_phase(state, "verify", "verification attempt")
+            if phase_clock is not None:
+                phase_clock.ensure("verify")
+            t0 = time.time()
+            state.verification_result = self._run_verifier(state)
+            if self._abort_repair_if_cancelled(state):
+                return True
+            ms = int((time.time() - t0) * 1000)
+            if phase_clock is not None:
+                phase_clock.consume("verify", ms)
+            self._record_l2_synthetic_ask(
+                state,
+                agent_name="verifier",
+                phase="verify",
+                attempt=state.retry_count,
+                elapsed_ms=ms,
+                stop_reason="verify_done",
+            )
+            set_phase_ms(state.node_timings, "verify", ms)
+            vr = state.verification_result
+            self._progress_emitter().emit(
+                "verify_progress",
+                summary=(
+                    f"done ms={ms} passed={getattr(vr, 'all_passed', None)} "
+                    f"failed={getattr(vr, 'failed', None)}"
+                ),
+            )
+            log.info("Verifier 完成: %dms", ms)
+
+            if state.verification_result.all_passed:
+                state.set_status(RepairTerminalStatus.FIXED, "verification_passed")
+                cooldown = getattr(self, "_verify_cooldown", None)
+                if cooldown is not None:
+                    cooldown.record_success()
+                break
+
+            if self._record_verification_failure(state, initial_snapshot, stop_loss):
+                break
+        return False
+
+    def _reject_semantic_drift(self, state: RepairState, initial_snapshot: dict) -> bool:
+        """Apply the signature gate before verified attempts."""
+        ctx = self._active_repair_ctx()
+        # ── AST 语义等价检查（V1.5-Bonus9）──
+        # 仅检测函数/类签名变更（语法错误不算 drift）
+        semantic_drift = False
+        for patch in state.candidate_patches:
+            try:
+                from src.tools.ast_parser import check_semantic_equivalence
+
+                result = check_semantic_equivalence(
+                    patch.original_lines,
+                    patch.patched_lines,
+                )
+                detail = result.get("detail", "")
+                # 跳过 syntax error（非签名级变更，由 verifier 最终裁决）
+                if result["status"] == "drift" and "syntax" not in detail:
+                    state.agent_errors["semantic_drift"] = detail
+                    semantic_drift = True
+                    tracer = ctx.repair_tracer
+                    if tracer:
+                        tracer.emit(
+                            "orchestrator",
+                            "semantic_check",
+                            {
+                                "status": "drift",
+                                "detail": detail,
+                                "file": patch.file_path,
+                            },
+                        )
+                    log.warning("[semantic] drift: %s → %s", patch.file_path, detail)
+                    break
+            except Exception:
+                pass
+
+        if semantic_drift:
+            state.feedback = (
+                f"AST 语义漂移检测拒绝补丁: {state.agent_errors['semantic_drift']}。"
+                "补丁不得删除或新增函数/类定义。"
+            )
+            self._restore_repo_snapshot(initial_snapshot)
+            state.candidate_patches = []
+            state.retry_count += 1
+            self._checkpoint_progress(state)
+            return True
+        return False
+
+    def _record_verification_failure(
+        self, state: RepairState, initial_snapshot: dict, stop_loss: StopLossTracker
+    ) -> bool:
+        """Roll back, record current evidence, then decide whether to stop."""
+        _record_pytest_exit(
+            state,
+            self._repo_root,
+            "post_patch_pytest_code",
+            getattr(self, "_sandbox_context", None),
+        )
+
+        self._restore_repo_snapshot(initial_snapshot)
+
+        from src.repair.failure_ledger import (
+            apply_ledger_to_state,
+            record_verify_into_ledger,
+        )
+        from src.repair.stop_loss import apply_stop_loss
+        from src.repair.verification.termination import introduced_regression
+        from src.repair.verification.verify_diagnose import (
+            diagnose_verification,
+            enrich_related_tests_from_diagnosis,
+        )
+
+        diag = diagnose_verification(state.verification_result)
+        enrich_related_tests_from_diagnosis(state, diag)
+        is_reg = introduced_regression(state)
+        ledger = record_verify_into_ledger(
+            state,
+            result=state.verification_result,
+            bucket=diag.bucket.value,
+            is_regression=is_reg,
+        )
+        apply_ledger_to_state(state, ledger)
+
+        state.feedback = self._build_feedback(
+            state.verification_result,
+            state=state,
+        )
+        self._write_feedback_to_blackboard(state.feedback)
+        sl = stop_loss.record_verify_failure(
+            state.verification_result,
+            state.candidate_patches,
+        )
+        state.control.stop_loss_snapshot = stop_loss.snapshot()
+        if sl.reason == "no_progress" and not sl.stop:
+            state.control.no_progress_warning = dict(sl.meta or {})
+            state.agent_errors["no_progress"] = sl.hint
+            warning = f"[无进展]\n{sl.hint}"
+            state.feedback = (
+                f"{warning}\n\n{state.feedback}".strip() if state.feedback else warning
+            )
+            self._write_feedback_to_blackboard(state.feedback)
+        state.control.consecutive_env_fails = stop_loss.snapshot().get("env_streak", 0)
+        state.retry_count += 1
+        if sl.stop:
+            apply_stop_loss(state, sl)
+            if sl.reason == "env":
+                state.control.verify_env_early_stop = True
+                state.agent_errors["verify_env"] = sl.hint
+            self._write_feedback_to_blackboard(state.feedback)
+            self._checkpoint_progress(state)
+            log.warning("[stop_loss] %s", sl.reason)
+            return True
+        self._checkpoint_progress(state)
+        return False
+
     def _restore_state_from_repair_checkpoint(self, state: RepairState, checkpoint: dict) -> None:
         """从 checkpoint 恢复长程可续跑字段（含 timings / 策略 / 失败面）。"""
         from agent_runtime.session_contract import compare_workspace_manifest, workspace_manifest
-        from src.state import CandidatePatch, RepairPlan, VerificationResult
+        from src.repair.control_state import RepairControl
+        from src.state import CandidatePatch, RepairPlan, VerificationResult, migrate_state_payload
+
+        checkpoint = migrate_state_payload(checkpoint)
+        cancelled = state.control.user_cancel
+        coordination = state.control.coordination_status
+        state.control = RepairControl.model_validate(checkpoint.get("control") or {})
+        state.control.user_cancel = cancelled
+        state.control.coordination_status = coordination
+        state.control.repair_timeout = 0
+        state.control.phase_timeout = ""
+        state.control.resume_workspace_stale = False
 
         saved_manifest = checkpoint.get("workspace_manifest") or {}
         if saved_manifest:
@@ -1083,14 +860,14 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             )
             resume_timings = {
                 "resume_workspace_manifest": manifest_diff,
-                "resume_workspace_stale": not manifest_diff["exact_match"],
             }
+            state.control.resume_workspace_stale = not manifest_diff["exact_match"]
         else:
             resume_timings = {}
 
         state.node_timings = {**dict(checkpoint.get("node_timings") or {}), **resume_timings}
         # A saved display projection cannot authorize this owner's recovery.
-        state.node_timings.pop("recovery_outcome", None)
+        state.control.reset("recovery_outcome")
         state.retry_count = checkpoint.get("retry_count", 0)
         state.max_retries = checkpoint.get("max_retries", state.max_retries)
         state.phase = checkpoint.get("phase", "patch")
@@ -1144,7 +921,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         state.side_effects = list(checkpoint.get("side_effects") or [])
         state.checkpoint_id = str(checkpoint.get("checkpoint_id", "") or "")
         state.checkpoint_sequence = int(checkpoint.get("checkpoint_sequence", 0) or 0)
-        if state.node_timings.get("resume_workspace_stale"):
+        if state.control.resume_workspace_stale:
             state.retrieved_context = None
             state.candidate_patches = []
             state.verification_result = None
@@ -1154,9 +931,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
     def _checkpoint_progress(self, state: RepairState) -> None:
         """patch/verify 回合中落盘，支持中断后续跑。"""
-        decision = state.node_timings.get("repair_failure_decision")
+        decision = state.control.repair_failure_decision
         if isinstance(decision, dict):
-            state.node_timings["checkpoint_next_action"] = decision.get("next_action", "")
+            state.control.checkpoint_next_action = decision.get("next_action", "")
         try:
             self._save_repair_checkpoint(state)
         except Exception:
@@ -1187,15 +964,41 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         finalize_repair_state(state)
         self._on_collaboration_phase(
             state,
-            "done" if state.status == "fixed" else "failed",
-            "recovery finalized",
+            (
+                "done"
+                if state.status in {RepairTerminalStatus.FIXED, RepairTerminalStatus.PENDING_VERIFY}
+                else "failed"
+            ),
+            "repair finalized",
         )
+
+        # 修复成功 → 写入先例（repair precedent 读写一体）
+        if state.status == "fixed" and state.repair_plan and state.repair_plan.issue_type:
+            try:
+                from src.repair.precedent import RepairPrecedentStore
+
+                store = RepairPrecedentStore(self._repo_root)
+                summary = _build_precedent_summary(state)
+                case_id = getattr(self, "_case_id", "") or ""
+                store.upsert(state.repair_plan.issue_type, summary, case_id=case_id)
+            except Exception:
+                pass
+
         total_ms = int((time.time() - t_start) * 1000)
         set_repair_total_ms(state.node_timings, total_ms)
         finalize_phases(state.node_timings)
+        lock = getattr(self, "_edit_lock", None)
+        if lock is not None:
+            state.node_timings["unread_write_reject_count"] = int(
+                getattr(lock, "unread_write_reject_count", 0) or 0
+            )
+            state.node_timings["apply_path_reject_count"] = int(
+                getattr(lock, "apply_path_reject_count", 0) or 0
+            )
         self._save_repair_checkpoint(state)
         self._attach_token_usage(state)
         self._attach_rejection_stats(state)
+        # 保存 L2 checkpoint 供 --resume-repair 续跑
         if state.repair_run_id:
             try:
                 from src.repair.checkpoint_load import save_repair_checkpoint
@@ -1214,6 +1017,10 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         # trace and report expose the same terminal control snapshot.
         self._checkpoint_progress(state)
         self._push_repair_metrics(state)
+        self._progress_emitter().emit(
+            "repair_finished",
+            summary=f"status={state.status} total_ms={total_ms}",
+        )
         log.info("总耗时: %dms, status=%s", total_ms, state.status)
         return state
 

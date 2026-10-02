@@ -16,7 +16,7 @@ from src.state import CandidatePatch, RepairState
 
 def test_runtime_contract_renders_feedback_and_no_progress_controls():
     state = RepairState(issue_input="x")
-    state.node_timings["structured_verify_feedback"] = {
+    state.control.structured_verify_feedback = {
         "bucket": "logic",
         "reason": "assertion failed",
         "failing_tests": ["tests/test_x.py::test_y"],
@@ -24,7 +24,7 @@ def test_runtime_contract_renders_feedback_and_no_progress_controls():
         "patch_files": ["pkg/x.py"],
         "next_action": "read_failed_test_then_patch_minimal_impl_and_reverify_same_target",
     }
-    state.node_timings["no_progress_warning"] = {
+    state.control.no_progress_warning = {
         "no_progress_count": 2,
         "required_next_action": "write_patch_or_expand_context",
         "forbid_repeated_reads": True,
@@ -48,7 +48,7 @@ def test_classifies_and_records_terminal_status():
     record_patcher_terminal_status(state, status, reason="unit")
 
     assert status == PatcherTerminalStatus.PATCH_PRODUCED
-    assert state.node_timings["patcher_terminal_status"] == "patch_produced"
+    assert state.control.patcher_terminal_status == "patch_produced"
     assert state.node_timings["patcher_terminal_history"][0]["reason"] == "unit"
 
 
@@ -85,7 +85,7 @@ def test_missing_grounding_is_localization_incomplete():
 def test_no_change_is_a_distinct_terminal_cause_and_phase():
     state = RepairState(issue_input="x")
     state.node_timings["patch_no_change"] = True
-    state.node_timings["patcher_terminal_status"] = "no_change"
+    state.control.patcher_terminal_status = "no_change"
 
     assert classify_patcher_attempt(state, []) == PatcherTerminalStatus.NO_CHANGE
     assert derive_patcher_phase(state) == PatcherPhase.TERMINAL
@@ -102,9 +102,9 @@ def test_runtime_contract_exposes_phase_and_evidence_summary():
 
 def test_begin_attempt_clears_transient_status_but_keeps_history():
     state = RepairState(issue_input="x")
+    state.control.patcher_terminal_status = "no_change"
     state.node_timings.update(
         {
-            "patcher_terminal_status": "no_change",
             "patcher_terminal_reason": "same content",
             "patch_no_change": True,
             "patcher_terminal_history": [{"status": "no_change"}],

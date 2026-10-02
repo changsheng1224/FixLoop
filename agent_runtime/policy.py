@@ -9,6 +9,29 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 
+def config_snapshot(model: BaseModel, provenance: dict[str, str]) -> dict[str, Any]:
+    """Snapshot validated values and sources; credentials are not config fields."""
+    values = model.model_dump(mode="json")
+    sources = {}
+
+    def visit(value, prefix=""):
+        for key, item in value.items():
+            path = f"{prefix}.{key}" if prefix else key
+            if isinstance(item, dict):
+                visit(item, path)
+            else:
+                sources[path] = provenance.get(path, "default")
+
+    visit(values)
+    payload = {"values": values, "provenance": sources}
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=True, default=str)
+    return {
+        "schema_version": getattr(model, "schema_version", "1.0"),
+        **payload,
+        "config_hash": hashlib.sha256(raw.encode()).hexdigest()[:16],
+    }
+
+
 class BudgetPolicy(BaseModel):
     """One namespaced policy for all run-level resource limits."""
 
@@ -105,15 +128,17 @@ class RuntimePolicy(BaseModel):
 
     def effective_budget(self) -> dict[str, int | float]:
         """Return legacy-compatible limits merged with namespaced policy."""
-        max_tool_calls = int(getattr(self, "max_tool_calls", 0) or self.budget.max_tool_calls)
-        max_write_calls = int(getattr(self, "max_write_calls", 0) or self.budget.max_write_calls)
-        max_verify_calls = int(getattr(self, "max_verify_calls", 0) or self.budget.max_verify_calls)
-        max_recovery = int(
-            getattr(self, "max_recovery_attempts", 0) or self.budget.max_recovery_attempts
-        )
-        max_llm_calls = int(
-            getattr(self, "max_llm_calls_per_repair", 0) or self.budget.max_llm_calls
-        )
+
+        def limit(scalar, nested):
+            if scalar in self.model_fields_set:
+                return int(getattr(self, scalar))
+            return int(getattr(self.budget, nested))
+
+        max_tool_calls = limit("max_tool_calls", "max_tool_calls")
+        max_write_calls = limit("max_write_calls", "max_write_calls")
+        max_verify_calls = limit("max_verify_calls", "max_verify_calls")
+        max_recovery = limit("max_recovery_attempts", "max_recovery_attempts")
+        max_llm_calls = limit("max_llm_calls_per_repair", "max_llm_calls")
         return {
             # Prompt tokens are reserved from the run-level ledger using the
             # context builder's estimate before each model dispatch.
@@ -134,15 +159,7 @@ class RuntimePolicy(BaseModel):
 
     def snapshot(self) -> dict[str, Any]:
         """Return reproducible config values, source provenance and hash."""
-        values = self.model_dump(mode="json")
-        payload = {"values": values, "provenance": dict(self._provenance)}
-        raw = json.dumps(payload, sort_keys=True, ensure_ascii=True, default=str)
-        return {
-            "schema_version": self.schema_version,
-            "values": values,
-            "provenance": dict(self._provenance),
-            "config_hash": hashlib.sha256(raw.encode()).hexdigest()[:16],
-        }
+        return config_snapshot(self, self._provenance)
 
 
 __all__ = [

@@ -93,7 +93,8 @@ def create_worktree(
     if lease.exists():
         try:
             payload = json.loads(lease.read_text(encoding="utf-8"))
-            if time.time() - float(payload.get("heartbeat", payload.get("created_at", 0))) < 24 * 3600:
+            heartbeat = float(payload.get("heartbeat", payload.get("created_at", 0)))
+            if time.time() - heartbeat < 24 * 3600:
                 raise WorktreeError(f"worktree lease already active: {run_id}")
         except WorktreeError:
             raise
@@ -162,7 +163,9 @@ def remove_worktree(
     lease_meta = wt / ".fixloop-worktree-lease.json"
     if lease_meta.is_file():
         try:
-            lease_run_id = str(json.loads(lease_meta.read_text(encoding="utf-8")).get("run_id") or wt.name)
+            lease_run_id = str(
+                json.loads(lease_meta.read_text(encoding="utf-8")).get("run_id") or wt.name
+            )
         except (OSError, ValueError, json.JSONDecodeError):
             pass
     result = _git(root, *args, check=False)

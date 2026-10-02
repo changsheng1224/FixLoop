@@ -55,7 +55,7 @@ def test_actual_l2_tools_and_pytest(tmp_path):
         assert result.total_tests == 1
         assert orch._plan_binding.session.plan.status == "completed"
         assert (tmp_path / "value.py").read_text() == "def answer():\n    return 2\n"
-        assert "plan_checkpoint" in state.node_timings
+        assert state.control.plan_checkpoint
     finally:
         if orch._plan_binding:
             orch._plan_binding.close()

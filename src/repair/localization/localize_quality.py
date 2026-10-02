@@ -199,7 +199,7 @@ def score_suspect(
         score += 0.1
     if suspect.reason in ("测试导入", "语义扩展", "issue 符号", "grep命中"):
         score += 0.12
-    if suspect.reason in ("F2P覆盖", "test_patch覆盖", "localize_confirmed"):
+    if suspect.reason in ("localize_confirmed"):
         score += 0.2
     if suspect.reason == "调用方扩展":
         score += 0.05

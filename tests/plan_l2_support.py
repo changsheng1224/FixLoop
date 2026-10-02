@@ -9,15 +9,19 @@ from agent_runtime.workspace import WorkspaceContext
 from src.agents.factory import create_repair_agent
 from src.orchestrator import Orchestrator
 from src.state import RepairPlan, RepairState, SuspectLocation
+from tests.repair_support import build_repository
 
 
 def repair_fixture(root, *, resume=False, full=False):
     root = Path(root)
     root.mkdir(exist_ok=True)
     if not resume:
-        (root / "value.py").write_text("def answer():\n    return 1\n")
-        (root / "test_value.py").write_text(
-            "from value import answer\ndef test_answer():\n    assert answer() == 2\n"
+        build_repository(
+            root,
+            {
+                "value.py": "def answer():\n    return 1\n",
+                "test_value.py": "from value import answer\ndef test_answer():\n    assert answer() == 2\n",
+            },
         )
     responses = (
         [

@@ -27,6 +27,16 @@ PROFILE_PRESETS: dict[str, dict[str, Any]] = {
     },
 }
 
+
+def parse_bool(value: str) -> bool:
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError("expected a boolean")
+
+
 _ENV_FIELDS = {
     "provider": str,
     "model": str,
@@ -37,8 +47,18 @@ _ENV_FIELDS = {
     "hard_cap": int,
     "approval": str,
     "temperature": float,
-    "json_mode": lambda v: str(v).lower() in {"1", "true", "yes", "on"},
+    "json_mode": parse_bool,
     "max_json_retries": int,
+    "tool_timeout_s": int,
+    "step_timeout_s": int,
+    "repair_wall_timeout_s": int,
+    "max_llm_calls_per_repair": int,
+    "max_tool_calls": int,
+    "max_write_calls": int,
+    "max_verify_calls": int,
+    "max_recovery_attempts": int,
+    "loop_detect_threshold": int,
+    "budget.prompt_tokens": int,
     "budget.max_turns": int,
     "budget.max_llm_calls": int,
     "budget.max_tool_calls": int,
@@ -80,22 +100,26 @@ def _merge(
 def _read_config(path: Path) -> dict[str, Any]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid configuration file: {path}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"configuration must be an object: {path}")
+    return data
 
 
-def _env_overrides(env: dict[str, str]) -> dict[str, Any]:
+def _env_overrides(env: dict[str, str], fields: dict | None = None) -> dict[str, Any]:
     result: dict[str, Any] = {}
-    for field, caster in _ENV_FIELDS.items():
+    for field, caster in (fields if fields is not None else _ENV_FIELDS).items():
         name = "FIXLOOP_" + field.upper().replace(".", "_")
+        if isinstance(caster, tuple):
+            name, caster = caster
         raw = env.get(name)
         if raw is None or raw == "":
             continue
         try:
             value = caster(raw)
-        except (TypeError, ValueError):
-            continue
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid environment configuration: {name}") from exc
         cursor = result
         parts = field.split(".")
         for part in parts[:-1]:
@@ -104,17 +128,19 @@ def _env_overrides(env: dict[str, str]) -> dict[str, Any]:
     return result
 
 
-def load_runtime_policy(
+def load_config_values(
     *,
     workspace_root: str | None = None,
     cli_overrides: dict[str, Any] | None = None,
     env: dict[str, str] | None = None,
     user_config: str | None = None,
-) -> AgentConfig:
-    """Load an ``AgentConfig`` with deterministic precedence and provenance."""
+    defaults: dict[str, Any] | None = None,
+    env_fields: dict | None = None,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Merge configuration layers with deterministic precedence and provenance."""
     values: dict[str, Any] = {}
     provenance: dict[str, str] = {}
-    actual_env = env or dict(os.environ)
+    actual_env = dict(os.environ) if env is None else dict(env)
     user_path = Path(user_config) if user_config else Path.home() / ".fixloop" / "config.json"
     user_values = _read_config(user_path) if user_path.is_file() else {}
     workspace_values: list[dict[str, Any]] = []
@@ -125,68 +151,99 @@ def load_runtime_policy(
                 workspace_values.append(_read_config(path))
     cli_profile = (cli_overrides or {}).get("profile")
     profile = str(
-        actual_env.get("FIXLOOP_PROFILE")
-        or cli_profile
-        or (workspace_values[-1] if workspace_values else {}).get("profile")
+        cli_profile
+        or actual_env.get("FIXLOOP_PROFILE")
+        or next(
+            (item["profile"] for item in reversed(workspace_values) if item.get("profile")), None
+        )
         or user_values.get("profile")
+        or (defaults or {}).get("profile")
         or "prod"
     ).lower()
-    _merge(values, PROFILE_PRESETS.get(profile, {}), "", provenance, "profile")
-    _merge(values, user_values, "", provenance, "user_file")
+
+    def merge_layer(layer: dict, name: str) -> None:
+        normalized = {}
+        sources = {}
+        _merge(normalized, layer, "", sources, name)
+        _apply_legacy_aliases(normalized, sources)
+        _merge(values, normalized, "", provenance, name)
+
+    merge_layer(defaults or {}, "default")
+    merge_layer(PROFILE_PRESETS.get(profile, {}), "profile")
+    merge_layer(user_values, "user_file")
     for workspace_value in workspace_values:
         # Semantic server activation is a host/user decision, not a repository setting.
-        _merge(
-            values,
+        merge_layer(
             {key: value for key, value in workspace_value.items() if key != "code_exploration"},
-            "",
-            provenance,
             "workspace_file",
         )
-    _merge(values, _env_overrides(actual_env), "", provenance, "environment")
-    if profile in PROFILE_PRESETS and "profile" not in values:
+    merge_layer(_env_overrides(actual_env, env_fields), "environment")
+    if "profile" not in values:
         values["profile"] = profile
-        provenance["profile"] = "environment" if "FIXLOOP_PROFILE" in actual_env else "default"
+        provenance["profile"] = "default"
     if cli_overrides:
-        _merge(
-            values,
+        merge_layer(
             {key: value for key, value in cli_overrides.items() if value is not None},
-            "",
-            provenance,
             "cli",
         )
-    _apply_legacy_aliases(values, provenance)
-    return AgentConfig(**values).set_provenance(provenance)
+    return values, provenance
 
 
 def _apply_legacy_aliases(values: dict[str, Any], provenance: dict[str, str]) -> None:
-    """Keep older scalar consumers aligned with namespaced policy values."""
-    budget = values.get("budget") or {}
-    deadline = values.get("deadline") or {}
+    """Normalize aliases within each source before merging it into prior sources.
+
+    Namespaced values win when both spellings occur in the same source.
+    Normalizing per source also preserves the order of multiple workspace files.
+    """
     aliases = {
-        "prompt_tokens": "prompt_budget",
-        "max_llm_calls": "max_llm_calls_per_repair",
-        "max_tool_calls": "max_tool_calls",
-        "max_write_calls": "max_write_calls",
-        "max_verify_calls": "max_verify_calls",
-        "max_recovery_attempts": "max_recovery_attempts",
+        "budget": {
+            "max_llm_calls": "max_llm_calls_per_repair",
+            "max_tool_calls": "max_tool_calls",
+            "max_write_calls": "max_write_calls",
+            "max_verify_calls": "max_verify_calls",
+            "max_recovery_attempts": "max_recovery_attempts",
+        },
+        "deadline": {
+            "repair_s": "repair_wall_timeout_s",
+            "step_s": "step_timeout_s",
+            "tool_s": "tool_timeout_s",
+        },
     }
-    for source, target in aliases.items():
-        if source in budget:
-            values[target] = budget[source]
-            provenance[target] = provenance.get(
-                f"budget.{source}", provenance.get(target, "policy")
-            )
-    deadline_aliases = {
-        "repair_s": "repair_wall_timeout_s",
-        "step_s": "step_timeout_s",
-        "tool_s": "tool_timeout_s",
-    }
-    for source, target in deadline_aliases.items():
-        if source in deadline:
-            values[target] = deadline[source]
-            provenance[target] = provenance.get(
-                f"deadline.{source}", provenance.get(target, "policy")
-            )
+    for block, fields in aliases.items():
+        nested = values.get(block, {})
+        if not isinstance(nested, dict):
+            raise ValueError(f"{block} configuration must be an object")
+        for key, scalar in fields.items():
+            path = f"{block}.{key}"
+            if key in nested:
+                values[scalar] = nested[key]
+                provenance[scalar] = provenance[path]
+            elif scalar in values:
+                nested[key] = values[scalar]
+                provenance[path] = provenance[scalar]
+        if nested:
+            values[block] = nested
 
 
-__all__ = ["PROFILE_PRESETS", "load_runtime_policy"]
+def load_runtime_policy(
+    *,
+    workspace_root: str | None = None,
+    cli_overrides: dict[str, Any] | None = None,
+    env: dict[str, str] | None = None,
+    user_config: str | None = None,
+    defaults: dict[str, Any] | None = None,
+) -> AgentConfig:
+    values, provenance = load_config_values(
+        workspace_root=workspace_root,
+        cli_overrides=cli_overrides,
+        env=env,
+        user_config=user_config,
+        defaults=defaults,
+    )
+    values.pop("repair", None)
+    provenance = {key: value for key, value in provenance.items() if not key.startswith("repair.")}
+    config = AgentConfig(**values)
+    return config.set_provenance(provenance)
+
+
+__all__ = ["PROFILE_PRESETS", "load_config_values", "load_runtime_policy", "parse_bool"]

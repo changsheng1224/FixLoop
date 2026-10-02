@@ -4,10 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.benchmark.swebench.convert import (
-    normalize_related_test_refs,
-    resolve_test_ref_for_pytest,
-)
 from src.repair.execution.patch_applier import (
     PatchApplier,
     apply_patch_to_text,
@@ -15,6 +11,10 @@ from src.repair.execution.patch_applier import (
     sibling_pattern_remains,
 )
 from src.repair.phase_clock import DEFAULT_PATCH_TIMEOUT_S
+from src.repair.verification.test_references import (
+    normalize_related_test_refs,
+    resolve_test_ref_for_pytest,
+)
 from src.state import CandidatePatch
 
 

@@ -71,15 +71,18 @@ def begin_patcher_attempt(state: RepairState) -> None:
     """Clear per-attempt markers while retaining the durable terminal history."""
     for key in (
         "patcher_terminal_status",
-        "patcher_terminal_reason",
-        "patcher_phase",
-        "patcher_evidence",
-        "patch_no_change",
         "patcher_parse_failed",
         "patcher_apply_failed",
         "patcher_write_attempted",
         "patcher_write_rejected",
         "patcher_export_failed",
+    ):
+        state.control.reset(key)
+    for key in (
+        "patcher_terminal_reason",
+        "patcher_phase",
+        "patcher_evidence",
+        "patch_no_change",
     ):
         state.node_timings.pop(key, None)
     for key in ("patcher_parse", "patcher_apply"):
@@ -91,7 +94,7 @@ def patcher_evidence_snapshot(state) -> dict[str, int | bool]:
     context = getattr(state, "retrieved_context", None)
     suspects = list(getattr(state, "suspect_locations", None) or [])
     plan = getattr(state, "repair_plan", None)
-    allowed = list((getattr(state, "node_timings", {}) or {}).get("allowed_edit") or [])
+    allowed = list(state.control.allowed_edit)
     tests = len(getattr(context, "related_tests", None) or []) if context else 0
     snippets = len(getattr(context, "similar_snippets", None) or []) if context else 0
     grounded = bool(suspects or allowed or (plan and getattr(plan, "suspect_files", None)))
@@ -108,7 +111,7 @@ def derive_patcher_phase(state, *, patches: list | None = None) -> PatcherPhase:
     """Derive the Patcher phase from durable state, not model prose."""
     if patches or getattr(state, "candidate_patches", None):
         return PatcherPhase.PATCHING
-    status = str((getattr(state, "node_timings", {}) or {}).get("patcher_terminal_status") or "")
+    status = state.control.patcher_terminal_status
     if status in PATCHER_TERMINAL_STATUSES:
         return PatcherPhase.TERMINAL
     evidence = patcher_evidence_snapshot(state)
@@ -165,7 +168,7 @@ def record_patcher_terminal_status(
     }
     if meta:
         event["meta"] = dict(meta)
-    state.node_timings["patcher_terminal_status"] = value
+    state.control.patcher_terminal_status = value
     state.node_timings["patcher_terminal_reason"] = str(reason or "")
     history = state.node_timings.setdefault("patcher_terminal_history", [])
     if isinstance(history, list):
@@ -195,19 +198,17 @@ def classify_patcher_attempt(
         return PatcherTerminalStatus.EDIT_LOCK_BLOCKED
     if state.node_timings.get("patch_no_change"):
         return PatcherTerminalStatus.NO_CHANGE
-    if state.node_timings.get("patcher_write_rejected"):
+    if state.control.patcher_write_rejected:
         return PatcherTerminalStatus.WRITE_REJECTED
-    if state.node_timings.get("patcher_export_failed"):
+    if state.control.patcher_export_failed:
         return PatcherTerminalStatus.PATCH_EXPORT_FAILED
-    if state.node_timings.get("patcher_write_attempted") is False:
+    if state.control.patcher_write_attempted is False:
         return PatcherTerminalStatus.NO_WRITE_ATTEMPT
-    if state.node_timings.get("no_progress_warning"):
+    if state.control.no_progress_warning:
         return PatcherTerminalStatus.NO_PROGRESS
     if apply_failed or state.agent_errors.get("patcher_apply"):
         return PatcherTerminalStatus.CANNOT_PATCH
-    if state.agent_errors.get("patcher_parse") or state.node_timings.get(
-        "patcher_parse_failed"
-    ):
+    if state.agent_errors.get("patcher_parse") or state.control.patcher_parse_failed:
         return PatcherTerminalStatus.MODEL_OUTPUT_INVALID
     if not patcher_evidence_snapshot(state)["grounded"]:
         return PatcherTerminalStatus.LOCALIZATION_INCOMPLETE
@@ -272,13 +273,12 @@ def render_patcher_runtime_contract(state: RepairState | None) -> str:
         )
     elif phase == PatcherPhase.GROUNDED:
         lines.append(
-            "- Localization evidence exists; make the smallest grounded "
-            "implementation change now."
+            "- Localization evidence exists; make the smallest grounded implementation change now."
         )
-    feedback_payload = state.node_timings.get("structured_verify_feedback")
+    feedback_payload = state.control.structured_verify_feedback
     if isinstance(feedback_payload, dict):
         lines.extend(_render_structured_feedback_hint(feedback_payload))
-    no_progress = state.node_timings.get("no_progress_warning")
+    no_progress = state.control.no_progress_warning
     if isinstance(no_progress, dict) and no_progress:
         lines.append("[NO PROGRESS CONTROL]")
         lines.append(f"- no_progress_count: {no_progress.get('no_progress_count')}")

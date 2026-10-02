@@ -1,5 +1,9 @@
 # Patcher Primary：SWE-bench 主环改造方案
 
+> 2026-10-02 更新：本文保留历史方案供参考。F2P/test_patch 驱动定位、编辑锁与
+> 修复环内验证的设计已删除；现行流程仅使用公开 Issue、源码和实际验证反馈。
+> 官方补丁与官方测试仅供独立评测，当前演示见 `PATCHER_PRIMARY_DEMO.md`。
+
 > 状态：草案（待确认后实现）
 > 日期：2026-08-06（Critic + SWE-agent ACI + Codex + Claude Code + **Cursor**；**primary 路径移除 Localizer/Retriever**）
 > 背景：DEV5 R8–R10 显示瓶颈在「编辑落地 / 文件锁定 / 预算错配 / 超时拖尾」，而非再增加 Localizer/Retriever 能力。

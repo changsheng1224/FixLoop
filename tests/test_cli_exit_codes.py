@@ -59,23 +59,25 @@ class TestRepairExitCode:
         state = RepairState(
             issue_input="x",
             status="failed",
-            node_timings={"repair_timeout": 180},
+            node_timings={},
+            control={"repair_timeout": 180},
         )
         assert repair_exit_code(state) == REPAIR_EXIT_TIMEOUT
 
-    def test_timeout_via_agent_errors(self):
+    def test_error_prose_does_not_determine_timeout_status(self):
         state = RepairState(
             issue_input="x",
             status="failed",
             agent_errors={"orchestrator": "repair timeout (180s)"},
         )
-        assert repair_exit_code(state) == REPAIR_EXIT_TIMEOUT
+        assert repair_exit_code(state) == REPAIR_EXIT_FAIL
 
     def test_timeout_takes_priority_over_fail(self):
         state = RepairState(
             issue_input="x",
             status="failed",
-            node_timings={"repair_timeout": 60},
+            node_timings={},
+            control={"repair_timeout": 60},
             agent_errors={"orchestrator": "repair timeout (60s)"},
         )
         assert repair_exit_code(state) == REPAIR_EXIT_TIMEOUT

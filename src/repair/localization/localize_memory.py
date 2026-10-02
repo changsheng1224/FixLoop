@@ -85,7 +85,7 @@ def remember_confirmed_impls(
         reason = (getattr(s, "reason", "") or "").strip()
         if root:
             tier = tier_for_suspect(s, root)
-        elif reason in ("堆栈指向", "F2P覆盖", "test_patch覆盖", "issue 路径"):
+        elif reason in ("堆栈指向", "issue 路径"):
             tier = SuspectTier.HIGH
         elif reason in ("grep命中", "测试覆盖边", "语义扩展", "issue 符号"):
             tier = SuspectTier.MID

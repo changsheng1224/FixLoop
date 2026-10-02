@@ -20,8 +20,6 @@ __all__ = [
 _HIGH_REASONS = frozenset(
     {
         "堆栈指向",
-        "F2P覆盖",
-        "test_patch覆盖",
         "issue 路径",
         "localize_confirmed",
     }
@@ -57,12 +55,7 @@ def tier_for_suspect(suspect: SuspectLocation, repo_root: str | Path) -> str:
     reason = (getattr(suspect, "reason", "") or "").strip()
     if reason in _HIGH_REASONS or reason.startswith("堆栈"):
         return SuspectTier.HIGH
-    if reason in _MID_REASONS or reason.startswith("F2P"):
-        # F2P测试 → low；F2P覆盖 already high
-        if reason == "F2P测试":
-            return SuspectTier.LOW
-        if reason.startswith("F2P") and "覆盖" in reason:
-            return SuspectTier.HIGH
+    if reason in _MID_REASONS:
         return SuspectTier.MID
     conf = float(getattr(suspect, "confidence", 0) or 0)
     if conf >= 0.85:
