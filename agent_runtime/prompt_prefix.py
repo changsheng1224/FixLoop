@@ -13,7 +13,6 @@ from pathlib import Path
 
 from agent_runtime.prefix_stable import assert_stable_prefix_clean, hash_stable_prefix
 from agent_runtime.prompt_external import (
-    BUILTIN_TOOL_EXAMPLES,
     PromptAssets,
     compose_examples,
     compose_rules,
@@ -23,7 +22,6 @@ from agent_runtime.prompt_external import (
 __all__ = [
     "PromptPrefix",
     "RepairL1Prefix",
-    "TOOL_EXAMPLES",
     "build_custom_system_prefix",
     "build_prefix_hashes",
     "build_prompt_prefix",
@@ -33,9 +31,6 @@ __all__ = [
     "join_stable_parts",
     "cache_stable_text",
 ]
-
-# 向后兼容：few-shot 内置条目
-TOOL_EXAMPLES = BUILTIN_TOOL_EXAMPLES
 
 
 def join_stable_parts(*parts: str) -> str:

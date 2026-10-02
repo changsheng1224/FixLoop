@@ -23,14 +23,14 @@ def test_cli_profile_also_controls_profile_defaults(tmp_path):
     assert policy.approval == "auto"
 
 
-def test_lower_priority_namespaced_value_does_not_override_cli_scalar(tmp_path):
+def test_environment_budget_does_not_override_cli_budget(tmp_path):
     policy = load_runtime_policy(
         env={"FIXLOOP_BUDGET_MAX_TOOL_CALLS": "2"},
-        cli_overrides={"max_tool_calls": 9},
+        cli_overrides={"budget": {"max_tool_calls": 9}},
         user_config=str(tmp_path / "missing.json"),
     )
-    assert policy.max_tool_calls == 9
-    assert policy.snapshot()["provenance"]["max_tool_calls"] == "cli"
+    assert policy.budget.max_tool_calls == 9
+    assert policy.snapshot()["provenance"]["budget.max_tool_calls"] == "cli"
 
 
 @pytest.mark.parametrize("value", ["nonsense", "-1"])
@@ -52,7 +52,7 @@ def test_invalid_configuration_file_is_not_silently_ignored(tmp_path, payload):
 def test_explicit_zero_timeout_and_budget_override_lower_priority_limits(tmp_path):
     policy = load_runtime_policy(
         env={"FIXLOOP_BUDGET_MAX_TOOL_CALLS": "9", "FIXLOOP_DEADLINE_TOOL_S": "30"},
-        cli_overrides={"max_tool_calls": 0, "tool_timeout_s": 0},
+        cli_overrides={"budget": {"max_tool_calls": 0}, "deadline": {"tool_s": 0}},
         user_config=str(tmp_path / "missing.json"),
     )
     assert policy.effective_budget()["tool_calls"] == 0
@@ -121,14 +121,14 @@ def test_role_factory_and_warm_budget_use_resolved_model(tmp_path, monkeypatch):
     assert policy.snapshot()["provenance"]["max_steps"] == "environment"
 
 
-def test_workspace_file_order_is_preserved_across_alias_spellings(tmp_path):
+def test_workspace_file_order_is_preserved_for_nested_budget(tmp_path):
     from tests.repair_support import build_repository
 
     build_repository(
         tmp_path,
         {
             ".fixloop/config.json": json.dumps({"profile": "dev", "budget": {"max_tool_calls": 2}}),
-            ".agent/config.json": json.dumps({"max_tool_calls": 7}),
+            ".agent/config.json": json.dumps({"budget": {"max_tool_calls": 7}}),
         },
     )
     policy = load_runtime_policy(
@@ -137,7 +137,15 @@ def test_workspace_file_order_is_preserved_across_alias_spellings(tmp_path):
         user_config=str(tmp_path / "missing.json"),
     )
     assert policy.approval == "auto"
-    assert policy.max_tool_calls == policy.budget.max_tool_calls == 7
+    assert policy.budget.max_tool_calls == 7
+
+
+@pytest.mark.parametrize("field", ["max_tool_calls", "tool_timeout_s", "max_llm_calls_per_repair"])
+def test_removed_scalar_config_is_rejected(tmp_path, field):
+    with pytest.raises(ValueError, match=field):
+        load_runtime_policy(
+            env={}, cli_overrides={field: 1}, user_config=str(tmp_path / "missing.json")
+        )
 
 
 def test_per_prompt_and_run_token_limits_are_independent(tmp_path):

@@ -46,7 +46,7 @@ class TestStepClock:
 
 class TestXmlStepTimeout:
     def test_stops_run_when_model_phase_exceeds_limit(self, temp_workspace):
-        config = AgentConfig(provider="fake", max_steps=4, step_timeout_s=1, tool_timeout_s=0)
+        config = AgentConfig(provider="fake", max_steps=4, deadline={"step_s": 1, "tool_s": 0})
         client = FakeModelClient(["<final>done</final>"])
         client.complete = lambda *a, **k: (time.sleep(2), "<final>done</final>")[1]  # type: ignore[method-assign]
         agent = Agent(
@@ -61,7 +61,7 @@ class TestXmlStepTimeout:
         assert _latest_report(temp_workspace)["stop_reason"] == "step_timeout"
 
     def test_trace_emits_step_timeout(self, temp_workspace):
-        config = AgentConfig(provider="fake", max_steps=4, step_timeout_s=1, tool_timeout_s=0)
+        config = AgentConfig(provider="fake", max_steps=4, deadline={"step_s": 1, "tool_s": 0})
         client = FakeModelClient(["<final>done</final>"])
         client.complete = lambda *a, **k: (time.sleep(2), "<final>done</final>")[1]  # type: ignore[method-assign]
         agent = Agent(
@@ -79,7 +79,7 @@ class TestXmlStepTimeout:
 
 class TestNativeStepTimeout:
     def test_stops_on_slow_turn(self, temp_workspace):
-        config = AgentConfig(provider="fake", max_steps=4, step_timeout_s=1, tool_timeout_s=0)
+        config = AgentConfig(provider="fake", max_steps=4, deadline={"step_s": 1, "tool_s": 0})
         client = FakeNativeToolClient(["<final>done</final>"])
         client.complete = lambda *a, **k: (time.sleep(2), "<final>done</final>")[1]  # type: ignore[method-assign]
         agent = Agent(
@@ -99,8 +99,7 @@ class TestStepTimeoutBeforeTool:
         config = AgentConfig(
             provider="fake",
             max_steps=4,
-            step_timeout_s=1,
-            tool_timeout_s=0,
+            deadline={"step_s": 1, "tool_s": 0},
             approval="auto",
         )
         client = FakeModelClient([_TOOL, "<final>done</final>"])

@@ -197,7 +197,7 @@ def extract_from_tool_result(
         )
 
     # git blame → dependency facts
-    if tool_name in ("git_blame", "search") and path:
+    if tool_name in ("git_blame", "grep") and path:
         blob = result_text[:200].strip()
         if blob:
             result.append(

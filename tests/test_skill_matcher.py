@@ -21,7 +21,7 @@ class TestSkillSpec:
             language="python",
             trigger_pattern="TypeError",
             priority=10,
-            suggested_tools=["search"],
+            suggested_tools=["grep"],
             example_patch="fix types",
         )
         assert spec.matches("TypeError: bad op")

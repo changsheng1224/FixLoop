@@ -9,7 +9,7 @@ from agent_runtime.workspace import WorkspaceContext
 
 
 class TestEndToEnd:
-    """完整管线：read → search → write → final → 验证所有模块。"""
+    """完整管线：read → grep → final → 验证所有模块。"""
 
     def test_full_pipeline(self, temp_workspace):
         config = AgentConfig(provider="fake", max_steps=5, max_new_tokens=256)
@@ -17,7 +17,7 @@ class TestEndToEnd:
         client = FakeModelClient(
             [
                 '<tool>{"name":"read_file","args":{"path":"README.md"}}</tool>',
-                '<tool>{"name":"search","args":{"pattern":"Agent","path":"."}}</tool>',
+                '<tool>{"name":"grep","args":{"pattern":"Agent","path":"."}}</tool>',
                 "<final>分析完成：项目是一个手写的Agent运行时。</final>",
             ]
         )
@@ -58,8 +58,8 @@ class TestEndToEnd:
         client = FakeModelClient(
             [
                 '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
-                '<tool>{"name":"read_file","args":{"path":"CLAUDE.md"}}</tool>',
-                '<tool>{"name":"search","args":{"pattern":"agent","path":"."}}</tool>',
+                '<tool>{"name":"read_file","args":{"path":"README.md"}}</tool>',
+                '<tool>{"name":"grep","args":{"pattern":"agent","path":"."}}</tool>',
                 "<final>找到相关文件。</final>",
             ]
         )
@@ -67,7 +67,7 @@ class TestEndToEnd:
         answer = agent.ask("探索项目")
         assert "相关" in answer
 
-        # 记忆应累积（list + read + search: CLAUDE.md + search note）
+        # 记忆应累积（list + read + grep: README.md + 搜索笔记）
         mem = agent.session["memory"]
-        assert len(mem["working"]["recent_files"]) >= 1  # read_file → CLAUDE.md
-        assert len(mem["episodic_notes"]) >= 1  # search 产生 note
+        assert "README.md" in mem["working"]["recent_files"]
+        assert len(mem["episodic_notes"]) >= 1

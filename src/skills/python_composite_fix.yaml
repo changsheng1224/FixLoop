@@ -2,7 +2,7 @@ name: python_composite_fix
 language: python
 trigger_pattern: "(ModuleNotFoundError|ImportError).*(TypeError|Type Error)|composite|两个文件"
 priority: 12
-suggested_tools: [search, read_file, ast_parse, patch_file]
+suggested_tools: [grep, read_file, ast_parse, patch_file]
 
 example_issue: |
   Multiple errors across files: import/path failure followed by type mismatch

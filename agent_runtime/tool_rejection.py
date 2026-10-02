@@ -163,7 +163,7 @@ def tool_trace_payload(
     tool_args: dict | None = None,
     result_content: str = "",
 ) -> dict:
-    """从 ToolExecutionResult.metadata 提取 trace 安全字段。"""
+    """从 ToolResult.metadata 提取 trace 安全字段。"""
     meta = metadata or {}
     payload = {"tool": tool_name}
     for key in TOOL_TRACE_PUBLIC_KEYS:
@@ -175,13 +175,11 @@ def tool_trace_payload(
 
         canonical = json.dumps(tool_args, sort_keys=True, ensure_ascii=False, default=str)
         payload["tool_args"] = dict(tool_args)
-        payload["args_hash"] = hashlib.sha256(
-            f"{tool_name}:{canonical}".encode()
-        ).hexdigest()[:20]
+        payload["args_hash"] = hashlib.sha256(f"{tool_name}:{canonical}".encode()).hexdigest()[:20]
     if result_content:
         import hashlib
 
-        payload["result_hash"] = hashlib.sha256(
-            str(result_content).encode("utf-8")
-        ).hexdigest()[:20]
+        payload["result_hash"] = hashlib.sha256(str(result_content).encode("utf-8")).hexdigest()[
+            :20
+        ]
     return payload

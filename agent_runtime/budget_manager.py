@@ -21,7 +21,7 @@ class BudgetDecision:
 class BudgetManager:
     """One ledger for turns, calls, tools and token consumption.
 
-    A limit of zero means unlimited for compatibility with existing config.
+    A limit of zero means unlimited.
     ``reserve`` is intentionally synchronous so a caller cannot forget to
     account for a resource before dispatching an operation.
     """
@@ -45,8 +45,7 @@ class BudgetManager:
 
     @classmethod
     def from_config(cls, config) -> BudgetManager:
-        effective = config.effective_budget() if hasattr(config, "effective_budget") else {}
-        return cls(effective)
+        return cls(config.effective_budget())
 
     def reserve(self, resource: str, amount: float = 1.0) -> BudgetDecision:
         key = str(resource)

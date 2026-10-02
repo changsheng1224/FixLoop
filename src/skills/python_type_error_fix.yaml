@@ -2,7 +2,7 @@ name: python_type_error_fix
 language: python
 trigger_pattern: "TypeError"
 priority: 10
-suggested_tools: [stack_parse, ast_parse, search, patch_file]
+suggested_tools: [stack_parse, ast_parse, grep, patch_file]
 
 example_issue: |
   TypeError: unsupported operand type(s) for +: 'str' and 'int'

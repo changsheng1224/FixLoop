@@ -3,11 +3,11 @@
 import pytest
 
 from agent_runtime.config import AgentConfig
+from agent_runtime.context_fit import fit_prompt_to_budget
 from agent_runtime.context_manager import (
     KEEP_RECENT_HISTORY,
     ContextManager,
     TokenBudget,
-    fit_prompt_to_budget,
     history_window_budget,
 )
 from agent_runtime.providers.clients import FakeModelClient
@@ -193,9 +193,11 @@ class TestContextManagerBuild:
         assert "ISSUE_TAIL" in dynamic
 
     def test_native_context_integrity_uses_current_issue_as_goal_evidence(self, agent):
-        repair_context = agent.session.setdefault("memory", {}).setdefault(
-            "working", {}
-        ).setdefault("repair_context", {})
+        repair_context = (
+            agent.session.setdefault("memory", {})
+            .setdefault("working", {})
+            .setdefault("repair_context", {})
+        )
         repair_context["goal"] = "fix issue"
         agent.record({"role": "user", "content": "previous evidence"})
 

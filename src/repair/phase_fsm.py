@@ -18,8 +18,6 @@ _ALLOWED: dict[str, set[str]] = {
     "seed": {"localize", "context", "patch", "verify", "recovery"},
     "localize": {"seed", "context", "patch", "verify", "recovery", "failed"},
     "context": {"seed", "localize", "patch", "verify", "recovery", "failed"},
-    # Legacy persisted states used ``retrieve`` for the context phase.
-    "retrieve": {"seed", "localize", "patch", "verify", "recovery", "failed"},
     "patch": {"verify", "patch", "recovery", "done", "failed"},
     "verify": {"patch", "verify", "recovery", "done", "failed"},
     "recovery": {"seed", "patch", "verify", "context", "done", "failed"},

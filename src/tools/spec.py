@@ -194,7 +194,6 @@ def _spec(name: str, roles: frozenset[str], **kwargs) -> ToolSpec:
 def default_repair_tool_registry(*, sandbox_mode: bool = False) -> ToolRegistry:
     specs = [
         _spec("read_file", _READERS, capabilities=frozenset({"filesystem.read"})),
-        _spec("search", _READERS, capabilities=frozenset({"code.search"})),
         _spec("grep", _READERS, capabilities=frozenset({"code.search"})),
         _spec("code_lookup", _READERS, capabilities=frozenset({"code.lsp"})),
         _spec("code_relations", _READERS, capabilities=frozenset({"code.relations"})),

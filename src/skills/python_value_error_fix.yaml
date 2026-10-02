@@ -2,7 +2,7 @@ name: python_value_error_fix
 language: python
 trigger_pattern: "ValueError"
 priority: 10
-suggested_tools: [stack_parse, read_file, search, patch_file]
+suggested_tools: [stack_parse, read_file, grep, patch_file]
 
 example_issue: |
   ValueError: invalid literal for int() with base 10: 'not-a-number'

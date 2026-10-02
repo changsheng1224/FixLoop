@@ -51,6 +51,18 @@ class TestCheckpoint:
         result = evaluate_resume_state(agent)
         assert result["status"] == "full-valid"
 
+    def test_evaluate_rejects_unsigned_checkpoint(self, agent):
+        ts = TaskState.create(user_request="test")
+        cp = create_checkpoint(agent, ts, "test")
+        cp.pop("checkpoint_envelope")
+        assert evaluate_resume_state(agent)["status"] == "integrity-failure"
+
+    def test_evaluate_rejects_unsupported_envelope(self, agent):
+        ts = TaskState.create(user_request="test")
+        cp = create_checkpoint(agent, ts, "test")
+        cp["checkpoint_envelope"]["schema_version"] = "1.0"
+        assert evaluate_resume_state(agent)["status"] == "schema-mismatch"
+
     def test_evaluate_stale_file(self, agent, temp_workspace):
         # 先让 agent 读一个文件
         agent.update_memory_after_tool("read_file", {"path": "README.md"}, "old")

@@ -2,7 +2,7 @@ name: python_attribute_error_fix
 language: python
 trigger_pattern: "AttributeError"
 priority: 10
-suggested_tools: [ast_parse, search, read_file, patch_file]
+suggested_tools: [ast_parse, grep, read_file, patch_file]
 
 example_issue: |
   AttributeError: 'NoneType' object has no attribute 'field'

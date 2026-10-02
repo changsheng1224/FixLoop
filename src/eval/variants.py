@@ -40,7 +40,7 @@ class NaiveOrchestrator:
             patches = parse_patches(raw)
             if patches:
                 state.candidate_patches = patches
-                state.status = "patched"
+                state.status = "pending_verify"
             else:
                 state.status = "failed"
         except Exception as e:

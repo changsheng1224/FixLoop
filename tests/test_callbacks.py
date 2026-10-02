@@ -328,22 +328,7 @@ class TestNotifyHelper:
 
 
 # ---------------------------------------------------------------------------
-# 向后兼容：ProgressCallback 别名
 # ---------------------------------------------------------------------------
-
-
-class TestProgressCallbackAlias:
-    """ProgressCallback = AgentCallback 向后兼容。"""
-
-    def test_alias_is_agent_callback(self):
-        from agent_runtime.callbacks import ProgressCallback
-
-        assert ProgressCallback is AgentCallback
-
-    def test_cli_callback_is_progress_callback(self):
-        from agent_runtime.callbacks import ProgressCallback
-
-        assert issubclass(CLIProgressCallback, ProgressCallback)
 
 
 # ---------------------------------------------------------------------------

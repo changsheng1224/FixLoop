@@ -14,18 +14,18 @@
 CLI (src/cli.py) — repair / eval / ablation 子命令
     │
     ▼
-repair_factory.py — ModelClient + Workspace → 4×Agent 实例
+repair_factory.py — ModelClient + Workspace → Patcher + 可选 Verifier
     │
     ├── agents/factory.py — 按角色装配 Agent + ToolGateway + 外置 prompt
-    ├── middleware.py — ToolGateway 声明式权限（Localizer 不可 write 等）
+    ├── middleware.py — ToolGateway 角色、阶段与证据权限
     └── tools/composite.py — L1 基础工具 + L2 域工具按 role 合并
     │
     ▼
 Orchestrator (orchestrator.py + repair/pipeline.py) — 纯 Python 调度，不调 LLM
     │
     ├── _parse_issue() + _match_skill() → RepairPlan + YAML Skill
-    ├── Localizer ∥ Retriever — ThreadPool 并行，各调 agent.ask()
-    ├── Patcher — 串行写补丁（patch_applier 落盘）
+    ├── Plan DAG — 最多两路只读探索，汇集版本化证据
+    ├── Patcher — 串行工具改盘，磁盘 diff 形成审计补丁
     └── Verifier — Docker / pytest 验证 → feedback 重试环（≤ max_retries）
     │
     ├── state.py — RepairState + 6 个结构化 dataclass 在 Agent 间流转
@@ -34,7 +34,7 @@ Orchestrator (orchestrator.py + repair/pipeline.py) — 纯 Python 调度，不�
     └── eval/ — 10 Case 消融评测（full / single / no_retriever）
 ```
 
-**与 Layer 1 的关系**：每个修复 Agent 都是 `agent_runtime.Agent` 的独立实例（独立 session / quota / tool_policy），Orchestrator 只负责拼 prompt、解析 JSON、驱动状态机。
+**与 Layer 1 的关系**：每个修复 Agent 都是 `agent_runtime.Agent` 的独立实例。Orchestrator 负责运行协调、任务派发、状态机与验证，模型负责理解问题和生成修改。
 
 ---
 
@@ -112,70 +112,42 @@ Orchestrator (orchestrator.py + repair/pipeline.py) — 纯 Python 调度，不�
 
 ### 3.1 一次 repair() 的完整路径
 
-```
-src/cli.py repair --issue "..." --repo ./myproject
-  → make_orchestrator_factory(skip_verify?, dry_run?)
-      ├── create_model_client()
-      ├── WorkspaceContext.build(repo)
-      ├── create_localizer / retriever / patcher (agents/factory.py)
-      │     ├── build_repair_agent_tools(role)  → 按 role 裁剪工具集
-      │     ├── load_system_prompt(role)        → src/prompts/*.txt
-      │     └── Agent(..., tool_policy=gw.can_call)
-      └── try_create_verifier() → Docker ping 成功则 create_verifier
-  → Orchestrator(localizer, retriever, patcher, verifier?)
-        │
-        └── orchestrator.repair(issue, max_retries=3, repair_timeout_s=180)
-              │
-              ├── RepairState(issue_input=issue, max_retries=3)
-              ├── [超时包装] ThreadPool + repair_timeout_s
-              │
-              └── _repair_impl(state)  ← repair/pipeline.py
-                    │
-                    ├── _parse_issue(issue)
-                    │     → 正则抽 language / exc_type / suspect_files → RepairPlan
-                    ├── _match_skill(issue)
-                    │     → src/skills/*.yaml trigger_pattern 最长匹配
-                    │
-                    ├── _run_localize_and_retrieve(state)  [ThreadPool(2)]
-                    │     ├── Localizer: _localizer_prompt → agent.ask()
-                    │     │     → parse_suspect_list → SuspectLocation[]
-                    │     └── Retriever:  _retriever_prompt  → agent.ask()
-                    │           → parse_retrieved_context → RetrievedContext
-                    │     [降级] 0 suspects → _fallback_suspects_from_plan
-                    │
-                    └── while retry_count < max_retries:
-                          ├── repo_snapshot = _snapshot_repo()   # verify 前快照
-                          ├── _run_patcher(state)
-                          │     ├── _patcher_prompt(suspects, context, feedback)
-                          │     ├── agent.ask() → parse_patches → CandidatePatch[]
-                          │     └── PatchApplier.apply → 写入 workspace
-                          │
-                          ├── [skip_verify] status=patched|failed → break
-                          │
-                          ├── _run_verifier(state)
-                          │     ├── VerifyStrategy.run()  # Docker 或 pytest
-                          │     └── VerificationResult(all_passed, failure_logs)
-                          │
-                          ├── [pass]  status=fixed → break
-                          ├── [fail]  restore_repo_snapshot + _build_feedback → retry++
-                          │
-                    └── status ∈ {fixed, patched, exhausted, failed}
-                          node_timings + token_usage 写入 RepairState
+```text
+CLI → make_orchestrator_factory → wire_orchestrator
+        ├─ 解析统一运行时配置、WorkspaceContext 和模型客户端
+        ├─ create_patcher，绑定规范工具与 ToolGateway
+        └─ 按验证策略装配独立 Verifier
+
+Orchestrator.repair
+  → RepairState / 取消令牌 / 运行协调 / checkpoint 恢复
+  → Issue 解析、规则种子与上下文组装
+  → RepairPlanBinding 管理证据驱动 Plan DAG
+      ├─ 最多两路只读探索，返回版本化证据
+      └─ 主 Patcher 串行 read_file → apply_patch → quick_test
+  → 磁盘快照 diff → CandidatePatch（审计与导出）
+  → Critic → 独立 Verifier
+      ├─ 跳过验证：pending_verify
+      ├─ 通过：fixed
+      └─ 失败：回滚、反馈与有限重试
+  → 保存当前版本状态、工具收据、Plan seal 与报告
 ```
 
-**Agent 内部**（每个 `_run_agent` 调用）仍走 Layer 1 全路径：`AgentLoop` → `ContextManager.build()` → `ToolExecutor` 九道闸口 → trace/report（见 [LAYER1_GUIDE.md §3.1](LAYER1_GUIDE.md)）。
+Patcher 的自然语言结论不会被再次解析成补丁落盘。每次 Agent 调用经过 Layer 1
+`AgentLoop`、上下文治理、预算和工具安全闸口。旧 checkpoint 不自动迁移，恢复边界
+见 [运行时契约](docs/RUNTIME_CONTRACTS.md) 与 [Plan DAG](docs/PLAN_DAG.md)。
 
-### 3.2 四 Agent 分工与权限
+### 3.2 当前角色与权限
 
-| Agent | 职责 | 关键工具 | ToolGateway 限制 |
-|-------|------|----------|------------------|
-| **Localizer** | 堆栈 + AST 定位 | ast_parse · stack_parse · read · search · git_* | **不可** write/patch/shell |
-| **Retriever** | 代码/测试/Git 上下文 | read · search · git_* · find_test | **不可** write/patch · ast/stack |
-| **Patcher** | 生成并应用补丁 | read · write · patch | **不可** run_shell · sandbox |
-| **Verifier** | 隔离验证 | sandbox_build/test/verify | **不可** 改代码 |
-| **baseline** | 消融单 Agent | 全部 L1+L2+sandbox | 评测对照组 |
+| 角色 | 职责 | 权限 |
+|------|------|------|
+| Patcher | 探索、修改、快检 | 受读前写、编辑锁、预算和审批约束 |
+| 只读探索 Agent | 执行派发的探索节点 | 只读工具，不修改仓库 |
+| Critic | 提交前轻量检查 | 运行时裁决 |
+| Verifier | 独立验证 | 验证策略与沙箱工具，不生成代码修改 |
 
-权限在 `middleware.REPAIR_PERMISSION_TABLE` 定义，经 `Agent.tool_policy=gw.can_call` 注入 Layer 1 `ToolExecutor`，Agent 无法绕过。
+`ToolGateway` 裁决角色、阶段、证据及工具权限；`Agent.execute_tool()` 进入
+`ToolExecutor.execute_gated()` 执行闸口。Localizer/Retriever 不再作为两个独立 LLM
+Agent 装配进当前主流程。
 
 ### 3.3 各模块编写顺序
 
@@ -215,16 +187,16 @@ Agent 产出经 `output_parsers` 解析为 dataclass，写入 `RepairState` 字�
 
 ### 4.3 ToolGateway 对 Agent 透明
 
-越权调用返回普通 `ToolExecutionResult(tool_error_code=permission_denied)`，不抛异常。Agent 读错误信息自行调整，与 Layer 1「闸口不崩溃循环」一致。
+越权调用返回普通 `ToolResult(error_code="permission_denied")`，不抛异常。Agent 读错误信息自行调整，与 Layer 1「闸口不崩溃循环」一致。
 
 ### 4.4 Template Method + Strategy
 
-- `RepairPipelineMixin` 从 `Orchestrator` 抽出 `_repair_impl` / `_run_localize_and_retrieve`，便于 `NoRetrieverOrchestrator` 等变体继承。
+- `RepairPipelineMixin` 承担修复控制流，`RepairPlanBinding` 负责 Plan 派发和恢复，验证采用独立策略。
 - `VerifyStrategy` 抽象 Docker vs 宿主机 pytest，eval 默认 pytest、生产 repair 优先 Docker。
 
 ### 4.5 读并行、写串行、验证前快照
 
-Localizer ∥ Retriever 只读并行；仅 Patcher 写 workspace；每次 verify 前 `_snapshot_repo()`，失败则 `restore_repo_snapshot()` 再进 feedback 环。
+Plan 节点支持最多两路只读探索；主 Patcher 串行写 workspace；验证失败后恢复快照，再进入反馈环。
 
 ### 4.6 工厂贯穿 repair 与 eval
 

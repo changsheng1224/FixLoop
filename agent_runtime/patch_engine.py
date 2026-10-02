@@ -150,7 +150,7 @@ def format_preview_text(
 
 
 def preview_to_metadata(preview: PatchPreview) -> dict:
-    """转为 trace / ToolExecutionResult metadata。"""
+    """转为 trace / ToolResult metadata。"""
     return {
         "path": preview.path,
         "hunk_count": preview.hunk_count,

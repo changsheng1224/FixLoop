@@ -117,9 +117,7 @@ def atomic_collaboration_update(
     """
     state_before = deepcopy(getattr(state, "__dict__", {}))
     board_before = board.snapshot()
-    result = apply_state_patch(
-        state, patch, actor=actor, expected_revision=expected_revision
-    )
+    result = apply_state_patch(state, patch, actor=actor, expected_revision=expected_revision)
     if not result.get("accepted"):
         return result
     for write in writes or []:
@@ -188,21 +186,21 @@ class CollaborationGovernance:
     def refresh_from_registry(self, registry) -> None:
         """Rebuild authorization policy from the canonical ToolSpec registry."""
         policies = [
-                ToolPolicy(
-                    tool=spec.name,
-                    roles=spec.roles,
-                    modes=spec.modes,
-                    phases=spec.phases,
-                    requires_evidence=spec.requires_evidence,
-                    requires_read_before_write=spec.requires_read_before_write,
-                    side_effect=getattr(spec, "side_effect", "read"),
-                    risk_level=getattr(spec, "risk_level", "low"),
-                    requires_approval=bool(getattr(spec, "requires_approval", False)),
-                )
-                for name in registry.names()
-                if (spec := registry.get(name)) is not None
-                and spec.lifecycle in {"active", "experimental", "deprecated"}
-            ]
+            ToolPolicy(
+                tool=spec.name,
+                roles=spec.roles,
+                modes=spec.modes,
+                phases=spec.phases,
+                requires_evidence=spec.requires_evidence,
+                requires_read_before_write=spec.requires_read_before_write,
+                side_effect=getattr(spec, "side_effect", "read"),
+                risk_level=getattr(spec, "risk_level", "low"),
+                requires_approval=bool(getattr(spec, "requires_approval", False)),
+            )
+            for name in registry.names()
+            if (spec := registry.get(name)) is not None
+            and spec.lifecycle in {"active", "experimental", "deprecated"}
+        ]
         self.policies = {policy.tool: policy for policy in policies}
 
     def authorize(
@@ -363,7 +361,6 @@ def default_tool_policies() -> list[ToolPolicy]:
     read = frozenset({"context", "localization", "patch", "verification"})
     return [
         ToolPolicy("read_file", frozenset({"patcher", "verifier", "baseline"}), phases=read),
-        ToolPolicy("search", frozenset({"patcher", "verifier", "baseline"}), phases=read),
         ToolPolicy("grep", frozenset({"patcher", "verifier", "baseline"}), phases=read),
         ToolPolicy(
             "apply_patch",

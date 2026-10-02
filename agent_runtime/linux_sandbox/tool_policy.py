@@ -19,7 +19,6 @@ _ACCESS = {
             "read_file",
             "list_files",
             "grep",
-            "search",
             "code_lookup",
             "code_relations",
             "inspect_file",

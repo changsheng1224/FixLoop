@@ -40,7 +40,7 @@ class FakeGoldPatchOrchestrator:
             state.candidate_patches = [
                 CandidatePatch(file_path=".fixloop_swebench_fake.txt", diff=patch)
             ]
-            state.status = "patched"
+            state.status = "pending_verify"
             return state
 
         try:

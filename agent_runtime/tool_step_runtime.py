@@ -173,9 +173,9 @@ def tool_step_flow(
         prior_status = str(prior_action.get("status", ""))
         prior_spec = (tool_registry or {}).get(tool_name) or {}
         if prior_status in {"verified", "succeeded"}:
-            from agent_runtime.tool_executor import ToolExecutionResult
+            from agent_runtime.tool_result import ToolResult
 
-            result = ToolExecutionResult(
+            result = ToolResult(
                 content="[idempotent replay] 已复用已验证的工具结果",
                 status="success",
                 metadata={
@@ -189,9 +189,9 @@ def tool_step_flow(
         elif prior_status in {"dispatched", "uncertain"} and str(
             prior_spec.get("side_effect", "none")
         ) not in {"read", "none", ""}:
-            from agent_runtime.tool_executor import ToolExecutionResult
+            from agent_runtime.tool_result import ToolResult
 
-            result = ToolExecutionResult(
+            result = ToolResult(
                 content="Error: 幂等操作状态不确定，需先执行 postcondition reconciliation",
                 status="uncertain",
                 error_code="idempotency_conflict",
@@ -236,7 +236,7 @@ def tool_step_flow(
         elif preflight is not None and preflight.action == "allow_reserved_read":
             pass
         elif preflight is not None and preflight.action.startswith("block_"):
-            from agent_runtime.tool_executor import ToolExecutionResult
+            from agent_runtime.tool_result import ToolResult
 
             event = (
                 "duplicate_read_blocked"
@@ -268,7 +268,7 @@ def tool_step_flow(
                         ],
                     },
                 )
-            result = ToolExecutionResult(
+            result = ToolResult(
                 content=(
                     f"Error: {preflight.detail}。{preflight.replan_hint} "
                     "可用动作: apply_patch/patch_file/expand_lock/终止。"
@@ -290,9 +290,9 @@ def tool_step_flow(
             convergence_blocked = True
     budget_rejected = runtime.deadline.expired()
     if not replayed and not replay_blocked and not convergence_blocked and budget_rejected:
-        from agent_runtime.tool_executor import ToolExecutionResult
+        from agent_runtime.tool_result import ToolResult
 
-        result = ToolExecutionResult(
+        result = ToolResult(
             content="Error: repair 全局执行期限已耗尽",
             metadata={
                 "tool_status": "rejected",
@@ -314,9 +314,9 @@ def tool_step_flow(
             or not runtime.hooks.budget_allows_tool(group.value)
         )
     ):
-        from agent_runtime.tool_executor import ToolExecutionResult
+        from agent_runtime.tool_result import ToolResult
 
-        result = ToolExecutionResult(
+        result = ToolResult(
             content=f"Error: 工具组 {group.value} 预算已耗尽",
             metadata={
                 "tool_status": "rejected",

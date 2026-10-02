@@ -1,4 +1,4 @@
-"""新接入模块的集成测试：Quota CLI, ProgressCallback, SessionSave, DurableRetrieval, CB。"""
+"""新接入模块的集成测试：Quota CLI, AgentCallback, SessionSave, DurableRetrieval, CB。"""
 
 import io
 
@@ -39,7 +39,7 @@ class TestQuotaCLI:
 
 
 class TestProgressCallback:
-    """ProgressCallback 接入 Agent.ask() 测试。"""
+    """AgentCallback 接入 Agent.ask() 测试。"""
 
     def test_callback_passed_to_ask(self, agent):
         buf = io.StringIO()

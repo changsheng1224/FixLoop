@@ -28,18 +28,6 @@ class AgentConfig(RuntimePolicy):
     )
     model: str = Field(default="deepseek-v4-pro", description="模型名称")
     max_steps: int = Field(default=6, ge=1, le=50, description="最大工具调用步数")
-    tool_timeout_s: int = Field(
-        default=120,
-        ge=0,
-        le=3600,
-        description="单工具 Gate 9 执行超时秒数，0=禁用",
-    )
-    step_timeout_s: int = Field(
-        default=300,
-        ge=0,
-        le=7200,
-        description="单步 wall-clock 超时秒数（context+model+tool），0=禁用",
-    )
     max_new_tokens: int = Field(
         default=2048, ge=1, le=8192, description="每次 LLM 调用的最大输出 token 数"
     )
@@ -66,12 +54,6 @@ class AgentConfig(RuntimePolicy):
         le=200_000,
         description="Prompt 上下文硬顶 token 数。超出时拒绝 ask，不静默裁剪。",
     )
-    max_llm_calls_per_repair: int = Field(
-        default=0,
-        ge=0,
-        le=200,
-        description="单次 repair LLM 调用硬顶（0=不禁用）。超限触发 budget_exhausted。",
-    )
     loop_detect_threshold: int = Field(
         default=3,
         ge=0,
@@ -92,33 +74,3 @@ class AgentConfig(RuntimePolicy):
         le=5,
         description="json_mode final answer 校验失败后的格式修复重试次数。",
     )
-    repair_wall_timeout_s: int = Field(
-        default=0,
-        ge=0,
-        le=86400,
-        description="单次 repair 全局墙钟超时，0=禁用。",
-    )
-    max_tool_calls: int = Field(
-        default=0,
-        ge=0,
-        le=500,
-        description="单次 repair 工具调用上限，0=使用角色/分组预算。",
-    )
-    max_write_calls: int = Field(default=0, ge=0, le=100)
-    max_verify_calls: int = Field(default=0, ge=0, le=100)
-    max_recovery_attempts: int = Field(default=0, ge=0, le=50)
-
-    def effective_deadline(self) -> dict[str, float | int]:
-        """Merge legacy scalar timeout fields with the canonical policy block."""
-
-        def limit(scalar, nested):
-            if scalar in self.model_fields_set:
-                return int(getattr(self, scalar))
-            return int(getattr(self.deadline, nested))
-
-        return {
-            "repair_s": limit("repair_wall_timeout_s", "repair_s"),
-            "step_s": limit("step_timeout_s", "step_s"),
-            "tool_s": limit("tool_timeout_s", "tool_s"),
-            "retry_backoff_cap_s": float(self.deadline.retry_backoff_cap_s),
-        }

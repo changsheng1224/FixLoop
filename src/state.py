@@ -37,7 +37,6 @@ class RepairPhase(StrEnum):
     INTENT = "intent"
     SEED = "seed"
     LOCALIZE = "localize"
-    RETRIEVE = "retrieve"  # legacy alias retained for persisted states
     CONTEXT = "context"
     PATCH = "patch"
     VERIFY = "verify"
@@ -58,49 +57,16 @@ class RepairStatus(StrEnum):
     REGRESSION = "regression"
 
 
-def _coerce_enum(value, enum_type, default):
-    if isinstance(value, enum_type):
-        return value
-    if enum_type is RepairStatus and str(value) == "patched":
-        return RepairStatus.FIXED
-    try:
-        return enum_type(str(value))
-    except (TypeError, ValueError):
-        return default
-
-
-def migrate_state_payload(data: dict[str, Any] | None) -> dict[str, Any]:
-    """Migrate persisted RepairState payloads without guessing unknown versions."""
+def validate_state_payload(data: dict[str, Any]) -> dict[str, Any]:
+    """Accept only the current persisted contract; historical states cannot resume."""
     payload = deepcopy(dict(data or {}))
-    version = str(payload.get("schema_version", "1.0") or "1.0")
-    if version not in {"1.0", "1.1", CURRENT_STATE_SCHEMA_VERSION}:
+    version = payload.get("schema_version")
+    if version != CURRENT_STATE_SCHEMA_VERSION:
         raise ValueError(f"unsupported RepairState schema_version: {version}")
-    if version == "1.0":
-        # v1 used an absent ``attempt`` and did not persist collaboration
-        # attribution.  Keep the migration explicit and deterministic.
-        payload.setdefault("attempt", 0)
-        payload.setdefault("collaboration_attribution", {})
-        payload.setdefault("collaboration_tasks", [])
-        payload.setdefault("handoffs", [])
-        payload.setdefault("effect_receipts", {})
-        payload.setdefault("task_dag_snapshot", {})
-        payload.setdefault("harness_control", {})
-        payload.setdefault("harness_events", [])
-        payload.setdefault("harness_metrics", {})
-        payload.setdefault("harness_manifest", {})
-        payload.setdefault("harness_attribution", {})
-        payload.setdefault("human_control", {})
-        payload.setdefault("bad_cases", [])
-        payload["schema_version"] = CURRENT_STATE_SCHEMA_VERSION
-    if version in {"1.0", "1.1"}:
-        timings = payload.get("node_timings") or {}
-        control = dict(payload.get("control") or {})
-        for name in RepairControl.model_fields:
-            if name in timings:
-                control.setdefault(name, timings.pop(name))
-        payload["node_timings"] = timings
-        payload["control"] = control
-        payload["schema_version"] = CURRENT_STATE_SCHEMA_VERSION
+    if "phase" in payload:
+        RepairPhase(payload["phase"])
+    if "status" in payload:
+        RepairStatus(payload["status"])
     return payload
 
 
@@ -539,15 +505,15 @@ class RepairState:
     hard_constraints: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        """Normalize legacy strings while keeping the dataclass API compatible."""
+        """Validate the current control, phase and status contracts."""
         self.control = RepairControl.model_validate(self.control).model_copy(deep=True)
         misplaced = set(self.node_timings) & set(RepairControl.model_fields)
         if misplaced:
             raise ValueError(
                 f"repair controls belong in control, not node_timings: {sorted(misplaced)}"
             )
-        self.phase = _coerce_enum(self.phase, RepairPhase, RepairPhase.LOCALIZE)
-        self.status = _coerce_enum(self.status, RepairStatus, RepairStatus.PENDING)
+        self.phase = RepairPhase(self.phase)
+        self.status = RepairStatus(self.status)
         self.retry_count = max(0, int(self.retry_count or 0))
         self.max_retries = max(0, int(self.max_retries or 0))
         self.state_revision = max(0, int(self.state_revision or 0))
@@ -637,7 +603,7 @@ class RepairState:
 
     def set_status(self, status: str | RepairStatus, reason: str = "") -> RepairStatus:
         """Commit a status change through the state governance path."""
-        normalized = _coerce_enum(status, RepairStatus, RepairStatus.FAILED)
+        normalized = RepairStatus(status)
         previous = self.status
         if previous != normalized:
             self.status = normalized
@@ -745,7 +711,7 @@ class RepairState:
     @classmethod
     def from_dict(cls, data: dict) -> RepairState:
         """从 dict 反序列化。"""
-        data = migrate_state_payload(data)
+        data = validate_state_payload(data)
         return cls(
             issue_input=data.get("issue_input", ""),
             hard_constraints=[str(item) for item in data.get("hard_constraints", [])],

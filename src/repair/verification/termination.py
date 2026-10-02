@@ -27,11 +27,11 @@ TERMINAL_STATUSES = frozenset(
 
 
 def is_terminal(status: str) -> bool:
-    return status in TERMINAL_STATUSES or status == "patched"
+    return status in TERMINAL_STATUSES
 
 
 def is_repair_success(state: RepairState) -> bool:
-    """修复是否算成功（fixed，或 legacy patched 且有补丁）。"""
+    """修复是否算成功（fixed 且有补丁）。"""
     return resolve_terminal_status(state) == RepairTerminalStatus.FIXED and bool(
         state.candidate_patches
     )

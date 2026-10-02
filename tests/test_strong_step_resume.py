@@ -160,7 +160,7 @@ def test_write_step_resume_rejected_when_affected_file_changed(temp_workspace):
 
 
 def test_step_checkpoint_not_persisted_if_cancelled_before_persist(temp_workspace):
-    from agent_runtime.tool_executor import ToolExecutionResult
+    from agent_runtime.tool_result import ToolResult
 
     agent = _agent(temp_workspace, [])
     token = CancellationToken()
@@ -176,7 +176,7 @@ def test_step_checkpoint_not_persisted_if_cancelled_before_persist(temp_workspac
         {"path": "."},
         "README.md",
         "工具 list_files 执行完成。\n结果:\nREADME.md",
-        ToolExecutionResult(
+        ToolResult(
             content="README.md",
             metadata={"tool_status": "success"},
         ),

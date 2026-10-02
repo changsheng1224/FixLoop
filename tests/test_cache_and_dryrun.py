@@ -76,24 +76,24 @@ class TestDryRun:
 
     def test_dry_run_returns_plan(self, agent):
         executor = ToolExecutor(agent=agent, approval_policy="auto", dry_run=True)
-        result = executor.execute("write_file", {"path": "t.txt", "content": "hi"})
+        result = executor.execute_gated("write_file", {"path": "t.txt", "content": "hi"})
         assert "[DRY RUN]" in result.content
         assert result.metadata["dry_run"] is True
 
     def test_dry_run_no_side_effects(self, agent, temp_workspace):
         executor = ToolExecutor(agent=agent, approval_policy="auto", dry_run=True)
-        executor.execute("write_file", {"path": "t.txt", "content": "hi"})
+        executor.execute_gated("write_file", {"path": "t.txt", "content": "hi"})
         # 文件不应被创建
         assert not (temp_workspace / "t.txt").exists()
 
     def test_normal_mode_writes_file(self, agent, temp_workspace):
         executor = ToolExecutor(agent=agent, approval_policy="auto", dry_run=False)
-        executor.execute("write_file", {"path": "t.txt", "content": "hi"})
+        executor.execute_gated("write_file", {"path": "t.txt", "content": "hi"})
         assert (temp_workspace / "t.txt").exists()
 
     def test_dry_run_skip_approval_check(self, agent):
         """dry_run 时应跳过审批（不修改文件）。"""
         executor = ToolExecutor(agent=agent, approval_policy="never", dry_run=True)
-        result = executor.execute("write_file", {"path": "x.txt", "content": "y"})
+        result = executor.execute_gated("write_file", {"path": "x.txt", "content": "y"})
         # 即使 approval=never，dry_run 也应该成功返回计划
         assert "[DRY RUN]" in result.content

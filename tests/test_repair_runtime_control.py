@@ -58,9 +58,9 @@ def test_deadline_and_group_budget_are_independent():
 
 def test_observation_normalizes_validation_error():
     from agent_runtime.repair_runtime import CanonicalToolCall, observation_from_result
-    from agent_runtime.tool_executor import ToolExecutionResult
+    from agent_runtime.tool_result import ToolResult
 
-    result = ToolExecutionResult(
+    result = ToolResult(
         "Error",
         {"tool_status": "rejected", "tool_error_code": "invalid_args"},
     )

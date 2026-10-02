@@ -8,7 +8,7 @@ Only tools already present in the canonical registry may be overridden.
     tools:
       write_file: [patcher]
       run_shell: []
-      search: ["*"]
+      grep: ["*"]
 """
 
 from __future__ import annotations

@@ -56,9 +56,7 @@ class TestMemoryHooks:
 
     def test_write_file_adds_and_invalidates(self, agent_with_memory):
         # 先建立摘要
-        agent_with_memory.update_memory_after_tool(
-            "read_file", {"path": "a.py"}, "old content"
-        )
+        agent_with_memory.update_memory_after_tool("read_file", {"path": "a.py"}, "old content")
         mem = agent_with_memory.session["memory"]
         assert "a.py" in mem["file_summaries"]
 
@@ -90,7 +88,7 @@ class TestMemoryHooks:
 
     def test_search_appends_note(self, agent_with_memory):
         agent_with_memory.update_memory_after_tool(
-            "search", {"pattern": "Agent"}, "agent_runtime/runtime.py:16: class Agent:"
+            "grep", {"pattern": "Agent"}, "agent_runtime/runtime.py:16: class Agent:"
         )
         notes = agent_with_memory.session["memory"]["episodic_notes"]
         assert len(notes) == 1

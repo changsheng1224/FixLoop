@@ -116,16 +116,16 @@ class TestRepairPhase:
         assert state.status == "fixed"
 
     def test_phase_roundtrip(self):
-        state = RepairState(issue_input="test", phase="retrieve")
+        state = RepairState(issue_input="test", phase="context")
         data = state.to_dict()
         restored = RepairState.from_dict(data)
-        assert restored.phase == "retrieve"
+        assert restored.phase == "context"
 
     def test_phase_transitions(self):
         from src.state import REPAIR_PHASES
 
         assert "localize" in REPAIR_PHASES
-        assert "retrieve" in REPAIR_PHASES
+        assert "context" in REPAIR_PHASES
         assert "patch" in REPAIR_PHASES
         assert "verify" in REPAIR_PHASES
         assert "done" in REPAIR_PHASES

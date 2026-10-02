@@ -70,7 +70,7 @@ class AgentLoop:
         self._step_guard = StepGuard()
         self._last_dream_stats: dict[str, int] = {}
         self._max_native_recovery_turns = max(
-            2, min(6, int(getattr(agent.config, "max_recovery_attempts", 0) or 3))
+            2, min(6, int(agent.config.budget.max_recovery_attempts or 3))
         )
         from agent_runtime.repair_run import RunTerminalGuard
 
@@ -80,21 +80,14 @@ class AgentLoop:
         from agent_runtime.latency_controller import LatencySLOController
         from agent_runtime.repair_runtime import ExecutionDeadline, RepairBudget
 
-        self._repair_deadline = ExecutionDeadline(
-            (
-                agent.config.effective_deadline()["repair_s"]
-                if hasattr(agent.config, "effective_deadline")
-                else getattr(agent.config, "repair_wall_timeout_s", 0)
-            )
-            or 0
-        )
+        self._repair_deadline = ExecutionDeadline(agent.config.deadline.repair_s)
         agent._repair_deadline = self._repair_deadline
         self._repair_budget = RepairBudget(
             max_turns=self.max_steps,
-            max_tool_calls=getattr(agent.config, "max_tool_calls", 0) or 0,
-            max_write_calls=getattr(agent.config, "max_write_calls", 0) or 0,
-            max_verify_calls=getattr(agent.config, "max_verify_calls", 0) or 0,
-            max_recovery_attempts=getattr(agent.config, "max_recovery_attempts", 0) or 0,
+            max_tool_calls=agent.config.budget.max_tool_calls,
+            max_write_calls=agent.config.budget.max_write_calls,
+            max_verify_calls=agent.config.budget.max_verify_calls,
+            max_recovery_attempts=agent.config.budget.max_recovery_attempts or 0,
         )
         self._budget_manager = getattr(
             agent, "_run_budget_manager", None
@@ -578,9 +571,7 @@ class AgentLoop:
         )
 
     def _step_timeout_limit_s(self) -> int:
-        if hasattr(self.agent.config, "effective_deadline"):
-            return int(self.agent.config.effective_deadline()["step_s"] or 0)
-        return int(getattr(self.agent.config, "step_timeout_s", 0) or 0)
+        return self.agent.config.deadline.step_s
 
     def _sleep_with_deadline(self, seconds: float) -> bool:
         """Sleep only within the remaining repair deadline."""
@@ -833,7 +824,6 @@ class AgentLoop:
                         "read_file",
                         "grep",
                         "list_files",
-                        "search",
                         "ast_parse",
                         "code_lookup",
                         "code_relations",
@@ -1318,14 +1308,7 @@ class AgentLoop:
         self._tool_state.patch_recovery_kind = ""
         from agent_runtime.repair_runtime import ExecutionDeadline
 
-        self._repair_deadline = ExecutionDeadline(
-            (
-                self.agent.config.effective_deadline()["repair_s"]
-                if hasattr(self.agent.config, "effective_deadline")
-                else getattr(self.agent.config, "repair_wall_timeout_s", 0)
-            )
-            or 0
-        )
+        self._repair_deadline = ExecutionDeadline(self.agent.config.deadline.repair_s)
         self.agent._repair_deadline = self._repair_deadline
         self._repair_budget.turns = 0
         self._repair_budget.tool_calls = 0

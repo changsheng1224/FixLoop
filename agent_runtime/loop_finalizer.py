@@ -73,7 +73,7 @@ def finalize_agent_run(loop, ts) -> None:
                 "tool_steps": ts.tool_steps,
                 "cache_hit_rate": context_summary.get("cache_hit_rate", 0.0),
                 "llm_calls": loop._protocol_state.llm_call_count,
-                "llm_call_limit": int(getattr(agent.config, "max_llm_calls_per_repair", 0) or 0),
+                "llm_call_limit": int(agent.config.budget.max_llm_calls),
                 "repair_budget": loop._repair_budget.summary(),
                 "budget_manager": loop._budget_manager.summary(),
                 "tool_observations": tool_observation_summary(

@@ -1,12 +1,11 @@
 """User Message 任务段模板单测。"""
 
-from agent_runtime.user_message_template import (
+from agent_runtime.task_section import (
     DEFAULT_TASK_TEMPLATE,
     load_task_template,
     render_task_message,
-    render_template,
-    template_fingerprint,
 )
+from agent_runtime.template_render import render_template, template_fingerprint
 
 
 class TestRenderTemplate:

@@ -7,7 +7,8 @@ import pytest
 from agent_runtime.config import AgentConfig
 from agent_runtime.providers.clients import FakeModelClient
 from agent_runtime.runtime import Agent
-from agent_runtime.tool_executor import ToolExecutionResult, ToolExecutor
+from agent_runtime.tool_executor import ToolExecutor
+from agent_runtime.tool_result import ToolResult
 
 
 @pytest.fixture
@@ -26,11 +27,11 @@ def executor(agent):
     return ToolExecutor(agent=agent, approval_policy="auto")
 
 
-class TestToolExecutionResult:
-    """ToolExecutionResult dataclass 测试。"""
+class TestToolResult:
+    """ToolResult dataclass 测试。"""
 
     def test_success_result(self):
-        result = ToolExecutionResult(
+        result = ToolResult(
             content="done",
             metadata={"tool_status": "success"},
         )
@@ -38,7 +39,7 @@ class TestToolExecutionResult:
         assert result.metadata["tool_status"] == "success"
 
     def test_rejected_result(self):
-        result = ToolExecutionResult(
+        result = ToolResult(
             content="Error: rejected",
             metadata={"tool_status": "rejected", "tool_error_code": "allowed_tools"},
         )
@@ -47,10 +48,17 @@ class TestToolExecutionResult:
 
 def test_unknown_write_keeps_disk_and_blocks_followup_writes(agent, executor, temp_workspace):
     from agent_runtime.tool_result import ToolResult
+
     target = temp_workspace / "unknown.txt"
+
     def uncertain_write(args):
         target.write_text("unconfirmed change")
-        return ToolResult(content="lost process receipt", status="uncertain", metadata={"termination_guaranteed": False})
+        return ToolResult(
+            content="lost process receipt",
+            status="uncertain",
+            metadata={"termination_guaranteed": False},
+        )
+
     agent.tools["write_file"]["run"] = uncertain_write
     result = executor.execute_gated("write_file", {"path": "unknown.txt", "content": "change"})
     assert result.status == "uncertain"
@@ -65,8 +73,13 @@ class TestToolExecutorGates:
     """闸口逐道测试。"""
 
     # Gate 1: allowed_tools
+    def test_removed_search_tool_is_rejected(self, executor):
+        result = executor.execute_gated("search", {"pattern": "anything"})
+        assert result.status == "rejected"
+        assert result.metadata["rejection_layer"] == "executor"
+
     def test_rejects_non_allowed_tool(self, executor):
-        result = executor.execute("non_existent_tool", {})
+        result = executor.execute_gated("non_existent_tool", {})
         assert "rejected" in result.metadata["tool_status"]
         assert result.metadata["tool_error_code"] == "allowed_tools"
 
@@ -75,7 +88,7 @@ class TestToolExecutorGates:
     # Gate 3: parameter validation
     def test_rejects_invalid_params(self, executor):
         # read_file 缺少必填 path
-        result = executor.execute("read_file", {})
+        result = executor.execute_gated("read_file", {})
         assert "rejected" in result.metadata["tool_status"]
 
     # Gate 4: duplicate detection
@@ -97,20 +110,18 @@ class TestToolExecutorGates:
                 "tool_args": {"path": "."},
             }
         )
-        result = executor.execute("list_files", {"path": "."})
+        result = executor.execute_gated("list_files", {"path": "."})
         assert "rejected" in result.metadata["tool_status"]
         assert result.metadata["tool_error_code"] == "duplicate"
 
     def test_allows_non_duplicate(self, executor, agent):
         agent.record({"tool_name": "list_files", "tool_args": {"path": "."}})
         agent.record({"tool_name": "read_file", "tool_args": {"path": "x.py"}})
-        result = executor.execute("list_files", {"path": "."})
+        result = executor.execute_gated("list_files", {"path": "."})
         # 最近 2 次不是相同调用 → 允许
         assert result.metadata["tool_status"] == "success"
 
-    def test_post_lock_reserve_bypasses_duplicate_gate_once(
-        self, agent, temp_workspace
-    ):
+    def test_post_lock_reserve_bypasses_duplicate_gate_once(self, agent, temp_workspace):
         executor = ToolExecutor(agent=agent, approval_policy="auto", quota=agent.quota)
         (temp_workspace / "locked.py").write_text("value = 1\n", encoding="utf-8")
         args = {"path": "locked.py", "start": 1, "end": 20}
@@ -123,25 +134,23 @@ class TestToolExecutorGates:
                     "tool_args": args,
                 }
             )
-        assert agent.quota.grant_read_reserve(
-            "locked.py", kind="post_lock", generation=1
-        )
+        assert agent.quota.grant_read_reserve("locked.py", kind="post_lock", generation=1)
 
-        result = executor.execute("read_file", args)
+        result = executor.execute_gated("read_file", args)
 
         assert result.metadata["tool_status"] == "success", result.metadata
         assert result.metadata["read_reserve_consumed"]["generation"] == 1
-        assert executor.execute("read_file", args).metadata["tool_error_code"] == "duplicate"
+        assert executor.execute_gated("read_file", args).metadata["tool_error_code"] == "duplicate"
 
     # Gate 5: approval
     def test_approval_auto_allows(self, agent):
         executor_auto = ToolExecutor(agent=agent, approval_policy="auto")
-        result = executor_auto.execute("write_file", {"path": "t.txt", "content": "x"})
+        result = executor_auto.execute_gated("write_file", {"path": "t.txt", "content": "x"})
         assert result.metadata["tool_status"] == "success"
 
     def test_approval_never_denies(self, agent):
         executor_never = ToolExecutor(agent=agent, approval_policy="never")
-        result = executor_never.execute("write_file", {"path": "t.txt", "content": "x"})
+        result = executor_never.execute_gated("write_file", {"path": "t.txt", "content": "x"})
         assert "rejected" in result.metadata["tool_status"]
         assert result.metadata["tool_error_code"] == "approval_denied"
         assert result.metadata["rejection_layer"] == "executor"
@@ -150,7 +159,7 @@ class TestToolExecutorGates:
     # Gate 6+7+8: snapshot + execute + diff
     def test_writes_get_snapshot_diff(self, agent):
         executor = ToolExecutor(agent=agent, approval_policy="auto")
-        result = executor.execute("write_file", {"path": "new.txt", "content": "created"})
+        result = executor.execute_gated("write_file", {"path": "new.txt", "content": "created"})
         assert result.metadata["tool_status"] == "success"
         assert "affected_paths" in result.metadata
         assert "new.txt" in result.metadata["affected_paths"]
@@ -160,7 +169,7 @@ class TestToolExecutorGates:
         target.write_text("same", encoding="utf-8")
         executor = ToolExecutor(agent=agent, approval_policy="auto")
 
-        result = executor.execute("write_file", {"path": "same.txt", "content": "same"})
+        result = executor.execute_gated("write_file", {"path": "same.txt", "content": "same"})
 
         assert result.metadata["tool_status"] == "no_change"
         assert result.metadata["tool_error_code"] == "no_change"
@@ -172,7 +181,7 @@ class TestToolExecutorGates:
         target.write_text("value = 2\n", encoding="utf-8")
         executor = ToolExecutor(agent=agent, approval_policy="auto")
 
-        result = executor.execute(
+        result = executor.execute_gated(
             "patch_file",
             {"path": "stale.py", "old_text": "value = 1", "new_text": "value = 3"},
         )
@@ -185,7 +194,7 @@ class TestToolExecutorGates:
         (temp_workspace / "empty.py").write_text("value = 1\n", encoding="utf-8")
         executor = ToolExecutor(agent=agent, approval_policy="auto")
 
-        result = executor.execute(
+        result = executor.execute_gated(
             "patch_file", {"path": "empty.py", "old_text": "", "new_text": ""}
         )
 
@@ -194,14 +203,14 @@ class TestToolExecutorGates:
         assert result.metadata["recovery_action"] == "apply_patch_with_context"
 
     def test_gate3_path_escape_rejected(self, executor):
-        result = executor.execute("read_file", {"path": "../outside.txt"})
+        result = executor.execute_gated("read_file", {"path": "../outside.txt"})
         assert result.metadata["gate_id"] == 3
         assert result.metadata["tool_error_code"] == "path_escape"
         assert result.metadata["tool_status"] == "rejected"
 
     def test_readonly_tool_no_snapshot(self, agent):
         executor = ToolExecutor(agent=agent, approval_policy="auto")
-        result = executor.execute("list_files", {"path": "."})
+        result = executor.execute_gated("list_files", {"path": "."})
         assert result.metadata["tool_status"] == "success"
         # 只读工具不做快照
         assert "affected_paths" not in result.metadata
@@ -209,7 +218,7 @@ class TestToolExecutorGates:
     def test_patch_file_includes_preview_metadata(self, agent, temp_workspace):
         (temp_workspace / "p.py").write_text("x = 1\n")
         executor = ToolExecutor(agent=agent, approval_policy="auto")
-        result = executor.execute(
+        result = executor.execute_gated(
             "patch_file",
             {"path": "p.py", "old_text": "x = 1", "new_text": "x = 2"},
         )
@@ -229,7 +238,7 @@ class TestToolExecutorGates:
             return "n"
 
         monkeypatch.setattr("builtins.input", fake_input)
-        result = executor.execute(
+        result = executor.execute_gated(
             "patch_file",
             {"path": "a.py", "old_text": "hello", "new_text": "world"},
         )
@@ -256,32 +265,32 @@ class TestExecutionTier:
 
     def test_host_tool_has_tier_in_metadata(self, agent):
         executor = ToolExecutor(agent=agent, approval_policy="auto")
-        result = executor.execute("list_files", {"path": "."})
+        result = executor.execute_gated("list_files", {"path": "."})
         assert result.metadata["tool_status"] == "success"
         assert result.metadata.get("execution_tier") == "host"
 
     def test_run_shell_is_denied_by_gate7(self, agent):
         executor = ToolExecutor(agent=agent, approval_policy="auto")
-        result = executor.execute("run_shell", {"command": "echo hello", "timeout": 5})
+        result = executor.execute_gated("run_shell", {"command": "echo hello", "timeout": 5})
         # Gate 7 deny tier → run_shell 被禁止
         assert result.metadata["tool_status"] == "rejected"
         assert result.metadata.get("gate_id") == 7
 
     def test_write_file_is_host_tier(self, agent):
         executor = ToolExecutor(agent=agent, approval_policy="auto")
-        result = executor.execute("write_file", {"path": "t.txt", "content": "x"})
+        result = executor.execute_gated("write_file", {"path": "t.txt", "content": "x"})
         assert result.metadata["tool_status"] == "success"
         assert result.metadata.get("execution_tier") == "host"
 
     def test_tool_spec_has_execution_tier(self, agent):
-        for name in ("list_files", "read_file", "search", "write_file", "patch_file", "run_shell"):
+        for name in ("list_files", "read_file", "grep", "write_file", "patch_file", "run_shell"):
             spec = agent.tools.get(name)
             assert spec is not None, f"missing tool: {name}"
             assert spec.get("execution_tier") == "host", f"{name} should be host tier"
 
     def test_rejected_tool_has_no_tier_in_metadata(self, executor):
         """被 Gate 拒绝的工具不执行，metadata 中不含 execution_tier。"""
-        result = executor.execute("non_existent_tool", {})
+        result = executor.execute_gated("non_existent_tool", {})
         assert result.metadata["tool_status"] == "rejected"
         assert "execution_tier" not in result.metadata
 
@@ -349,11 +358,11 @@ class TestGate5SemanticDuplicate:
         """search 相同 path → 语义重复。"""
         agent = _make_agent()
         agent.session["history"] = [
-            {"tool_name": "search", "tool_args": {"path": "src", "pattern": "foo"}},
-            {"tool_name": "search", "tool_args": {"path": "src", "pattern": "bar"}},
+            {"tool_name": "grep", "tool_args": {"path": "src", "pattern": "foo"}},
+            {"tool_name": "grep", "tool_args": {"path": "src", "pattern": "bar"}},
         ]
         exe = ToolExecutor(agent, approval_policy="auto")
-        assert exe._is_duplicate("search", {"path": "src", "pattern": "baz"})
+        assert exe._is_duplicate("grep", {"path": "src", "pattern": "baz"})
 
 
 # ---------------------------------------------------------------------------
@@ -447,7 +456,7 @@ class TestLoopDetection:
         exe = ToolExecutor(agent, approval_policy="auto")
         exe.execute_gated("read_file", {"path": "app.py"})
         exe.execute_gated("read_file", {"path": "app.py"})
-        exe.execute_gated("search", {"pattern": "TODO"})  # 不同工具
+        exe.execute_gated("grep", {"pattern": "TODO"})  # 不同工具
         exe.execute_gated("read_file", {"path": "app.py"})
         # 窗口内只有 2 次 read app.py → 不触发
         result = exe.execute_gated("read_file", {"path": "app.py"})
