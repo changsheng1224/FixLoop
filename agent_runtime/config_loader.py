@@ -49,14 +49,6 @@ _ENV_FIELDS = {
     "temperature": float,
     "json_mode": parse_bool,
     "max_json_retries": int,
-    "tool_timeout_s": int,
-    "step_timeout_s": int,
-    "repair_wall_timeout_s": int,
-    "max_llm_calls_per_repair": int,
-    "max_tool_calls": int,
-    "max_write_calls": int,
-    "max_verify_calls": int,
-    "max_recovery_attempts": int,
     "loop_detect_threshold": int,
     "budget.prompt_tokens": int,
     "budget.max_turns": int,
@@ -162,11 +154,7 @@ def load_config_values(
     ).lower()
 
     def merge_layer(layer: dict, name: str) -> None:
-        normalized = {}
-        sources = {}
-        _merge(normalized, layer, "", sources, name)
-        _apply_legacy_aliases(normalized, sources)
-        _merge(values, normalized, "", provenance, name)
+        _merge(values, layer, "", provenance, name)
 
     merge_layer(defaults or {}, "default")
     merge_layer(PROFILE_PRESETS.get(profile, {}), "profile")
@@ -187,42 +175,6 @@ def load_config_values(
             "cli",
         )
     return values, provenance
-
-
-def _apply_legacy_aliases(values: dict[str, Any], provenance: dict[str, str]) -> None:
-    """Normalize aliases within each source before merging it into prior sources.
-
-    Namespaced values win when both spellings occur in the same source.
-    Normalizing per source also preserves the order of multiple workspace files.
-    """
-    aliases = {
-        "budget": {
-            "max_llm_calls": "max_llm_calls_per_repair",
-            "max_tool_calls": "max_tool_calls",
-            "max_write_calls": "max_write_calls",
-            "max_verify_calls": "max_verify_calls",
-            "max_recovery_attempts": "max_recovery_attempts",
-        },
-        "deadline": {
-            "repair_s": "repair_wall_timeout_s",
-            "step_s": "step_timeout_s",
-            "tool_s": "tool_timeout_s",
-        },
-    }
-    for block, fields in aliases.items():
-        nested = values.get(block, {})
-        if not isinstance(nested, dict):
-            raise ValueError(f"{block} configuration must be an object")
-        for key, scalar in fields.items():
-            path = f"{block}.{key}"
-            if key in nested:
-                values[scalar] = nested[key]
-                provenance[scalar] = provenance[path]
-            elif scalar in values:
-                nested[key] = values[scalar]
-                provenance[path] = provenance[scalar]
-        if nested:
-            values[block] = nested
 
 
 def load_runtime_policy(

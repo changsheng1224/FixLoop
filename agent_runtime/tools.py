@@ -49,15 +49,6 @@ class ReadFileArgs:
 
 
 @dataclass
-class SearchArgs:
-    """代码搜索（rg 优先，Python fallback）。"""
-
-    pattern: str  # 必填
-    path: str = "."
-    context_lines: int = 0  # 匹配行前后各多显示 N 行
-
-
-@dataclass
 class GrepArgs:
     """内容搜索（rg 优先，Python re fallback）。"""
 
@@ -156,7 +147,7 @@ class ExpandObservationArgs:
 
 
 # ============================================================================
-# 忽略的路径名（list_files + search 都会跳过）
+# 忽略的路径名（list_files + grep 都会跳过）
 # ============================================================================
 
 IGNORED_PATH_NAMES = {
@@ -789,11 +780,6 @@ def tool_quick_test(context, args: dict) -> str:
     return f"quick_test {status} target={target} exit={proc.returncode}\n{out}"
 
 
-def tool_search(context, args: dict) -> str:
-    """代码搜索（已委托 grep，保留兼容名。新调用请直接用 grep）。"""
-    return tool_grep(context, args)
-
-
 def tool_grep(context, args: dict) -> str:
     """Legacy string surface for budgeted text search."""
     from agent_runtime.code_exploration.io import grep_result
@@ -1234,16 +1220,6 @@ def build_tool_registry(context) -> dict:
         "run": lambda args: _grep_structured(context, args),
     }
 
-    # ---- search ----
-    registry["search"] = {
-        "budget_group": "read",
-        "schema": auto_schema(SearchArgs),
-        "risky": False,
-        "execution_tier": TIER_HOST,
-        "description": "代码搜索（rg 优先，Python fallback）。参数: pattern, path（默认 '.'）",
-        "run": lambda args: _grep_structured(context, args),
-    }
-
     registry["code_lookup"] = {
         "budget_group": "read",
         "schema": auto_schema(CodeLookupArgs),
@@ -1358,7 +1334,6 @@ def build_tool_registry(context) -> dict:
         "list_files",
         "read_file",
         "grep",
-        "search",
         "code_lookup",
         "code_relations",
         "expand_observation",

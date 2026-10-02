@@ -34,16 +34,12 @@ def extract_evidence(
     """Extract bounded facts without deciding a repair target or patch."""
     name = str(tool or "")
     body = str(text or "")
-    facts = (
-        _paths(body)
-        if name in {"read_file", "search", "grep", "test", "run_shell", "patch_file"}
-        else []
-    )
+    facts = _paths(body) if name in {"read_file", "grep", "test", "run_shell", "patch_file"} else []
     if name in {"test", "run_shell", "quick_test", "sandbox_test", "verify"}:
         for match in _TEST_FAILURE.finditer(body):
             facts.append({"kind": "verification_failure", "target": match.group("target")})
     if name in {"write_file", "patch_file", "apply_patch"}:
-        for path in (args or {}).get("path", ""),:
+        for path in ((args or {}).get("path", ""),):
             if path:
                 facts.append({"kind": "changed_file", "path": str(path)})
     if source_version:

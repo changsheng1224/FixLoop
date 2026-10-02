@@ -70,7 +70,7 @@ Agent (runtime.py) — 对外唯一接口
 
 | 文件 | 行数 | M | 职责 |
 |------|:--:|:--:|------|
-| `tools.py` | 410 | M1/M2/B | 6 工具 + write_file append + search context_lines |
+| `tools.py` | 410 | M1/M2/B | 6 工具 + write_file append + grep context_lines |
 | `schema_utils.py` | 51 | M1 | auto_schema() + auto_validate() — 从 type hints 推导 |
 | `tool_context.py` | 24 | M1 | ToolContext — 路径解析 + 逃逸检测 |
 | `tool_executor.py` | 310 | M2/M4 | 9 闸口 ToolExecutor + QuotaEnforcer + 快照对比 |
@@ -106,7 +106,7 @@ Agent (runtime.py) — 对外唯一接口
 | 文件 | 行数 | M | 职责 |
 |------|:--:|:--:|------|
 | `security.py` | 135 | M2/M3 | shell_env + redact_text + redact_artifact + looks_sensitive |
-| `callbacks.py` | 50 | M4/B | ProgressCallback + CLIProgressCallback（ANSI 彩色 + 耗时） |
+| `callbacks.py` | 50 | M4/B | AgentCallback + CLIProgressCallback（ANSI 彩色 + 耗时） |
 | `replay.py` | 75 | M4 | ReplayRunner — 从 trace 回放工具执行 |
 
 ---
@@ -191,7 +191,7 @@ Bonus (工具/体验/性能增强):
 
 ### 4.3 不抛异常
 
-`ToolExecutor.execute()` 的 9 道闸口任何一道失败都返回 `ToolExecutionResult`，不抛异常。AgentLoop 拿到的始终是结构化结果，不会因闸口拒绝而崩溃。模型可以读错误信息并调整策略。
+`ToolExecutor.execute_gated()` 的 9 道闸口任何一道失败都返回 `ToolResult`，不抛异常。AgentLoop 拿到的始终是结构化结果，不会因闸口拒绝而崩溃。模型可以读错误信息并调整策略。
 
 ### 4.4 单例在构造时完成
 
@@ -298,3 +298,5 @@ pytest tests/ --cov=agent_runtime --cov-branch
 ---
 
 *Layer 1 完成 | 281 tests | 82% 行覆盖 / 86% 分支覆盖 | ~4300 行源码 | 13 bonus PRs*
+
+当前配置、工具导入和 checkpoint 恢复边界见 [运行时契约](docs/RUNTIME_CONTRACTS.md)。

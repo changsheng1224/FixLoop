@@ -18,7 +18,7 @@ def budget():
 
 @pytest.fixture
 def policy():
-    return TierPolicy(allowed_tools=frozenset({"read_file", "search"}))
+    return TierPolicy(allowed_tools=frozenset({"read_file", "grep"}))
 
 
 class TestL0FilterHistory:

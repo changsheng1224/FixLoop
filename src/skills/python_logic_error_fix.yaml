@@ -2,7 +2,7 @@ name: python_logic_error_fix
 language: python
 trigger_pattern: "off-by-one|inclusive_range|closed interval|逻辑错误"
 priority: 8
-suggested_tools: [read_file, find_test, search, patch_file]
+suggested_tools: [read_file, find_test, grep, patch_file]
 
 example_issue: |
   Test failure: implementation output length or boundary differs from expected

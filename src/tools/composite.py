@@ -34,7 +34,6 @@ REPAIR_CANONICAL_TOOL_NAMES: tuple[str, ...] = (
     "sandbox_build",
     "sandbox_test",
     "sandbox_verify",
-    "search",
     "stack_parse",
     "write_file",
 )

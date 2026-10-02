@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Literal
 
 from agent_runtime.session_contract import (
+    CHECKPOINT_ENVELOPE_VERSION,
     CheckpointEnvelope,
     SessionIdentity,
     compare_workspace_manifest,
@@ -295,25 +296,28 @@ def evaluate_resume_state(agent) -> dict:
     last = checkpoints[-1]
 
     envelope_raw = last.get("checkpoint_envelope")
-    if isinstance(envelope_raw, dict):
-        try:
-            envelope = CheckpointEnvelope.from_dict(envelope_raw)
-            if not envelope.verify():
-                return _emit_resume_result(agent, _resume_result("integrity-failure", last))
-            if last.get("identity") and last.get("identity") != envelope.identity:
-                return _emit_resume_result(agent, _resume_result("integrity-failure", last))
-            for field in (
-                "task_state",
-                "context_manifest",
-                "workspace_manifest",
-                "action_ledger",
-                "side_effects",
-                "observation_manifest",
-            ):
-                if field in last and last.get(field) != getattr(envelope, field):
-                    return _emit_resume_result(agent, _resume_result("integrity-failure", last))
-        except (TypeError, ValueError):
+    if not isinstance(envelope_raw, dict):
+        return _emit_resume_result(agent, _resume_result("integrity-failure", last))
+    try:
+        envelope = CheckpointEnvelope.from_dict(envelope_raw)
+        if envelope.schema_version != CHECKPOINT_ENVELOPE_VERSION:
+            return _emit_resume_result(agent, _resume_result("schema-mismatch", last))
+        if not envelope.verify():
             return _emit_resume_result(agent, _resume_result("integrity-failure", last))
+        if last.get("identity") and last.get("identity") != envelope.identity:
+            return _emit_resume_result(agent, _resume_result("integrity-failure", last))
+        for field in (
+            "task_state",
+            "context_manifest",
+            "workspace_manifest",
+            "action_ledger",
+            "side_effects",
+            "observation_manifest",
+        ):
+            if field in last and last.get(field) != getattr(envelope, field):
+                return _emit_resume_result(agent, _resume_result("integrity-failure", last))
+    except (TypeError, ValueError):
+        return _emit_resume_result(agent, _resume_result("integrity-failure", last))
 
     # Schema 版本检查
     if last.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
@@ -539,19 +543,6 @@ def _workspace_fingerprint(root: str) -> str:
         return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
     except OSError:
         return ""
-
-
-def _legacy_file_freshness(root: str, path: str) -> str:
-    """Legacy mtime helper retained for old checkpoint readers."""
-    try:
-        p = Path(root) / path
-        if p.exists():
-            stat = p.stat()
-            raw = f"{stat.st_mtime}:{stat.st_size}"
-            return hashlib.sha256(raw.encode()).hexdigest()[:16]
-    except OSError:
-        pass
-    return ""
 
 
 def file_content_hash(root: str, path: str) -> str:

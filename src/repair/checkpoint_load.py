@@ -119,7 +119,7 @@ def load_repair_checkpoint(
         envelope_raw = data.get("checkpoint_envelope")
         if isinstance(envelope_raw, dict):
             envelope = CheckpointEnvelope.from_dict(envelope_raw)
-            if require_valid and envelope.schema_version != CHECKPOINT_ENVELOPE_VERSION:
+            if envelope.schema_version != CHECKPOINT_ENVELOPE_VERSION:
                 return reject("resume_checkpoint_schema_mismatch")
             if not envelope.verify() or data.get("checkpoint_checksum") != envelope.checksum:
                 return reject("resume_checkpoint_integrity_failed")
@@ -140,7 +140,7 @@ def load_repair_checkpoint(
                 != Path(repo_root).resolve()
             ):
                 return reject("resume_checkpoint_identity_mismatch")
-        elif require_valid:
+        else:
             return reject("resume_checkpoint_integrity_failed")
         if require_valid and issue is not None and data.get("issue_input") != issue:
             return reject("resume_task_objective_mismatch")
@@ -153,13 +153,15 @@ def load_repair_checkpoint(
         ):
             return reject("resume_checkpoint_malformed")
         from src.repair.control_state import RepairControl
-        from src.state import migrate_state_payload
+        from src.state import CURRENT_STATE_SCHEMA_VERSION, validate_state_payload
 
-        migrated = migrate_state_payload(data)
-        RepairControl.model_validate(migrated.get("control", {}))
-        if set(migrated.get("node_timings", {})) & set(RepairControl.model_fields):
+        if data.get("schema_version") != CURRENT_STATE_SCHEMA_VERSION:
+            return reject("resume_checkpoint_schema_mismatch")
+        validated = validate_state_payload(data)
+        RepairControl.model_validate(validated.get("control", {}))
+        if set(validated.get("node_timings", {})) & set(RepairControl.model_fields):
             return reject("resume_checkpoint_malformed")
-        return migrated
+        return validated
     except RepairCheckpointError:
         raise
     except (json.JSONDecodeError, UnicodeError, TypeError, ValueError, AttributeError):

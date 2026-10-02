@@ -120,17 +120,17 @@ def test_uncertain_blocks_followup_command_and_write_at_executor(tmp_path, monke
         return capture()
 
     monkeypatch.setattr(executor, "_capture_snapshot", tracked_capture)
-    first = executor.execute("quick_test", {"nodeid": "missing.py"})
+    first = executor.execute_gated("quick_test", {"nodeid": "missing.py"})
     assert first.status == "rejected"
     captures.clear()
     (tmp_path / "test_a.py").write_text("def test_a(): pass\n")
-    second = executor.execute("quick_test", {"nodeid": "test_a.py"})
+    second = executor.execute_gated("quick_test", {"nodeid": "test_a.py"})
     assert second.status == "uncertain"
     assert second.metadata["execution_tier"] == "none"
     assert "rollback_attempted" not in second.metadata
     assert len(captures) == 1  # Never inspect a workspace with unconfirmed cleanup.
     assert second.metadata["workspace_diff_status"] == "pending_cleanup"
-    blocked = executor.execute("write_file", {"path": "new.py", "content": "x=1"})
+    blocked = executor.execute_gated("write_file", {"path": "new.py", "content": "x=1"})
     assert blocked.error_code == "execution_uncertain"
     assert not (tmp_path / "new.py").exists()
     assert len(backend.requests) == 1
@@ -153,7 +153,7 @@ def test_executor_preserves_actual_tier_and_sandbox_receipt(tmp_path):
         cwd=str(tmp_path),
         tool_context=ctx,
     )
-    result = ToolExecutor(agent, approval_policy="auto").execute(
+    result = ToolExecutor(agent, approval_policy="auto").execute_gated(
         "quick_test", {"nodeid": "test_a.py"}
     )
     assert result.ok
@@ -200,7 +200,7 @@ def test_executor_rejects_command_with_unverified_execution_tier(tmp_path):
         cwd=str(tmp_path),
         tool_context=ctx,
     )
-    result = ToolExecutor(agent, approval_policy="auto").execute(
+    result = ToolExecutor(agent, approval_policy="auto").execute_gated(
         "run_shell", {"command": "python -c 'print(1)'"}
     )
     assert result.error_code == "policy_denied"

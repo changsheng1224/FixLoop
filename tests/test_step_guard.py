@@ -45,7 +45,7 @@ class TestToolTargetFile:
         assert _tool_target_file("patch_file", {"path": "utils/helpers.py"}) == "helpers.py"
 
     def test_non_file_tool_returns_none(self):
-        assert _tool_target_file("search", {"pattern": "def"}) is None
+        assert _tool_target_file("grep", {"pattern": "def"}) is None
         assert _tool_target_file("grep", {"pattern": "TODO"}) is None
 
     def test_missing_path_returns_none(self):
@@ -207,7 +207,7 @@ class TestDriftDetection:
         # 多次调用 search 但不操作文件 → 不触发 drift
         for _ in range(5):
             v = guard.evaluate(
-                StepContext(tool_name="search", tool_args={"pattern": "TODO"}, has_affected=True)
+                StepContext(tool_name="grep", tool_args={"pattern": "TODO"}, has_affected=True)
             )
             assert v is None
         assert guard.drift_count == 0

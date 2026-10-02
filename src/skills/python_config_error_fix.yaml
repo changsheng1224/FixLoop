@@ -2,7 +2,7 @@ name: python_config_error_fix
 language: python
 trigger_pattern: "KeyError|pyproject\\.toml|missing.*\\[tool"
 priority: 10
-suggested_tools: [read_file, search, patch_file]
+suggested_tools: [read_file, grep, patch_file]
 
 example_issue: |
   KeyError: 'section' when reading config mapping

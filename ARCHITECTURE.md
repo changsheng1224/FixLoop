@@ -49,7 +49,7 @@ Layer 1 位于 `agent_runtime/`，约 1900 行核心代码。对外唯一入口�
 | `tools.py` | 6 个基础工具实现 | 路径、搜索词等 | 文件内容 / 搜索结果 | 读写与搜索是 Agent 与代码库交互的最小集合 |
 | `schema_utils.py` | 参数 schema 推导 | 函数 type hints | JSON schema + 校验 | 零手写 schema，工具签名即契约 |
 | `tool_context.py` | 路径解析与逃逸检测 | 相对路径 | 绝对路径或拒绝 | **路径锚定**：禁止 `../` 逃出 workspace |
-| `tool_executor.py` | 9 道执行闸口 | tool_name、args | `ToolExecutionResult` | 所有工具必经安全检查；失败不抛异常，模型可读错误 |
+| `tool_executor.py` | 9 道执行闸口 | tool_name、args | `ToolResult` | 所有工具必经安全检查；失败不抛异常，模型可读错误 |
 
 ### 1.5 记忆与持久化
 
@@ -107,7 +107,7 @@ Layer 1 位于 `agent_runtime/`，约 1900 行核心代码。对外唯一入口�
 │        └─ 解析失败                      → retry 提示            │
 │                                                               │
 │   ④ ToolExecutor.execute(name, args)   [9 道闸口]            │
-│        └─ tools.* 实际执行 → ToolExecutionResult              │
+│        └─ tools.* 实际执行 → ToolResult                       │
 │                                                               │
 │   ⑤ session.history.append + update_memory()                  │
 │        └─ trace.jsonl 追加事件                                │
@@ -158,7 +158,7 @@ Layer 1 位于 `agent_runtime/`，约 1900 行核心代码。对外唯一入口�
               │ToolExecutor │
               │ 9 gates     │
               └──────┬──────┘
-                     │ ToolExecutionResult
+                     │ ToolResult
          ┌───────────┼───────────┐
          ▼           ▼           ▼
    session.history  memory   trace.jsonl
@@ -184,59 +184,34 @@ Layer 2 位于 `src/`，在 Layer 1 之上实现分工修复。**Orchestrator �
 
 ### 4.1 协作总览
 
-```
-Issue 文本
-    │
-    ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Orchestrator (纯 Python)                                    │
-│   _parse_issue()  → RepairPlan                              │
-│   _match_skill()  → suggested_tools (YAML)                  │
-└───────────────────────────┬─────────────────────────────────┘
-                            │
-            ┌───────────────┴───────────────┐
-            ▼                               ▼
-   ┌─────────────────┐             ┌─────────────────┐
-   │   Localizer     │             │   Retriever     │
-   │ ast/stack/git   │             │ search/find_test│
-   │ → SuspectLocation[]           │ → RetrievedContext
-   └────────┬────────┘             └────────┬────────┘
-            │         并行 (ThreadPool)    │
-            └───────────────┬───────────────┘
-                            ▼
-                   RepairState 填充
-                            │
-                            ▼
-            ┌───────────────────────────────┐
-            │ Patcher (串行, 可重试)         │
-            │ read → JSON patch → write_file │
-            │ → CandidatePatch[]           │
-            └───────────────┬───────────────┘
-                            ▼
-            ┌───────────────────────────────┐
-            │ Verifier                      │
-            │ pytest (本地) / Docker (沙箱)  │
-            │ → VerificationResult          │
-            └───────────────┬───────────────┘
-                            │
-              ┌─────────────┴─────────────┐
-              │ all_passed                │ failed
-              ▼                           ▼
-         status=fixed              回滚 repo 快照
-                                   feedback → retry Patcher
-                                   (max_retries 次)
+```text
+公开 Issue → Intent / 规则种子 → 证据驱动 Plan DAG
+                                 │
+                      最多两路只读探索
+                                 │
+                         Patcher 串行读改测
+                    read_file → apply_patch → quick_test
+                                 │
+                      磁盘快照 diff → CandidatePatch
+                                 │
+                          Critic → Verifier
+                                 │
+                       成功保留 / 失败回滚与反馈
 ```
 
-### 4.2 各 Agent 职责
+`CandidatePatch` 是落盘修改的审计与导出数据。模型最终回答中的 JSON 或文本 diff
+不会进入自动应用路径。Localizer/Retriever 不再是主流程中的独立 LLM Agent。
 
-| Agent | 工具子集 | 产出 | max_steps |
-|-------|----------|------|-----------|
-| **Localizer** | ast_parse, stack_parse, git_blame, read/search | `SuspectLocation[]` | 6 |
-| **Retriever** | search, find_test, git_diff | `RetrievedContext` | 6 |
-| **Patcher** | read_file, write_file, patch_file | `CandidatePatch[]` | 8 |
-| **Verifier** | sandbox_build, sandbox_test（或本地 pytest） | `VerificationResult` | — |
+### 4.2 各角色职责
 
-每个 Agent 是 **独立的 `Agent` 实例**（Layer 1），经 `ToolGateway` 包裹后只能调用授权工具。
+| 角色 | 职责 | 关键工具 |
+|------|------|----------|
+| Patcher | 理解问题、探索、修改与快检 | read_file、grep、apply_patch、quick_test |
+| 只读探索 Agent | 消费 Plan 节点，提供版本化证据 | 受派发契约约束的只读工具 |
+| Critic | 提交前轻量检查 | 运行时裁决 |
+| Verifier | 独立验证 | 本地测试策略或 Docker 验证工具 |
+
+工具 schema 保持稳定，执行权限由 `ToolGateway` 根据角色、阶段和证据裁决。
 
 ### 4.3 Blackboard
 
@@ -270,8 +245,8 @@ Issue 文本
 |------|------|--------|------|
 | `issue_input` | str | CLI | 原始 Issue |
 | `repair_plan` | RepairPlan | Orchestrator._parse_issue | 语言、issue_type、嫌疑文件 |
-| `suspect_locations` | list | Localizer | 精确行号与置信度 |
-| `retrieved_context` | RetrievedContext | Retriever | 相关测试、调用链、片段 |
+| `suspect_locations` | list | 规则种子 / Patcher 探索 | 精确行号与置信度 |
+| `retrieved_context` | RetrievedContext | 证据上下文组装 | 相关测试、调用链、片段 |
 | `candidate_patches` | list | Patcher | unified diff + 说明 |
 | `verification_result` | VerificationResult | Verifier | pytest / 容器结果 |
 | `feedback` | str | Orchestrator | 验证失败摘要，喂给下一轮 Patcher |
@@ -281,22 +256,18 @@ Issue 文本
 
 ### 5.2 status 状态机
 
+```text
+pending → Patcher 生成落盘补丁
+             ├─ 跳过验证 → pending_verify
+             └─ 独立验证
+                   ├─ 通过 → fixed
+                   └─ 失败 → 回滚 → feedback → 重试
+                                             └─ 耗尽 → exhausted
 ```
-pending
-   │ parse + localize/retrieve
-   ▼
-(localizing 中间态，代码中较少显式设置)
-   │
-   ▼
- patched  ←── skip_verify 或无 Verifier 时，有补丁即停
-   │
-   │ verify loop
-   ├─ all_passed ──► fixed
-   │
-   ├─ fail + retry < max ──► 回滚 ──► feedback ──► 再 patch
-   │
-   └─ retry >= max ──► exhausted
-```
+
+取消、超时、恢复阻塞和回归分别记录为 `user_cancel`、`timeout`、
+`recovery_required`、`regression`。阶段使用 `context`；历史 `retrieve` 和 `patched`
+不再接受。状态和 checkpoint 契约见 [运行时契约](docs/RUNTIME_CONTRACTS.md)。
 
 ### 5.3 自愈循环（Verifier 重试）
 
@@ -308,7 +279,7 @@ pending
 4. **失败**：`_restore_repo_snapshot()` 还原 → `_build_feedback()` 写入 `state.feedback` → `retry_count += 1`  
 5. **成功**：`status = "fixed"`，保留补丁
 
-无补丁或 JSON 解析失败也会递增 `retry_count`，并给出针对性 `feedback`。
+无落盘补丁的失败尝试也会递增 `retry_count`，并给出针对性 `feedback`。
 
 ---
 
@@ -340,13 +311,13 @@ FixLoop 采用**纵深防御**：Layer 1 闸口 + Layer 2 权限网关 + 容器�
                                 ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ 第 5 层：ToolGateway (Layer 2)                              │
-│   Localizer 不能 write；Patcher 不能 ast_parse；声明式表    │
+│   按角色、阶段、证据和审批裁决工具权限                     │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ### 6.1 Layer 1：ToolExecutor 九道闸口
 
-按序执行，任一失败返回结构化 `ToolExecutionResult`：
+按序执行，任一失败返回结构化 `ToolResult`：
 
 1. allowed_tools 白名单  
 2. 工具存在检查  
@@ -382,7 +353,7 @@ Docker sandbox 默认 `network_mode=none`，容器内完全无网络访问。
 
 - `write_file` / `patch_file` → 仅 **patcher**  
 - `ast_parse` / `stack_parse` → 仅 **localizer**  
-- `read_file` / `search` / `list_files` → 所有 Agent  
+- `read_file` / `grep` / `list_files` → 所有 Agent
 
 Agent 收到的是普通工具错误，**不知道被网关拦截**——避免 prompt 注入绕过。
 
@@ -400,7 +371,7 @@ Agent 收到的是普通工具错误，**不知道被网关拦截**——避免 
 ```
 agent_runtime/     Layer 1 内核
 src/
-├── agents/        Localizer / Retriever / Patcher / Verifier 工厂
+├── agents/        Patcher / Verifier 工厂
 ├── orchestrator.py
 ├── state.py       RepairState 类型
 ├── blackboard.py

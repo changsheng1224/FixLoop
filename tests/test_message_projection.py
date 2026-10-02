@@ -12,7 +12,7 @@ from agent_runtime.message_projection import (
     PROJECTION_STATE_KEY,
     attach_projection_metadata,
     build_context_prefix,
-    check_prefix_aligned,
+    check_prefix_monotonic,
     init_run_projection,
     seal_history_at_build,
 )
@@ -30,18 +30,18 @@ def agent(temp_workspace):
 
 
 class TestMessageProjectionHelpers:
-    def test_check_prefix_aligned_first_step(self):
-        assert check_prefix_aligned("", "any prefix") is True
+    def test_check_prefix_monotonic_first_step(self):
+        assert check_prefix_monotonic("", "any prefix") is True
 
-    def test_check_prefix_aligned_growing_prefix(self):
+    def test_check_prefix_monotonic_growing_prefix(self):
         prev = "stable|memory|history-v1"
         curr = "stable|memory|history-v1|history-v2"
-        assert check_prefix_aligned(prev, curr) is True
+        assert check_prefix_monotonic(prev, curr) is True
 
-    def test_check_prefix_aligned_divergent(self):
+    def test_check_prefix_monotonic_divergent(self):
         prev = "stable|memory|history-v1"
         curr = "stable|memory|HISTORY-REWRITTEN|history-v2"
-        assert check_prefix_aligned(prev, curr) is False
+        assert check_prefix_monotonic(prev, curr) is False
 
     def test_init_run_projection_freezes_memory_and_query(self, agent):
         agent.session["memory"]["working"]["recent_files"] = ["a.py"]
@@ -79,7 +79,7 @@ class TestContextManagerSealedHistory:
         _, meta2 = cm.build("tool result step 1")
         prefix1 = build_context_prefix(agent, meta1)
         prefix2 = build_context_prefix(agent, meta2)
-        assert check_prefix_aligned(prefix1, prefix2)
+        assert check_prefix_monotonic(prefix1, prefix2)
 
         agent.session["history"].extend(
             [
@@ -90,7 +90,7 @@ class TestContextManagerSealedHistory:
         _, meta3 = cm.build("tool result step 2")
         prefix3 = build_context_prefix(agent, meta3)
         attach_projection_metadata(meta3, agent.session, context_prefix=prefix3)
-        assert check_prefix_aligned(prefix2, prefix3)
+        assert check_prefix_monotonic(prefix2, prefix3)
         assert meta3.get("prefix_aligned") is True
 
     def test_memory_snapshot_prevents_prefix_drift_from_recent_files(self, agent):
@@ -109,7 +109,7 @@ class TestContextManagerSealedHistory:
         agent.session["history"].append({"role": "assistant", "content": "read x.py", "turn_id": 1})
         _, meta2 = cm.build("done reading")
         prefix2 = build_context_prefix(agent, meta2)
-        assert check_prefix_aligned(prefix1, prefix2)
+        assert check_prefix_monotonic(prefix1, prefix2)
 
 
 class TestAttachProjectionMetadata:

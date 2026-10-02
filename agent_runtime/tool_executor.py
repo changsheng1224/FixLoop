@@ -18,7 +18,6 @@ import hashlib
 import os
 import threading
 from copy import copy
-from dataclasses import dataclass
 from functools import partial, wraps
 from pathlib import Path
 
@@ -36,11 +35,6 @@ from agent_runtime.tool_result import (
     attach_tool_receipt,
     normalize_tool_result,
 )
-
-
-@dataclass
-class ToolExecutionResult(ToolResult):
-    """Backward-compatible name for the canonical :class:`ToolResult`."""
 
 
 def _invoke_tool(run, args):
@@ -77,14 +71,13 @@ class ToolExecutor:
         self.approval_policy = approval_policy or agent.config.approval
         self.dry_run = dry_run
         self._quota = quota
-        self._high_risk_tools = self._collect_high_risk()
         self._resilience = ToolResilienceController()
         # 死循环检测滑动窗口
         self._call_window: list[str] = []
         self._window_lock = threading.RLock()
         self._call_context = None
 
-    def execute_gated(self, name: str, args: dict, *, call_context=None) -> ToolExecutionResult:
+    def execute_gated(self, name: str, args: dict, *, call_context=None) -> ToolResult:
         executor = self.for_call(call_context) if call_context is not None else self
         result = executor._execute_gated(name, args)
         context = executor._call_context
@@ -123,7 +116,7 @@ class ToolExecutor:
                     spec["isolated_read"] = True
         return local
 
-    def _execute_gated(self, name: str, args: dict) -> ToolExecutionResult:
+    def _execute_gated(self, name: str, args: dict) -> ToolResult:
         """按序执行 Executor 闸口（Gate 1–9），不含 Gateway 权限层。"""
         from agent_runtime.repair_runtime import CanonicalToolCall
 
@@ -162,7 +155,8 @@ class ToolExecutor:
         if coordinator is not None:
             coordinator.assert_can_dispatch()
         if getattr(ctx, "execution_uncertain", False) and (
-            name in self._high_risk_tools or tool_spec.get("side_effect") in {"write", "process"}
+            name in self._ASK_TOOLS | self._DENY_TOOLS
+            or tool_spec.get("side_effect") in {"write", "process"}
         ):
             return self._rejected(
                 2, "execution_uncertain", "Error: previous cleanup unverified; resume required."
@@ -220,7 +214,7 @@ class ToolExecutor:
         args: dict,
         tool_spec: dict,
         token,
-    ) -> ToolExecutionResult:
+    ) -> ToolResult:
         """执行 Gate 5–9；调用方负责释放 Gate 4 获取的资源。"""
 
         active_reserve = None
@@ -285,7 +279,7 @@ class ToolExecutor:
 
         # ---- Gate 8: 执行前工作区快照 ----
         sandbox_command = tool_spec.get("execution_tier") == "linux_sandbox"
-        is_risky = name in self._high_risk_tools or sandbox_command
+        is_risky = name in self._ASK_TOOLS | self._DENY_TOOLS or sandbox_command
         before_snapshot = self._capture_snapshot() if is_risky else {}
         restore_snapshot = (
             self._capture_restore_snapshot() if is_risky and not sandbox_command else {}
@@ -316,7 +310,7 @@ class ToolExecutor:
                 execution_result.error_code = "edit_lint_reject"
                 execution_result.metadata["tool_error_code"] = "edit_lint_reject"
                 execution_result.metadata["recovery_action"] = "apply_patch_with_corrected_syntax"
-        result = ToolExecutionResult(
+        result = ToolResult(
             content=execution_result.content,
             metadata=dict(execution_result.metadata),
             status=execution_result.status,
@@ -440,15 +434,9 @@ class ToolExecutor:
                 result.metadata["read_reserve_consumed"] = consumed
         return result
 
-    def execute(self, name: str, args: dict) -> ToolExecutionResult:
-        """兼容旧调用；生产路径应经 Agent.execute_tool → dispatch。"""
-        return self.execute_gated(name, args)
-
     # ---- 内部方法 ----
 
-    def _rejected(
-        self, gate_id: int, tool_error_code: str, content: str, **extra
-    ) -> ToolExecutionResult:
+    def _rejected(self, gate_id: int, tool_error_code: str, content: str, **extra) -> ToolResult:
         """构造 Executor 闸口拒绝结果。"""
         try:
             from agent_runtime.metrics import get_registry
@@ -459,19 +447,19 @@ class ToolExecutor:
             )
         except Exception:
             pass
-        return ToolExecutionResult(
+        return ToolResult(
             content=content,
             metadata=build_executor_rejection_metadata(gate_id, tool_error_code, **extra),
         )
 
-    def _rejected_cancel(self, content: str, **extra) -> ToolExecutionResult:
+    def _rejected_cancel(self, content: str, **extra) -> ToolResult:
         """用户 cancel 导致的拒绝（rejection_layer=cancel）。"""
-        return ToolExecutionResult(
+        return ToolResult(
             content=content,
             metadata=build_executor_cancel_metadata(**extra),
         )
 
-    def _validate_args(self, name: str, args: dict) -> tuple[dict, ToolExecutionResult | None]:
+    def _validate_args(self, name: str, args: dict) -> tuple[dict, ToolResult | None]:
         """Gate 3：dataclass 参数校验与路径逃逸校验。"""
         from agent_runtime.tool_schema import validate_tool_arguments
 
@@ -519,7 +507,7 @@ class ToolExecutor:
 
     def _check_quota(
         self, name: str, args: dict, tool_spec: dict | None = None
-    ) -> tuple[bool, ToolExecutionResult | None]:
+    ) -> tuple[bool, ToolResult | None]:
         """Gate 4：检查调用配额，并返回是否获取了 shell 并发槽。"""
         if self._quota is None:
             return False, None
@@ -556,11 +544,11 @@ class ToolExecutor:
             return True, None
         return False, None
 
-    def _maybe_dry_run(self, name: str, args: dict) -> ToolExecutionResult | None:
+    def _maybe_dry_run(self, name: str, args: dict) -> ToolResult | None:
         """Gate 6：dry-run 直接返回计划，不进入审批与执行。"""
         if not self.dry_run:
             return None
-        return ToolExecutionResult(
+        return ToolResult(
             content=f"[DRY RUN] Would {name}({args})",
             metadata={"tool_status": "success", "dry_run": True},
         )
@@ -569,7 +557,7 @@ class ToolExecutor:
         self,
         name: str,
         args: dict,
-    ) -> tuple[dict | None, ToolExecutionResult | None]:
+    ) -> tuple[dict | None, ToolResult | None]:
         """Gate 6.5：为写类工具准备审批预览。"""
         if name == "write_file":
             raw_path = args.get("path", "")
@@ -604,7 +592,7 @@ class ToolExecutor:
         args: dict,
         patch_preview_meta: dict | None,
         token,
-    ) -> tuple[dict | None, ToolExecutionResult | None]:
+    ) -> tuple[dict | None, ToolResult | None]:
         """Gate 7：执行分级审批策略。"""
         tier = self._approval_tier(name)
         if (
@@ -637,7 +625,7 @@ class ToolExecutor:
             **extra,
         )
 
-    def _run_tool(self, name: str, args: dict, tool_spec: dict, token) -> str | ToolExecutionResult:
+    def _run_tool(self, name: str, args: dict, tool_spec: dict, token) -> str | ToolResult:
         """Run with bounded retries and update the per-tool circuit state."""
         from agent_runtime.providers.retry_policy import RetryPolicy
 
@@ -666,7 +654,7 @@ class ToolExecutor:
             if deadline is not None:
                 remaining = deadline.remaining_s()
                 if remaining <= 0:
-                    return ToolExecutionResult(
+                    return ToolResult(
                         content=f"Error: 工具 '{name}' 重试前已超过全局执行期限",
                         status=ToolStatus.REJECTED.value,
                         error_code="deadline_exceeded",
@@ -681,14 +669,9 @@ class ToolExecutor:
                 time.sleep(delay)
         return result
 
-    def _run_tool_once(
-        self, name: str, args: dict, tool_spec: dict, token
-    ) -> str | ToolExecutionResult:
+    def _run_tool_once(self, name: str, args: dict, tool_spec: dict, token) -> str | ToolResult:
         """Gate 9: execute one attempt and normalize exceptions."""
-        if hasattr(self.agent.config, "effective_deadline"):
-            timeout_s = int(self.agent.config.effective_deadline()["tool_s"] or 0)
-        else:
-            timeout_s = int(getattr(self.agent.config, "tool_timeout_s", 0) or 0)
+        timeout_s = self.agent.config.deadline.tool_s
         spec_timeout = float(tool_spec.get("timeout_s", 0) or 0)
         if spec_timeout > 0:
             timeout_s = spec_timeout if timeout_s <= 0 else min(timeout_s, spec_timeout)
@@ -747,24 +730,24 @@ class ToolExecutor:
                     metadata["structured_facts"] = list(result.structured_facts)
                 if getattr(result, "raw", None):
                     metadata["raw_result"] = result.raw
-                return ToolExecutionResult(content=str(result.content), metadata=metadata)
+                return ToolResult(content=str(result.content), metadata=metadata)
             return result
         except CancelledError:
-            return ToolExecutionResult(
+            return ToolResult(
                 content=f"Error: 工具 '{name}' 执行已取消。",
                 status=ToolStatus.CANCELLED.value,
                 error_code="tool_cancelled",
                 metadata=build_executor_cancel_metadata(),
             )
         except ToolCancelledError:
-            return ToolExecutionResult(
+            return ToolResult(
                 content=f"Error: 工具 '{name}' 执行已取消。",
                 status=ToolStatus.CANCELLED.value,
                 error_code="tool_cancelled",
                 metadata=build_executor_cancel_metadata(termination_guaranteed=True),
             )
         except ToolTimeoutError as e:
-            return ToolExecutionResult(
+            return ToolResult(
                 content=f"Error: 工具 '{name}' 执行超时（{e.timeout_s} 秒）",
                 status=ToolStatus.ERROR.value,
                 error_code="tool_timeout",
@@ -776,7 +759,7 @@ class ToolExecutor:
                 ),
             )
         except ToolIsolationError as e:
-            return ToolExecutionResult(
+            return ToolResult(
                 content=f"Error: 工具 '{name}' 无法满足进程隔离要求: {e}",
                 status=ToolStatus.ERROR.value,
                 error_code="policy_denied",
@@ -785,7 +768,7 @@ class ToolExecutor:
                 ),
             )
         except Exception as e:
-            return ToolExecutionResult(
+            return ToolResult(
                 content=f"Error: 工具 '{name}' 执行异常: {e}",
                 metadata=build_executor_error_metadata(retryable=True),
             )
@@ -817,7 +800,7 @@ class ToolExecutor:
                 metadata["shell_env_keys"] = sorted(provider().keys())
         return metadata
 
-    def _validate_path_args(self, name: str, args) -> ToolExecutionResult | None:
+    def _validate_path_args(self, name: str, args) -> ToolResult | None:
         """Gate 3 续：路径 resolve、敏感路径、超大/二进制读拦截。"""
         if isinstance(args, dict):
             raw_path = args.get("path")
@@ -854,7 +837,7 @@ class ToolExecutor:
         # 有界读取器计量实际字节；整文件大小不能阻止合法的小范围读取。
         return None
 
-    def _validate_shell_args(self, name: str, args) -> ToolExecutionResult | None:
+    def _validate_shell_args(self, name: str, args) -> ToolResult | None:
         """Gate 3 续：宿主机 shell 命令 allowlist（Docker verify 不经此路径）。"""
         if name != "run_shell":
             return None
@@ -885,7 +868,6 @@ class ToolExecutor:
         {
             "read_file",
             "list_files",
-            "search",
             "grep",
             "ast_parse",
             "code_lookup",
@@ -922,10 +904,6 @@ class ToolExecutor:
             return cls._APPROVAL_TIER_DENY
         return cls._APPROVAL_TIER_ASK  # 未知工具默认须审批
 
-    def _collect_high_risk(self) -> set[str]:
-        """collect_high_risk 已废弃，保留兼容 stub。"""
-        return self._ASK_TOOLS | self._DENY_TOOLS
-
     def _get_args_class(self, name: str) -> type | None:
         """根据工具名返回对应的参数 dataclass。"""
         tool = (self.agent.tools or {}).get(name) or {}
@@ -936,7 +914,6 @@ class ToolExecutor:
         mapping = {
             "list_files": tools_module.ListFilesArgs,
             "read_file": tools_module.ReadFileArgs,
-            "search": tools_module.SearchArgs,
             "grep": tools_module.GrepArgs,
             "code_lookup": tools_module.CodeLookupArgs,
             "code_relations": tools_module.CodeRelationsArgs,
@@ -951,7 +928,6 @@ class ToolExecutor:
         {
             "read_file",
             "list_files",
-            "search",
             "grep",
             "ast_parse",
             "code_lookup",
@@ -1133,12 +1109,6 @@ class ToolExecutor:
             try:
                 if target.exists() or target.is_symlink():
                     target.unlink()
-                # Backwards compatibility for snapshots created by older
-                # runtimes/tests that stored plain UTF-8 strings.
-                if isinstance(record, str) or record is None:
-                    if record is not None:
-                        target.write_text(record, encoding="utf-8")
-                    continue
                 if record.get("kind") == "symlink":
                     os.symlink(record.get("target", ""), target)
                 else:
@@ -1181,9 +1151,7 @@ class ToolExecutor:
             "diff_summary": "\n".join(summary_parts) if summary_parts else "(无变更)",
         }
 
-    def _attach_stale_preimage_metadata(
-        self, result: ToolExecutionResult, name: str, args: dict
-    ) -> None:
+    def _attach_stale_preimage_metadata(self, result: ToolResult, name: str, args: dict) -> None:
         """Expose current file identity so a stale patch can be repaired once."""
         raw_path = str(args.get("path") or "")
         result.metadata.update(

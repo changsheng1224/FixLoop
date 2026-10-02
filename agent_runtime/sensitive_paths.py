@@ -61,7 +61,7 @@ SENSITIVE_PATH_GLOBS: tuple[str, ...] = (
 )
 
 _WRITE_TOOLS = frozenset({"write_file", "patch_file"})
-_READ_TOOLS = frozenset({"read_file", "grep", "search", "inspect_file", "ast_parse", "code_lookup"})
+_READ_TOOLS = frozenset({"read_file", "grep", "inspect_file", "ast_parse", "code_lookup"})
 
 
 def is_sensitive_path(path: str | Path) -> bool:
@@ -101,9 +101,14 @@ def check_sensitive_access(tool_name: str, path: str | Path) -> str | None:
         return None
     if not is_sensitive_path(path):
         return None
-    if tool_name in _WRITE_TOOLS or tool_name in _READ_TOOLS or tool_name in (
-        "list_files",
-        "find_test",
+    if (
+        tool_name in _WRITE_TOOLS
+        or tool_name in _READ_TOOLS
+        or tool_name
+        in (
+            "list_files",
+            "find_test",
+        )
     ):
         return "sensitive_path"
     # 未知带 path 的工具也拦截

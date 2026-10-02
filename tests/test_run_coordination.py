@@ -333,7 +333,7 @@ def test_cancel_during_tool_preparation_blocks_actual_dispatch(tmp_path, monkeyp
         assert release.wait(3)
         return {}
 
-    executor._high_risk_tools = executor._high_risk_tools | {"list_files"}
+    executor._ASK_TOOLS = executor._ASK_TOOLS | {"list_files"}
     monkeypatch.setattr(executor, "_capture_snapshot", prepare)
     monkeypatch.setattr(executor, "_capture_restore_snapshot", lambda: {})
     monkeypatch.setattr(executor, "_run_tool", lambda *args: calls.append(True))

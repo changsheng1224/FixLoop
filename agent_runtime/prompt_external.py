@@ -42,7 +42,7 @@ BUILTIN_TOOL_EXAMPLES = [
         "description": "搜索特定模式",
         "tool": (
             "<function_calls>\n"
-            '<invoke name="search">\n'
+            '<invoke name="grep">\n'
             '<parameter name="pattern">TODO</parameter>\n'
             '<parameter name="path">src</parameter>\n'
             "</invoke>\n"

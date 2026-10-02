@@ -814,9 +814,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             state.control.no_progress_warning = dict(sl.meta or {})
             state.agent_errors["no_progress"] = sl.hint
             warning = f"[无进展]\n{sl.hint}"
-            state.feedback = (
-                f"{warning}\n\n{state.feedback}".strip() if state.feedback else warning
-            )
+            state.feedback = f"{warning}\n\n{state.feedback}".strip() if state.feedback else warning
             self._write_feedback_to_blackboard(state.feedback)
         state.control.consecutive_env_fails = stop_loss.snapshot().get("env_streak", 0)
         state.retry_count += 1
@@ -836,9 +834,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         """从 checkpoint 恢复长程可续跑字段（含 timings / 策略 / 失败面）。"""
         from agent_runtime.session_contract import compare_workspace_manifest, workspace_manifest
         from src.repair.control_state import RepairControl
-        from src.state import CandidatePatch, RepairPlan, VerificationResult, migrate_state_payload
+        from src.state import CandidatePatch, RepairPlan, VerificationResult, validate_state_payload
 
-        checkpoint = migrate_state_payload(checkpoint)
+        checkpoint = validate_state_payload(checkpoint)
         cancelled = state.control.user_cancel
         coordination = state.control.coordination_status
         state.control = RepairControl.model_validate(checkpoint.get("control") or {})

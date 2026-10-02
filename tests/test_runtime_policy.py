@@ -20,7 +20,7 @@ def test_config_precedence_and_provenance(tmp_path, monkeypatch):
     config = load_runtime_policy(workspace_root=str(workspace), user_config=str(user_file))
     assert config.provider == "environment"
     assert config.max_steps == 4
-    assert config.max_tool_calls == 2
+    assert config.budget.max_tool_calls == 2
     assert config.snapshot()["provenance"]["provider"] == "environment"
     assert config.snapshot()["provenance"]["budget.max_tool_calls"] == "workspace_file"
 

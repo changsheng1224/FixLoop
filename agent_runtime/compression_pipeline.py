@@ -23,7 +23,7 @@ Summarizer = Callable[[str], str]
 # 按工具类型的 L1 截断上限（tokens）
 TOOL_TRUNCATION_TOKENS = {
     "list_files": 60,
-    "search": 230,
+    "grep": 230,
     "read_file": 570,
     "write_file": 90,
     "patch_file": 90,
@@ -47,7 +47,7 @@ L5_FALLBACK_KEEP_ENTRIES = 8
 L5_SUMMARY_MAX_CHARS = 300
 L5_PROMPT_TAIL_ENTRIES = 20
 
-READONLY_TOOLS = frozenset({"list_files", "read_file", "search"})
+READONLY_TOOLS = frozenset({"list_files", "read_file", "grep"})
 HIGH_VALUE_TOOLS = frozenset({"write_file", "patch_file", "run_shell"})
 PROTECTED_KEYWORDS = ("Error", "Traceback", "Fail", "FAILED", "error:")
 
@@ -937,9 +937,7 @@ def run_compression_pipeline(
     return projected
 
 
-def validate_compression_contract(
-    original: list[dict], projected: list[dict]
-) -> dict[str, Any]:
+def validate_compression_contract(original: list[dict], projected: list[dict]) -> dict[str, Any]:
     """Validate safety invariants after a history projection.
 
     This is deliberately structural: it does not infer whether a repair is
@@ -948,14 +946,10 @@ def validate_compression_contract(
     """
     violations: list[str] = []
     original_obs = {
-        str(item.get("observation_id"))
-        for item in original
-        if item.get("observation_id")
+        str(item.get("observation_id")) for item in original if item.get("observation_id")
     }
     projected_obs = {
-        str(item.get("observation_id"))
-        for item in projected
-        if item.get("observation_id")
+        str(item.get("observation_id")) for item in projected if item.get("observation_id")
     }
     for item in projected:
         if item.get("role") == "tool" and item.get("_compact_ref"):

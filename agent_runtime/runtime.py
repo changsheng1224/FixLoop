@@ -142,7 +142,7 @@ class Agent:
 
         Args:
             user_message: 用户输入。
-            callback: 可选的 ProgressCallback 实例（streaming 时需含 on_chunk）。
+            callback: 可选的 AgentCallback 实例（streaming 时需含 on_chunk）。
             skip_plan: L2 repair 等场景跳过 plan 阶段（避免额外 LLM 调用）。
             stream: 启用流式输出（REPL --stream 模式）。
 
@@ -250,7 +250,8 @@ class Agent:
         self, user_message: str, *, system_override: str | None = None
     ) -> tuple[str, dict]:
         """用统一 TokenBudget 裁剪 user 段，保留 system/prefix 优先。"""
-        from agent_runtime.context_manager import TOTAL_BUDGET, fit_prompt_to_budget
+        from agent_runtime.context_fit import fit_prompt_to_budget
+        from agent_runtime.context_manager import TOTAL_BUDGET
 
         if system_override is not None:
             system = system_override
@@ -598,7 +599,7 @@ class Agent:
                 "result_excerpt": result_text[-500:],
             }
 
-        elif name == "search":
+        elif name == "grep":
             pattern = args.get("pattern", "")
             if pattern:
                 append_note(

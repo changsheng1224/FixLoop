@@ -122,7 +122,7 @@ def create_repair_agent(
         system_prompt += (
             "\n\n【输出格式】优先 read_file → apply_patch（*** Begin/End Patch）修改文件；"
             "patch_file 仅作兜底；可用 quick_test 运行与问题相关的仓库测试；"
-            "完成后简短说明。仅当无法调用工具时才输出 CandidatePatch JSON 数组。"
+            "完成后简短说明。无法调用工具时报告阻塞原因。"
         )
         # Owner control tools belong to the L2 role projection, preserving the
         # canonical L1 prefix shared with verifier and existing cache keys.

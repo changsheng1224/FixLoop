@@ -5,22 +5,21 @@ import pytest
 
 from src.blackboard import Blackboard
 from src.collaboration_governance import atomic_collaboration_update
-from src.state import RepairState, RepairStatus
+from src.state import RepairState
 
 
-def test_repairstate_migrates_v1_and_rejects_unknown_schema():
-    state = RepairState.from_dict({"issue_input": "x", "schema_version": "1.0"})
-    assert state.schema_version == "1.2"
-    assert state.status == RepairStatus.PENDING
+@pytest.mark.parametrize("version", [None, "1.0", "1.1", "9.0"])
+def test_repairstate_rejects_missing_historical_and_unknown_schema(version):
     with pytest.raises(ValueError, match="unsupported"):
-        RepairState.from_dict({"issue_input": "x", "schema_version": "9.0"})
+        RepairState.from_dict({"issue_input": "x", "schema_version": version})
 
 
-def test_v11_control_migration_roundtrip_and_snapshot_isolation():
+def test_current_control_roundtrip_and_snapshot_isolation():
     payload = {
-        "schema_version": "1.1",
+        "schema_version": "1.2",
         "issue_input": "x",
-        "node_timings": {"user_cancel": True, "allowed_edit": ["a.py"], "patch_ms": 7},
+        "control": {"user_cancel": True, "allowed_edit": ["a.py"]},
+        "node_timings": {"patch_ms": 7},
     }
     state = RepairState.from_dict(payload)
     assert state.control.user_cancel
@@ -28,8 +27,33 @@ def test_v11_control_migration_roundtrip_and_snapshot_isolation():
     snapshot = state.to_dict()
     snapshot["control"]["allowed_edit"].append("b.py")
     assert state.control.allowed_edit == ["a.py"]
-    assert "user_cancel" in payload["node_timings"]
+    assert payload["control"]["allowed_edit"] == ["a.py"]
     assert RepairState.from_dict(state.to_dict()).control == state.control
+
+
+@pytest.mark.parametrize("field,value", [("phase", "retrieve"), ("status", "patched")])
+def test_historical_phase_and_status_are_rejected(field, value):
+    with pytest.raises(ValueError):
+        RepairState(issue_input="x", **{field: value})
+    with pytest.raises(ValueError):
+        RepairState.from_dict({"schema_version": "1.2", "issue_input": "x", field: value})
+
+
+def test_unsigned_repair_checkpoint_cannot_resume(tmp_path):
+    from src.repair.checkpoint_load import (
+        RepairCheckpointError,
+        load_repair_checkpoint,
+        save_repair_checkpoint,
+    )
+
+    state = RepairState(issue_input="x", repair_run_id="unsigned")
+    path = save_repair_checkpoint(state, str(tmp_path))
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw.pop("checkpoint_envelope")
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    assert load_repair_checkpoint(str(tmp_path), "unsigned") is None
+    with pytest.raises(RepairCheckpointError, match="resume_checkpoint_integrity_failed"):
+        load_repair_checkpoint(str(tmp_path), "unsigned", require_valid=True, issue="x")
 
 
 def test_control_rejects_unknown_fields_and_old_storage_on_new_schema():
@@ -63,7 +87,7 @@ def test_resume_restores_controls_without_replaying_previous_cancellation():
     assert not current.control.user_cancel and not current.control.repair_timeout
 
 
-def test_signed_legacy_checkpoint_is_verified_before_control_migration(tmp_path, monkeypatch):
+def test_signed_historical_checkpoint_is_rejected_without_migration(tmp_path, monkeypatch):
     from src.repair.checkpoint_load import load_repair_checkpoint, save_repair_checkpoint
 
     state = RepairState(issue_input="x", repair_run_id="legacy-run", control={"user_cancel": True})
@@ -80,10 +104,11 @@ def test_signed_legacy_checkpoint_is_verified_before_control_migration(tmp_path,
         },
     )
     path = save_repair_checkpoint(state, str(tmp_path))
-    loaded = load_repair_checkpoint(str(tmp_path), "legacy-run", require_valid=True, issue="x")
-    assert loaded["schema_version"] == "1.2"
-    assert loaded["control"]["user_cancel"] is True
-    assert "user_cancel" not in loaded["node_timings"]
+    from src.repair.checkpoint_load import RepairCheckpointError
+
+    with pytest.raises(RepairCheckpointError, match="resume_checkpoint_schema_mismatch"):
+        load_repair_checkpoint(str(tmp_path), "legacy-run", require_valid=True, issue="x")
+    assert load_repair_checkpoint(str(tmp_path), "legacy-run") is None
     raw = json.loads(path.read_text(encoding="utf-8"))
     raw["node_timings"]["user_cancel"] = False
     path.write_text(json.dumps(raw), encoding="utf-8")

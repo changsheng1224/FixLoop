@@ -35,10 +35,6 @@ def update_diff_has_preimage(diff: str) -> bool:
     return False
 
 
-# 兼容内部旧名
-_update_diff_has_preimage = update_diff_has_preimage
-
-
 def strip_fences(text: str) -> str:
     """剥 markdown / heredoc 围栏，便于模型 freeform 输出。"""
     raw = (text or "").strip()
@@ -71,9 +67,7 @@ def parse_apply_patch_text(text: str) -> list[ApplyPatchOp]:
     # 无 Begin 标记时：若像 unified diff 且带 --- a/ 则拒（需 path）；允许裸 Update
     if "*** Begin Patch" not in body and "*** Update File:" not in body:
         if body.lstrip().startswith("@@") or "--- " in body[:80]:
-            raise ValueError(
-                "apply_patch: missing *** Begin Patch / *** Update File: path header"
-            )
+            raise ValueError("apply_patch: missing *** Begin Patch / *** Update File: path header")
         raise ValueError("apply_patch: expected *** Begin Patch ... *** End Patch")
 
     # 取 Begin..End 之间；若无 End 则用全文
@@ -103,7 +97,7 @@ def parse_apply_patch_text(text: str) -> list[ApplyPatchOp]:
                     f"apply_patch: empty Update File body for {path} "
                     "(need @@ hunk with -/+ context; read file first)"
                 )
-            if not _update_diff_has_preimage(diff_body):
+            if not update_diff_has_preimage(diff_body):
                 raise ValueError(
                     f"apply_patch: Update File {path} missing preimage "
                     "(- or context lines); refuse empty_original"

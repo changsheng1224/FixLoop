@@ -3,7 +3,8 @@
 import pytest
 
 from agent_runtime.config import AgentConfig
-from agent_runtime.context_manager import TokenBudget, fit_prompt_to_budget, fit_repair_user_prompt
+from agent_runtime.context_fit import fit_prompt_to_budget, fit_repair_user_prompt
+from agent_runtime.context_manager import TokenBudget
 from agent_runtime.providers.clients import FakeModelClient
 from agent_runtime.runtime import Agent
 from agent_runtime.tokenizer_registry import lookup_token_rule

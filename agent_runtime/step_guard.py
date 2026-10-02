@@ -51,7 +51,6 @@ _READ_TOOLS = frozenset(
     {
         "read_file",
         "list_files",
-        "search",
         "grep",
         "ast_parse",
         "inspect_file",
@@ -203,8 +202,7 @@ class StepGuard:
             tool_name == "read_file"
             and isinstance(read_reservation, dict)
             and read_reservation.get("kind") == "post_lock"
-            and read_reservation.get("path")
-            == str(tool_args.get("path") or "").replace("\\", "/")
+            and read_reservation.get("path") == str(tool_args.get("path") or "").replace("\\", "/")
         ):
             return StepVerdict(
                 reason="",

@@ -160,7 +160,7 @@ class TestToolExecutorCancel:
         agent.cancel_token = CancellationToken()
         agent.cancel_token.cancel()
         executor = ToolExecutor(agent=agent, approval_policy="auto")
-        result = executor.execute("write_file", {"path": "x.txt", "content": "y"})
+        result = executor.execute_gated("write_file", {"path": "x.txt", "content": "y"})
         assert result.metadata["tool_status"] == "rejected"
         assert result.metadata["tool_error_code"] == "cancelled"
 
@@ -179,7 +179,7 @@ class TestToolExecutorCancel:
             return original_run(args)
 
         agent.tools["write_file"]["run"] = write_then_cancel
-        result = executor.execute("write_file", {"path": "mut.py", "content": "after\n"})
+        result = executor.execute_gated("write_file", {"path": "mut.py", "content": "after\n"})
         assert result.metadata["tool_status"] == "success"
         assert result.metadata.get("cancel_restored") is True
         assert target.read_text(encoding="utf-8") == "before\n"
@@ -354,7 +354,7 @@ class TestGate7Cancel:
             raise KeyboardInterrupt
 
         monkeypatch.setattr("builtins.input", fake_input)
-        result = executor.execute("write_file", {"path": "x.txt", "content": "y"})
+        result = executor.execute_gated("write_file", {"path": "x.txt", "content": "y"})
         assert result.metadata["tool_status"] == "rejected"
         assert result.metadata["tool_error_code"] == "cancelled"
         assert result.metadata["rejection_layer"] == "cancel"
@@ -384,7 +384,7 @@ class TestAgentLoopPostToolCancel:
             raise KeyboardInterrupt
 
         monkeypatch.setattr("builtins.input", fake_input)
-        monkeypatch.setattr(agent, "execute_tool", executor.execute)
+        monkeypatch.setattr(agent, "execute_tool", executor.execute_gated)
 
         answer = agent.ask("写文件")
         assert "取消" in answer

@@ -60,7 +60,7 @@ class RepairReport:
         )
         runtime_status = str(resolve_terminal_status(state))
         status = runtime_status
-        if status in {"fixed", "patched"} and not tested:
+        if status == "fixed" and not tested:
             status = "pending_verify"
         self.data.update(
             status=status,

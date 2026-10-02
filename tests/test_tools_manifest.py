@@ -31,11 +31,11 @@ class TestLoadManifest:
             agent_dir = Path(tmp) / ".agent"
             agent_dir.mkdir()
             (agent_dir / "tools.yaml").write_text(
-                "tools:\n  write_file: [patcher]\n  search: ['*']\n"
+                "tools:\n  write_file: [patcher]\n  grep: ['*']\n"
             )
             result = load_tool_role_overrides(tmp)
             assert result["write_file"] == {"patcher"}
-            assert result["search"] == {"*"}
+            assert result["grep"] == {"*"}
 
     def test_unknown_tool_is_skipped(self):
         with tempfile.TemporaryDirectory() as tmp:

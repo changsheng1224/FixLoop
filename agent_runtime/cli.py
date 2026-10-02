@@ -51,13 +51,13 @@ def _make_parser() -> argparse.ArgumentParser:
         "--tool-timeout",
         type=int,
         default=None,
-        help=f"单工具执行超时秒数，0=禁用（默认 {cfg.tool_timeout_s}）",
+        help=f"单工具执行超时秒数，0=禁用（默认 {cfg.deadline.tool_s}）",
     )
     p.add_argument(
         "--step-timeout",
         type=int,
         default=None,
-        help=f"单步 wall-clock 超时秒数，0=禁用（默认 {cfg.step_timeout_s}）",
+        help=f"单步 wall-clock 超时秒数，0=禁用（默认 {cfg.deadline.step_s}）",
     )
     p.add_argument(
         "--temperature",
@@ -99,12 +99,17 @@ def _make_config(args) -> AgentConfig:
         "provider": getattr(args, "provider", None),
         "model": getattr(args, "model", None),
         "max_steps": getattr(args, "max_steps", None),
-        "tool_timeout_s": getattr(args, "tool_timeout", None),
-        "step_timeout_s": getattr(args, "step_timeout", None),
         "temperature": getattr(args, "temperature", None),
         "approval": getattr(args, "approval", None),
         "profile": getattr(args, "profile", None),
     }
+    deadline = {
+        "tool_s": getattr(args, "tool_timeout", None),
+        "step_s": getattr(args, "step_timeout", None),
+    }
+    deadline = {key: value for key, value in deadline.items() if value is not None}
+    if deadline:
+        cfg_kw["deadline"] = deadline
     return load_runtime_policy(
         workspace_root=getattr(args, "cwd", None),
         cli_overrides={k: v for k, v in cfg_kw.items() if v is not None},
@@ -119,8 +124,8 @@ def _make_agent(args) -> Agent:
     args.model = config.model
     args.approval = config.approval
     args.max_steps = config.max_steps
-    args.tool_timeout = config.tool_timeout_s
-    args.step_timeout = config.step_timeout_s
+    args.tool_timeout = config.deadline.tool_s
+    args.step_timeout = config.deadline.step_s
     args.temperature = config.temperature
     workspace = WorkspaceContext.build(args.cwd)
     model_client = _build_model_client(args, config)
@@ -452,9 +457,7 @@ def _repl_dispatch_intent(agent: Agent, user_input: str, args) -> bool:
                     channel="repl",
                 )
             )
-        proj = update_projection(
-            proj, result, user_text=route_text, history=hist_for_resolve
-        )
+        proj = update_projection(proj, result, user_text=route_text, history=hist_for_resolve)
         save_projection(agent.session, proj)
     except Exception:
         pass
@@ -544,7 +547,7 @@ def _repl_dispatch_intent(agent: Agent, user_input: str, args) -> bool:
 
     def handle_repair(node: IntentNode):
         print(
-            "检测到修复意图。请使用: python -m src.cli repair --issue \"...\"",
+            '检测到修复意图。请使用: python -m src.cli repair --issue "..."',
             file=sys.stderr,
         )
         print(f"issue 摘要: {(node.text or exec_text)[:200]}")

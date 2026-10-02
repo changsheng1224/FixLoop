@@ -83,11 +83,6 @@ class AgentCallback:
         """ReAct 阶段切换。phase ∈ {reasoning, acting, observation, recording}。"""
 
 
-# ---- 向后兼容别名 ----
-
-ProgressCallback = AgentCallback  # 旧名可用
-
-
 # ---- Callback 链 ----
 
 

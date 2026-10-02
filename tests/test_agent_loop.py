@@ -98,7 +98,7 @@ class TestAgentAsk:
         outputs = [
             '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
             '<tool>{"name":"read_file","args":{"path":"README.md"}}</tool>',
-            '<tool>{"name":"search","args":{"pattern":"test","path":"."}}</tool>',
+            '<tool>{"name":"grep","args":{"pattern":"test","path":"."}}</tool>',
             "<final>搜索完成，共找到 5 处匹配</final>",
         ]
         agent = _make_agent(outputs, config, workspace)
@@ -786,7 +786,7 @@ class TestCoTStripping:
         raw = (
             "<think>reasoning step 1</think>\n"
             "Now I'll search for the error...\n"
-            '<tool>{"name":"search","args":{"pattern":"error"}}</tool>'
+            '<tool>{"name":"grep","args":{"pattern":"error"}}</tool>'
         )
         cleaned = strip_cot(raw)
         assert "reasoning" not in cleaned

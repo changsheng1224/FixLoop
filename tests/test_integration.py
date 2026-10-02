@@ -40,7 +40,7 @@ class TestIntegrationFullPipeline:
             model_client=FakeModelClient(
                 [
                     '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
-                    '<tool>{"name":"search","args":{"pattern":"TODO","path":"."}}</tool>',
+                    '<tool>{"name":"grep","args":{"pattern":"TODO","path":"."}}</tool>',
                     "<final>发现 2 个文件，搜索到 0 个 TODO。</final>",
                 ]
             ),

@@ -483,7 +483,7 @@ def _print_repair_result(state, verbose: bool, *, dry_run: bool = False) -> None
         verified = bool(vr and vr.all_passed and vr.total_tests > 0 and not dry_run)
         pending = state.status == "pending_verify" or not verified
         suffix = " (未验证)" if pending else ""
-        emoji = "⚠" if pending or state.status == "patched" else "✅"
+        emoji = "⚠" if pending else "✅"
         label = "补丁已生成，等待验证" if pending else "修复完成"
         print(f"\n{emoji} {label}! 状态={state.status}{suffix}")
         for patch in state.candidate_patches:

@@ -112,7 +112,6 @@ class CodeExplorationService:
         if self.mode != "relations" or tool not in {
             "read_file",
             "grep",
-            "search",
             "code_lookup",
             "ast_parse",
             "inspect_file",

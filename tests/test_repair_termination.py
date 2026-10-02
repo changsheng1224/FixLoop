@@ -17,21 +17,13 @@ class TestRepairTerminalStatus:
     def test_is_terminal(self):
         assert is_terminal("fixed")
         assert is_terminal("timeout")
-        assert is_terminal("patched")  # legacy 终态兼容
+        assert not is_terminal("patched")
         assert not is_terminal("pending")
 
     def test_is_repair_success_fixed(self):
         state = RepairState(
             issue_input="x",
             status="fixed",
-            candidate_patches=[CandidatePatch(file_path="a.py")],
-        )
-        assert is_repair_success(state)
-
-    def test_is_repair_success_legacy_patched(self):
-        state = RepairState(
-            issue_input="x",
-            status="patched",
             candidate_patches=[CandidatePatch(file_path="a.py")],
         )
         assert is_repair_success(state)
@@ -45,6 +37,28 @@ class TestRepairTerminalStatus:
         assert is_terminal(state.status)
         assert not is_repair_success(state)
         assert has_actionable_patch(state)
+
+
+def test_unverified_naive_output_is_not_a_repair_success():
+    import json
+
+    from agent_runtime.providers.clients import FakeModelClient
+    from src.eval.variants import NaiveOrchestrator
+
+    client = FakeModelClient([json.dumps([{"file_path": "a.py", "diff": "-old\n+new"}])])
+    state = NaiveOrchestrator(client).repair("fix a.py")
+    assert state.status == "pending_verify"
+    assert has_actionable_patch(state)
+    assert not is_repair_success(state)
+
+
+def test_unverified_fake_patch_is_not_a_repair_success(tmp_path):
+    from src.benchmark.swebench.fake import FakeGoldPatchOrchestrator
+
+    state = FakeGoldPatchOrchestrator(str(tmp_path)).repair("smoke")
+    assert state.status == "pending_verify"
+    assert has_actionable_patch(state)
+    assert not is_repair_success(state)
 
 
 class TestApplyTerminalStatus:

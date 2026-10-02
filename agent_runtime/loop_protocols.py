@@ -276,7 +276,7 @@ def xml_build_context(runtime, ts, user_message: str, *, step: int, callback) ->
 
 def xml_call_model(runtime, ts, prompt_text: str, *, step: int, callback=None) -> tuple[str, float]:
     # LLM 调用预算硬顶
-    max_calls = getattr(runtime.agent.config, "max_llm_calls_per_repair", 0) or 0
+    max_calls = runtime.agent.config.budget.max_llm_calls
     if max_calls > 0 and runtime.state.llm_call_count >= max_calls:
         ts.stop_with_reason(
             StopReason.BUDGET_EXHAUSTED, "stopped", detail=f"max_llm_calls={max_calls}"

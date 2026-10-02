@@ -7,7 +7,8 @@
 import pytest
 
 from agent_runtime.config import AgentConfig
-from agent_runtime.context_manager import ContextManager, fit_repair_user_prompt
+from agent_runtime.context_fit import fit_repair_user_prompt
+from agent_runtime.context_manager import ContextManager
 from agent_runtime.providers.clients import FakeModelClient
 from agent_runtime.runtime import Agent
 from agent_runtime.tier_policy import (
@@ -247,16 +248,18 @@ class TestTierPinsL2FitRepair:
 
     def test_issue_and_stack_survive_tiny_budget(self, agent):
         """极小 budget 下 issue/stack 钉扎字段仍在 fitted 输出中。"""
-        agent.config.prompt_budget = 300
+        agent.config.hard_cap = 512
+        agent.config.prompt_budget = 512
         user_text = (
             "issue: UNIQUE_BUG_123 TypeError at calc.py:42\n"
             'stack: File "calc.py", line 42, in add\n'
-            "TypeError: unsupported operand\n" + "padding " * 200
+            "TypeError: unsupported operand\n" + "padding " * 800
         )
         fitted, meta = fit_repair_user_prompt(agent, user_text, "sys")
         assert "UNIQUE_BUG_123" in fitted
         assert "calc.py" in fitted
         assert meta.get("request_preserved") is True
+        assert meta["task_budget_overflow"] is True
 
     def test_l0_and_l2_read_same_pin_fields(self):
         """L0 (tier_policy) 与 L2 (context_fit) 从同一 tier_pins.yaml 读取 pin 字段。"""
@@ -271,8 +274,10 @@ class TestTierPinsL2FitRepair:
 
     def test_pin_field_request_survives(self, agent):
         """'request' 钉扎字段在超长文本中保留。"""
-        agent.config.prompt_budget = 400
-        user_text = "request: fix all import errors in src/utils.py\n" + "details " * 200
+        agent.config.hard_cap = 512
+        agent.config.prompt_budget = 512
+        user_text = "request: fix all import errors in src/utils.py\n" + "details " * 800
         fitted, meta = fit_repair_user_prompt(agent, user_text, "sys")
         assert "src/utils.py" in fitted
         assert meta["orpin_preserved"].get("request") is True
+        assert meta["task_budget_overflow"] is True

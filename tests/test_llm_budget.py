@@ -11,7 +11,7 @@ class TestLLMBudgetHardCap:
         from agent_runtime.workspace import WorkspaceContext
 
         ws = WorkspaceContext.build(str(temp_workspace))
-        config = AgentConfig(provider="fake", max_steps=5, max_llm_calls_per_repair=1)
+        config = AgentConfig(provider="fake", max_steps=5, budget={"max_llm_calls": 1})
         agent = Agent(
             config=config,
             model_client=FakeModelClient(
@@ -36,7 +36,7 @@ class TestLLMBudgetHardCap:
         from agent_runtime.workspace import WorkspaceContext
 
         ws = WorkspaceContext.build(str(temp_workspace))
-        config = AgentConfig(provider="fake", max_steps=2, max_llm_calls_per_repair=0)
+        config = AgentConfig(provider="fake", max_steps=2, budget={"max_llm_calls": 0})
         agent = Agent(
             config=config,
             model_client=FakeModelClient(
@@ -60,7 +60,7 @@ class TestLLMBudgetHardCap:
         from agent_runtime.workspace import WorkspaceContext
 
         ws = WorkspaceContext.build(str(temp_workspace))
-        config = AgentConfig(provider="fake", max_steps=3, max_llm_calls_per_repair=10)
+        config = AgentConfig(provider="fake", max_steps=3, budget={"max_llm_calls": 10})
         agent = Agent(
             config=config,
             model_client=FakeModelClient(["<final>ok</final>"]),
@@ -69,4 +69,4 @@ class TestLLMBudgetHardCap:
         )
         agent.ask("test")
         # 验证 config 字段
-        assert config.max_llm_calls_per_repair == 10
+        assert config.budget.max_llm_calls == 10

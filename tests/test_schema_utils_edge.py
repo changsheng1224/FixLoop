@@ -5,11 +5,11 @@ import pytest
 from agent_runtime.schema_utils import auto_schema, auto_validate
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.tools import (
+    GrepArgs,
     ListFilesArgs,
     PatchFileArgs,
     ReadFileArgs,
     RunShellArgs,
-    SearchArgs,
     WriteFileArgs,
     tool_read_file,
     tool_run_shell,
@@ -80,7 +80,7 @@ class TestToolEdge:
         for cls in [
             ListFilesArgs,
             ReadFileArgs,
-            SearchArgs,
+            GrepArgs,
             WriteFileArgs,
             PatchFileArgs,
             RunShellArgs,

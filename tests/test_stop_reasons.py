@@ -79,7 +79,7 @@ def _latest_report(workspace: Path) -> dict:
 
 class TestAgentLoopStopReason:
     def test_max_steps_emits_step_limit(self, workspace, temp_workspace):
-        config = AgentConfig(provider="fake", max_steps=1, step_timeout_s=0, tool_timeout_s=0)
+        config = AgentConfig(provider="fake", max_steps=1, deadline={"step_s": 0, "tool_s": 0})
         client = FakeModelClient(
             [
                 '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
@@ -100,7 +100,7 @@ class TestAgentLoopStopReason:
         assert "tool_steps" in report["node_timings"]["stop_reason_detail"]
 
     def test_parse_fail_emits_canonical_reason(self, workspace, temp_workspace):
-        config = AgentConfig(provider="fake", max_steps=2, step_timeout_s=0, tool_timeout_s=0)
+        config = AgentConfig(provider="fake", max_steps=2, deadline={"step_s": 0, "tool_s": 0})
         client = FakeModelClient(["not xml"] * 20)
         agent = Agent(
             config=config,
@@ -116,7 +116,7 @@ class TestAgentLoopStopReason:
     def test_native_max_turns_emits_step_limit(self, workspace, temp_workspace):
         from agent_runtime.providers.clients import FakeNativeToolClient
 
-        config = AgentConfig(provider="fake", max_steps=2, step_timeout_s=0, tool_timeout_s=0)
+        config = AgentConfig(provider="fake", max_steps=2, deadline={"step_s": 0, "tool_s": 0})
         client = FakeNativeToolClient(
             [
                 '<tool>{"name":"list_files","args":{"path":"."}}</tool>',

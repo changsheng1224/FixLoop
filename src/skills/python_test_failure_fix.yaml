@@ -2,7 +2,7 @@ name: python_test_failure_fix
 language: python
 trigger_pattern: "FAILED|assert|AssertionError"
 priority: 5
-suggested_tools: [find_test, read_file, search, git_blame, patch_file]
+suggested_tools: [find_test, read_file, grep, git_blame, patch_file]
 
 example_issue: |
   FAILED tests/test_module.py::test_case - AssertionError: expected != actual

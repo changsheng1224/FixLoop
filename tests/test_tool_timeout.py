@@ -27,7 +27,7 @@ class TestRunWithTimeout:
 class TestToolExecutorTimeout:
     @pytest.fixture
     def slow_agent(self, workspace):
-        config = AgentConfig(provider="fake", max_steps=4, approval="auto", tool_timeout_s=1)
+        config = AgentConfig(provider="fake", max_steps=4, approval="auto", deadline={"tool_s": 1})
         client = FakeModelClient(["<final>ok</final>"])
         agent = Agent(config=config, model_client=client, workspace=workspace)
         original_run = agent.tools["list_files"]["run"]
@@ -48,7 +48,7 @@ class TestToolExecutorTimeout:
         assert result.metadata["gate_id"] == 9
 
     def test_disabled_timeout_waits_for_tool(self, workspace):
-        config = AgentConfig(provider="fake", approval="auto", tool_timeout_s=0)
+        config = AgentConfig(provider="fake", approval="auto", deadline={"tool_s": 0})
         client = FakeModelClient(["<final>ok</final>"])
         agent = Agent(config=config, model_client=client, workspace=workspace)
         agent.tools["list_files"]["run"] = lambda args: time.sleep(0.3) or "[]"

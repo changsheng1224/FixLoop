@@ -3,7 +3,8 @@
 import pytest
 
 from agent_runtime.config import AgentConfig
-from agent_runtime.context_manager import ContextManager, TokenBudget, fit_prompt_to_budget
+from agent_runtime.context_fit import fit_prompt_to_budget
+from agent_runtime.context_manager import ContextManager, TokenBudget
 from agent_runtime.context_projection import (
     CONTEXT_SCHEMA_VERSION,
     EIGHT_SECTIONS,

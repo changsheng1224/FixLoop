@@ -39,7 +39,7 @@ class TestBuildPromptPrefix:
         assert "可用工具" in prefix.text
         assert "list_files" in prefix.text
         assert "read_file" in prefix.text
-        assert "search" in prefix.text
+        assert "grep" in prefix.text
         assert "调用示例" in prefix.text
         assert "Workspace:" in prefix.text
 
@@ -74,12 +74,12 @@ class TestBuildPromptPrefix:
         ws = WorkspaceContext.build(str(temp_workspace))
         ctx = ToolContext(root=str(temp_workspace))
         registry = build_tool_registry(ctx)
-        enabled = {"read_file", "search"}
+        enabled = {"read_file", "grep"}
 
         prefix = build_prompt_prefix(ws, registry, tool_names=enabled)
 
         assert "### read_file" in prefix.stable_tools_text
-        assert "### search" in prefix.stable_tools_text
+        assert "### grep" in prefix.stable_tools_text
         assert "### write_file" not in prefix.stable_tools_text
         assert "### list_files" not in prefix.stable_tools_text
 

@@ -3,14 +3,11 @@
 import pytest
 
 from agent_runtime.config import AgentConfig
-from agent_runtime.context_manager import (
-    ContextManager,
-    fit_prompt_to_budget,
-    fit_repair_user_prompt,
-)
+from agent_runtime.context_fit import fit_prompt_to_budget, fit_repair_user_prompt
+from agent_runtime.context_manager import ContextManager
 from agent_runtime.providers.clients import FakeModelClient
 from agent_runtime.runtime import Agent
-from agent_runtime.task_preservation import issue_preserved, reserve_section_budget
+from agent_runtime.task_section import issue_preserved, reserve_section_budget
 from agent_runtime.workspace import WorkspaceContext
 
 ISSUE_MARKER = "UNIQUE_ISSUE_MARKER_XYZ_42"

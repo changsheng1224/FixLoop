@@ -24,9 +24,6 @@ from agent_runtime.compression_pipeline import (
 from agent_runtime.compression_pipeline import (
     truncate_tool_content as _truncate_tool_content,
 )
-
-# Re-export fit helpers for test / L2 import compatibility.
-from agent_runtime.context_fit import fit_prompt_to_budget, fit_repair_user_prompt  # noqa: F401
 from agent_runtime.context_projection import attach_context_projection
 from agent_runtime.context_runtime import (
     ContextItem,

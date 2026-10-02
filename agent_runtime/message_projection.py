@@ -66,10 +66,6 @@ def check_prefix_monotonic(previous_prefix: str, current_prefix: str) -> bool:
     return current_prefix.startswith(previous_prefix)
 
 
-# Backward-compatible alias
-check_prefix_aligned = check_prefix_monotonic
-
-
 def fingerprint_prefix(text: str) -> str:
     """稳定前缀指纹（SHA256）。"""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()

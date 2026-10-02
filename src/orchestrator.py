@@ -413,8 +413,7 @@ class Orchestrator(RepairPipelineMixin):
 
     def _set_collaboration_context(self, state: RepairState) -> None:
         """Pass current mode/phase to gateways when the runtime owns the state."""
-        # Localizer/Retriever are legacy compatibility agents.  Governance is
-        # intentionally enforced only on the current repair roles.
+        # Governance applies to the active patcher and verifier roles.
         harness = getattr(self._repair_ctx, "harness_control", None)
         control_mode = getattr(getattr(harness, "control_mode", None), "value", "") or (
             state.human_control or {}
@@ -711,10 +710,6 @@ class Orchestrator(RepairPipelineMixin):
         from src.skills.matcher import match_skill_semantic
 
         return match_skill_semantic(issue, language=language)
-
-    def _classify_error(self, exc_type: str) -> str:
-        """兼容旧调用；新代码请用 ``classify_exception``。"""
-        return classify_exception(exc_type)
 
     def _verification_enabled(self) -> bool:
         return (
@@ -1998,7 +1993,7 @@ class Orchestrator(RepairPipelineMixin):
             guide_parts.append(diagnosis.guidance)
         if diagnosis.bucket == VerifyBucket.LOGIC:
             guide_parts.append(
-                "使用 read_file / patch_file 先读失败测试再改实现，最后输出 CandidatePatch JSON。"
+                "使用 read_file / apply_patch 先读失败测试再改实现，完成后简短说明。"
             )
         elif diagnosis.bucket == VerifyBucket.ENV:
             guide_parts.append(
@@ -2010,8 +2005,7 @@ class Orchestrator(RepairPipelineMixin):
             )
         elif not guide_parts:
             guide_parts.append(
-                "请根据以上日志修改补丁。"
-                "使用 patch_file 直接修改文件，然后输出 CandidatePatch JSON。"
+                "请根据以上日志修改补丁。使用 apply_patch 直接修改文件，完成后简短说明。"
             )
         lines.append("\n[指导]\n" + " ".join(guide_parts))
         return "\n".join(lines)

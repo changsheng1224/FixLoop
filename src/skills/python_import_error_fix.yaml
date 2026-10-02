@@ -2,7 +2,7 @@ name: python_import_error_fix
 language: python
 trigger_pattern: "ImportError|ModuleNotFoundError"
 priority: 10
-suggested_tools: [search, read_file, patch_file]
+suggested_tools: [grep, read_file, patch_file]
 
 example_issue: |
   ModuleNotFoundError: No module named 'pkg.submodule'

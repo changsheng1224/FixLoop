@@ -119,39 +119,32 @@ class RuntimePolicy(BaseModel):
         if self.degradation.max_output_floor > self.max_new_tokens:
             default_floor = DegradationPolicy.model_fields["max_output_floor"].default
             if self.degradation.max_output_floor == default_floor:
-                # Keep legacy small-output test/dev configs valid while still
-                # rejecting an explicitly contradictory policy value.
+                # The default floor follows the output cap; an explicitly
+                # contradictory floor is rejected.
                 self.degradation.max_output_floor = self.max_new_tokens
             else:
                 raise ValueError("degradation.max_output_floor must be <= max_new_tokens")
         return self
 
     def effective_budget(self) -> dict[str, int | float]:
-        """Return legacy-compatible limits merged with namespaced policy."""
-
-        def limit(scalar, nested):
-            if scalar in self.model_fields_set:
-                return int(getattr(self, scalar))
-            return int(getattr(self.budget, nested))
-
-        max_tool_calls = limit("max_tool_calls", "max_tool_calls")
-        max_write_calls = limit("max_write_calls", "max_write_calls")
-        max_verify_calls = limit("max_verify_calls", "max_verify_calls")
-        max_recovery = limit("max_recovery_attempts", "max_recovery_attempts")
-        max_llm_calls = limit("max_llm_calls_per_repair", "max_llm_calls")
+        """Project the canonical budget policy into ledger resource names."""
         return {
             # Prompt tokens are reserved from the run-level ledger using the
             # context builder's estimate before each model dispatch.
             "prompt_tokens": self.budget.prompt_tokens,
             "turns": self.budget.max_turns,
-            "llm_calls": max_llm_calls,
-            "tool_calls": max_tool_calls,
-            "writes": max_write_calls,
-            "verifies": max_verify_calls,
-            "recoveries": max_recovery,
+            "llm_calls": self.budget.max_llm_calls,
+            "tool_calls": self.budget.max_tool_calls,
+            "writes": self.budget.max_write_calls,
+            "verifies": self.budget.max_verify_calls,
+            "recoveries": self.budget.max_recovery_attempts,
             "soft_cost_limit_usd": self.budget.soft_cost_limit_usd,
             "hard_cost_limit_usd": self.budget.hard_cost_limit_usd,
         }
+
+    def effective_deadline(self) -> dict[str, float | int]:
+        """Return the canonical deadline policy for nested operations."""
+        return self.deadline.model_dump()
 
     def set_provenance(self, provenance: dict[str, str]) -> RuntimePolicy:
         self._provenance = {str(k): str(v) for k, v in provenance.items()}

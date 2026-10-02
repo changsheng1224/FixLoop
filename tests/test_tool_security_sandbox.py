@@ -44,13 +44,13 @@ class TestSensitivePaths:
 
     def test_gate3_rejects_read_env(self, executor, workspace):
         (Path(workspace.repo_root) / ".env").write_text("SECRET=1\n", encoding="utf-8")
-        result = executor.execute("read_file", {"path": ".env"})
+        result = executor.execute_gated("read_file", {"path": ".env"})
         assert result.metadata["tool_status"] == "rejected"
         assert result.metadata["tool_error_code"] == "sensitive_path"
         assert result.metadata.get("sandbox_violation") is True
 
     def test_gate3_rejects_write_pem(self, executor):
-        result = executor.execute(
+        result = executor.execute_gated(
             "write_file",
             {"path": "leak.pem", "content": "-----BEGIN-----\n"},
         )
@@ -69,7 +69,7 @@ class TestIoLimits:
         monkeypatch.setenv("FIXLOOP_READ_MAX_BYTES", "64")
         big = Path(workspace.repo_root) / "big.txt"
         big.write_text("x" * 200, encoding="utf-8")
-        result = executor.execute("read_file", {"path": "big.txt"})
+        result = executor.execute_gated("read_file", {"path": "big.txt"})
         assert result.metadata["tool_status"] == "success"
         assert "x" * 200 in result.content
 
@@ -77,7 +77,7 @@ class TestIoLimits:
         blob = Path(workspace.repo_root) / "a.bin"
         blob.write_bytes(b"\x00\x01\x02\x03" + b"\xff" * 100)
         assert is_likely_binary(blob)
-        result = executor.execute("read_file", {"path": "a.bin"})
+        result = executor.execute_gated("read_file", {"path": "a.bin"})
         assert result.metadata["tool_error_code"] == "binary_file"
 
     def test_truncate_text(self):
@@ -88,13 +88,13 @@ class TestIoLimits:
 
 class TestPathEscapeAndShell:
     def test_path_escape_sandbox_flag(self, executor):
-        result = executor.execute("read_file", {"path": "../outside.txt"})
+        result = executor.execute_gated("read_file", {"path": "../outside.txt"})
         assert result.metadata["tool_error_code"] == "path_escape"
         assert result.metadata.get("sandbox_violation") is True
 
     def test_malicious_shell_gate3(self, executor):
         # sudo 在 blocklist；Gate3 早于 Gate7 deny
-        result = executor.execute("run_shell", {"command": "sudo rm -rf /"})
+        result = executor.execute_gated("run_shell", {"command": "sudo rm -rf /"})
         assert result.metadata["gate_id"] == 3
         assert result.metadata["tool_error_code"] == "sandbox_violation"
 

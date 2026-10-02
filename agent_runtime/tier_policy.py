@@ -32,9 +32,6 @@ def load_orchestrator_pin_fields() -> tuple[str, ...]:
         return ()
 
 
-# Backward-compatible alias
-_load_orchestrator_pin_markers = load_orchestrator_pin_fields
-
 _orch_pins = load_orchestrator_pin_fields()
 PIN_CONTENT_MARKERS = PIN_CONTENT_MARKERS + _orch_pins
 LOW_VALUE_SYSTEM_PHRASES = ("工具调用格式错误",)

@@ -6,9 +6,9 @@ from agent_runtime.tool_context import ToolContext
 from agent_runtime.tools import (
     build_tool_registry,
     legal_tool_names,
+    tool_grep,
     tool_list_files,
     tool_read_file,
-    tool_search,
 )
 
 
@@ -62,26 +62,26 @@ class TestSearch:
     """search 工具测试。"""
 
     def test_search_finds_pattern(self, ctx):
-        result = tool_search(ctx, {"pattern": "Test Project", "path": "."})
+        result = tool_grep(ctx, {"pattern": "Test Project", "path": "."})
         assert "README.md" in result
 
     def test_search_no_match(self, ctx):
-        result = tool_search(ctx, {"pattern": "xyzzy_not_found_42", "path": "."})
+        result = tool_grep(ctx, {"pattern": "xyzzy_not_found_42", "path": "."})
         assert "无匹配" in result
 
     def test_missing_pattern(self, ctx):
-        result = tool_search(ctx, {})
+        result = tool_grep(ctx, {})
         assert "Error" in result
         assert "pattern" in result
 
     def test_nonexistent_path(self, ctx):
-        result = tool_search(ctx, {"pattern": "test", "path": "ghost_dir"})
+        result = tool_grep(ctx, {"pattern": "test", "path": "ghost_dir"})
         assert "Error" in result
 
     def test_context_lines_shows_surrounding(self, ctx, temp_workspace):
         """context_lines 显示匹配行前后的上下文。"""
         (temp_workspace / "data.txt").write_text("line A\nline B\nTODO fix this\nline D\nline E\n")
-        result = tool_search(
+        result = tool_grep(
             ctx, {"pattern": "TODO", "path": str(temp_workspace), "context_lines": 1}
         )
         assert "TODO fix this" in result
@@ -93,7 +93,7 @@ class TestSearch:
     def test_context_lines_zero(self, ctx, temp_workspace):
         """context_lines=0 时只显示匹配行。"""
         (temp_workspace / "data.txt").write_text("a\nb TODO here\nc\n")
-        result = tool_search(
+        result = tool_grep(
             ctx, {"pattern": "TODO", "path": str(temp_workspace), "context_lines": 0}
         )
         assert "TODO" in result
@@ -108,11 +108,11 @@ class TestToolRegistry:
         registry = build_tool_registry(ctx)
         assert "list_files" in registry
         assert "read_file" in registry
-        assert "search" in registry
+        assert "grep" in registry
 
     def test_readonly_tools_are_marked_safe(self, ctx):
         registry = build_tool_registry(ctx)
-        readonly = {"list_files", "read_file", "search"}
+        readonly = {"list_files", "read_file", "grep"}
         for name in readonly:
             assert name in registry, f"{name} 缺失"
             assert registry[name]["risky"] is False, f"{name} 应为安全工具"
@@ -143,7 +143,6 @@ class TestToolRegistry:
         expected = {
             "list_files",
             "read_file",
-            "search",
             "grep",
             "code_lookup",
             "code_relations",

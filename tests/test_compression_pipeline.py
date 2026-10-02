@@ -68,7 +68,7 @@ class TestCompressionPipeline:
         assert meta["compression_pipeline"]["l5_triggered"] is False
 
     def test_pipeline_does_not_mutate_canonical_history(self, budget):
-        history = [{"role": "tool", "tool_name": "search", "content": "y" * 5000}]
+        history = [{"role": "tool", "tool_name": "grep", "content": "y" * 5000}]
         canonical = history[0]["content"]
         run_compression_pipeline(history, budget)
         assert history[0]["content"] == canonical
