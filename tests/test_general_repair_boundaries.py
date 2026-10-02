@@ -15,6 +15,30 @@ def test_evaluation_patch_is_rejected_at_repair_api_boundary():
         orch.repair("public issue", verify_test_patch="hidden test contents")
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "ValueError: invalid literal for int() with base 10: 'N/A'",
+        "TypeError: unsupported operand type(s) for +: 'int' and 'str'",
+    ],
+)
+def test_error_text_is_evidence_without_prescribed_patch(failure):
+    from src.state import VerificationResult
+
+    feedback = Orchestrator(None)._build_feedback(
+        VerificationResult(
+            all_passed=False,
+            total_tests=1,
+            failed=1,
+            failure_logs=[failure],
+        )
+    )
+    assert failure in feedback
+    assert "修复约束" not in feedback
+    assert "raw.isdigit()" not in feedback
+    assert "str(...)" not in feedback
+
+
 def test_verifier_does_not_apply_hidden_patch_from_private_context(tmp_path, monkeypatch):
     target = tmp_path / "test_value.py"
     original = "def test_value():\n    assert True\n"

@@ -126,20 +126,6 @@ def _summarize_failure_targets(failure_logs: list[str]) -> str:
     return "\n".join(parts)
 
 
-def _repair_constraint_hints(failure_logs: list[str]) -> str:
-    combined = "\n".join(str(log) for log in failure_logs[:5])
-    hints: list[str] = []
-    if re.search(r"invalid literal for int\(\).*['\"]N/A['\"]", combined, re.IGNORECASE):
-        hints.append(
-            "检测到 int() 转换非数字字符串 N/A。不要只写 dict.get/data.get(..., '0') 或 `or 0`，"
-            "因为 'N/A' 是 truthy；必须显式处理非数字字符串，例如先取 raw，"
-            "raw.isdigit() 时 int(raw)，否则按测试期望返回 0。"
-        )
-    if re.search(r"unsupported operand type\(s\).*['\"]int['\"].*['\"]str['\"]", combined):
-        hints.append("检测到 int 与 str 拼接；字符串输出场景应在拼接前对数值结果使用 str(...)。")
-    return "\n".join(hints)
-
-
 def _patch_retry_fingerprint(patch: CandidatePatch) -> str:
     body = "\n".join(
         [
@@ -1972,13 +1958,6 @@ class Orchestrator(RepairPipelineMixin):
                     _MAX_FAILURE_TARGET_CHARS,
                 )
             )
-
-        constraint_inputs = list(result.failure_logs)
-        if state is not None and state.issue_input:
-            constraint_inputs.append(state.issue_input)
-        constraint_hints = _repair_constraint_hints(constraint_inputs)
-        if constraint_hints:
-            sections.append(_FeedbackSection("修复约束", constraint_hints, 26, 700))
 
         # 3. failure logs
         if result.failure_logs:
