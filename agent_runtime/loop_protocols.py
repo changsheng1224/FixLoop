@@ -144,14 +144,14 @@ def validate_final_answer(config, text: str) -> tuple[bool, str]:
             "list": list,
             "dict": dict,
         }
-        for field, ftype in schema.items():
+        for field_name, ftype in schema.items():
             expected = type_map.get(ftype)
             if expected is None:
                 continue
-            value = data.get(field)
+            value = data.get(field_name)
             if value is not None and not isinstance(value, expected):
                 return False, (
-                    f"字段 '{field}' 应为 {ftype} 类型，实际为 {type(value).__name__}。"
+                    f"字段 '{field_name}' 应为 {ftype} 类型，实际为 {type(value).__name__}。"
                     "请修正后重新输出。"
                 )
 

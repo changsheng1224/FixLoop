@@ -115,3 +115,22 @@ Skill 注册、上下文装配和持久化格式的其余兼容路径于 2026-10
   （直接调用 `agent_runtime.json_recovery.repair_structured_output`）、
   `swebench.harness._parse_resolved` 与 `UserProfileStore.remove`
   （改用 `invalidate`）。
+
+## 2026-10-05（续）：意图 / 载荷 / 记忆兼容面收敛（破坏式）
+
+- **意图**：删除 `llm_fallback.maybe_refine_graph` 兼容壳，统一使用
+  `maybe_refine(...).graph`；`CandidateEvent.from_dict` 与意图路由指标不再用
+  `"legacy"` 作为 `router_version` / `taxonomy_version` 缺省，改用
+  `INTENT_ROUTER_VERSION` / `INTENT_TAXONOMY_VERSION`。
+- **载荷字段**：读取侧收敛到唯一 canonical 键（删除无生产者的别名）——
+  trace 的 `context_built` 只读 `context_sections`、`tool_executed` 只读
+  `tool_args`；`attribute_failure` 只读 `failure_class`；
+  `tool_observations` 条目只读 `tool`；观测导出只读 `model`。
+  多来源/模型容错与外部协议双拼写（`duration_ms|elapsed_ms`、`status|outcome`、
+  `token_usage`、MCP/LSP/SWE-bench）保留。
+- **记忆/持久化**：`DurableMemoryStore._read_topic` 只接受 topic 名，删除
+  direct-Path 兼容分支；`canonical_trace.validate_event` 删除未使用的
+  `require_canonical` 形参与其旧格式短路。
+- **死代码**：删除 `agent_runtime.tools` 未使用的 `json` 导入；
+  修正 `loop_protocols` 中遮蔽 `dataclasses.field` 的循环变量。
+

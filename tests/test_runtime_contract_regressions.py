@@ -247,3 +247,29 @@ def test_compatibility_shims_stay_removed():
     assert not hasattr(patch_applier, "extract_json_block")
     assert not hasattr(harness, "_parse_resolved")
 
+
+def test_intent_payload_and_memory_shims_stay_removed():
+    """The 2026-10-05 (cont.) intent/payload/memory removal must not creep back."""
+    import inspect
+
+    import agent_runtime.intent.llm_fallback as llm_fallback
+
+    assert hasattr(llm_fallback, "maybe_refine")
+    assert not hasattr(llm_fallback, "maybe_refine_graph")
+
+    import agent_runtime.tools as tools
+
+    assert not hasattr(tools, "json")
+
+    from agent_runtime.canonical_trace import validate_event
+
+    assert "require_canonical" not in inspect.signature(validate_event).parameters
+
+    from agent_runtime.features.memory.durable import DurableMemoryStore
+
+    assert list(inspect.signature(DurableMemoryStore._read_topic).parameters)[1:] == [
+        "topic",
+        "strategy",
+    ]
+
+

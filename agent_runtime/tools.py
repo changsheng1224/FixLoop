@@ -7,7 +7,6 @@
 auto_schema() 从 dataclass 自动推导参数字典，新增工具无需手写 schema。
 """
 
-import json
 import os
 import subprocess
 import sys
