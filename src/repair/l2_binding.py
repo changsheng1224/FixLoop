@@ -42,7 +42,14 @@ def bind_l2_context(
     agent._l2_task_id = task_id
     agent._l2_ask_started_ms = int(started_ms)
     if repair_state is not None:
-        agent._l2_repair_state = repair_state
+
+        def record_grounding(allowed_edit, grounded_paths, ledger):
+            repair_state.control.allowed_edit = allowed_edit
+            repair_state.node_timings["patcher_grounded"] = bool(grounded_paths)
+            repair_state.node_timings["patch_required"] = True
+            repair_state.node_timings["evidence_ledger"] = ledger
+
+        agent.tool_context.grounding_sink = record_grounding
     return task_id
 
 
@@ -50,6 +57,9 @@ def clear_l2_context(agent) -> None:
     """ask 结束后清理 Agent 上的 L2 临时属性。"""
     if agent is None:
         return
+    context = getattr(agent, "tool_context", None)
+    if context is not None:
+        context.grounding_sink = None
     for attr in (
         "_l2_repair_run_id",
         "_l2_agent",
@@ -57,7 +67,6 @@ def clear_l2_context(agent) -> None:
         "_l2_attempt",
         "_l2_task_id",
         "_l2_ask_started_ms",
-        "_l2_repair_state",
     ):
         if hasattr(agent, attr):
             delattr(agent, attr)

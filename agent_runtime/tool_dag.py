@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
-from agent_runtime.tool_result import ToolErrorCode, ToolResult, ToolStatus, normalize_tool_result
+from agent_runtime.tool_result import ToolErrorCode, ToolResult, ToolStatus, require_tool_result
 
 
 @dataclass(frozen=True)
@@ -59,11 +59,7 @@ class ToolDAGExecutor:
                     content=f"Error: dependency failed for {node.node_id}",
                     status=ToolStatus.REJECTED.value,
                     error_code=ToolErrorCode.STALE_PRECONDITION.value,
-                    metadata={
-                        "tool_status": ToolStatus.REJECTED.value,
-                        "tool_error_code": ToolErrorCode.STALE_PRECONDITION.value,
-                        "blocked_by": list(node.depends_on),
-                    },
+                    metadata={'blocked_by': list(node.depends_on)},
                 )
             pending.difference_update(node.node_id for node in blocked)
             ready = [node for node in ready if node not in blocked]
@@ -76,11 +72,11 @@ class ToolDAGExecutor:
                         for node in parallel
                     }
                     for node in parallel:
-                        results[node.node_id] = normalize_tool_result(
+                        results[node.node_id] = require_tool_result(
                             futures[node.node_id].result(), tool_name=node.tool_name
                         )
             for node in serial:
-                results[node.node_id] = normalize_tool_result(
+                results[node.node_id] = require_tool_result(
                     self.execute(node.tool_name, node.arguments), tool_name=node.tool_name
                 )
             pending.difference_update(node.node_id for node in ready)

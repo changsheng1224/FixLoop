@@ -16,6 +16,7 @@ class TestSkillValidateL1:
             "\n".join(
                 [
                     "name: bad_skill",
+                    "kind: guidance",
                     "trigger_pattern: Error",
                     "suggested_tools: [not_a_real_tool]",
                     "guidance:",
@@ -30,7 +31,7 @@ class TestSkillValidateL1:
 
     def test_empty_guidance_is_error(self, tmp_path: Path):
         (tmp_path / "bad.yaml").write_text(
-            "name: bad_skill\ntrigger_pattern: Error\nguidance: []\n",
+            "name: bad_skill\nkind: guidance\ntrigger_pattern: Error\nguidance: []\n",
             encoding="utf-8",
         )
         report = validate_directory(tmp_path)
@@ -38,7 +39,7 @@ class TestSkillValidateL1:
 
     def test_invalid_name_slug_is_error(self, tmp_path: Path):
         (tmp_path / "bad.yaml").write_text(
-            "name: Bad-Skill\ntrigger_pattern: Error\nguidance:\n  - x\n",
+            "name: Bad-Skill\nkind: guidance\ntrigger_pattern: Error\nguidance:\n  - x\n",
             encoding="utf-8",
         )
         report = validate_directory(tmp_path)
@@ -47,7 +48,7 @@ class TestSkillValidateL1:
 
 class TestSkillValidateL2:
     def test_duplicate_name_is_error(self, tmp_path: Path):
-        body = "name: dup\ntrigger_pattern: A\npriority: 1\nguidance:\n  - a\n"
+        body = "name: dup\nkind: guidance\ntrigger_pattern: A\npriority: 1\nguidance:\n  - a\n"
         (tmp_path / "a.yaml").write_text(body, encoding="utf-8")
         (tmp_path / "b.yaml").write_text(body, encoding="utf-8")
         report = validate_directory(tmp_path)
@@ -56,7 +57,7 @@ class TestSkillValidateL2:
 
     def test_filename_mismatch_is_warning(self, tmp_path: Path):
         (tmp_path / "file_a.yaml").write_text(
-            "name: skill_b\ntrigger_pattern: Error\nguidance:\n  - hint\n",
+            "name: skill_b\nkind: guidance\ntrigger_pattern: Error\nguidance:\n  - hint\n",
             encoding="utf-8",
         )
         report = validate_directory(tmp_path)
@@ -64,16 +65,15 @@ class TestSkillValidateL2:
         assert any(issue.field == "name" for issue in report.warnings)
 
     def test_builtin_skills_validate_clean(self):
-        from src.skills.catalog import _BUILTIN_DIR
-
-        report = validate_directory(_BUILTIN_DIR)
+        builtin_dir = Path(__file__).resolve().parents[1] / "src" / "skills"
+        report = validate_directory(builtin_dir)
         assert report.ok
         assert report.skill_count == 11
         assert not report.warnings  # filenames match skill names after P2-11 rename
 
     def test_strict_load_raises_on_errors(self, tmp_path: Path):
         (tmp_path / "bad.yaml").write_text(
-            "name: bad\ntrigger_pattern: Error\nguidance: []\n",
+            "name: bad\nkind: guidance\ntrigger_pattern: Error\nguidance: []\n",
             encoding="utf-8",
         )
         with pytest.raises(SkillCatalogError):

@@ -581,9 +581,9 @@ class Orchestrator(RepairPipelineMixin):
         5. logic_error → 无异常名的错误行为描述
         6. unknown → LLM fallback
         """
-        from agent_runtime.intent.adapters import IssueIntentAdapter
         from agent_runtime.intent.models import RouteContext
         from agent_runtime.intent.router import IntentRouter
+        from src.repair.intent_adapter import IssueIntentAdapter
 
         tracer = None
         repair_ctx = getattr(self, "_repair_ctx", None)

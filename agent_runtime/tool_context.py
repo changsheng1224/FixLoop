@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from agent_runtime.cancellation import CancellationToken
+from agent_runtime.edit_policy import EditPolicy
 from agent_runtime.path_safety import resolve_under_root
 
 
@@ -32,7 +33,8 @@ class ToolContext:
     budget: object | None = None
     idempotency_key: str = ""
     # Patcher-primary：可选 EditLockState（未读不可写 / allowed_edit）
-    edit_lock: object | None = None
+    edit_lock: EditPolicy | None = None
+    grounding_sink: Callable[[list[str], list[str], list[dict]], None] | None = None
     observation_state: dict | None = None
     exploration_mode: str = "text"
     exploration_service: object | None = None
@@ -55,7 +57,6 @@ class ToolContext:
     def __post_init__(self):
         if self.path_resolver is None:
             self.path_resolver = self._default_resolve
-
 
     def resolve(self, raw_path: str) -> Path:
         """将用户提供的路径解析为绝对路径，并进行逃逸检测。

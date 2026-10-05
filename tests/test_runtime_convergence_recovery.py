@@ -12,7 +12,7 @@ from agent_runtime.model_turn import (
 from agent_runtime.runtime import Agent
 from agent_runtime.step_guard import StepContext, StepGuard
 from agent_runtime.tool_executor import QuotaEnforcer
-from agent_runtime.tool_step_runtime import tool_target_paths
+from src.repair.loop_policy import tool_target_paths
 from agent_runtime.workspace import WorkspaceContext
 
 
@@ -117,15 +117,33 @@ def _final(text: str = "done") -> ModelTurnResult:
     )
 
 
-def _native_loop(tmp_path, results: list[ModelTurnResult]):
+def _native_loop(tmp_path, results: list[ModelTurnResult], *, patcher: bool = True):
+    """Build an AgentLoop through the same injection path as production.
+
+    Repair behaviour is owned by the injected L2 policy, not by the agent
+    name: the canonical ``create_repair_agent`` path injects
+    ``RepairLoopPolicy`` for the patcher role.  Tests mirror that here so a
+    post-hoc ``_agent_name`` swap is never needed.
+    """
     from agent_runtime.agent_loop import AgentLoop
+    from agent_runtime.tool_context import ToolContext
+    from src.repair.loop_policy import RepairLoopPolicy
+    from src.tools.composite import build_repair_agent_tools
 
     client = ScriptedNativeClient(results)
+    ctx = ToolContext(root=str(tmp_path))
+    tools = build_repair_agent_tools(ctx, "patcher") if patcher else None
     agent = Agent(
-        config=AgentConfig(provider="fake", max_steps=3, max_new_tokens=512),
+        config=AgentConfig(
+            provider="fake", max_steps=3, max_new_tokens=512, approval="auto"
+        ),
         model_client=client,
         workspace=WorkspaceContext.build(str(tmp_path)),
         cwd=str(tmp_path),
+        tools=tools,
+        tool_context=ctx if patcher else None,
+        loop_policy=RepairLoopPolicy() if patcher else None,
+        agent_name="patcher" if patcher else "",
     )
     loop = AgentLoop(agent)
     events = []
@@ -338,7 +356,6 @@ def test_thinking_only_recovery_uses_patch_decision_tools_and_smaller_budget(tmp
     loop, agent, client, events = _native_loop(
         tmp_path, [_thinking_truncated(), _final("cannot_patch: insufficient evidence")]
     )
-    agent._agent_name = "patcher"
 
     loop.run("fix issue", skip_plan=True)
 
@@ -357,65 +374,74 @@ def test_thinking_only_recovery_uses_patch_decision_tools_and_smaller_budget(tmp
 
 def test_patch_decision_gate_filters_reads_at_request_projection(tmp_path):
     loop, agent, _client, _events = _native_loop(tmp_path, [_final()])
-    agent._agent_name = "patcher"
     loop._step_guard.enter_convergence("read_limit_without_write")
-    loop._tool_state.patch_decision_required = True
+    loop._tool_state.action_required = True
 
-    names = loop._native_tool_names(action_required=True)
+    names = loop.agent.loop_policy.visible_tools(loop._policy_context(), action_required=True)
 
     assert names == {"apply_patch", "patch_file", "finish_repair"}
 
 
 def test_reading_editable_implementation_syncs_grounding_and_forces_patch(tmp_path):
     from agent_runtime.tool_result import ToolResult
-    from src.repair.execution.edit_lock import EditLockState, set_active_edit_lock
+    from src.repair.execution.edit_lock import EditLockState
 
     target = tmp_path / "module.py"
     target.write_text("value = 1\n", encoding="utf-8")
     loop, agent, _client, events = _native_loop(tmp_path, [_final()])
-    agent._agent_name = "patcher"
     from src.state import RepairState
 
     state = RepairState(issue_input="fix")
-    agent._l2_repair_state = state
+    from src.repair.l2_binding import bind_l2_context
+
+    bind_l2_context(
+        agent,
+        repair_run_id="test",
+        agent_name="patcher",
+        phase="patch",
+        attempt=0,
+        repair_state=state,
+    )
     lock = EditLockState(repo_root=tmp_path, allowed_edit=set())
-    set_active_edit_lock(tmp_path, lock)
+    agent.tool_context.edit_lock = lock
     try:
         lock.mark_read("module.py", auto_allow_impl=True)
         result = ToolResult(
-            content="module.py", status="success", metadata={"tool_status": "success"}
+            content="module.py", status="success", metadata={}
         )
-        loop._sync_patcher_grounding("read_file", {"path": "module.py"}, result)
+        loop.agent.loop_policy.sync_grounding(
+            loop._policy_context(), "read_file", {"path": "module.py"}, result
+        )
         assert state.node_timings["patcher_grounded"] is True
         assert state.node_timings["patch_required"] is True
-        assert loop._tool_state.patch_decision_required is True
-        assert loop._tool_state.patch_recovery_allowed_tools == {
+        assert loop._tool_state.action_required is True
+        assert loop._tool_state.recovery_allowed_tools == {
             "apply_patch",
             "patch_file",
             "finish_repair",
         }
         assert any(name == "patcher_grounded" for name, _payload in events)
     finally:
-        set_active_edit_lock(tmp_path, None)
+        agent.tool_context.edit_lock = None
 
 
 def test_grounded_patcher_cannot_finish_with_needs_more_context(tmp_path):
     from agent_runtime.tool_result import ToolResult
 
     loop, agent, _client, _events = _native_loop(tmp_path, [_final()])
-    agent._agent_name = "patcher"
     agent.session["_patcher_runtime"] = {"grounded": True}
-    result = ToolResult(content="", status="success", metadata={"tool_status": "success"})
+    result = ToolResult(content="", status="success", metadata={})
 
     assert (
-        loop._block_grounded_finish(
+        loop.agent.loop_policy.review_result(
+            loop._policy_context(),
             "finish_repair",
             {"status": "needs_more_context", "reason": "need more context"},
             result,
         )
         is True
     )
-    assert result.metadata["tool_error_code"] == "grounded_finish_blocked"
+    assert result.error_code == "grounded_finish_blocked"
     assert result.metadata["required_next_action"] == "apply_patch_or_cannot_patch"
 
 
@@ -433,12 +459,11 @@ def test_patcher_terminal_classifies_no_write_attempt():
 
 def test_targeted_reread_reserve_overrides_patch_decision_for_exact_read(tmp_path):
     loop, agent, _client, _events = _native_loop(tmp_path, [_final()])
-    agent._agent_name = "patcher"
     loop._step_guard.enter_convergence("stale_preimage")
-    loop._tool_state.patch_decision_required = True
+    loop._tool_state.action_required = True
     agent.quota.grant_read_reserve("pkg/a.py", kind="targeted")
 
-    names = loop._native_tool_names(action_required=True)
+    names = loop.agent.loop_policy.visible_tools(loop._policy_context(), action_required=True)
 
     assert "read_file" in names
     assert "grep" not in names
@@ -447,12 +472,14 @@ def test_targeted_reread_reserve_overrides_patch_decision_for_exact_read(tmp_pat
 
 def test_patch_recovery_projection_forces_apply_patch_after_invalid_args(tmp_path):
     loop, agent, _client, _events = _native_loop(tmp_path, [_final()])
-    agent._agent_name = "patcher"
-    loop._set_patch_recovery(
-        "invalid_args", "use grounded apply_patch", {"apply_patch", "finish_repair"}
+    loop.agent.loop_policy.set_recovery(
+        loop._policy_context(),
+        "invalid_args",
+        "use grounded apply_patch",
+        {"apply_patch", "finish_repair"},
     )
 
-    assert loop._native_tool_names(action_required=True) == {
+    assert loop.agent.loop_policy.visible_tools(loop._policy_context(), action_required=True) == {
         "apply_patch",
         "finish_repair",
     }
@@ -460,12 +487,11 @@ def test_patch_recovery_projection_forces_apply_patch_after_invalid_args(tmp_pat
 
 def test_patcher_localization_window_keeps_reads_after_action_gate(tmp_path):
     loop, agent, _client, _events = _native_loop(tmp_path, [_final()])
-    agent._agent_name = "patcher"
     loop._step_guard.reset("fix issue", localization_mode=True)
     loop._step_guard.enter_convergence("read_limit_without_write")
-    loop._tool_state.patch_decision_required = True
+    loop._tool_state.action_required = True
 
-    names = loop._native_tool_names(action_required=True)
+    names = loop.agent.loop_policy.visible_tools(loop._policy_context(), action_required=True)
 
     assert {"read_file", "grep", "apply_patch", "finish_repair"} <= names
 
@@ -522,7 +548,6 @@ def test_thinking_only_recovery_accepts_structured_terminal_tool(tmp_path):
             ),
         ],
     )
-    agent._agent_name = "patcher"
 
     answer = loop.run("fix issue", skip_plan=True)
 
@@ -533,7 +558,7 @@ def test_thinking_only_recovery_accepts_structured_terminal_tool(tmp_path):
 
 def test_finish_repair_has_terminal_reserve_when_recovery_budget_is_exhausted():
     quota = QuotaEnforcer(group_limits={"read": 0, "write": 0, "verify": 0, "recovery": 0})
-    spec = {"budget_group": "recovery"}
+    spec = {"budget_group": "recovery", "terminal": True}
     args = {"status": "needs_more_context", "reason": "evidence is incomplete"}
 
     assert quota.check("finish_repair", spec, args)
@@ -578,7 +603,6 @@ def test_successful_recovery_write_returns_to_normal_tool_choice(tmp_path):
             _final("patched"),
         ],
     )
-    agent._agent_name = "patcher"
     agent.config.approval = "auto"
 
     assert loop.run("fix issue", skip_plan=True) == "patched"

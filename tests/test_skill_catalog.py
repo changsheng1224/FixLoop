@@ -8,7 +8,11 @@ from pathlib import Path
 
 import yaml
 
-from src.skills.catalog import SkillCatalog, _compute_directory_hash
+from src.skills.catalog import SkillCatalog
+
+
+def _compute_directory_hash(directory: Path) -> str:
+    return SkillCatalog.load_from_directory(directory).content_hash
 
 # ---------------------------------------------------------------------------
 # content_hash
@@ -23,6 +27,7 @@ class TestContentHash:
                 yaml.dump(
                     {
                         "name": "test_a",
+                        "kind": "guidance",
                         "language": "python",
                         "trigger_pattern": "TypeError",
                         "priority": 10,
@@ -35,6 +40,7 @@ class TestContentHash:
                 yaml.dump(
                     {
                         "name": "test_b",
+                        "kind": "guidance",
                         "language": "python",
                         "trigger_pattern": "ValueError",
                         "priority": 20,
@@ -52,6 +58,7 @@ class TestContentHash:
                 yaml.dump(
                     {
                         "name": "test",
+                        "kind": "guidance",
                         "language": "python",
                         "trigger_pattern": "Error",
                         "priority": 5,
@@ -76,6 +83,7 @@ class TestContentHash:
                 yaml.dump(
                     {
                         "name": "test",
+                        "kind": "guidance",
                         "language": "python",
                         "trigger_pattern": "Error",
                         "priority": 5,
@@ -123,6 +131,7 @@ class TestRebuildIndex:
                 yaml.dump(
                     {
                         "name": "new_skill",
+                        "kind": "guidance",
                         "language": "python",
                         "trigger_pattern": "NewError",
                         "priority": 99,
@@ -158,6 +167,7 @@ def _setup(tmp: str) -> tuple[Path, Path]:
         yaml.dump(
             {
                 "name": "test_skill",
+                "kind": "guidance",
                 "language": "python",
                 "trigger_pattern": "Error",
                 "priority": 10,

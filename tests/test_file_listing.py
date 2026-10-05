@@ -73,10 +73,10 @@ class TestListFilesTool:
         src.mkdir()
         (src / "mod.py").write_text("x")
         ctx = ToolContext(root=str(temp_workspace))
-        result = tool_list_files(ctx, {"path": ".", "depth": 2})
+        result = tool_list_files(ctx, {"path": ".", "depth": 2}).content
         assert "[F] pkg/mod.py" in result
 
     def test_glob_no_match_message(self, temp_workspace):
         ctx = ToolContext(root=str(temp_workspace))
-        result = tool_list_files(ctx, {"path": ".", "glob": "*.xyz"})
+        result = tool_list_files(ctx, {"path": ".", "glob": "*.xyz"}).content
         assert "(无匹配)" in result

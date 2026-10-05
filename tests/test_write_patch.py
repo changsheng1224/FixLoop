@@ -19,39 +19,43 @@ class TestWriteFile:
     """write_file 工具测试。"""
 
     def test_normal_write(self, ctx, temp_workspace):
-        result = tool_write_file(ctx, {"path": "hello.txt", "content": "hello world"})
+        result = tool_write_file(ctx, {"path": "hello.txt", "content": "hello world"}).content
         assert "已写入" in result
         assert (temp_workspace / "hello.txt").read_text() == "hello world"
 
     def test_overwrite_existing(self, ctx, temp_workspace):
         (temp_workspace / "exist.txt").write_text("old")
-        result = tool_write_file(ctx, {"path": "exist.txt", "content": "new"})
+        result = tool_write_file(ctx, {"path": "exist.txt", "content": "new"}).content
         assert "已写入" in result
         assert (temp_workspace / "exist.txt").read_text() == "new"
 
     def test_creates_parent_directories(self, ctx, temp_workspace):
-        result = tool_write_file(ctx, {"path": "sub/deep/nested/file.py", "content": "x=1"})
+        result = tool_write_file(ctx, {"path": "sub/deep/nested/file.py", "content": "x=1"}).content
         assert "已写入" in result
         assert (temp_workspace / "sub" / "deep" / "nested" / "file.py").read_text() == "x=1"
 
     def test_missing_path(self, ctx):
-        result = tool_write_file(ctx, {"content": "no path"})
+        result = tool_write_file(ctx, {"content": "no path"}).content
         assert "Error" in result
 
     def test_append_to_existing(self, ctx, temp_workspace):
         (temp_workspace / "log.txt").write_text("line1\n")
-        result = tool_write_file(ctx, {"path": "log.txt", "content": "line2\n", "append": True})
+        result = tool_write_file(
+            ctx, {"path": "log.txt", "content": "line2\n", "append": True}
+        ).content
         assert "已追加到" in result
         assert (temp_workspace / "log.txt").read_text() == "line1\nline2\n"
 
     def test_append_to_new_file(self, ctx, temp_workspace):
         """append 到不存在的文件 → 创建新文件。"""
-        result = tool_write_file(ctx, {"path": "new.txt", "content": "hello", "append": True})
+        result = tool_write_file(
+            ctx, {"path": "new.txt", "content": "hello", "append": True}
+        ).content
         assert "已写入" in result
         assert (temp_workspace / "new.txt").read_text() == "hello"
 
     def test_atomic_write_no_tmp_residue(self, ctx, temp_workspace):
-        result = tool_write_file(ctx, {"path": "clean.txt", "content": "ok"})
+        result = tool_write_file(ctx, {"path": "clean.txt", "content": "ok"}).content
         assert "已写入" in result
         assert (temp_workspace / "clean.txt").read_text() == "ok"
         assert not (temp_workspace / "clean.txt.tmp").exists()
@@ -60,7 +64,7 @@ class TestWriteFile:
         target = temp_workspace / "keep.txt"
         target.write_text("original")
         with patch.object(type(target), "replace", side_effect=OSError("replace failed")):
-            result = tool_write_file(ctx, {"path": "keep.txt", "content": "broken"})
+            result = tool_write_file(ctx, {"path": "keep.txt", "content": "broken"}).content
         assert "Error" in result
         assert target.read_text() == "original"
         assert not (temp_workspace / "keep.txt.tmp").exists()
@@ -94,7 +98,7 @@ class TestPatchFile:
                 "old_text": "return a + b",
                 "new_text": "return int(a) + int(b)",
             },
-        )
+        ).content
         assert "已修补" in result
         assert "int(a) + int(b)" in (temp_workspace / "calc.py").read_text()
 
@@ -107,7 +111,7 @@ class TestPatchFile:
                 "old_text": "nonexistent code",
                 "new_text": "x",
             },
-        )
+        ).content
         assert "出现 0 次" in result
 
     def test_patch_multiple_matches(self, ctx, temp_workspace):
@@ -119,7 +123,7 @@ class TestPatchFile:
                 "old_text": "x = 1",
                 "new_text": "y = 2",
             },
-        )
+        ).content
         assert "出现 3 次" in result
 
     def test_patch_nonexistent_file(self, ctx):
@@ -130,13 +134,13 @@ class TestPatchFile:
                 "old_text": "a",
                 "new_text": "b",
             },
-        )
+        ).content
         assert "Error" in result
 
     def test_patch_multi_hunk_diff(self, ctx, temp_workspace):
         (temp_workspace / "multi.py").write_text("line1\nold\nline3\nfoo\n")
         diff = "@@ -1,3 +1,3 @@\n line1\n-old\n+new\n line3\n@@ -4,1 +4,2 @@\n foo\n+bar\n"
-        result = tool_patch_file(ctx, {"path": "multi.py", "diff": diff})
+        result = tool_patch_file(ctx, {"path": "multi.py", "diff": diff}).content
         assert "已修补" in result
         assert "2 个 hunk" in result
         assert (temp_workspace / "multi.py").read_text() == "line1\nnew\nline3\nfoo\nbar\n"

@@ -161,8 +161,8 @@ class TestToolExecutorCancel:
         agent.cancel_token.cancel()
         executor = ToolExecutor(agent=agent, approval_policy="auto")
         result = executor.execute_gated("write_file", {"path": "x.txt", "content": "y"})
-        assert result.metadata["tool_status"] == "rejected"
-        assert result.metadata["tool_error_code"] == "cancelled"
+        assert result.status == "rejected"
+        assert result.error_code == "cancelled"
 
     def test_restores_write_after_cancel(self, agent, temp_workspace, monkeypatch):
         from agent_runtime.cancellation import CancellationToken
@@ -180,7 +180,7 @@ class TestToolExecutorCancel:
 
         agent.tools["write_file"]["run"] = write_then_cancel
         result = executor.execute_gated("write_file", {"path": "mut.py", "content": "after\n"})
-        assert result.metadata["tool_status"] == "success"
+        assert result.status == "success"
         assert result.metadata.get("cancel_restored") is True
         assert target.read_text(encoding="utf-8") == "before\n"
 
@@ -337,7 +337,7 @@ class TestRunShellCancel:
         result = tool_run_shell(
             ctx,
             {"command": 'python -c "import time; time.sleep(2)"', "timeout": 30},
-        )
+        ).content
         elapsed = time.time() - t0
         assert "取消" in result
         assert elapsed < 1.5
@@ -355,8 +355,8 @@ class TestGate7Cancel:
 
         monkeypatch.setattr("builtins.input", fake_input)
         result = executor.execute_gated("write_file", {"path": "x.txt", "content": "y"})
-        assert result.metadata["tool_status"] == "rejected"
-        assert result.metadata["tool_error_code"] == "cancelled"
+        assert result.status == "rejected"
+        assert result.error_code == "cancelled"
         assert result.metadata["rejection_layer"] == "cancel"
         assert agent.cancel_token.is_cancelled
 

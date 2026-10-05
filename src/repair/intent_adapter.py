@@ -38,9 +38,7 @@ class IssueIntentAdapter:
     def to_repair_plan(self, result: IntentResult, issue: str) -> RepairPlan:
         graph = merge_constraints(result.graph)
         execs = [n for n in graph.nodes if n.role == "executable"]
-        repair_nodes = [
-            n for n in execs if n.primary in ("repair_issue", "repair_request")
-        ]
+        repair_nodes = [n for n in execs if n.primary in ("repair_issue", "repair_request")]
         dropped: list[str] = []
         if len(repair_nodes) > 1:
             repair_nodes = sorted(repair_nodes, key=lambda n: n.confidence, reverse=True)
@@ -78,9 +76,7 @@ class IssueIntentAdapter:
         issue_type, rule_name = self._classify(issue)
         plan.issue_type = issue_type
 
-        has_import_err = bool(
-            re.search(r"ModuleNotFoundError|ImportError", issue, re.IGNORECASE)
-        )
+        has_import_err = bool(re.search(r"ModuleNotFoundError|ImportError", issue, re.IGNORECASE))
         has_type_err = bool(re.search(r"TypeError", issue, re.IGNORECASE))
         if has_import_err and has_type_err:
             plan.issue_type = "composite"
@@ -112,9 +108,7 @@ class IssueIntentAdapter:
             if name and name not in plan.suspect_files:
                 plan.suspect_files.append(name)
 
-        candidate_match = re.search(
-            r"Candidate source files:\s*(.+)", issue, re.IGNORECASE
-        )
+        candidate_match = re.search(r"Candidate source files:\s*(.+)", issue, re.IGNORECASE)
         if candidate_match:
             for raw in candidate_match.group(1).split(","):
                 raw_name = raw.strip().replace("\\", "/")
@@ -144,9 +138,7 @@ class IssueIntentAdapter:
         if parsed.top_frame:
             line_no = parsed.top_frame.line
         if line_no is None:
-            line_no = self._parse_line(
-                issue, plan.suspect_files[0] if plan.suspect_files else ""
-            )
+            line_no = self._parse_line(issue, plan.suspect_files[0] if plan.suspect_files else "")
         if line_no and plan.suspect_files:
             plan.reasoning = f"{plan.suspect_files[0]}:{line_no}"
         else:

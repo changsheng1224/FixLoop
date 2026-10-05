@@ -7,13 +7,15 @@
 import re
 from dataclasses import dataclass
 
+from agent_runtime.tool_result import ToolResult
+
 
 @dataclass
 class StackParseArgs:
     traceback: str  # 必填
 
 
-def stack_parse(context, args: dict) -> str:
+def stack_parse(context, args: dict) -> ToolResult:
     """解析 Python Traceback 为结构化数据。
 
     Args:
@@ -27,7 +29,7 @@ def stack_parse(context, args: dict) -> str:
 
     traceback_text = args.get("traceback", "")
     if not traceback_text:
-        return "Error: 缺少必填参数 traceback"
+        return ToolResult.error("Error: 缺少必填参数 traceback")
 
     result = {
         "exception_type": "",
@@ -68,4 +70,4 @@ def stack_parse(context, args: dict) -> str:
             result["syntax_file"] = syntax_match.group(1)
             result["syntax_line"] = int(syntax_match.group(2))
 
-    return json.dumps(result, ensure_ascii=False, indent=2)
+    return ToolResult(content=json.dumps(result, ensure_ascii=False, indent=2))

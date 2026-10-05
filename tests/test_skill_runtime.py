@@ -15,22 +15,22 @@ from src.skills.composition import SkillComposer, SkillStep
 from src.skills.contract import (
     SideEffectLevel,
     SkillLifecycle,
-    canonical_from_executable,
     validate_json_contract,
 )
 from src.skills.decision import build_canonical_skill_decision
-from src.skills.executable_spec import ExecutableSkillSpec
+from src.skills.contract import SkillSpec
 from src.skills.execution import SkillExecutionGateway
 from src.skills.feedback import SkillFeedbackLedger, SkillUsageEvent
 from src.skills.invocation import SkillErrorCode
 from src.skills.models import MatchedSkill
-from src.skills.registry import CanonicalSkillRegistry, SkillRegistry
+from src.skills.registry import SkillRegistry
 from src.skills.router import CandidateScore, RouteDecision
 
 
 def _spec(name="demo", **updates):
     raw = {
         "name": name,
+        "kind": "executable",
         "description": "demo",
         "input_schema": {
             "type": "object",
@@ -46,7 +46,7 @@ def _spec(name="demo", **updates):
         "completion_evidence": ["result.value"],
     }
     raw.update(updates)
-    return ExecutableSkillSpec.model_validate(raw)
+    return SkillSpec.model_validate(raw)
 
 
 def _gateway(spec=None, **kwargs):
@@ -54,8 +54,8 @@ def _gateway(spec=None, **kwargs):
 
 
 def test_canonical_contract_hash_is_stable_and_semver_is_enforced():
-    first = canonical_from_executable(_spec())
-    second = canonical_from_executable(_spec())
+    first = _spec().with_hash()
+    second = _spec().with_hash()
     assert first.content_hash == second.content_hash
     assert len(first.content_hash) == 64
     with pytest.raises(ValueError):
@@ -69,9 +69,9 @@ def test_schema_subset_rejects_required_type_and_extra_fields():
         "properties": {"name": {"type": "string"}},
         "additionalProperties": False,
     }
-    assert validate_json_contract({}, schema) == ["$.name: required"]
-    assert "expected string" in validate_json_contract({"name": 1}, schema)[0]
-    assert "additional property" in validate_json_contract({"name": "x", "bad": 1}, schema)[0]
+    assert "required" in validate_json_contract({}, schema)[0]
+    assert "string" in validate_json_contract({"name": 1}, schema)[0]
+    assert "Additional properties" in validate_json_contract({"name": "x", "bad": 1}, schema)[0]
 
 
 def test_gateway_rejects_invalid_input_before_runner():
@@ -299,7 +299,7 @@ def test_preconditions_postconditions_and_receipt_are_enforced():
 
 def test_version_pin_and_retired_lifecycle_are_enforced():
     registry = SkillRegistry([_spec(version="1.0.0")])
-    registry.register_version(_spec(version="2.0.0"))
+    registry.register(_spec(version="2.0.0"), activate=False)
     pinned = SkillExecutionGateway(registry).execute(
         "demo",
         {"text": "x"},
@@ -399,37 +399,25 @@ def test_execution_and_outcome_metrics_cover_contract_and_ablation():
     assert cohorts["no_skill"]["avg_tool_calls"] == 4
 
 
-def test_side_effect_inference_for_builtin_tools():
-    remote = canonical_from_executable(_spec(allowed_tools=["github_create_draft_pr"]))
-    local = canonical_from_executable(_spec(allowed_tools=["patch_file"]))
-    assert remote.side_effect_level is SideEffectLevel.REMOTE_WRITE
+def test_builtin_effects_are_explicit():
+    registry = SkillRegistry.from_default_specs()
+    assert registry.get("draft_pr_prepare").side_effect_level is SideEffectLevel.REMOTE_WRITE
+    local = registry.get("patch_apply_check")
     assert local.side_effect_level is SideEffectLevel.LOCAL_WRITE
-    assert remote.lifecycle is SkillLifecycle.ACTIVE
+    assert local.requires_read_before_write
+    assert local.lifecycle is SkillLifecycle.ACTIVE
 
 
-def test_canonical_registry_unifies_guidance_and_executable_contracts():
-    executable = _spec("shared")
-    guidance = type(
-        "Guidance",
-        (),
-        {
-            "name": "shared",
-            "version": "1",
-            "source": "workspace_local",
-            "trust_level": "trusted",
-            "scope": "workspace",
-            "suggested_tools": [],
-            "guidance": ["inspect evidence"],
-            "avoid": [],
-        },
-    )()
-    executable_registry = SkillRegistry([executable])
-    catalog = type("Catalog", (), {"skills": [guidance]})()
-    registry = CanonicalSkillRegistry.from_legacy(
-        executable_registry=executable_registry, guidance_catalog=catalog
+def test_registry_unifies_guidance_and_executable_contracts():
+    guidance = SkillSpec(
+        name="shared", kind="guidance", trigger_pattern=".*", guidance=["inspect evidence"],
+        source="workspace_local", trust_level="trusted", scope="workspace",
     )
+    registry = SkillRegistry([_spec("shared"), guidance])
     assert len(registry.list(name="shared")) == 2
-    assert registry.resolve("shared", kind="executable").name == "shared"
+    assert registry.get("shared", kind="executable").name == "shared"
+    with pytest.raises(ValueError, match="ambiguous"):
+        registry.get("shared")
 
 
 def test_skill_trace_events_feed_low_cardinality_metrics():

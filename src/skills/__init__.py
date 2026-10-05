@@ -3,7 +3,7 @@
 from src.skills.catalog import SkillCatalog, SkillCatalogError, get_default_catalog
 from src.skills.composition import SkillComposer, SkillCompositionResult, SkillStep
 from src.skills.contract import (
-    CanonicalSkillSpec,
+    SkillSpec,
     SideEffectLevel,
     SkillBudgetProfile,
     SkillKind,
@@ -12,7 +12,6 @@ from src.skills.contract import (
     SkillTrust,
 )
 from src.skills.decision import CanonicalSkillDecision, build_canonical_skill_decision
-from src.skills.executable_spec import ExecutableSkillSpec
 from src.skills.execution import SkillExecutionGateway, execute_skill
 from src.skills.fallback import (
     SkillFallback,
@@ -33,7 +32,7 @@ from src.skills.invocation import (
     SkillInvocationStatus,
 )
 from src.skills.matcher import match_skill
-from src.skills.models import MatchedSkill, SkillSpec
+from src.skills.models import MatchedSkill
 from src.skills.prompt import (
     SkillHintRole,
     format_skill_hint,
@@ -42,9 +41,8 @@ from src.skills.prompt import (
     format_skill_miss_hint,
 )
 from src.skills.registry import (
-    CanonicalSkillRegistry,
     SkillRegistry,
-    get_default_executable_registry,
+    get_default_registry,
 )
 from src.skills.resolve import resolve_skill_for_plan
 from src.skills.router import RouteDecision, SkillRouter, route_executable_skill
@@ -52,9 +50,7 @@ from src.skills.validate import SkillValidationIssue, SkillValidationReport, val
 
 __all__ = [
     "CanonicalSkillDecision",
-    "CanonicalSkillRegistry",
-    "CanonicalSkillSpec",
-    "ExecutableSkillSpec",
+    "SkillSpec",
     "MatchedSkill",
     "RouteDecision",
     "SkillCatalog",
@@ -75,7 +71,6 @@ __all__ = [
     "SkillRegistry",
     "SkillRouter",
     "SkillScope",
-    "SkillSpec",
     "SkillStep",
     "SkillTrust",
     "SkillUsageEvent",
@@ -86,7 +81,7 @@ __all__ = [
     "SkillHintRole",
     "apply_skill_fallback",
     "build_canonical_skill_decision",
-    "get_default_executable_registry",
+    "get_default_registry",
     "resolve_skill_fallback",
     "resolve_skill_for_plan",
     "route_executable_skill",

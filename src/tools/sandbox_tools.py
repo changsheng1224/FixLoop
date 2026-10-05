@@ -7,13 +7,10 @@ Orchestrator 可直连 harness，避免 Verifier LLM 多轮 tool 调用开销。
 import json
 from dataclasses import dataclass
 
+from agent_runtime.tool_result import ToolResult
 from agent_runtime.tools import TIER_CONTAINER
 from src.harness.sandbox_verify import ensure_sandbox, run_sandbox_verification_flow
 from src.state import VerificationResult
-
-# 兼容旧测试 / 内部引用
-_ensure_sandbox = ensure_sandbox
-_run_test_in_sandbox = run_sandbox_verification_flow
 
 
 @dataclass
@@ -27,33 +24,36 @@ class SandboxTestArgs:
     test_path: str = ""
 
 
-def sandbox_build(context, args: dict) -> str:
+def sandbox_build(context, args: dict) -> ToolResult:
     """在 Docker 容器内执行 pip install -e /code，缓存容器 ID 供后续 test 复用。"""
-    return ensure_sandbox(context, args.get("repo_path", ""))["build_result"]
+    result = ensure_sandbox(context, args.get("repo_path", ""))
+    if result["status"] == "error":
+        return ToolResult.error(result["build_result"], retryable=False)
+    return ToolResult(content=result["build_result"])
 
 
-def sandbox_test(context, args: dict) -> str:
+def sandbox_test(context, args: dict) -> ToolResult:
     """在同一容器内运行 pytest，完成后销毁容器。"""
     repo = args.get("repo_path", "")
     test_path = args.get("test_path", "")
     if not repo:
-        return "Error: 缺少必填参数 repo_path"
+        return ToolResult.error("Error: 缺少必填参数 repo_path")
 
-    result, _timings = _run_test_in_sandbox(context, repo, test_path)
-    return json.dumps(result.to_dict(), ensure_ascii=False, indent=2)
+    result, _timings = run_sandbox_verification_flow(context, repo, test_path)
+    return ToolResult(content=json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
 
 
-def sandbox_verify(context, args: dict) -> str:
+def sandbox_verify(context, args: dict) -> ToolResult:
     """单容器完成 build + test，返回 VerificationResult JSON。"""
     repo = args.get("repo_path", "")
     test_path = args.get("test_path", "")
     if not repo:
-        return "Error: 缺少必填参数 repo_path"
+        return ToolResult.error("Error: 缺少必填参数 repo_path")
 
-    result, timings = _run_test_in_sandbox(context, repo, test_path)
+    result, timings = run_sandbox_verification_flow(context, repo, test_path)
     payload = result.to_dict()
     payload["sandbox_timings"] = timings
-    return json.dumps(payload, ensure_ascii=False, indent=2)
+    return ToolResult(content=json.dumps(payload, ensure_ascii=False, indent=2))
 
 
 def build_sandbox_tool_registry(context) -> dict:
@@ -61,7 +61,12 @@ def build_sandbox_tool_registry(context) -> dict:
     return {
         "sandbox_build": {
             "budget_group": "verify",
-            "schema": {"repo_path": "str"},
+            "schema": {
+                "type": "object",
+                "properties": {"repo_path": {"type": "string"}},
+                "required": ["repo_path"],
+                "additionalProperties": False,
+            },
             "risky": False,
             "execution_tier": TIER_CONTAINER,
             "description": "在 Docker 容器内执行 pip install。参数: repo_path",
@@ -69,7 +74,15 @@ def build_sandbox_tool_registry(context) -> dict:
         },
         "sandbox_test": {
             "budget_group": "verify",
-            "schema": {"repo_path": "str", "test_path": "str="},
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "repo_path": {"type": "string"},
+                    "test_path": {"type": "string", "default": ""},
+                },
+                "required": ["repo_path"],
+                "additionalProperties": False,
+            },
             "risky": False,
             "execution_tier": TIER_CONTAINER,
             "description": "在 Docker 容器内运行 pytest。参数: repo_path, test_path",
@@ -77,7 +90,15 @@ def build_sandbox_tool_registry(context) -> dict:
         },
         "sandbox_verify": {
             "budget_group": "verify",
-            "schema": {"repo_path": "str", "test_path": "str="},
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "repo_path": {"type": "string"},
+                    "test_path": {"type": "string", "default": ""},
+                },
+                "required": ["repo_path"],
+                "additionalProperties": False,
+            },
             "risky": False,
             "execution_tier": TIER_CONTAINER,
             "description": "单容器 build+test。参数: repo_path, test_path",
@@ -98,4 +119,4 @@ def run_sandbox_verification(
 
         context = ToolContext(root=repo_path)
 
-    return _run_test_in_sandbox(context, repo_path, test_path, cancel_token=cancel_token)
+    return run_sandbox_verification_flow(context, repo_path, test_path, cancel_token=cancel_token)

@@ -17,7 +17,6 @@ from agent_runtime.cancellation import (
 from agent_runtime.context_runtime import ObservationStore
 from src.skills.contract import (
     SideEffectLevel,
-    canonical_from_executable,
     resolve_evidence,
     validate_json_contract,
 )
@@ -29,7 +28,7 @@ from src.skills.invocation import (
     SkillInvocation,
     SkillInvocationStatus,
 )
-from src.skills.registry import SkillRegistry, get_default_executable_registry
+from src.skills.registry import SkillRegistry, get_default_registry
 
 TraceFn = Callable[[str, dict[str, Any], str | None], None]
 AuthorizeFn = Callable[[str], bool]
@@ -51,7 +50,7 @@ class SkillExecutionGateway:
         authorize_tool: AuthorizeFn | None = None,
         trace: TraceFn | None = None,
     ) -> None:
-        self.registry = registry or get_default_executable_registry()
+        self.registry = registry or get_default_registry()
         self.state = state if state is not None else {}
         self.observations = ObservationStore(self.state, workspace_root)
         self.authorize_tool = authorize_tool
@@ -141,8 +140,8 @@ class SkillExecutionGateway:
         input_raw = json.dumps(args, sort_keys=True, ensure_ascii=True, default=str)
         invocation.input_hash = hashlib.sha256(input_raw.encode()).hexdigest()[:16]
         self._emit("skill_discovered", invocation)
-        legacy = self.registry.get(name, pinned_version or None)
-        if legacy is None:
+        spec = self.registry.get(name, pinned_version or None, kind="executable")
+        if spec is None:
             invocation.fail(
                 SkillInvocationStatus.FAILED,
                 SkillErrorCode.SKILL_NOT_FOUND,
@@ -150,7 +149,6 @@ class SkillExecutionGateway:
             )
             self._emit("skill_failed", invocation, "error")
             return self._finish(SkillExecutionResult(invocation))
-        spec = canonical_from_executable(legacy)
         invocation.skill_version = spec.version
         invocation.content_hash = spec.content_hash
         invocation.side_effect_level = spec.side_effect_level.value

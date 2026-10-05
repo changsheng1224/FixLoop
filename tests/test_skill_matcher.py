@@ -9,32 +9,33 @@ from pydantic import ValidationError
 
 from src.skills.catalog import SkillCatalog, SkillCatalogError
 from src.skills.matcher import match_skill
-from src.skills.models import SkillSpec
+from src.skills.contract import SkillSpec
 from src.skills.prompt import format_skill_hint_block
 from src.state import RepairPlan, SkillContext
 
 
 class TestSkillSpec:
     def test_valid_spec(self):
-        spec = SkillSpec(
+        spec = SkillSpec(kind="guidance", 
             name="demo",
             language="python",
             trigger_pattern="TypeError",
             priority=10,
             suggested_tools=["grep"],
+            guidance=["fix types"],
             example_patch="fix types",
         )
         assert spec.matches("TypeError: bad op")
 
     def test_invalid_regex_rejected(self):
         with pytest.raises(ValidationError):
-            SkillSpec(name="bad", trigger_pattern="[unclosed")
+            SkillSpec(kind="guidance", name="bad", trigger_pattern="[unclosed")
 
 
 class TestSkillCatalog:
     def test_loads_yaml_files(self, tmp_path: Path):
         (tmp_path / "a.yaml").write_text(
-            "name: skill_a\nlanguage: python\ntrigger_pattern: TypeError\npriority: 10\n",
+            "name: skill_a\nkind: guidance\nlanguage: python\ntrigger_pattern: TypeError\npriority: 10\nguidance: [fix types]\n",
             encoding="utf-8",
         )
         catalog = SkillCatalog.load_from_directory(tmp_path)
@@ -48,11 +49,11 @@ class TestSkillCatalog:
 
     def test_duplicate_name_raises(self, tmp_path: Path):
         (tmp_path / "a.yaml").write_text(
-            "name: dup\ntrigger_pattern: A\n",
+            "name: dup\nkind: guidance\ntrigger_pattern: A\nguidance: [fix]\n",
             encoding="utf-8",
         )
         (tmp_path / "b.yaml").write_text(
-            "name: dup\ntrigger_pattern: B\n",
+            "name: dup\nkind: guidance\ntrigger_pattern: B\nguidance: [fix]\n",
             encoding="utf-8",
         )
         with pytest.raises(SkillCatalogError):
@@ -67,17 +68,17 @@ class TestMatchSkill:
         self._write(
             tmp_path,
             "low.yaml",
-            "name: low\ntrigger_pattern: Error\npriority: 1\n",
+            "name: low\nkind: guidance\ntrigger_pattern: Error\npriority: 1\nguidance: [fix]\n",
         )
         self._write(
             tmp_path,
             "high_short.yaml",
-            "name: high_short\ntrigger_pattern: Error\npriority: 10\n",
+            "name: high_short\nkind: guidance\ntrigger_pattern: Error\npriority: 10\nguidance: [fix]\n",
         )
         self._write(
             tmp_path,
             "high_long.yaml",
-            "name: high_long\ntrigger_pattern: TypeError\npriority: 10\n",
+            "name: high_long\nkind: guidance\ntrigger_pattern: TypeError\npriority: 10\nguidance: [fix]\n",
         )
         catalog = SkillCatalog.load_from_directory(tmp_path)
         matched = match_skill("TypeError: boom", language="python", catalog=catalog)
@@ -88,19 +89,19 @@ class TestMatchSkill:
         self._write(
             tmp_path,
             "py.yaml",
-            "name: py\ntrigger_pattern: Error\nlanguage: python\n",
+            "name: py\nkind: guidance\ntrigger_pattern: Error\nlanguage: python\nguidance: [fix]\n",
         )
         self._write(
             tmp_path,
             "js.yaml",
-            "name: js\ntrigger_pattern: Error\nlanguage: javascript\n",
+            "name: js\nkind: guidance\ntrigger_pattern: Error\nlanguage: javascript\nguidance: [fix]\n",
         )
         catalog = SkillCatalog.load_from_directory(tmp_path)
         assert match_skill("Error", language="python", catalog=catalog).name == "py"
         assert match_skill("Error", language="javascript", catalog=catalog).name == "js"
 
     def test_no_match_returns_none(self, tmp_path: Path):
-        self._write(tmp_path, "a.yaml", "name: a\ntrigger_pattern: FooError\n")
+        self._write(tmp_path, "a.yaml", "name: a\nkind: guidance\ntrigger_pattern: FooError\nguidance: [fix]\n")
         catalog = SkillCatalog.load_from_directory(tmp_path)
         assert match_skill("TypeError", catalog=catalog) is None
 

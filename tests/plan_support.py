@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from agent_runtime.plan_runtime import Completion, Plan, PlanNode
 from agent_runtime.plan_runtime.session import PlanSession
+from agent_runtime.tool_result import ToolResult
 
 REGISTRY = {
     "read_file": {"side_effect": "read"},
@@ -71,7 +72,7 @@ def read(session, attempt):
         session,
         "read_file",
         {"path": "value.py"},
-        lambda: (Path(session.workspace) / "value.py").read_text(),
+        lambda: ToolResult(content=(Path(session.workspace) / "value.py").read_text()),
     )
     return session.tool_result(attempt)
 
@@ -79,7 +80,7 @@ def read(session, attempt):
 def write(session, attempt):
     def raw():
         (Path(session.workspace) / "value.py").write_text("value = 2\n")
-        return "applied"
+        return ToolResult(content="applied")
 
     tool(session, "write_file", {"path": "value.py"}, raw)
     return session.tool_result(attempt)

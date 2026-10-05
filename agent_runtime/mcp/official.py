@@ -6,6 +6,7 @@ import os
 import shlex
 from typing import Any
 
+from agent_runtime.mcp.arguments import validate_arguments
 from agent_runtime.mcp.client import McpCallResult, McpClient, McpToolSpec
 from agent_runtime.mcp.errors import McpError, McpSchemaError, McpUnavailableError
 from agent_runtime.mcp.official_map import (
@@ -13,7 +14,6 @@ from agent_runtime.mcp.official_map import (
     OFFICIAL_TOOL_MAPS,
     adapt_local_call,
 )
-from agent_runtime.mcp.schema_map import validate_arguments
 from agent_runtime.mcp.stdio import StdioTransport
 
 DEFAULT_DOCKER_IMAGE = "ghcr.io/github/github-mcp-server"
@@ -52,6 +52,7 @@ class OfficialMappedClient:
                         "type": "object",
                         "properties": mapping.properties,
                         "required": list(mapping.required),
+                        "additionalProperties": False,
                     },
                 )
             )
@@ -69,8 +70,12 @@ class OfficialMappedClient:
             raise McpSchemaError(f"未知本地 GitHub MCP 工具 '{name}'")
         args = validate_arguments(
             tool_name=name,
-            schema_props=mapping.properties,
-            required=mapping.required,
+            schema={
+                "type": "object",
+                "properties": mapping.properties,
+                "required": mapping.required,
+                "additionalProperties": False,
+            },
             arguments=arguments,
         )
         # 确保远程已 list，且映射目标存在

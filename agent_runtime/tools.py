@@ -16,6 +16,7 @@ from pathlib import Path
 
 from agent_runtime.schema_utils import auto_schema
 from agent_runtime.tool_context import ToolContext
+from agent_runtime.tool_result import ToolResult, ToolStatus
 
 # ============================================================================
 # 工具执行层级常量
@@ -106,19 +107,8 @@ class ApplyPatchArgs:
     patch: str = ""
 
 
-@dataclass
-class ExpandLockArgs:
-    """显式扩锁。"""
-
-    path: str = ""
 
 
-@dataclass
-class FinishRepairArgs:
-    """End a repair attempt without claiming that a patch was produced."""
-
-    status: str = ""
-    reason: str = ""
 
 
 @dataclass
@@ -173,14 +163,7 @@ IGNORED_PATH_NAMES = {
 # ============================================================================
 
 
-def tool_list_files(context, args: dict) -> str:
-    """Legacy string surface for bounded file enumeration."""
-    from agent_runtime.code_exploration.io import list_files_result
-
-    return list_files_result(context, args).content
-
-
-def _list_files_structured(context, args: dict):
+def tool_list_files(context, args: dict):
     from agent_runtime.code_exploration.io import list_files_result
 
     return list_files_result(context, args)
@@ -240,17 +223,7 @@ def _code_relations_structured(context, args: dict):
     return result
 
 
-def tool_read_file(context, args: dict) -> str:
-    """Legacy string surface for bounded range reads."""
-    from agent_runtime.code_exploration.io import read_file_result
-
-    result = read_file_result(context, args)
-    if result.ok:
-        _mark_edit_lock_read(context, str(args.get("path", "")))
-    return result.content
-
-
-def _read_file_structured(context, args: dict):
+def tool_read_file(context, args: dict):
     from agent_runtime.code_exploration.io import read_file_result
 
     result = read_file_result(context, args)
@@ -260,40 +233,20 @@ def _read_file_structured(context, args: dict):
 
 
 def _resolve_edit_lock(context):
-    lock = getattr(context, "edit_lock", None)
-    if lock is not None:
-        return lock
-    try:
-        from src.repair.execution.edit_lock import get_active_edit_lock
-
-        return get_active_edit_lock(getattr(context, "root", None))
-    except Exception:
-        return None
+    return context.edit_lock
 
 
 def _mark_edit_lock_read(context, raw_path: str) -> None:
     lock = _resolve_edit_lock(context)
-    if lock is None:
-        return
-    try:
-        lock.mark_read(raw_path, auto_allow_impl=True)
-    except TypeError:
-        try:
-            lock.mark_read(raw_path)
-        except Exception:
-            pass
-    except Exception:
-        pass
+    if lock is not None:
+        lock.mark_read(raw_path)
 
 
 def _reject_if_edit_locked(context, raw_path: str) -> str | None:
     lock = _resolve_edit_lock(context)
     if lock is None:
         return None
-    try:
-        ok, reason = lock.check_write(raw_path)
-    except Exception:
-        return None
+    ok, reason = lock.check_write(raw_path)
     if ok:
         return None
     return f"Error: edit_lock rejected write ({reason})"
@@ -483,22 +436,6 @@ def _normalize_hunk_headers(diff: str, file_text: str) -> str:
     return "\n".join(out_lines)
 
 
-def tool_expand_lock(context, args: dict) -> str:
-    """显式扩锁：将路径加入 allowed_edit（最多 2 次）；扩后须 read 再写。"""
-    raw_path = args.get("path", "")
-    if not raw_path:
-        return "Error: 缺少必填参数 path"
-    lock = _resolve_edit_lock(context)
-    if lock is None:
-        return "Error: expand_lock 需要 active edit_lock（patcher_primary）"
-    ok, reason = lock.expand_lock(raw_path)
-    if not ok:
-        return f"Error: expand_lock failed ({reason})"
-    return (
-        f"expand_lock ok: {reason}. "
-        f"allowed_edit={sorted(lock.allowed_edit)[:12]}. "
-        "下一步: read_file 该路径后再 apply_patch/patch_file。"
-    )
 
 
 def _patch_transaction_paths(context, patch_text: str) -> dict:
@@ -540,7 +477,7 @@ def _restore_patch_transaction(snapshot: dict) -> None:
             pass
 
 
-def tool_apply_patch(context, args: dict) -> str:
+def tool_apply_patch(context, args: dict) -> ToolResult:
     """Transactional wrapper around the canonical apply_patch implementation."""
     patch_text = args.get("patch") or args.get("diff") or args.get("input") or ""
     snapshot = _patch_transaction_paths(context, str(patch_text))
@@ -553,24 +490,30 @@ def tool_apply_patch(context, args: dict) -> str:
                 try:
                     target = context.resolve(raw_path)
                 except ValueError:
-                    return f"Error: base hash path invalid: {raw_path}"
+                    return ToolResult.error(
+                        f"Error: base hash path invalid: {raw_path}", code="tool_execution_failed"
+                    )
             else:
                 value = expected
                 target = next((Path(path) for path in snapshot), None)
             if target is None or not target.is_file():
-                return "Error: base hash target missing"
+                return ToolResult.error(
+                    "Error: base hash target missing", code="tool_execution_failed"
+                )
             import hashlib
 
             actual = hashlib.sha256(target.read_bytes()).hexdigest()
             if actual != str(value):
-                return f"Error: stale patch/base hash mismatch: {target}"
+                return ToolResult.error(
+                    f"Error: stale patch/base hash mismatch: {target}", code="stale_preimage"
+                )
     result = _tool_apply_patch_unchecked(context, args)
-    if result.startswith("Error:"):
+    if result.failed:
         _restore_patch_transaction(snapshot)
         try:
             from agent_runtime.metrics import get_registry
 
-            reason = "stale_patch" if "stale" in result.lower() else "apply_error"
+            reason = "stale_patch" if result.error_code == "stale_preimage" else "apply_error"
             metric = (
                 "fixloop_stale_patch_rejections_total"
                 if reason == "stale_patch"
@@ -582,7 +525,7 @@ def tool_apply_patch(context, args: dict) -> str:
     return result
 
 
-def _tool_apply_patch_unchecked(context, args: dict) -> str:
+def _tool_apply_patch_unchecked(context, args: dict) -> ToolResult:
     """Codex 风格 apply_patch：*** Begin/End Patch；ACI 写后回显 + edit-time lint。"""
     from agent_runtime.apply_patch_format import parse_apply_patch_text
     from agent_runtime.atomic_io import atomic_write_text
@@ -591,37 +534,44 @@ def _tool_apply_patch_unchecked(context, args: dict) -> str:
 
     patch_text = args.get("patch") or args.get("diff") or args.get("input") or ""
     if not str(patch_text).strip():
-        return "Error: apply_patch 缺少 patch 文本（*** Begin Patch ... *** End Patch）"
+        return ToolResult.error(
+            "Error: apply_patch 缺少 patch 文本（*** Begin Patch ... *** End Patch）",
+            code="tool_execution_failed",
+        )
 
     serial_err = _reject_if_write_serial(context)
     if serial_err:
-        return serial_err
+        return ToolResult.error(serial_err, code="tool_execution_failed")
 
     try:
         ops = parse_apply_patch_text(str(patch_text))
     except ValueError as e:
-        return f"Error: {e}"
+        return ToolResult.error(f"Error: {e}", code="tool_execution_failed")
 
     summaries: list[str] = []
     for op in ops:
         raw_path = op.path
         if is_sensitive_path(raw_path):
-            return sensitive_reject_message(raw_path)
+            return ToolResult.error(
+                sensitive_reject_message(raw_path), code="tool_execution_failed"
+            )
         rejected = _reject_if_edit_locked(context, raw_path)
         if rejected:
-            return rejected
+            return ToolResult.error(rejected, code="tool_execution_failed")
         try:
             target = context.resolve(raw_path)
         except ValueError as e:
-            return f"Error: {e}"
+            return ToolResult.error(f"Error: {e}", code="tool_execution_failed")
 
         if op.action == "delete":
             if not target.exists():
-                return f"Error: delete 目标不存在: {raw_path}"
+                return ToolResult.error(
+                    f"Error: delete 目标不存在: {raw_path}", code="tool_execution_failed"
+                )
             try:
                 target.unlink()
             except OSError as e:
-                return f"Error: 删除失败: {e}"
+                return ToolResult.error(f"Error: 删除失败: {e}", code="tool_execution_failed")
             summaries.append(f"deleted {raw_path}")
             continue
 
@@ -632,37 +582,40 @@ def _tool_apply_patch_unchecked(context, args: dict) -> str:
                 lock = _resolve_edit_lock(context)
                 if lock is not None:
                     lock.edit_lint_reject_count += 1
-                return f"Error: {lint_err}"
+                return ToolResult.error(f"Error: {lint_err}", code="edit_lint_reject")
             try:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 atomic_write_text(target, content)
             except OSError as e:
-                return f"Error: 写入失败: {e}"
+                return ToolResult.error(f"Error: 写入失败: {e}", code="tool_execution_failed")
             summaries.append(f"added {raw_path} ({len(content)} chars)")
             continue
 
         # update
         if not target.is_file():
-            return f"Error: 文件不存在: {raw_path}"
+            return ToolResult.error(f"Error: 文件不存在: {raw_path}", code="tool_execution_failed")
         try:
             text = target.read_text(encoding="utf-8")
         except UnicodeDecodeError:
-            return f"Error: 无法以 UTF-8 读取: {raw_path}"
+            return ToolResult.error(
+                f"Error: 无法以 UTF-8 读取: {raw_path}", code="tool_execution_failed"
+            )
 
         from agent_runtime.apply_patch_format import update_diff_has_preimage
 
         if not update_diff_has_preimage(op.diff or ""):
             near = _near_snippet(text, "")
-            return (
+            return ToolResult.error(
                 f"Error: apply_patch empty_original（Update 缺少 - / 上下文行）。"
-                f"先 read_file {raw_path} 再带 preimage 重试。{near}"
+                f"先 read_file {raw_path} 再带 preimage 重试。{near}",
+                code="tool_execution_failed",
             )
 
         diff = _normalize_hunk_headers(op.diff, text)
         try:
             plan = parse_patch_input({"diff": diff})
         except ValueError as e:
-            return f"Error: {e}"
+            return ToolResult.error(f"Error: {e}", code="tool_execution_failed")
 
         # Preimage 校验：删除行须与文件当前内容一致（防静默错位改写）
         pre_err = _check_diff_preimage(text, plan)
@@ -673,8 +626,10 @@ def _tool_apply_patch_unchecked(context, args: dict) -> str:
                 if ln.startswith("-") and not ln.startswith("---")
             )
             near = _near_snippet(text, removed)
-            return (
-                f"Error: apply_patch stale/未匹配（{pre_err}）。先 read_file 再 apply_patch。{near}"
+            return ToolResult.error(
+                f"Error: apply_patch stale/未匹配（{pre_err}）。"
+                f"先 read_file 再 apply_patch。{near}",
+                code="stale_preimage",
             )
 
         new_text = apply_plan(text, plan)
@@ -685,19 +640,22 @@ def _tool_apply_patch_unchecked(context, args: dict) -> str:
                 if ln.startswith("-") and not ln.startswith("---")
             )
             near = _near_snippet(text, removed)
-            return f"Error: apply_patch stale/未匹配（hunk 与文件不一致）。{near}"
+            return ToolResult.error(
+                f"Error: apply_patch stale/未匹配（hunk 与文件不一致）。{near}",
+                code="stale_preimage",
+            )
 
         lint_err = _edit_time_lint_py(raw_path, new_text)
         if lint_err:
             lock = _resolve_edit_lock(context)
             if lock is not None:
                 lock.edit_lint_reject_count += 1
-            return f"Error: {lint_err}（未落盘）"
+            return ToolResult.error(f"Error: {lint_err}（未落盘）", code="edit_lint_reject")
 
         try:
             atomic_write_text(target, new_text)
         except OSError as e:
-            return f"Error: 写入失败: {e}"
+            return ToolResult.error(f"Error: 写入失败: {e}", code="tool_execution_failed")
 
         lock = _resolve_edit_lock(context)
         if lock is not None:
@@ -712,10 +670,14 @@ def _tool_apply_patch_unchecked(context, args: dict) -> str:
         )
 
     _mark_write_done(context)
-    return "\n\n".join(summaries) if summaries else "Error: apply_patch 无有效操作"
+    return (
+        ToolResult(content="\n\n".join(summaries))
+        if summaries
+        else ToolResult.error("Error: apply_patch 无有效操作")
+    )
 
 
-def tool_quick_test(context, args: dict) -> str:
+def tool_quick_test(context, args: dict) -> ToolResult:
     """环内快检：优先跑给定 nodeid / 路径（失败不阻断主环语义，只回灌）。"""
     import subprocess
 
@@ -723,7 +685,9 @@ def tool_quick_test(context, args: dict) -> str:
     path = (args.get("path") or "").strip()
     target = nodeid or path
     if not target:
-        return "Error: quick_test 需要 nodeid 或 path"
+        return ToolResult.error(
+            "Error: quick_test 需要 nodeid 或 path", code="tool_execution_failed"
+        )
 
     if getattr(context, "sandbox_backend", None) is not None:
         from agent_runtime.linux_sandbox.routing import (
@@ -765,9 +729,11 @@ def tool_quick_test(context, args: dict) -> str:
             timeout=int(args.get("timeout", 60) or 60),
         )
     except subprocess.TimeoutExpired:
-        return f"Error: quick_test timeout on {target}"
+        return ToolResult.error(f"Error: quick_test timeout on {target}", code="tool_timeout")
     except OSError as e:
-        return f"Error: quick_test failed to start: {e}"
+        return ToolResult.error(
+            f"Error: quick_test failed to start: {e}", code="tool_execution_failed"
+        )
 
     out = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
     out = out.strip()
@@ -777,17 +743,10 @@ def tool_quick_test(context, args: dict) -> str:
     # 截断
     if len(out) > 2500:
         out = out[:2000] + "\n...[truncated]...\n" + out[-400:]
-    return f"quick_test {status} target={target} exit={proc.returncode}\n{out}"
+    return ToolResult(content=f"quick_test {status} target={target} exit={proc.returncode}\n{out}")
 
 
-def tool_grep(context, args: dict) -> str:
-    """Legacy string surface for budgeted text search."""
-    from agent_runtime.code_exploration.io import grep_result
-
-    return grep_result(context, args).content
-
-
-def _grep_structured(context, args: dict):
+def tool_grep(context, args: dict):
     from agent_runtime.code_exploration.io import grep_result
 
     return grep_result(context, args)
@@ -798,37 +757,37 @@ def _grep_structured(context, args: dict):
 # ============================================================================
 
 
-def tool_write_file(context, args: dict) -> str:
+def tool_write_file(context, args: dict) -> ToolResult:
     """创建或覆盖文件，自动创建父目录。
 
     Args 必须包含 'path' 和 'content'，可选 'append'（默认 False）。
     """
     raw_path = args.get("path", "")
     if not raw_path:
-        return "Error: 缺少必填参数 path"
+        return ToolResult.error("Error: 缺少必填参数 path", code="tool_execution_failed")
     content = args.get("content", "")
     append = args.get("append", False)
 
     from agent_runtime.sensitive_paths import is_sensitive_path, sensitive_reject_message
 
     if is_sensitive_path(raw_path):
-        return sensitive_reject_message(raw_path)
+        return ToolResult.error(sensitive_reject_message(raw_path), code="tool_execution_failed")
 
     serial_err = _reject_if_write_serial(context)
     if serial_err:
-        return serial_err
+        return ToolResult.error(serial_err, code="tool_execution_failed")
 
     rejected = _reject_if_edit_locked(context, raw_path)
     if rejected:
-        return rejected
+        return ToolResult.error(rejected, code="tool_execution_failed")
 
     try:
         target = context.resolve(raw_path)
     except ValueError as e:
-        return f"Error: {e}"
+        return ToolResult.error(f"Error: {e}", code="tool_execution_failed")
 
     if is_sensitive_path(target):
-        return sensitive_reject_message(raw_path)
+        return ToolResult.error(sensitive_reject_message(raw_path), code="tool_execution_failed")
 
     from agent_runtime.atomic_io import atomic_write_text
 
@@ -841,13 +800,13 @@ def tool_write_file(context, args: dict) -> str:
             mode = "已写入"
         atomic_write_text(target, payload)
     except OSError as e:
-        return f"Error: 写入文件失败: {e}"
+        return ToolResult.error(f"Error: 写入文件失败: {e}", code="tool_execution_failed")
 
     _mark_write_done(context)
-    return f"{mode} {raw_path}（{len(content)} 字符）"
+    return ToolResult(content=f"{mode} {raw_path}（{len(content)} 字符）")
 
 
-def tool_patch_file(context, args: dict) -> str:
+def tool_patch_file(context, args: dict) -> ToolResult:
     """精确文本替换或 unified diff 多 hunk 修补。
 
     Args 必须包含 path，以及 diff 或 (old_text + new_text)。
@@ -855,38 +814,40 @@ def tool_patch_file(context, args: dict) -> str:
     """
     raw_path = args.get("path", "")
     if not raw_path:
-        return "Error: 缺少必填参数 path"
+        return ToolResult.error("Error: 缺少必填参数 path", code="tool_execution_failed")
 
     from agent_runtime.sensitive_paths import is_sensitive_path, sensitive_reject_message
 
     if is_sensitive_path(raw_path):
-        return sensitive_reject_message(raw_path)
+        return ToolResult.error(sensitive_reject_message(raw_path), code="tool_execution_failed")
 
     serial_err = _reject_if_write_serial(context)
     if serial_err:
-        return serial_err
+        return ToolResult.error(serial_err, code="tool_execution_failed")
 
     rejected = _reject_if_edit_locked(context, raw_path)
     if rejected:
-        return rejected
+        return ToolResult.error(rejected, code="tool_execution_failed")
 
     try:
         target = context.resolve(raw_path)
     except ValueError as e:
-        return f"Error: {e}"
+        return ToolResult.error(f"Error: {e}", code="tool_execution_failed")
 
     if is_sensitive_path(target):
-        return sensitive_reject_message(raw_path)
+        return ToolResult.error(sensitive_reject_message(raw_path), code="tool_execution_failed")
 
     if not target.exists():
-        return f"Error: 文件不存在: {raw_path}"
+        return ToolResult.error(f"Error: 文件不存在: {raw_path}", code="tool_execution_failed")
     if not target.is_file():
-        return f"Error: 不是文件: {raw_path}"
+        return ToolResult.error(f"Error: 不是文件: {raw_path}", code="tool_execution_failed")
 
     try:
         text = target.read_text(encoding="utf-8")
     except UnicodeDecodeError:
-        return f"Error: 无法以 UTF-8 编码读取: {raw_path}"
+        return ToolResult.error(
+            f"Error: 无法以 UTF-8 编码读取: {raw_path}", code="tool_execution_failed"
+        )
 
     from agent_runtime.atomic_io import atomic_write_text
     from agent_runtime.patch_engine import apply_plan, build_preview, parse_patch_input
@@ -897,39 +858,48 @@ def tool_patch_file(context, args: dict) -> str:
 
         actual_hash = hashlib.sha256(target.read_bytes()).hexdigest()
         if actual_hash != str(expected_hash):
-            return f"Error: stale patch/base hash mismatch: {raw_path}"
+            return ToolResult.error(
+                f"Error: stale patch/base hash mismatch: {raw_path}", code="stale_preimage"
+            )
 
     try:
         plan = parse_patch_input(args)
     except ValueError as e:
-        return f"Error: {e}"
+        return ToolResult.error(f"Error: {e}", code="tool_execution_failed")
 
     if plan.mode == "legacy":
         count = text.count(plan.old_text)
         if count == 0:
             near = _near_snippet(text, plan.old_text)
-            return (
-                f"Error: old_text 在文件中未找到（出现 0 次）。old_text 必须恰好出现 1 次。{near}"
+            return ToolResult.error(
+                f"Error: old_text 在文件中未找到（出现 0 次）。old_text 必须恰好出现 1 次。{near}",
+                code="stale_preimage",
             )
         if count > 1:
-            return f"Error: old_text 出现 {count} 次，必须恰好出现 1 次。请提供更多上下文使其唯一。"
+            return ToolResult.error(
+                f"Error: old_text 出现 {count} 次，必须恰好出现 1 次。请提供更多上下文使其唯一。",
+                code="stale_preimage",
+            )
 
     new_text = apply_plan(text, plan)
     if new_text is None:
         near = _near_snippet(text, getattr(plan, "old_text", "") or "")
-        return f"Error: 补丁无法应用到文件（hunk 与文件内容不匹配 / stale）。{near}"
+        return ToolResult.error(
+            f"Error: 补丁无法应用到文件（hunk 与文件内容不匹配 / stale）。{near}",
+            code="stale_preimage",
+        )
 
     lint_err = _edit_time_lint_py(raw_path, new_text)
     if lint_err:
         lock = _resolve_edit_lock(context)
         if lock is not None:
             lock.edit_lint_reject_count += 1
-        return f"Error: {lint_err}（未落盘）"
+        return ToolResult.error(f"Error: {lint_err}（未落盘）", code="edit_lint_reject")
 
     try:
         atomic_write_text(target, new_text)
     except OSError as e:
-        return f"Error: 写入文件失败: {e}"
+        return ToolResult.error(f"Error: 写入文件失败: {e}", code="tool_execution_failed")
 
     _mark_write_done(context)
     preview = build_preview(raw_path, plan)
@@ -937,15 +907,17 @@ def tool_patch_file(context, args: dict) -> str:
     lines = new_text.splitlines()
     window = "\n".join(f"{i + 1:4d} | {lines[i]}" for i in range(min(20, len(lines))))
     if preview.hunk_count == 1 and plan.mode == "legacy":
-        return f"已修补 {raw_path}（替换 1 处，{delta:+d} 字符）\n--- 写后窗口 ---\n{window}"
-    return (
-        f"已修补 {raw_path}（{preview.hunk_count} 个 hunk，"
+        return ToolResult(
+            content=f"已修补 {raw_path}（替换 1 处，{delta:+d} 字符）\n--- 写后窗口 ---\n{window}"
+        )
+    return ToolResult(
+        content=f"已修补 {raw_path}（{preview.hunk_count} 个 hunk，"
         f"-{preview.lines_removed}/+{preview.lines_added} 行）\n"
         f"--- 写后窗口 ---\n{window}"
     )
 
 
-def tool_run_shell(context, args: dict) -> str:
+def tool_run_shell(context, args: dict) -> ToolResult:
     """在 workspace 根目录执行 Shell 命令。
 
     Args 必须包含 'command'，可选 'timeout'(默认20s)。
@@ -956,11 +928,14 @@ def tool_run_shell(context, args: dict) -> str:
 
     command = args.get("command", "")
     if not command:
-        return "Error: 缺少必填参数 command"
+        return ToolResult.error("Error: 缺少必填参数 command", code="tool_execution_failed")
 
     allowed, reason = check_shell_command(command)
     if not allowed:
-        return f"Error: Shell 命令被安全策略拒绝 ({reason}): {command[:100]}"
+        return ToolResult.error(
+            f"Error: Shell 命令被安全策略拒绝 ({reason}): {command[:100]}",
+            code="tool_execution_failed",
+        )
     try:
         timeout = int(args.get("timeout", 20))
     except (ValueError, TypeError):
@@ -971,7 +946,9 @@ def tool_run_shell(context, args: dict) -> str:
     try:
         argv = parse_shell_argv(command)
     except ValueError as exc:
-        return f"Error: Shell 命令被安全策略拒绝 ({exc})"
+        return ToolResult.error(
+            f"Error: Shell 命令被安全策略拒绝 ({exc})", code="tool_execution_failed"
+        )
     if getattr(context, "sandbox_backend", None) is not None:
         from agent_runtime.linux_sandbox.routing import execute_sandbox, sandbox_tool_result
 
@@ -1008,9 +985,9 @@ def tool_run_shell(context, args: dict) -> str:
         env = _shell_env(root=root)
 
     cancel_token = getattr(context, "cancel_token", None)
-    if cancel_token is not None:
-        return redact_text(_run_shell_cancellable(argv, command, root, env, timeout, cancel_token))
-    return redact_text(_run_shell_blocking(argv, command, root, env, timeout))
+    result = _run_shell(argv, command, root, env, timeout, cancel_token)
+    result.content = redact_text(result.content)
+    return result
 
 
 def sandbox_tool_result_rejection(reason: str):
@@ -1025,96 +1002,141 @@ def sandbox_tool_result_rejection(reason: str):
     )
 
 
-def _run_shell_blocking(argv: list[str], display_command: str, root, env, timeout: int) -> str:
-    try:
-        result = subprocess.run(
-            argv,
-            cwd=root,
-            shell=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
-        )
-    except subprocess.TimeoutExpired:
-        return f"Error: 命令超时（{timeout} 秒）: {display_command[:100]}"
+def _kill_process_tree(proc: subprocess.Popen) -> bool:
+    """Stop the owned process group and report whether termination was confirmed."""
+    import signal
 
-    return _format_shell_result(result.returncode, result.stdout, result.stderr)
-
-
-def _kill_process_tree(proc: subprocess.Popen) -> None:
-    """终止 shell 子进程（含 Windows 下 shell 派生的孙进程）。"""
-    if proc.poll() is not None:
-        return
-    killed = False
     if os.name == "nt":
-        result = subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-            capture_output=True,
-            check=False,
+        killed = (
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                capture_output=True,
+                check=False,
+            ).returncode
+            == 0
         )
-        killed = result.returncode == 0
     else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+            killed = True
+        except ProcessLookupError:
+            killed = proc.poll() is not None
+    if proc.poll() is None:
         proc.kill()
-        killed = True
-    if not killed and proc.poll() is None:
-        proc.terminate()
     try:
-        proc.wait(timeout=0.5)
+        proc.wait(timeout=1)
     except subprocess.TimeoutExpired:
-        proc.kill()
+        return False
+    return killed
 
 
-def _run_shell_cancellable(
-    argv: list[str], display_command: str, root, env, timeout: int, cancel_token
-) -> str:
+def _run_shell(
+    argv: list[str], display_command: str, root, env, timeout: int, cancel_token=None
+) -> ToolResult:
+    """Drain both pipes continuously; retained output is bounded independently of runtime."""
+    import threading
     import time
 
-    popen_kwargs = {}
-    popen_command = argv
-    use_shell = False
-    if os.name == "nt":
-        popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    else:
-        popen_kwargs["start_new_session"] = True
+    from agent_runtime.io_limits import shell_max_bytes
 
+    if cancel_token is not None and cancel_token.is_cancelled:
+        return ToolResult(
+            content=f"Error: 命令已取消: {display_command[:100]}",
+            status=ToolStatus.CANCELLED,
+            error_code="tool_cancelled",
+            retryable=False,
+            metadata={"termination_guaranteed": True},
+        )
+    options = (
+        {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        if os.name == "nt"
+        else {"start_new_session": True}
+    )
     proc = subprocess.Popen(
-        popen_command,
+        argv,
         cwd=root,
-        shell=use_shell,
+        shell=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
         env=env,
-        **popen_kwargs,
+        **options,
     )
-    deadline = time.time() + timeout
-    poll_s = 0.05
-    while proc.poll() is None:
-        if cancel_token.is_cancelled:
-            _kill_process_tree(proc)
-            return f"Error: 命令已取消: {display_command[:100]}"
-        if time.time() >= deadline:
-            _kill_process_tree(proc)
-            return f"Error: 命令超时（{timeout} 秒）: {display_command[:100]}"
-        time.sleep(poll_s)
+    limit = max(1, shell_max_bytes())
+    buffers = [bytearray(), bytearray()]
+    truncated = [False, False]
+    reader_errors = []
 
-    stdout, stderr = proc.communicate(timeout=1)
-    return _format_shell_result(proc.returncode or 0, stdout or "", stderr or "")
+    def drain(pipe, index):
+        try:
+            with pipe:
+                while chunk := pipe.read1(65536):
+                    available = max(0, limit - len(buffers[index]))
+                    buffers[index].extend(chunk[:available])
+                    truncated[index] |= len(chunk) > available
+        except OSError as exc:
+            reader_errors.append(str(exc))
+
+    readers = [
+        threading.Thread(target=drain, args=(pipe, i), daemon=True)
+        for i, pipe in enumerate((proc.stdout, proc.stderr))
+    ]
+    for reader in readers:
+        reader.start()
+    deadline = time.monotonic() + timeout if timeout > 0 else None
+    failure = ""
+    termination_confirmed = True
+    try:
+        while proc.poll() is None or any(reader.is_alive() for reader in readers):
+            if cancel_token is not None and cancel_token.is_cancelled:
+                failure = "tool_cancelled"
+            elif deadline is not None and time.monotonic() >= deadline:
+                failure = "tool_timeout"
+            if failure:
+                termination_confirmed = _kill_process_tree(proc)
+                break
+            time.sleep(0.02)
+    finally:
+        if proc.poll() is None:
+            termination_confirmed = _kill_process_tree(proc)
+        for reader in readers:
+            reader.join(timeout=1)
+    drained = not any(reader.is_alive() for reader in readers)
+    output = [bytes(buf).decode("utf-8", errors="replace") for buf in buffers]
+    for i, label in enumerate(("stdout", "stderr")):
+        if truncated[i]:
+            output[i] += f"\n... [{label} truncated at {limit} bytes]"
+    result = _format_shell_result(proc.returncode, *output)
+    result.output_truncated |= any(truncated)
+    result.metadata["termination_guaranteed"] = termination_confirmed and drained
+    if failure:
+        result.status = ToolStatus.CANCELLED if failure == "tool_cancelled" else ToolStatus.ERROR
+        result.error_code = failure
+        result.retryable = False
+        reason = "取消" if failure == "tool_cancelled" else f"超时（{timeout} 秒）"
+        result.content = f"Error: 命令已{reason}: {display_command[:100]}\n{result.content}"
+    if not drained or reader_errors:
+        result.status = ToolStatus.UNCERTAIN
+        result.error_code = "cleanup_unverified" if not drained else "output_read_failed"
+        result.retryable = False
+    return result
 
 
-def _format_shell_result(returncode: int, stdout: str, stderr: str) -> str:
+def _format_shell_result(returncode: int, stdout: str, stderr: str) -> ToolResult:
     from agent_runtime.io_limits import shell_max_bytes, truncate_text
 
-    stdout, _ = truncate_text(stdout, shell_max_bytes(), label="stdout")
-    stderr, _ = truncate_text(stderr, shell_max_bytes(), label="stderr")
+    stdout, stdout_cut = truncate_text(stdout, shell_max_bytes(), label="stdout")
+    stderr, stderr_cut = truncate_text(stderr, shell_max_bytes(), label="stderr")
     out = []
     out.append(f"exit_code: {returncode}")
     if stdout.strip():
         out.append(f"stdout:\n{stdout.rstrip()}")
     if stderr.strip():
         out.append(f"stderr:\n{stderr.rstrip()}")
-    return "\n".join(out)
+    return ToolResult(
+        content="\n".join(out),
+        data={"exit_code": returncode},
+        output_truncated=stdout_cut or stderr_cut,
+    )
 
 
 # ============================================================================
@@ -1122,27 +1144,20 @@ def _format_shell_result(returncode: int, stdout: str, stderr: str) -> str:
 # ============================================================================
 
 
-def tool_finish_repair(args: dict) -> str:
-    """Return an explicit, machine-readable no-patch terminal outcome."""
-    status = str(args.get("status") or "").strip().lower()
-    reason = str(args.get("reason") or "").strip()
-    if status not in {"cannot_patch", "needs_more_context"}:
-        return "Error: finish_repair status 必须是 cannot_patch 或 needs_more_context"
-    if not reason:
-        return "Error: finish_repair reason 不能为空，必须说明当前证据或缺失上下文"
-    return json.dumps({"status": status, "reason": reason}, ensure_ascii=False)
 
 
-def tool_expand_observation(context: ToolContext, args: dict) -> str:
+def tool_expand_observation(context: ToolContext, args: dict) -> ToolResult:
     """Return a bounded, checksum-validated Observation payload."""
     from agent_runtime.context_runtime import ObservationStore
 
     state = context.observation_state
     if not isinstance(state, dict):
-        return "Observation expansion unavailable: session state is not attached."
+        return ToolResult(
+            content="Observation expansion unavailable: session state is not attached."
+        )
     observation_id = str(args.get("observation_id", "") or "")
     if not observation_id.startswith("OBS-"):
-        return "Observation expansion denied: invalid observation id."
+        return ToolResult(content="Observation expansion denied: invalid observation id.")
     store = ObservationStore(
         state,
         root=context.root,
@@ -1163,9 +1178,9 @@ def tool_expand_observation(context: ToolContext, args: dict) -> str:
     header = retrieval_header(contract, result.get("freshness", "unknown")) if contract else ""
     if not result.get("ok"):
         reason = result.get("reason", "unknown")
-        return f"{header}Observation unavailable: {reason}; reread required."
-    return (
-        f"[{result['observation_id']}] tool={result.get('tool', '')} "
+        return ToolResult(content=f"{header}Observation unavailable: {reason}; reread required.")
+    return ToolResult(
+        content=f"[{result['observation_id']}] tool={result.get('tool', '')} "
         f"source_version={result.get('source_version', '')} "
         f"output_truncated={str(result['output_truncated']).lower()}\n"
         f"{header}{result.get('content', '')}"
@@ -1194,7 +1209,7 @@ def build_tool_registry(context) -> dict:
         "risky": False,
         "execution_tier": TIER_HOST,
         "description": "列出目录内容。参数: path（默认 '.'）",
-        "run": lambda args: _list_files_structured(context, args),
+        "run": lambda args: tool_list_files(context, args),
     }
 
     # ---- read_file ----
@@ -1204,7 +1219,7 @@ def build_tool_registry(context) -> dict:
         "risky": False,
         "execution_tier": TIER_HOST,
         "description": "按行号范围读取 UTF-8 文件。参数: path, start(默认1), end(默认200)",
-        "run": lambda args: _read_file_structured(context, args),
+        "run": lambda args: tool_read_file(context, args),
     }
 
     # ---- grep ----
@@ -1217,7 +1232,7 @@ def build_tool_registry(context) -> dict:
             "内容搜索（rg 优先，Python fallback）。"
             "参数: pattern, path, glob, ignore_case, context_lines, max_results"
         ),
-        "run": lambda args: _grep_structured(context, args),
+        "run": lambda args: tool_grep(context, args),
     }
 
     registry["code_lookup"] = {
@@ -1276,30 +1291,6 @@ def build_tool_registry(context) -> dict:
         "run": lambda args: tool_apply_patch(context, args),
     }
 
-    # ---- finish_repair ----
-    registry["finish_repair"] = {
-        "budget_group": "recovery",
-        "schema": auto_schema(FinishRepairArgs),
-        "risky": False,
-        "terminal": True,
-        "execution_tier": TIER_HOST,
-        "description": (
-            "结构化结束本次修复且不声称已生成补丁。"
-            "status 只能是 cannot_patch 或 needs_more_context；reason 必须说明证据。"
-        ),
-        "run": tool_finish_repair,
-    }
-
-    # ---- expand_lock ----
-    registry["expand_lock"] = {
-        "budget_group": "recovery",
-        "schema": auto_schema(ExpandLockArgs),
-        "risky": False,
-        "execution_tier": TIER_HOST,
-        "description": "扩锁：将路径加入 allowed_edit（最多2次），随后须 read 再写。参数: path",
-        "run": lambda args: tool_expand_lock(context, args),
-    }
-
     # ---- quick_test ----
     registry["quick_test"] = {
         "budget_group": "verify",
@@ -1337,7 +1328,6 @@ def build_tool_registry(context) -> dict:
         "code_lookup",
         "code_relations",
         "expand_observation",
-        "finish_repair",
     }
     for name, spec in registry.items():
         spec["side_effect"] = (

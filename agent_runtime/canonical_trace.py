@@ -57,7 +57,7 @@ EVENT_CATALOG: dict[str, tuple[str, ...]] = {
         "post_lock_read_reserved",
         "post_lock_read_consumed",
         "targeted_read_consumed",
-        "patch_decision_required",
+        "action_required",
         "patch_no_change",
         "runtime_contract_recovery",
     ),

@@ -6,6 +6,8 @@
 import ast
 from dataclasses import dataclass
 
+from agent_runtime.tool_result import ToolResult
+
 
 @dataclass
 class AstParseArgs:
@@ -19,7 +21,7 @@ class AstParseArgs:
 _DEFAULT_CONTEXT_LINES = 20
 
 
-def ast_parse(context, args: dict) -> str:
+def ast_parse(context, args: dict) -> ToolResult:
     """解析 Python 文件为结构化函数/类/方法列表。
 
     支持局部分析：提供 start_line/end_line 时仅输出附近节点。
@@ -35,23 +37,23 @@ def ast_parse(context, args: dict) -> str:
 
     raw_path = args.get("path", "")
     if not raw_path:
-        return "Error: 缺少必填参数 path"
+        return ToolResult.error("Error: 缺少必填参数 path", code="tool_execution_failed")
 
     try:
         target = context.resolve(raw_path)
     except ValueError as e:
-        return f"Error: {e}"
+        return ToolResult.error(f"Error: {e}", code="tool_execution_failed")
 
     if not target.is_file():
-        return f"Error: 文件不存在: {raw_path}"
+        return ToolResult.error(f"Error: 文件不存在: {raw_path}", code="tool_execution_failed")
 
     try:
         source = target.read_text(encoding="utf-8")
         tree = ast.parse(source)
     except SyntaxError as e:
-        return f"Error: 语法错误，无法解析: {e}"
+        return ToolResult.error(f"Error: 语法错误，无法解析: {e}", code="tool_execution_failed")
     except Exception as e:
-        return f"Error: {e}"
+        return ToolResult.error(f"Error: {e}", code="tool_execution_failed")
 
     start_line = int(args.get("start_line", 0) or 0)
     end_line = int(args.get("end_line", 0) or 0)
@@ -72,7 +74,7 @@ def ast_parse(context, args: dict) -> str:
             if r["lineno"] <= window_end and (r["end_lineno"] or r["lineno"]) >= window_start
         ]
 
-    return json.dumps(results, ensure_ascii=False, indent=2)
+    return ToolResult(content=json.dumps(results, ensure_ascii=False, indent=2))
 
 
 def _extract_node(node) -> dict | None:

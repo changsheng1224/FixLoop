@@ -34,8 +34,8 @@ class TestQuotaCLI:
         """QuotaEnforcer 通过 Agent.execute_tool() 传给 ToolExecutor。"""
         agent.quota._limits["total"] = 0  # 耗尽配额
         result = agent.execute_tool("list_files", {"path": "."})
-        assert result.metadata["tool_status"] == "rejected"
-        assert result.metadata["tool_error_code"] == "quota_exceeded"
+        assert result.status == "rejected"
+        assert result.error_code == "quota_exceeded"
 
 
 class TestProgressCallback:

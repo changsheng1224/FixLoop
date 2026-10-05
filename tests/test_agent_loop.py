@@ -39,12 +39,23 @@ def test_accepted_answer_is_recorded_and_finalized_once(tmp_path, native, termin
         if terminal_tool
         else "<final>done</final>"
     )
+    from agent_runtime.tool_context import ToolContext
+    from agent_runtime.tools import build_tool_registry
+    from src.tools.repair_control import build_repair_control_tools
+
     client_type = FakeNativeToolClient if native else FakeModelClient
+    # Terminal repair tools live in the L2 control registry; the L1 loop
+    # accepts any tool whose spec declares ``terminal: True``.
+    ctx = ToolContext(root=str(tmp_path))
+    tools = build_tool_registry(ctx)
+    tools.update(build_repair_control_tools(ctx))
     agent = Agent(
         config=AgentConfig(provider="fake", approval="auto"),
         model_client=client_type([output]),
         workspace=WorkspaceContext.build(str(tmp_path)),
         cwd=str(tmp_path),
+        tools=tools,
+        tool_context=ctx,
     )
     loop = AgentLoop(agent)
     answers = []

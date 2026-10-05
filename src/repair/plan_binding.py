@@ -221,8 +221,8 @@ class RepairPlanBinding:
         # subagent left behind by a crashed process.
         if collaboration is not None:
             collaboration.attach_coordinator(self.coordinator)
-            self.session.resource_parent = lambda kind: f"agent:{state.repair_run_id}:" + (
-                "verify" if kind == "verify" else "patch"
+            self.session.resource_parent = lambda kind: (
+                f"agent:{state.repair_run_id}:" + ("verify" if kind == "verify" else "patch")
             )
         self.agent._plan_session = self.session
         request_hash = digest(state.issue_input)
@@ -423,6 +423,7 @@ class RepairPlanBinding:
             self.agent.tool_context,
             cancel_token=child.cancel_token,
             edit_lock=None,
+            grounding_sink=None,
             observation_state=child.session,
             exploration_service=None,
             path_resolver=None,

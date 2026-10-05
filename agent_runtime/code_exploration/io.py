@@ -186,7 +186,7 @@ def _finish(
     tool_result = result.to_tool_result(content)
     if error_code:
         tool_result.error_code = error_code
-        tool_result.metadata["tool_error_code"] = error_code
+        tool_result.error_code = error_code
     return tool_result
 
 

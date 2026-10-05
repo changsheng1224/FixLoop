@@ -1,3 +1,6 @@
+kind: guidance
+version: "1.0.0"
+scope: builtin
 name: java_type_error_fix
 language: java
 trigger_pattern: "error: incompatible types:|ClassCastException|NumberFormatException|NullPointerException"

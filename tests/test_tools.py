@@ -22,12 +22,12 @@ class TestListFiles:
     """list_files 工具测试。"""
 
     def test_lists_directory(self, ctx, temp_workspace):
-        result = tool_list_files(ctx, {"path": "."})
+        result = tool_list_files(ctx, {"path": "."}).content
         assert "[F] README.md" in result
         assert "[F] pyproject.toml" in result
 
     def test_nonexistent_directory(self, ctx):
-        result = tool_list_files(ctx, {"path": "nonexistent"})
+        result = tool_list_files(ctx, {"path": "nonexistent"}).content
         assert "Error" in result
 
 
@@ -35,23 +35,23 @@ class TestReadFile:
     """read_file 工具测试。"""
 
     def test_reads_file_with_line_numbers(self, ctx):
-        result = tool_read_file(ctx, {"path": "README.md"})
+        result = tool_read_file(ctx, {"path": "README.md"}).content
         assert "# Test Project" in result
         assert "1 |" in result  # 行号前缀
 
     def test_missing_path(self, ctx):
-        result = tool_read_file(ctx, {})
+        result = tool_read_file(ctx, {}).content
         assert "Error" in result
         assert "path" in result
 
     def test_nonexistent_file(self, ctx):
-        result = tool_read_file(ctx, {"path": "ghost.py"})
+        result = tool_read_file(ctx, {"path": "ghost.py"}).content
         assert "Error" in result
 
     def test_line_range(self, ctx, temp_workspace):
         # 创建一个多行文件
         (temp_workspace / "multiline.py").write_text("line1\nline2\nline3\nline4\nline5\n")
-        result = tool_read_file(ctx, {"path": "multiline.py", "start": 2, "end": 3})
+        result = tool_read_file(ctx, {"path": "multiline.py", "start": 2, "end": 3}).content
         assert "2 | line2" in result
         assert "3 | line3" in result
         assert "1 |" not in result
@@ -62,20 +62,20 @@ class TestSearch:
     """search 工具测试。"""
 
     def test_search_finds_pattern(self, ctx):
-        result = tool_grep(ctx, {"pattern": "Test Project", "path": "."})
+        result = tool_grep(ctx, {"pattern": "Test Project", "path": "."}).content
         assert "README.md" in result
 
     def test_search_no_match(self, ctx):
-        result = tool_grep(ctx, {"pattern": "xyzzy_not_found_42", "path": "."})
+        result = tool_grep(ctx, {"pattern": "xyzzy_not_found_42", "path": "."}).content
         assert "无匹配" in result
 
     def test_missing_pattern(self, ctx):
-        result = tool_grep(ctx, {})
+        result = tool_grep(ctx, {}).content
         assert "Error" in result
         assert "pattern" in result
 
     def test_nonexistent_path(self, ctx):
-        result = tool_grep(ctx, {"pattern": "test", "path": "ghost_dir"})
+        result = tool_grep(ctx, {"pattern": "test", "path": "ghost_dir"}).content
         assert "Error" in result
 
     def test_context_lines_shows_surrounding(self, ctx, temp_workspace):
@@ -83,7 +83,7 @@ class TestSearch:
         (temp_workspace / "data.txt").write_text("line A\nline B\nTODO fix this\nline D\nline E\n")
         result = tool_grep(
             ctx, {"pattern": "TODO", "path": str(temp_workspace), "context_lines": 1}
-        )
+        ).content
         assert "TODO fix this" in result
         assert "line B" in result
         assert "line D" in result
@@ -95,7 +95,7 @@ class TestSearch:
         (temp_workspace / "data.txt").write_text("a\nb TODO here\nc\n")
         result = tool_grep(
             ctx, {"pattern": "TODO", "path": str(temp_workspace), "context_lines": 0}
-        )
+        ).content
         assert "TODO" in result
         assert "b TODO here" in result
         assert "line A" not in result and "\na\n" not in result
@@ -190,7 +190,7 @@ class TestGrep:
         from agent_runtime.tools import tool_grep
 
         ctx = ToolContext(root=str(temp_workspace))
-        result = tool_grep(ctx, {"pattern": "def foo", "path": "."})
+        result = tool_grep(ctx, {"pattern": "def foo", "path": "."}).content
         assert "def foo" in result
         assert "a.py:1" in result
 
@@ -200,14 +200,14 @@ class TestGrep:
         from agent_runtime.tools import tool_grep
 
         ctx = ToolContext(root=str(temp_workspace))
-        assert "0 matches" in tool_grep(ctx, {"pattern": "noSuchPattern", "path": "."})
+        assert "0 matches" in tool_grep(ctx, {"pattern": "noSuchPattern", "path": "."}).content
 
     def test_grep_missing_pattern(self):
         from agent_runtime.tool_context import ToolContext
         from agent_runtime.tools import tool_grep
 
         ctx = ToolContext(root=".")
-        assert "Error" in tool_grep(ctx, {"pattern": ""})
+        assert "Error" in tool_grep(ctx, {"pattern": ""}).content
 
     def test_grep_glob_filter(self, temp_workspace):
         (temp_workspace / "a.py").write_text("hello\n", encoding="utf-8")
@@ -216,7 +216,7 @@ class TestGrep:
         from agent_runtime.tools import tool_grep
 
         ctx = ToolContext(root=str(temp_workspace))
-        result = tool_grep(ctx, {"pattern": "hello", "path": ".", "glob": "*.py"})
+        result = tool_grep(ctx, {"pattern": "hello", "path": ".", "glob": "*.py"}).content
         assert "a.py" in result
         assert "b.txt" not in result
 
@@ -226,7 +226,7 @@ class TestGrep:
         from agent_runtime.tools import tool_grep
 
         ctx = ToolContext(root=str(temp_workspace))
-        result = tool_grep(ctx, {"pattern": "hello", "path": ".", "ignore_case": True})
+        result = tool_grep(ctx, {"pattern": "hello", "path": ".", "ignore_case": True}).content
         assert "HELLO" in result
 
     def test_grep_in_tool_registry(self, ctx):
@@ -253,7 +253,7 @@ class TestGrep:
         from agent_runtime.tools import tool_grep
 
         ctx = ToolContext(root=str(temp_workspace))
-        result = tool_grep(ctx, {"pattern": "def |x =|y =|return", "path": "."})
+        result = tool_grep(ctx, {"pattern": "def |x =|y =|return", "path": "."}).content
         # 4 连续行应合并为 a.py:1-4: 范围
         assert "a.py:1-4:" in result
         assert "1: def foo" in result

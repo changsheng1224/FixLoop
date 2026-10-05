@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 
 from agent_runtime.cancellation import CancellationToken
 from agent_runtime.tool_context import ToolContext
-from agent_runtime.tool_result import ToolResult, attach_tool_receipt, normalize_tool_result
+from agent_runtime.tool_result import ToolResult, attach_tool_receipt, require_tool_result
 from agent_runtime.tool_schema import validate_tool_arguments
 
 PARALLEL_READ_TOOLS = frozenset({"read_file", "list_files"})
@@ -125,7 +125,7 @@ class ToolCallBatch:
     ):
         registry = {name: dict(spec) for name, spec in registry.items()}
         for spec in registry.values():
-            for key in ("schema", "json_schema"):
+            for key in ("schema",):
                 if key in spec:
                     spec[key] = deepcopy(spec[key])
         if not isinstance(calls, list) or not calls:
@@ -163,9 +163,7 @@ class ToolCallBatch:
             arguments = json.loads(json.dumps(call.arguments))
             spec = registry[call.name]
             # Preserve raw arguments and identities; Executor owns normalization and gates.
-            _, argument_errors = validate_tool_arguments(
-                spec.get("json_schema") or spec.get("schema", {}), deepcopy(arguments)
-            )
+            _, argument_errors = validate_tool_arguments(spec["schema"], deepcopy(arguments))
             args_hash = hashlib.sha256(
                 json.dumps(arguments, sort_keys=True, ensure_ascii=False).encode()
             ).hexdigest()
@@ -174,6 +172,7 @@ class ToolCallBatch:
                 isolated_context.observation_state = None
                 isolated_context.exploration_service = None
                 isolated_context.edit_lock = None
+                isolated_context.grounding_sink = None
                 isolated_context.sandbox_identity = dict(context.sandbox_identity)
                 if getattr(context.path_resolver, "__self__", None) is context:
                     isolated_context.path_resolver = isolated_context._default_resolve
@@ -211,7 +210,7 @@ class ToolCallBatch:
 
 
 def call_result(call: BatchCall, result) -> ToolResult:
-    result = normalize_tool_result(result, tool_name=call.tool_name)
+    result = require_tool_result(result, tool_name=call.tool_name)
     result.metadata.update(
         {
             "turn_id": call.context.turn_id,
@@ -268,7 +267,7 @@ class ToolBatchScheduler:
 
     def finish(self, call, result):
         if self.on_result is not None:
-            result = self.on_result(call, normalize_tool_result(result))
+            result = self.on_result(call, require_tool_result(result))
         call.result = call_result(call, result)
         status = call.result.status
         call.status = (
@@ -335,7 +334,7 @@ class ToolBatchScheduler:
                 if call.context.cancel_token.is_cancelled:
                     return cancellation_result()
                 started = time.monotonic()
-                result = normalize_tool_result(work(), tool_name=call.tool_name)
+                result = require_tool_result(work(), tool_name=call.tool_name)
                 result.duration_ms = int((time.monotonic() - started) * 1000)
                 return result
             except Exception:

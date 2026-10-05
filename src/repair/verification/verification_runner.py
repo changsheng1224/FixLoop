@@ -32,6 +32,7 @@ def run_profile(
                 "error": f"missing executable: {command[0]}",
                 "steps": results,
             }
+        command[0] = executable
         started = time.monotonic()
         try:
             proc = subprocess.run(
@@ -46,6 +47,13 @@ def run_profile(
             return {
                 "all_passed": False,
                 "category": "verification_timeout",
+                "error": str(exc),
+                "steps": results,
+            }
+        except OSError as exc:
+            return {
+                "all_passed": False,
+                "category": "verification_environment_failed",
                 "error": str(exc),
                 "steps": results,
             }

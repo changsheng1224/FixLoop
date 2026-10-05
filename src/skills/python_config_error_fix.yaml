@@ -1,3 +1,6 @@
+kind: guidance
+version: "1.0.0"
+scope: builtin
 name: python_config_error_fix
 language: python
 trigger_pattern: "KeyError|pyproject\\.toml|missing.*\\[tool"

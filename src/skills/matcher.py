@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from src.skills.catalog import SkillCatalog, get_default_catalog
-from src.skills.models import MatchedSkill, SkillSpec
+from src.skills.models import MatchedSkill
+from src.skills.contract import SkillSpec
 
 
 def _rank_key(spec: SkillSpec) -> tuple[int, int, str]:

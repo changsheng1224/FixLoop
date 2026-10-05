@@ -10,6 +10,7 @@ from agent_runtime.config import AgentConfig
 from agent_runtime.providers.clients import FakeModelClient, FakeNativeToolClient
 from agent_runtime.runtime import Agent
 from agent_runtime.step_clock import StepClock, StepTimeoutError
+from agent_runtime.tool_result import ToolResult
 from agent_runtime.workspace import WorkspaceContext
 
 _TOOL = '<tool>{"name":"list_files","args":{"path":"."}}</tool>'
@@ -110,7 +111,7 @@ class TestStepTimeoutBeforeTool:
             workspace=workspace,
             cwd=str(temp_workspace),
         )
-        agent.tools["list_files"]["run"] = lambda args: time.sleep(3) or "[]"
+        agent.tools["list_files"]["run"] = lambda args: time.sleep(3) or ToolResult(content="[]")
 
         t0 = time.time()
         answer = agent.ask("list")

@@ -1,16 +1,17 @@
 """Fresh and resumed repairs must enforce the same lifecycle and policy gates."""
 
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
 from agent_runtime.cancellation import CancellationToken
+from agent_runtime.tool_context import ToolContext
 from src.orchestrator import Orchestrator
 from src.repair.checkpoint_load import save_repair_checkpoint
 from src.repair.execution.edit_lock import (
     EditLockState,
-    get_active_edit_lock,
-    set_active_edit_lock,
 )
 from src.repair.phase_clock import PhaseTimeoutConfig
 from src.repair.progress import ProgressEmitter
@@ -71,7 +72,7 @@ def test_pending_verify_completes_phase_and_progress(flow):
     assert names.count("repair_finished") == 1
     assert "patcher_turn" in names
     assert orch._progress._hb_thread is None
-    assert get_active_edit_lock(orch._repo_root) is None
+    assert orch._edit_lock is None
 
 
 def test_patch_budget_is_enforced(flow, monkeypatch):
@@ -200,13 +201,13 @@ def test_cleanup_preserves_another_owners_lock(tmp_path):
     own_lock = EditLockState(repo_root=own_root)
     other_lock = EditLockState(repo_root=own_root)
     orch._edit_lock = own_lock
-    set_active_edit_lock(own_root, other_lock)
+    orch.patcher = SimpleNamespace(tool_context=ToolContext(str(own_root), edit_lock=other_lock))
     try:
         orch._release_repair_resources()
-        assert get_active_edit_lock(own_root) is other_lock
+        assert orch.patcher.tool_context.edit_lock is other_lock
         assert orch._edit_lock is None
     finally:
-        set_active_edit_lock(own_root, None)
+        orch.patcher.tool_context.edit_lock = None
 
 
 def test_binding_close_failure_still_releases_worktree_lock(tmp_path, monkeypatch):
@@ -215,7 +216,7 @@ def test_binding_close_failure_still_releases_worktree_lock(tmp_path, monkeypatc
     own_root = tmp_path / "worktree"
     lock = EditLockState(repo_root=own_root)
     orch._edit_lock = lock
-    set_active_edit_lock(own_root, lock)
+    orch.patcher = SimpleNamespace(tool_context=ToolContext(str(own_root), edit_lock=lock))
     binding = Mock()
     binding.close.side_effect = RuntimeError("close failure")
     orch._plan_binding = binding
@@ -226,11 +227,11 @@ def test_binding_close_failure_still_releases_worktree_lock(tmp_path, monkeypatc
     try:
         with pytest.raises(RuntimeError, match="close failure"):
             orch._repair_impl(state)
-        assert get_active_edit_lock(own_root) is None
+        assert orch.patcher.tool_context.edit_lock is None
         assert orch._plan_binding is None
         heartbeat.assert_called_once()
     finally:
-        set_active_edit_lock(own_root, None)
+        orch.patcher.tool_context.edit_lock = None
 
 
 def test_exception_releases_resources(flow, monkeypatch):
@@ -242,7 +243,6 @@ def test_exception_releases_resources(flow, monkeypatch):
 
     def crash(state):
         orch._edit_lock = lock
-        set_active_edit_lock(orch._repo_root, lock)
         orch._plan_binding = binding
         orch._progress.start_heartbeat(interval_s=60)
         raise RuntimeError("patch failure")
@@ -251,10 +251,26 @@ def test_exception_releases_resources(flow, monkeypatch):
     try:
         with pytest.raises(RuntimeError, match="patch failure"):
             run()
-        assert get_active_edit_lock(orch._repo_root) is None
+        assert orch._edit_lock is None
         assert orch._edit_lock is None
         binding.close.assert_called_once()
         heartbeat.assert_called_once()
     finally:
-        set_active_edit_lock(orch._repo_root, None)
         orch._progress.stop_heartbeat()
+
+
+def test_every_attempt_has_an_owned_edit_policy(flow, monkeypatch):
+    orch, run, _ = flow
+    patcher = orch._run_patcher
+    observed = []
+
+    def inspect_policy(state):
+        lock = orch._edit_lock
+        assert isinstance(lock, EditLockState)
+        assert lock.repo_root == Path(orch._repo_root)
+        observed.append(lock)
+        return patcher(state)
+
+    monkeypatch.setattr(orch, "_run_patcher", inspect_policy)
+    run()
+    assert observed and orch._edit_lock is None

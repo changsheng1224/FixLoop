@@ -153,8 +153,18 @@ def test_preflight_freezes_nested_schema_and_preserves_original_arguments(tmp_pa
         },
     }
     registry = {
-        "read_file": {"schema": {"path": "str", "start": "int=1"}},
-        "list_files": {"json_schema": schema},
+        "read_file": {
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "start": {"type": "integer", "default": 1},
+                },
+                "required": ["path"],
+                "additionalProperties": False,
+            }
+        },
+        "list_files": {"schema": schema},
     }
     original = {"path": "value.py", "start": "2"}
     calls = [
@@ -164,11 +174,11 @@ def test_preflight_freezes_nested_schema_and_preserves_original_arguments(tmp_pa
     batch = ToolCallBatch.create(
         calls, run_id="run", turn_id="turn", context=ToolContext(str(tmp_path)), registry=registry
     )
-    assert not batch.calls[0].argument_errors
+    assert batch.calls[0].argument_errors[0]["code"] == "invalid_argument_type"
     assert batch.calls[0].arguments == original and original["start"] == "2"
     assert batch.calls[1].argument_errors[0]["code"] == "enum_violation"
     schema["properties"]["options"]["properties"]["mode"]["enum"].append("bad")
-    frozen = batch.calls[1].context.registry["list_files"]["json_schema"]
+    frozen = batch.calls[1].context.registry["list_files"]["schema"]
     assert frozen["properties"]["options"]["properties"]["mode"]["enum"] == ["safe"]
     assert all(not call.context.budget_reserved and not call.result for call in batch.calls)
 

@@ -2,7 +2,7 @@
 
 from src.skills.catalog import SkillCatalog
 from src.skills.matcher import match_skill, match_skill_semantic
-from src.skills.models import SkillSpec
+from src.skills.contract import SkillSpec
 
 
 def _make_skills(n: int = 10) -> list[SkillSpec]:
@@ -10,7 +10,7 @@ def _make_skills(n: int = 10) -> list[SkillSpec]:
     skills = []
     for i in range(n):
         skills.append(
-            SkillSpec(
+            SkillSpec(kind="guidance", 
                 name=f"python_error_{i:03d}",
                 language="python",
                 trigger_pattern=(
@@ -27,7 +27,7 @@ def _make_skills(n: int = 10) -> list[SkillSpec]:
                 ),
                 priority=10 - (i % 3),
                 suggested_tools=["grep", "read_file", "ast_parse"],
-                prompt_hint=f"Fix error type {i} by checking types",
+                guidance=[f"Fix error type {i} by checking types"],
             )
         )
     return skills
@@ -98,16 +98,20 @@ class TestMatchSkillSemantic:
     def test_rank_key_priority_order(self):
         """高 priority 的 skill 排前。"""
         s1 = SkillSpec(
+            kind="guidance",
             name="high_priority",
             language="python",
             trigger_pattern="Error",
             priority=10,
+            guidance=["prefer the high priority skill"],
         )
         s2 = SkillSpec(
+            kind="guidance",
             name="low_priority",
             language="python",
             trigger_pattern="Error",
             priority=1,
+            guidance=["fallback skill"],
         )
         catalog = SkillCatalog([s1, s2])
         result = match_skill_semantic("Error occurred", catalog=catalog)
@@ -163,9 +167,11 @@ class TestOrchestratorSkillSemanticWiring:
             called["issue"] = issue
             called["language"] = language
             spec = SkillSpec(
+                kind="guidance",
                 name="semantic_skill",
                 language=language,
                 trigger_pattern="TypeError",
+                guidance=["semantic match"],
             )
             return MatchedSkill.from_spec(spec, candidates_count=1)
 

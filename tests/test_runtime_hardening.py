@@ -45,9 +45,9 @@ def test_runtime_finalize_centralizes_stopped_to_cancelled_mapping():
     assert machine.terminal is True
 
 
-def test_attach_tool_receipt_normalizes_and_preserves_metadata():
+def test_attach_tool_receipt_preserves_extension_metadata():
     normalized = attach_tool_receipt(
-        "ok",
+        ToolResult(content="ok", metadata={"provider": "test"}),
         "read_file",
         args_hash="args-1",
         run_id="run-1",
@@ -55,7 +55,8 @@ def test_attach_tool_receipt_normalizes_and_preserves_metadata():
     )
 
     assert normalized.ok is True
-    assert normalized.metadata["receipt"] == normalized.receipt
+    assert normalized.metadata == {"provider": "test"}
+    assert normalized.to_metadata()["receipt"] == normalized.receipt
     assert normalized.receipt["call_id"] == "call-1"
 
 

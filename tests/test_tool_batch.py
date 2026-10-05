@@ -10,6 +10,7 @@ from agent_runtime.model_turn import ToolCall
 from agent_runtime.read_permits import ReadPermitPool
 from agent_runtime.tool_batch import ToolBatchProtocolError, ToolBatchScheduler, ToolCallBatch
 from agent_runtime.tool_context import ToolContext
+from agent_runtime.tool_result import ToolResult
 from agent_runtime.tools import build_tool_registry
 from agent_runtime.turn_progress import TurnEventEmitter
 
@@ -44,7 +45,7 @@ def test_same_name_calls_overlap_and_keep_order(tmp_path):
             barrier.wait(timeout=3)
             with lock:
                 active -= 1
-            return call.arguments["path"]
+            return ToolResult(content=call.arguments["path"])
 
         return work
 
@@ -90,7 +91,7 @@ def test_mixed_batch_serial_original_order(tmp_path, side_effect_tool):
     scheduler, _ = scheduler_for()
     scheduler.run(
         batch,
-        lambda call: lambda: executed.append(call.call_id) or "ok",
+        lambda call: lambda: executed.append(call.call_id) or ToolResult(content="ok"),
         lambda call, result: result,
     )
     assert executed == ["r", "w", "r2"]
@@ -100,7 +101,14 @@ def test_more_than_four_calls_degrade_without_dropping(tmp_path):
     batch = batch_for(tmp_path, [ToolCall("read_file", {}, str(i)) for i in range(5)])
     assert not batch.parallel and batch.downgrade_reason == "capacity"
     scheduler, _ = scheduler_for()
-    assert len(scheduler.run(batch, lambda call: lambda: "ok", lambda call, result: result)) == 5
+    assert (
+        len(
+            scheduler.run(
+                batch, lambda call: lambda: ToolResult(content="ok"), lambda call, result: result
+            )
+        )
+        == 5
+    )
 
 
 def test_failed_read_does_not_block_sibling(tmp_path):
@@ -112,7 +120,7 @@ def test_failed_read_does_not_block_sibling(tmp_path):
         def work():
             if call.call_id == "bad":
                 raise RuntimeError("private content must not leak")
-            return "ok"
+            return ToolResult(content="ok")
 
         return work
 
@@ -136,7 +144,7 @@ def test_cancel_running_and_queued_and_discard_late_result(tmp_path):
             executed.append(call.call_id)
             barrier.wait(timeout=3)
             release.wait(timeout=3)
-            return "late result"
+            return ToolResult(content="late result")
 
         return work
 
@@ -173,7 +181,7 @@ def test_cooperative_cancel_confirms_worker_return(tmp_path):
             barrier.wait(timeout=3)
             while not call.context.cancel_token.is_cancelled:
                 threading.Event().wait(0.005)
-            return "stopped"
+            return ToolResult(content="stopped")
 
         return work
 
@@ -237,7 +245,7 @@ def test_cancel_during_future_collection_never_reuses_returned_success(tmp_path)
     def prepare(call):
         def work():
             token.cancel()
-            return "completed after cancellation"
+            return ToolResult(content="completed after cancellation")
 
         return work
 

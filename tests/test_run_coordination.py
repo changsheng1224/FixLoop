@@ -349,7 +349,7 @@ def test_cancel_during_tool_preparation_blocks_actual_dispatch(tmp_path, monkeyp
         worker.join(3)
         assert not worker.is_alive()
         assert not calls
-        assert outcomes[0].metadata["tool_status"] == "rejected"
+        assert outcomes[0].status == "rejected"
         assert outcomes[0].metadata["rejection_layer"] == "cancel"
     finally:
         release.set()

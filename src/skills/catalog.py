@@ -8,13 +8,12 @@ from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from src.skills.models import SkillSpec
+from src.skills.contract import SkillSpec
+from src.skills.registry import SkillRegistry, get_default_registry
 from src.skills.validate import format_report, validate_directory
 
 if TYPE_CHECKING:
     from agent_runtime.features.memory.semantic import SemanticMemory
-
-_BUILTIN_DIR = Path(__file__).resolve().parent
 
 
 class SkillCatalogError(ValueError):
@@ -24,12 +23,22 @@ class SkillCatalogError(ValueError):
 class SkillCatalog:
     """In-memory Skill registry（含向量索引用于 N>100 大目录场景）。"""
 
-    def __init__(self, skills: list[SkillSpec], content_hash: str = "") -> None:
-        self.skills = tuple(skills)
-        self.content_hash = content_hash or _compute_skills_hash(
-            Path.cwd() / ".agent" / ".skill_cache"  # default path, overridden by caller
-        )
+    def __init__(
+        self, skills: list[SkillSpec] = (), *,
+        registry: SkillRegistry | None = None,
+    ) -> None:
+        self.registry = registry if registry is not None else SkillRegistry(skills)
         self._embed_index: SemanticMemory | None = None
+        self._index_hash = ""
+
+    @property
+    def skills(self) -> tuple[SkillSpec, ...]:
+        return tuple(self.registry.list(kind="guidance"))
+
+    @property
+    def content_hash(self) -> str:
+        payload = [spec.content_hash for spec in self.skills]
+        return hashlib.sha256(json.dumps(payload).encode()).hexdigest()
 
     def build_embed_index(self) -> bool:
         """预构建语义向量索引（复用 semantic.py SemanticMemory）。
@@ -52,6 +61,7 @@ class SkillCatalog:
                     }
                 )
             self._embed_index = sem
+            self._index_hash = self.content_hash
             return True
         except Exception:
             self._embed_index = None
@@ -59,7 +69,7 @@ class SkillCatalog:
 
     def get_embed_index(self):
         """获取预构建的向量索引（None 表示不可用或未构建）。"""
-        if self._embed_index is not None:
+        if self._embed_index is not None and self._index_hash == self.content_hash:
             return self._embed_index
         self.build_embed_index()
         return self._embed_index
@@ -69,8 +79,7 @@ class SkillCatalog:
         report = validate_directory(directory)
         if strict and not report.ok:
             raise SkillCatalogError(format_report(report, directory=directory))
-        content_hash = _compute_directory_hash(directory)
-        return cls(list(report.specs), content_hash=content_hash)
+        return cls(list(report.specs))
 
     @property
     def skill_count(self) -> int:
@@ -118,23 +127,7 @@ class SkillCatalog:
         return True
 
 
-def _compute_directory_hash(directory: Path) -> str:
-    """计算目录下所有 YAML 文件的 SHA256。"""
-    h = hashlib.sha256()
-    for yaml_file in sorted(directory.glob("*.yaml")):
-        try:
-            h.update(yaml_file.read_bytes())
-        except OSError:
-            pass
-    return h.hexdigest()
-
-
-def _compute_skills_hash(fallback_path: Path | None = None) -> str:
-    """兼容旧构造的 hash 回退。"""
-    return ""
-
-
 @lru_cache(maxsize=1)
 def get_default_catalog() -> SkillCatalog:
     """Load built-in skills from ``src/skills/*.yaml``."""
-    return SkillCatalog.load_from_directory(_BUILTIN_DIR)
+    return SkillCatalog(registry=get_default_registry())

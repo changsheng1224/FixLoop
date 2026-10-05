@@ -169,12 +169,13 @@ def test_interrupted_process_capable_read_requires_cleanup_proof(tmp_path):
 import os, sys
 from dataclasses import replace
 from tests.plan_support import session_for, simple_plan, tool
+from agent_runtime.tool_result import ToolResult
 with session_for(sys.argv[1]) as session:
     plan = simple_plan(session)
     first = replace(plan.nodes[0], tool_name='grep', tool_allowlist=('grep',))
     session.create(replace(plan, nodes=(first, *plan.nodes[1:])).seal())
     session.fault = lambda point: os._exit(77) if point == 'tool_dispatched' else None
-    session.run_node('read-0', lambda a: tool(session, 'grep', {}, lambda: 'matches'))
+    session.run_node('read-0', lambda a: tool(session, 'grep', {}, lambda: ToolResult(content='matches')))
 """
     child = subprocess.run(
         [sys.executable, "-c", code, str(tmp_path)],

@@ -8,6 +8,7 @@ from agent_runtime.config import AgentConfig
 from agent_runtime.providers.clients import FakeModelClient
 from agent_runtime.runtime import Agent
 from agent_runtime.tool_executor import ToolExecutor
+from agent_runtime.tool_result import ToolResult
 from agent_runtime.tool_timeout import ToolTimeoutError, run_with_timeout
 
 
@@ -42,8 +43,8 @@ class TestToolExecutorTimeout:
 
         assert elapsed < 2.5
         assert "超时" in result.content
-        assert result.metadata["tool_status"] == "error"
-        assert result.metadata["tool_error_code"] == "tool_timeout"
+        assert result.status == "error"
+        assert result.error_code == "tool_timeout"
         assert result.metadata["timeout_s"] == 1
         assert result.metadata["gate_id"] == 9
 
@@ -51,7 +52,7 @@ class TestToolExecutorTimeout:
         config = AgentConfig(provider="fake", approval="auto", deadline={"tool_s": 0})
         client = FakeModelClient(["<final>ok</final>"])
         agent = Agent(config=config, model_client=client, workspace=workspace)
-        agent.tools["list_files"]["run"] = lambda args: time.sleep(0.3) or "[]"
+        agent.tools["list_files"]["run"] = lambda args: time.sleep(0.3) or ToolResult(content="[]")
         executor = ToolExecutor(agent=agent, approval_policy="auto")
 
         t0 = time.time()
@@ -59,4 +60,4 @@ class TestToolExecutorTimeout:
         elapsed = time.time() - t0
 
         assert elapsed >= 0.25
-        assert result.metadata.get("tool_status") == "success"
+        assert result.status == "success"

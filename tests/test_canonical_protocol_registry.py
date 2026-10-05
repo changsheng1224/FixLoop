@@ -57,8 +57,8 @@ def test_mcp_specs_and_capability_query_share_registry():
         build_github_mcp_tool_specs,
         build_mock_github_mcp_client,
     )
+    from agent_runtime.tool_spec import ToolRegistry, project_tool_specs
     from src.middleware import ToolGateway
-    from src.tools.spec import ToolRegistry, project_tool_specs
 
     client, _ = build_mock_github_mcp_client()
     specs = build_github_mcp_tool_specs(client)
@@ -73,7 +73,7 @@ def test_mcp_specs_and_capability_query_share_registry():
     assert "github_create_draft_pr" in names
     assert draft is not None and draft.side_effect == "external_write"
     assert draft.provider == "mcp"
-    assert draft.protocol_schema["additionalProperties"] is False
+    assert draft.input_schema["additionalProperties"] is False
 
 
 def test_mcp_errors_have_canonical_retry_semantics():

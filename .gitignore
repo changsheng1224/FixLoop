@@ -28,3 +28,12 @@ eval_results/
 .pytest_cache/
 .pytest-tmp/
 .ruff_cache/
+
+# Local scratch & tooling
+.runtime-tools/
+temp_manual/
+temp_pytest_run/
+temp_pytest_run2/
+run123/
+tests/_pytest_tmp_plugin.py
+.workbuddy/

@@ -12,7 +12,7 @@ import re
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class SkillKind(StrEnum):
@@ -56,12 +56,24 @@ class SkillBudgetProfile(BaseModel):
     max_output_chars: int = Field(default=50_000, ge=1, le=5_000_000)
 
 
-class CanonicalSkillSpec(BaseModel):
+class SkillSpec(BaseModel):
     """One governed identity for prompt guidance and executable capability."""
 
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    language: str = "python"
+    trigger_pattern: str = ""
+    priority: int = Field(default=0, ge=0, le=100)
+    suggested_tools: list[str] = Field(default_factory=list)
+    example_issue: str = ""
+    example_patch: str = ""
+    positive_triggers: list[str] = Field(default_factory=list)
+    negative_triggers: list[str] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
+    prototypes: list[str] = Field(default_factory=list)
     name: str
     version: str = "1.0.0"
-    kind: SkillKind = SkillKind.EXECUTABLE
+    kind: SkillKind
     description: str = ""
     source: str = "builtin_verified"
     trust_level: SkillTrust = SkillTrust.VERIFIED
@@ -106,13 +118,46 @@ class CanonicalSkillSpec(BaseModel):
             raise ValueError(f"source must be one of: {', '.join(sorted(allowed))}")
         return value
 
+    @field_validator("trigger_pattern", "positive_triggers", "negative_triggers")
+    @classmethod
+    def validate_patterns(cls, value):
+        for pattern in [value] if isinstance(value, str) else value:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                # Surface a Pydantic validation error instead of a bare
+                # ``re.error`` so callers can handle every contract violation
+                # through one exception type.
+                raise ValueError(f"invalid regex {pattern!r}: {exc}") from exc
+        return value
+
+    @model_validator(mode="after")
+    def validate_kind(self):
+        if self.kind in {SkillKind.GUIDANCE, SkillKind.HYBRID}:
+            from src.tools.composite import REPAIR_CANONICAL_TOOL_NAMES
+
+            if not self.trigger_pattern or not self.guidance:
+                raise ValueError("guidance skills require trigger_pattern and guidance")
+            if self.language not in {"python", "javascript", "java"}:
+                raise ValueError("unsupported guidance language")
+            unknown = set(self.suggested_tools) - set(REPAIR_CANONICAL_TOOL_NAMES)
+            if unknown:
+                raise ValueError(f"unknown suggested_tools: {sorted(unknown)}")
+        return self
+
+    def matches(self, text: str) -> bool:
+        return bool(self.trigger_pattern and re.search(self.trigger_pattern, text))
+
     def stable_hash(self) -> str:
         payload = self.model_dump(mode="json", exclude={"content_hash"})
         raw = json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
         return hashlib.sha256(raw.encode()).hexdigest()
 
-    def with_hash(self) -> CanonicalSkillSpec:
-        return self.model_copy(update={"content_hash": self.content_hash or self.stable_hash()})
+    def with_hash(self) -> SkillSpec:
+        digest = self.stable_hash()
+        if self.content_hash and self.content_hash != digest:
+            raise ValueError("skill content_hash does not match its content")
+        return self.model_copy(update={"content_hash": digest}, deep=True)
 
     def permits_new_invocation(self) -> bool:
         return self.lifecycle in {SkillLifecycle.EXPERIMENTAL, SkillLifecycle.ACTIVE}
@@ -124,111 +169,11 @@ class CanonicalSkillSpec(BaseModel):
         )
 
 
-def canonical_from_executable(spec: Any) -> CanonicalSkillSpec:
-    """Adapt the legacy executable specification without changing its YAML."""
-    side_effect = SideEffectLevel(str(getattr(spec, "side_effect_level", "none")))
-    tools = list(getattr(spec, "allowed_tools", []) or [])
-    if side_effect is SideEffectLevel.NONE and any(
-        name.startswith("github_create") for name in tools
-    ):
-        side_effect = SideEffectLevel.REMOTE_WRITE
-    elif side_effect is SideEffectLevel.NONE and any(
-        name in {"apply_patch", "patch_file", "write_file"} for name in tools
-    ):
-        side_effect = SideEffectLevel.LOCAL_WRITE
-    lifecycle = str(getattr(spec, "lifecycle", "active"))
-    return CanonicalSkillSpec(
-        name=spec.name,
-        version=spec.version,
-        kind=SkillKind.EXECUTABLE,
-        description=spec.description,
-        source=str(getattr(spec, "source", "builtin_verified")),
-        trust_level=SkillTrust(str(getattr(spec, "trust_level", "verified"))),
-        scope=SkillScope(str(getattr(spec, "scope", "builtin"))),
-        lifecycle=SkillLifecycle(lifecycle),
-        input_schema=dict(spec.input_schema),
-        output_schema=dict(spec.output_schema),
-        allowed_tools=list(spec.allowed_tools),
-        completion_evidence=list(spec.completion_evidence),
-        preconditions=list(getattr(spec, "preconditions", []) or []),
-        postconditions=list(getattr(spec, "postconditions", []) or []),
-        requires_read_before_write=bool(
-            getattr(spec, "requires_read_before_write", False)
-            or side_effect is SideEffectLevel.LOCAL_WRITE
-        ),
-        side_effect_level=side_effect,
-        budget=SkillBudgetProfile.model_validate(getattr(spec, "budget", {}) or {}),
-        fallback=spec.fallback,
-    ).with_hash()
-
-
-def canonical_from_guidance(spec: Any) -> CanonicalSkillSpec:
-    """Adapt the original prompt-guidance Skill to the governed identity."""
-    version = str(getattr(spec, "version", "1") or "1")
-    if version.isdigit():
-        version = f"{version}.0.0"
-    scope_map = {
-        "workspace": SkillScope.WORKSPACE,
-        "user": SkillScope.USER,
-        "remote": SkillScope.REMOTE,
-    }
-    return CanonicalSkillSpec(
-        name=spec.name,
-        version=version,
-        kind=SkillKind.GUIDANCE,
-        source=str(getattr(spec, "source", "builtin_verified")),
-        trust_level=SkillTrust(str(getattr(spec, "trust_level", "verified"))),
-        scope=scope_map.get(str(getattr(spec, "scope", "workspace")), SkillScope.BUILTIN),
-        allowed_tools=list(getattr(spec, "suggested_tools", []) or []),
-        guidance=list(getattr(spec, "guidance", []) or []),
-        avoid=list(getattr(spec, "avoid", []) or []),
-    ).with_hash()
-
-
 def validate_json_contract(value: Any, schema: dict[str, Any], path: str = "$") -> list[str]:
-    """Validate the JSON-Schema subset used by built-in Skills.
+    """Use the same Draft 2020-12 implementation as tool argument validation."""
+    from agent_runtime.tool_schema import validate_json_value
 
-    Keeping this small avoids introducing a second schema dependency. Unknown
-    keywords are ignored; type, required, properties, items, enum and
-    additionalProperties are enforced.
-    """
-    if not schema:
-        return []
-    issues: list[str] = []
-    expected = schema.get("type")
-    type_map = {
-        "object": dict,
-        "array": list,
-        "string": str,
-        "integer": int,
-        "number": (int, float),
-        "boolean": bool,
-        "null": type(None),
-    }
-    if expected in type_map:
-        valid = isinstance(value, type_map[expected])
-        if expected in {"integer", "number"} and isinstance(value, bool):
-            valid = False
-        if not valid:
-            return [f"{path}: expected {expected}"]
-    if "enum" in schema and value not in schema["enum"]:
-        issues.append(f"{path}: value is not in enum")
-    if isinstance(value, dict):
-        properties = schema.get("properties") or {}
-        for name in schema.get("required") or []:
-            if name not in value:
-                issues.append(f"{path}.{name}: required")
-        if schema.get("additionalProperties") is False:
-            for name in value:
-                if name not in properties:
-                    issues.append(f"{path}.{name}: additional property not allowed")
-        for name, child_schema in properties.items():
-            if name in value and isinstance(child_schema, dict):
-                issues.extend(validate_json_contract(value[name], child_schema, f"{path}.{name}"))
-    if isinstance(value, list) and isinstance(schema.get("items"), dict):
-        for index, item in enumerate(value):
-            issues.extend(validate_json_contract(item, schema["items"], f"{path}[{index}]"))
-    return issues
+    return [f"{path}.{error['field']}: {error['message']}" for error in validate_json_value(schema, value)]
 
 
 def resolve_evidence(output: dict[str, Any], dotted_path: str) -> tuple[bool, Any]:

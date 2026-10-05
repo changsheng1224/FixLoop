@@ -57,3 +57,40 @@ Patcher 通过受治理工具修改磁盘，运行时根据快照差异生成 `C
 L1 和 L2 checkpoint 必须携带当前版本 `2.0` 的 `CheckpointEnvelope`，并通过完整性
 校验。历史无 envelope 的 checkpoint 和 L2 `1.0`/`1.1` 状态不能继续恢复，需创建新运行。
 现有历史结果文件仍可留作人工审计，不会被自动改写。
+
+
+## 2026-10-04：工具契约破坏式更新
+
+- 通用 `ToolSpec`、`ToolRegistry` 与执行投影从 `agent_runtime.tool_spec` 导入。
+  `src.tools.spec` 只声明修复域默认权限；不再提供旧路径兼容导出。
+- 注册表只接受 `schema` 字段中的 object JSON Schema。删除简写参数格式、
+  `json_schema` / `protocol_schema` 双轨字段与隐式类型转换。
+  `auto_schema()` 从 dataclass 生成 JSON Schema，保留 nullable、数组项类型和默认值。
+- 所有工具执行函数返回 `ToolResult`。文本消费者显式读取 `.content`；
+  执行器检查 `.status`、`.error_code`、`.retryable`，不再根据 `Error` 文本猜测失败。
+  自定义工具返回裸字符串会被拒绝为 `invalid_tool_result`。
+- L2 通过 `ToolContext.edit_lock` 注入 `EditPolicy`，通过 `grounding_sink` 接收证据。
+  删除按仓库路径保存的全局编辑锁注册表及静默异常放行。
+  恢复检查点只恢复编辑范围，必须重新读取文件才能写入。
+- `IssueIntentAdapter` 移至 `src.repair.intent_adapter`。L1 不再导入 L2；
+  `tests/test_runtime_contract_boundaries.py` 以 AST 检查保护依赖方向。
+
+自定义工具、外部调用方与测试桩必须直接改用以上契约，不提供自动迁移层。
+Skill 注册、上下文装配和持久化格式的其余兼容路径不属于本批改动。
+
+## 2026-10-04：结果、校验与进程执行收敛
+
+- `ToolResult` 的 `status`、`error_code`、`retryable`、`changed_files`、
+  `receipt`、`duration_ms`、`output_truncated` 是运行时唯一状态来源。
+  `metadata` 只保存扩展信息，写入重复控制字段会被拒绝。
+  日志和持久化使用 `to_metadata()` 导出的独立快照；不支持旧 metadata 构造方式。
+  工具执行后的策略判定完成后重新生成回执，再写入 action ledger 和 Observation。
+- 工具参数采用 JSON Schema Draft 2020-12，由 `jsonschema` 完整校验；
+  不进行类型转换。支持组合约束、布尔 schema 和本地 `$ref`，禁用远程引用加载。
+  保留标准的开放对象语义；需要禁止未知字段的工具显式声明
+  `additionalProperties: false`。MCP 发现、模型投影和执行校验保留完整 schema。
+- 宿主 shell 使用统一执行器，持续读取 stdout/stderr，按流限制保留的输出，
+  统一使用 UTF-8 解码和单调时钟计时。取消、超时清理进程组并报告清理是否确认；
+  `data.exit_code` 保存命令退出码，`output_truncated` 标记输出截断。
+- 声明式验证使用解析后的可执行文件路径；启动时的操作系统错误返回
+  `verification_environment_failed`，不再以未捕获异常中断流程。

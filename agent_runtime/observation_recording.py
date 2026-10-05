@@ -106,6 +106,8 @@ class ToolObservationRecorder:
         projection["raw_ref"] = stored.raw_ref
         metadata["observation_id"] = stored.observation_id
         metadata["artifact_ref"] = stored.raw_ref
+        result.metadata["observation_id"] = stored.observation_id
+        result.metadata["artifact_ref"] = stored.raw_ref
         self.on_retrieval(
             call.name, call.arguments, metadata.get("retrieval_result"), stored.observation_id
         )

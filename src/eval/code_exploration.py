@@ -241,7 +241,7 @@ def run_deterministic(task: dict, suite: Path, output: Path, manifest: dict) -> 
             ("list_files", {"path": ".", "depth": 0, "glob": "*.py"}, tool_list_files),
             ("grep", {"pattern": probe["pattern"], "path": probe["path"]}, tool_grep),
         ):
-            result = function(context, args)
+            result = function(context, args).content
             calls.append({"tool": name, "args": args, "result": result})
         # rg omits the filename when its target is a single file.
         match = re.search(r"(?:^|:)(\d+):", calls[-1]["result"], re.MULTILINE)
@@ -249,7 +249,7 @@ def run_deterministic(task: dict, suite: Path, output: Path, manifest: dict) -> 
         if match:
             line = int(match.group(1))
             args = {"path": probe["path"], "start": line, "end": line + 3}
-            result = tool_read_file(context, args)
+            result = tool_read_file(context, args).content
             calls.append({"tool": "read_file", "args": args, "result": result})
             predicted = [{"path": probe["path"], "line": line}]
         trace_path = output / "traces" / f"{task['id']}.json"

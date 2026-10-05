@@ -12,7 +12,7 @@ from agent_runtime.context_runtime import ObservationStore
 from agent_runtime.run_coordination.models import OwnerLease
 from agent_runtime.run_coordination.store import RunCoordinationStore
 from agent_runtime.state_root import state_root_for
-from agent_runtime.tool_result import ToolResult, attach_tool_receipt, normalize_tool_result
+from agent_runtime.tool_result import ToolResult, attach_tool_receipt, require_tool_result
 
 from .evidence import EvidenceLedger
 from .journal import PlanStore
@@ -697,7 +697,7 @@ class PlanSession:
             setattr(agent.tool_context, "sandbox_parent_resource_id", attempt["attempt_id"])
         self.store.append("operation", {**operation, "phase": "dispatched"})
         self.cut("tool_dispatched")
-        result = normalize_tool_result((yield), tool_name=name)
+        result = require_tool_result((yield), tool_name=name)
         if not result.receipt:
             result = attach_tool_receipt(
                 result,

@@ -52,8 +52,6 @@ TOOL_TRACE_PUBLIC_KEYS = (
 def build_gateway_rejection_metadata(**extra) -> dict:
     """Layer 1 Gateway 拒绝 metadata。"""
     meta = {
-        "tool_status": "rejected",
-        "tool_error_code": "permission_denied",
         "rejection_layer": REJECTION_LAYER_GATEWAY,
         "rejection_reason": "role_not_allowed",
     }
@@ -111,11 +109,9 @@ def build_rejection_observability_payload(summary: dict | None = None, **fields)
     return payload
 
 
-def build_executor_rejection_metadata(gate_id: int | str, tool_error_code: str, **extra) -> dict:
+def build_executor_rejection_metadata(gate_id: int | str, **extra) -> dict:
     """Layer 2 Executor 闸口拒绝 metadata。"""
     meta = {
-        "tool_status": "rejected",
-        "tool_error_code": tool_error_code,
         "rejection_layer": REJECTION_LAYER_EXECUTOR,
         "gate_id": gate_id,
     }
@@ -123,11 +119,9 @@ def build_executor_rejection_metadata(gate_id: int | str, tool_error_code: str, 
     return meta
 
 
-def build_executor_cancel_metadata(tool_error_code: str = "cancelled", **extra) -> dict:
+def build_executor_cancel_metadata(**extra) -> dict:
     """用户 cancel 导致的工具拒绝（非 Gate 1–9）。"""
     meta = {
-        "tool_status": "rejected",
-        "tool_error_code": tool_error_code,
         "rejection_layer": REJECTION_LAYER_CANCEL,
         "gate_id": EXECUTOR_GATE_CANCEL,
     }
@@ -135,11 +129,9 @@ def build_executor_cancel_metadata(tool_error_code: str = "cancelled", **extra) 
     return meta
 
 
-def build_executor_error_metadata(tool_error_code: str = "runtime_error", **extra) -> dict:
+def build_executor_error_metadata(**extra) -> dict:
     """Layer 2 Gate 9 执行异常 metadata。"""
     meta = {
-        "tool_status": "error",
-        "tool_error_code": tool_error_code,
         "rejection_layer": REJECTION_LAYER_EXECUTOR,
         "gate_id": 9,
     }

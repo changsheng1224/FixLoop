@@ -63,9 +63,9 @@ class CanonicalToolCall:
     ):
         args = arguments if isinstance(arguments, dict) else {}
         stable = json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
-        identifier = call_id or "call_" + hashlib.sha256(
-            f"{name}:{stable}".encode()
-        ).hexdigest()[:12]
+        identifier = (
+            call_id or "call_" + hashlib.sha256(f"{name}:{stable}".encode()).hexdigest()[:12]
+        )
         return cls(identifier, str(name), args, ToolSource(source), str(name), stable)
 
 
@@ -198,18 +198,13 @@ class RepairBudget:
 def observation_from_result(
     call: CanonicalToolCall, result, duration_ms: int = 0
 ) -> ToolObservation:
-    metadata = getattr(result, "metadata", None) or {}
-    status = str(metadata.get("tool_status", "success"))
+    status = str(result.status)
     if status == "rejected":
-        failure = str(metadata.get("tool_error_code", "tool_rejected"))
+        failure = result.error_code
         denied = {"permission_denied", "approval_denied", "role_not_allowed"}
         status = "permission_denied" if failure in denied else "validation_error"
     elif status == "error":
-        status = (
-            "timeout"
-            if metadata.get("tool_error_code") == "tool_timeout"
-            else "execution_error"
-        )
+        status = "timeout" if result.error_code == "tool_timeout" else "execution_error"
     elif status == "uncertain":
         status = "uncertain"
     elif status == "cancelled":
@@ -218,12 +213,10 @@ def observation_from_result(
         call_id=call.call_id,
         tool_name=call.name,
         status=status,
-        content=str(getattr(result, "content", result)),
-        changed_files=list(metadata.get("affected_paths") or []),
-        retryable=bool(
-            metadata.get("retryable", status in {"validation_error", "execution_error"})
-        ),
-        failure_class=str(metadata.get("tool_error_code", "") or ""),
+        content=result.content,
+        changed_files=list(result.changed_files),
+        retryable=result.retryable,
+        failure_class=result.error_code,
         duration_ms=duration_ms,
     )
 

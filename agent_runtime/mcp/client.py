@@ -7,20 +7,19 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from agent_runtime.mcp.arguments import validate_arguments
 from agent_runtime.mcp.errors import (
     McpError,
     McpSchemaError,
     McpTimeoutError,
     McpUnavailableError,
 )
-from agent_runtime.mcp.schema_map import validate_arguments
 
 
 class McpTransport(Protocol):
     """可替换的 MCP 传输（进程内 / 未来 stdio）。"""
 
-    def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        ...
+    def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]: ...
 
 
 @dataclass
@@ -135,8 +134,7 @@ class McpClient:
             raise McpSchemaError(f"未知 MCP 工具 '{name}'")
         args = validate_arguments(
             tool_name=name,
-            schema_props=spec.properties,
-            required=spec.required,
+            schema=spec.input_schema,
             arguments=arguments,
         )
         raw = self._timed_request(

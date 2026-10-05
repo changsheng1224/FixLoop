@@ -9,8 +9,8 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from agent_runtime.vector_math import cosine_similarity
-from src.skills.executable_spec import ExecutableSkillSpec
-from src.skills.registry import ROUTER_VERSION, SkillRegistry, get_default_executable_registry
+from src.skills.contract import SkillSpec
+from src.skills.registry import ROUTER_VERSION, SkillRegistry, get_default_registry
 
 EmbedFn = Callable[[str], Any]
 LlmPickFn = Callable[[str, list[dict[str, Any]]], str | None]
@@ -107,7 +107,7 @@ def _tokenize(text: str) -> set[str]:
     }
 
 
-def _keyword_score(text: str, spec: ExecutableSkillSpec) -> float:
+def _keyword_score(text: str, spec: SkillSpec) -> float:
     tokens = _tokenize(text)
     if not tokens:
         return 0.0
@@ -120,7 +120,7 @@ def _keyword_score(text: str, spec: ExecutableSkillSpec) -> float:
     return min(0.92, hit / max(4.0, math.sqrt(len(keys))))
 
 
-def _embed_score(text: str, spec: ExecutableSkillSpec, embed_fn: EmbedFn) -> float:
+def _embed_score(text: str, spec: SkillSpec, embed_fn: EmbedFn) -> float:
     try:
         q = embed_fn(text)
         best = 0.0
@@ -150,7 +150,7 @@ class SkillRouter:
         margin_tau: float = MARGIN_TAU,
         score_floor: float = SCORE_FLOOR,
     ) -> None:
-        self.registry = registry or get_default_executable_registry()
+        self.registry = registry or get_default_registry()
         self.embed_fn = embed_fn
         self.llm_pick_fn = llm_pick_fn
         self.margin_tau = margin_tau
@@ -158,7 +158,7 @@ class SkillRouter:
 
     def score_candidates(self, text: str) -> list[CandidateScore]:
         scored: list[CandidateScore] = []
-        for spec in self.registry.list(lifecycle="active"):
+        for spec in self.registry.list(lifecycle="active", kind="executable"):
             if _rule_hit(text, spec.negative_triggers):
                 scored.append(CandidateScore(spec.name, 0.0, "excluded"))
                 continue
@@ -231,7 +231,7 @@ class SkillRouter:
                     text,
                     [{"name": c.name, "score": c.score, "tier": c.tier} for c in active[:3]],
                 )
-                if pick and self.registry.get(pick):
+                if pick and self.registry.get(pick, kind="executable"):
                     return self._decide(
                         pick,
                         "llm_fallback",
@@ -264,7 +264,7 @@ class SkillRouter:
         low_margin: bool,
         previous_selected: str | None,
     ) -> RouteDecision:
-        spec = self.registry.get(name)
+        spec = self.registry.get(name, kind="executable")
         switched = previous_selected if previous_selected and previous_selected != name else None
         return RouteDecision(
             selected=name,

@@ -6,8 +6,10 @@ import os
 from typing import Literal
 
 from agent_runtime.tool_context import ToolContext
+from agent_runtime.tool_result import ToolResult
 from agent_runtime.tools import build_tool_registry
 from src.tools.registry import build_repair_tools
+from src.tools.repair_control import build_repair_control_tools
 from src.tools.sandbox_tools import build_sandbox_tool_registry
 
 RepairAgentRole = Literal["patcher", "verifier"]
@@ -51,6 +53,7 @@ def build_repair_canonical_tools(ctx: ToolContext) -> dict:
 
     tools = build_tool_registry(ctx)
     tools.update(build_repair_tools(ctx))
+    tools.update(build_repair_control_tools(ctx))
     tools.update(build_sandbox_tool_registry(ctx))
     # composite 工具（未在子注册表中）
     tools["inspect_file"] = {
@@ -63,9 +66,10 @@ def build_repair_canonical_tools(ctx: ToolContext) -> dict:
         ),
         "run": lambda args: tool_inspect_file(ctx, args),
     }
-    # L1 registry 已含 apply_patch / expand_lock / quick_test
+    # L1 owns generic file and process tools; L2 adds repair control.
     selected = {name: tools[name] for name in REPAIR_CANONICAL_TOOL_NAMES}
-    from src.tools.spec import bind_execution_tools, default_repair_tool_registry
+    from agent_runtime.tool_spec import bind_execution_tools
+    from src.tools.spec import default_repair_tool_registry
 
     return bind_execution_tools(
         selected, default_repair_tool_registry(sandbox_mode=ctx.sandbox_backend is not None)
@@ -77,7 +81,7 @@ def is_repair_canonical_registry(tools: dict) -> bool:
     return tuple(sorted(tools.keys())) == REPAIR_CANONICAL_TOOL_NAMES
 
 
-def tool_inspect_file(context, args: dict) -> str:
+def tool_inspect_file(context, args: dict) -> ToolResult:
     """read_file + ast_parse 组合：一次调用完成文件读取与 AST 解析，占 1 次配额。
 
     Args 必须包含 'path'，可选 'start'/'end'（同 read_file）。
@@ -86,10 +90,15 @@ def tool_inspect_file(context, args: dict) -> str:
     from src.tools.ast_parser import ast_parse as _ast_parse
 
     read_out = tool_read_file(context, args)
-    if read_out.startswith("Error"):
+    if read_out.failed:
         return read_out
     ast_out = _ast_parse(context, args)
-    return f"{read_out}\n\n--- AST 结构 ---\n{ast_out}"
+    return ToolResult(
+        content=f"{read_out.content}\n\n--- AST 结构 ---\n{ast_out.content}",
+        status="partial" if ast_out.failed else "success",
+        metadata=read_out.metadata,
+        error_code=ast_out.error_code,
+    )
 
 
 def build_repair_agent_tools(ctx: ToolContext, role: RepairAgentRole) -> dict:

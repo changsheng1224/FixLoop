@@ -75,7 +75,6 @@ def build_delegation_tools(context):
     return {
         name: {
             "schema": schema,
-            "json_schema": schema,
             "description": descriptions[name],
             "risky": False,
             "side_effect": "read",

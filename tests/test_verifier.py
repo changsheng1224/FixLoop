@@ -21,12 +21,12 @@ class TestVerifierAgent:
     def test_verifier_blocked_from_write(self, client, workspace):
         agent = create_verifier(client, workspace)
         result = agent.execute_tool("write_file", {"path": "x.py", "content": "y"})
-        assert result.metadata["tool_error_code"] == "permission_denied"
+        assert result.error_code == "permission_denied"
 
     def test_verifier_blocked_from_ast_parse(self, client, workspace):
         agent = create_verifier(client, workspace)
         result = agent.execute_tool("ast_parse", {"path": "x.py"})
-        assert result.metadata["tool_error_code"] == "permission_denied"
+        assert result.error_code == "permission_denied"
 
     def test_verifier_ask_returns_answer(self, client, workspace):
         agent = create_verifier(client, workspace)
@@ -256,6 +256,9 @@ class TestVerifierFallbackPolicy:
                 internal={"actual_tier": "static", "language": language},
             )
 
+        monkeypatch.setattr(
+            "src.repair.verification.verification_runner.shutil.which", lambda _command: None
+        )
         monkeypatch.setattr("src.orchestrator.StaticVerifyStrategy.run", fake_static_run)
         orch = Orchestrator(None, verifier=object(), use_pytest_verify=True)
         orch._repo_root = str(tmp_path)

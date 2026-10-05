@@ -10,6 +10,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from agent_runtime.tool_result import ToolResult
+
 
 @dataclass
 class FindTestArgs:
@@ -17,7 +19,7 @@ class FindTestArgs:
     file_path: str  # 必填
 
 
-def find_test_for_function(context, args: dict) -> str:
+def find_test_for_function(context, args: dict) -> ToolResult:
     """查找函数的对应测试。
 
     Args:
@@ -27,12 +29,14 @@ def find_test_for_function(context, args: dict) -> str:
     func_name = args.get("function_name", "")
     file_path = args.get("file_path", "")
     if not func_name or not file_path:
-        return "Error: 缺少必填参数 function_name 或 file_path"
+        return ToolResult.error(
+            "Error: 缺少必填参数 function_name 或 file_path", code="tool_execution_failed"
+        )
 
     try:
         target = context.resolve(file_path)
     except ValueError as e:
-        return f"Error: {e}"
+        return ToolResult.error(f"Error: {e}", code="tool_execution_failed")
 
     module_name = target.stem  # calculator.py → calculator
     results = []
@@ -73,7 +77,7 @@ def find_test_for_function(context, args: dict) -> str:
                 )
 
     if not results:
-        return "(未找到对应测试)"
+        return ToolResult(content="(未找到对应测试)")
 
     # 去重按 confidence 降序
     seen = set()
@@ -84,4 +88,4 @@ def find_test_for_function(context, args: dict) -> str:
             seen.add(key)
             unique.append(r)
 
-    return json.dumps(unique, ensure_ascii=False, indent=2)
+    return ToolResult(content=json.dumps(unique, ensure_ascii=False, indent=2))

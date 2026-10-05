@@ -4,40 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-__all__ = [
-    "EditLockState",
-    "clear_active_edit_lock",
-    "get_active_edit_lock",
-    "normalize_repo_rel",
-    "set_active_edit_lock",
-]
-
-_ACTIVE_LOCKS: dict[str, EditLockState] = {}
-
-
-def _root_key(repo_root: str | Path) -> str:
-    try:
-        return str(Path(repo_root).resolve())
-    except OSError:
-        return str(repo_root)
-
-
-def set_active_edit_lock(repo_root: str | Path, lock: EditLockState | None) -> None:
-    key = _root_key(repo_root)
-    if lock is None:
-        _ACTIVE_LOCKS.pop(key, None)
-    else:
-        _ACTIVE_LOCKS[key] = lock
-
-
-def get_active_edit_lock(repo_root: str | Path | None) -> EditLockState | None:
-    if not repo_root:
-        return None
-    return _ACTIVE_LOCKS.get(_root_key(repo_root))
-
-
-def clear_active_edit_lock(repo_root: str | Path) -> None:
-    set_active_edit_lock(repo_root, None)
+__all__ = ["EditLockState", "normalize_repo_rel"]
 
 
 def normalize_repo_rel(path: str, repo_root: str | Path | None = None) -> str:
@@ -113,7 +80,16 @@ class EditLockState:
             self.mark_read(rel)
         return seeded
 
-    def mark_read(self, path: str, *, auto_allow_impl: bool = False) -> bool:
+    def grounded_paths(self) -> list[str]:
+        from src.repair.localization.localize_quality import _is_test_path
+
+        return [
+            path
+            for path in sorted(self.allowed_edit)
+            if path in self.read_set and not _is_test_path(path)
+        ]
+
+    def mark_read(self, path: str, *, auto_allow_impl: bool = True) -> bool:
         rel = normalize_repo_rel(path, self.repo_root)
         if not rel:
             return False

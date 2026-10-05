@@ -140,6 +140,7 @@ class AgentLoop:
         return ToolStepRuntime(
             agent=self.agent,
             state=self._tool_state,
+            policy_context=self._policy_context(),
             guard=self._step_guard,
             budget=self._repair_budget,
             deadline=self._repair_deadline,
@@ -150,11 +151,9 @@ class AgentLoop:
             hooks=ToolStepHooks(
                 abort_if_cancelled=self._abort_if_cancelled,
                 advance_todo=self._advance_todo,
-                block_grounded_finish=self._block_grounded_finish,
                 budget_allows_tool=self._budget_allows_tool,
                 budget_reserve=self._budget_reserve,
                 emit=self._emit,
-                enter_convergence_gate=self._enter_convergence_gate,
                 grant_read_reserve=self._grant_read_reserve,
                 has_targeted_read_reserve=self._has_targeted_read_reserve,
                 matching_read_reservation=self._matching_read_reservation,
@@ -162,8 +161,6 @@ class AgentLoop:
                 notify_react_phase=self._notify_react_phase,
                 persist_step_checkpoint=self._persist_step_checkpoint,
                 record_tool_outcome=self._record_tool_outcome,
-                set_patch_recovery=self._set_patch_recovery,
-                sync_patcher_grounding=self._sync_patcher_grounding,
             ),
         )
 
@@ -699,173 +696,22 @@ class AgentLoop:
         reserves = (quota.quota_summary() or {}).get("read_reserves") or []
         return any(str(item.get("kind", "")) == "targeted" for item in reserves)
 
-    def _set_patch_recovery(self, kind: str, directive: str, allowed_tools: set[str]) -> None:
-        self._tool_state.patch_recovery_kind = str(kind)
-        self._tool_state.patch_recovery_directive = str(directive)
-        self._tool_state.patch_recovery_allowed_tools = set(allowed_tools)
-        self._tool_state.patch_decision_required = True
+    def _policy_context(self):
+        from agent_runtime.loop_policy import LoopPolicyContext
 
-    def _patcher_grounded(self) -> bool:
-        """Return whether this Patcher has read an editable implementation path."""
-        runtime = self.agent.session.get("_patcher_runtime", {}) or {}
-        if bool(runtime.get("grounded")):
-            return True
-        try:
-            from src.repair.execution.edit_lock import get_active_edit_lock
-            from src.repair.localization.localize_quality import _is_test_path
-
-            lock = get_active_edit_lock(getattr(self.agent.tool_context, "root", None))
-            if lock is None:
-                return False
-            return any(
-                path in lock.read_set and path in lock.allowed_edit and not _is_test_path(path)
-                for path in lock.allowed_edit
-            )
-        except Exception:
-            return False
-
-    def _sync_patcher_grounding(self, tool_name: str, tool_args: dict, result) -> None:
-        """Reflect implementation-read evidence into L1 state and action gating."""
-        if (getattr(self.agent, "agent_name", "") or "") != "patcher":
-            return
-        metadata = getattr(result, "metadata", {}) or {}
-        if metadata.get("tool_status") != "success" or tool_name != "read_file":
-            return
-        try:
-            from src.repair.execution.edit_lock import get_active_edit_lock, normalize_repo_rel
-            from src.repair.localization.localize_quality import _is_test_path
-
-            lock = get_active_edit_lock(getattr(self.agent.tool_context, "root", None))
-            if lock is None:
-                return
-            path = normalize_repo_rel(str(tool_args.get("path") or ""), lock.repo_root)
-            grounded_paths = [
-                item
-                for item in sorted(lock.allowed_edit)
-                if item in lock.read_set and not _is_test_path(item)
-            ]
-            if path not in grounded_paths and not grounded_paths:
-                return
-            runtime = self.agent.session.setdefault("_patcher_runtime", {})
-            runtime["grounded"] = True
-            runtime["grounded_paths"] = grounded_paths[:12]
-            runtime["patch_required"] = True
-            state = getattr(self.agent, "_l2_repair_state", None)
-            if state is not None:
-                state.control.allowed_edit = sorted(lock.allowed_edit)
-                state.node_timings["patcher_grounded"] = True
-                state.node_timings["patch_required"] = True
-                ledger = ((self.agent.session.get("memory") or {}).get("working") or {}).get(
-                    "evidence_ledger", []
-                )
-                if isinstance(ledger, list):
-                    state.node_timings["evidence_ledger"] = [dict(item) for item in ledger[-12:]]
-            self._set_patch_recovery(
-                "grounded_evidence",
-                "已读取实现文件并获得可编辑证据。停止继续探索，立即调用 apply_patch/patch_file；"
-                "若确实无法形成补丁，只能声明 cannot_patch 并说明具体原因。",
-                {"apply_patch", "patch_file", "finish_repair"},
-            )
-            self._emit(
-                "patcher_grounded",
-                {"path": path, "grounded_paths": grounded_paths[:12], "patch_required": True},
-            )
-        except Exception:
-            return
-
-    def _block_grounded_finish(self, tool_name: str, tool_args: dict, result) -> bool:
-        """Reject needs_more_context after implementation evidence exists."""
-        if tool_name != "finish_repair" or not self._patcher_grounded():
-            return False
-        status = str(tool_args.get("status") or "").strip().lower()
-        if status != "needs_more_context":
-            return False
-        result.status = "rejected"
-        result.error_code = "grounded_finish_blocked"
-        result.retryable = False
-        result.content = (
-            "Error: 已有实现文件证据，不能以 needs_more_context 结束。"
-            "请调用 apply_patch/patch_file；若无法修复请改用 cannot_patch。"
+        return LoopPolicyContext(
+            agent=self.agent, state=self._tool_state, guard=self._step_guard,
+            task_state=self._task_state,
+            emit=self._emit, grant_read_reserve=self._grant_read_reserve,
+            matching_read_reservation=self._matching_read_reservation,
+            has_targeted_read_reserve=self._has_targeted_read_reserve,
         )
-        result.metadata.update(
-            {
-                "tool_status": "rejected",
-                "tool_error_code": "grounded_finish_blocked",
-                "retryable": False,
-                "required_next_action": "apply_patch_or_cannot_patch",
-            }
-        )
-        self._set_patch_recovery(
-            "grounded_finish_blocked",
-            "已有实现文件证据，needs_more_context 已拒绝。请直接提交补丁，或声明 cannot_patch。",
-            {"apply_patch", "patch_file", "finish_repair"},
-        )
-        self._emit("grounded_finish_blocked", {"status": status})
-        return True
 
-    def _native_tool_names(
-        self, *, action_required: bool = False, patch_only_recovery: bool = False
-    ) -> set[str] | None:
-        """Project tool schemas to the current repair phase."""
-        is_patcher = (getattr(self.agent, "agent_name", "") or "") == "patcher"
-        if is_patcher and action_required:
-            names = {"apply_patch", "patch_file", "finish_repair"}
-            if self._tool_state.patch_recovery_allowed_tools is not None:
-                # Recovery directives are stricter than the normal convergence
-                # window.  In particular stale writes expose only the exact
-                # reread, while malformed writes expose apply_patch.
-                return set(self._tool_state.patch_recovery_allowed_tools)
-            # Patcher owns localization.  Once convergence has requested a
-            # write, retain a small bounded read window so a newly discovered
-            # implementation path is not made unreachable by schema gating.
-            if not patch_only_recovery and self._step_guard.localization_reads_available:
-                names.update(
-                    {
-                        "read_file",
-                        "grep",
-                        "list_files",
-                        "ast_parse",
-                        "code_lookup",
-                        "code_relations",
-                        "inspect_file",
-                        "find_test",
-                    }
-                )
-            # A truncated response is an action boundary.  Only stale
-            # preimage recovery may open one explicitly bounded reread.
-            elif not patch_only_recovery and self._has_targeted_read_reserve():
-                names.update({"read_file", "ast_parse", "inspect_file"})
-            return names
-        if not is_patcher or self._step_guard.phase != "converge":
-            return None
-        writes = {
-            "write_file",
-            "patch_file",
-            "apply_patch",
-            "finish_repair",
-            "expand_lock",
-            "quick_test",
-        }
-        quota = getattr(self.agent, "quota", None)
-        reserves = list((quota.quota_summary() if quota else {}).get("read_reserves") or [])
-        has_post_lock = any(item.get("kind") == "post_lock" for item in reserves)
-        if has_post_lock or (
-            self._step_guard.targeted_read_available
-            and not self._tool_state.patch_decision_required
-        ):
-            writes.add("read_file")
-        return writes
-
-    def _enter_convergence_gate(self, reason: str, *, step: int) -> None:
-        self._emit(
-            "convergence_gate_entered",
-            {
-                "step": step,
-                "reason": reason,
-                "reads_since_write": self._step_guard.reads_since_write,
-            },
+    def _native_tool_names(self, *, action_required=False, strict_recovery=False):
+        return self.agent.loop_policy.visible_tools(
+            self._policy_context(), action_required=action_required,
+            strict_recovery=strict_recovery,
         )
-        self._grant_read_reserve("*", kind="targeted", step=step)
 
     def _budget_reserve_turn(self, turn: int) -> bool:
         if int(turn) <= self._budget_turns_seen:
@@ -1194,14 +1040,14 @@ class AgentLoop:
         token = getattr(self.agent, "cancel_token", None)
         if token is not None and token.is_cancelled:
             return
-        meta = getattr(result, "metadata", None) or {}
-        if meta.get("tool_status") != "success":
+        meta = result.to_metadata()
+        if result.status != "success":
             return
         try:
             from agent_runtime.checkpoint import create_checkpoint, file_content_hash
             from agent_runtime.session_store import SessionStore
 
-            affected_paths = list(meta.get("affected_paths") or [])
+            affected_paths = list(result.changed_files)
             if tool_name in ("write_file", "patch_file", "apply_patch") and tool_args.get("path"):
                 affected_path = str(tool_args["path"])
                 if affected_path not in affected_paths:
@@ -1289,8 +1135,7 @@ class AgentLoop:
             }
         )
         self._task_state = ts
-        if agent_name == "patcher":
-            self.agent.session.pop("_patcher_runtime", None)
+        self.agent.loop_policy.reset(self._policy_context())
         self._call_timings = []
         self._budget_manager = getattr(
             self.agent, "_run_budget_manager", None
@@ -1302,10 +1147,10 @@ class AgentLoop:
         )
         self._protocol_state.retry_count = 0
         self._tool_state.blocked_convergence_reads = 0
-        self._tool_state.patch_decision_required = False
-        self._tool_state.patch_recovery_directive = ""
-        self._tool_state.patch_recovery_allowed_tools = None
-        self._tool_state.patch_recovery_kind = ""
+        self._tool_state.action_required = False
+        self._tool_state.recovery_directive = ""
+        self._tool_state.recovery_allowed_tools = None
+        self._tool_state.recovery_kind = ""
         from agent_runtime.repair_runtime import ExecutionDeadline
 
         self._repair_deadline = ExecutionDeadline(self.agent.config.deadline.repair_s)
@@ -1332,7 +1177,7 @@ class AgentLoop:
                 self._step_guard.reset(
                     task_summary=self._get_task_summary_text(),
                     suspect_files=self._extract_suspect_files(),
-                    localization_mode=(agent_name == "patcher"),
+                    localization_mode=self.agent.loop_policy.localization_mode,
                 )
 
                 answer = self._run_loop(user_message, ts, callback)
@@ -1434,7 +1279,7 @@ class AgentLoop:
                 self._step_guard.reset(
                     task_summary=self._get_task_summary_text(),
                     suspect_files=self._extract_suspect_files(),
-                    localization_mode=(getattr(self.agent, "_agent_name", "") == "patcher"),
+                    localization_mode=self.agent.loop_policy.localization_mode,
                 )
                 path = (
                     "native"
@@ -1520,8 +1365,8 @@ class AgentLoop:
                     )
                 self._begin_native_turn(ts, callback)
                 if recovery_turn and not (
-                    self._tool_state.patch_recovery_directive
-                    or self._tool_state.patch_decision_required
+                    self._tool_state.recovery_directive
+                    or self._tool_state.action_required
                 ):
                     ts.stop_step_limit(self.max_steps)
                     return self._complete_run(
@@ -1848,17 +1693,9 @@ class AgentLoop:
 
     def _begin_edit_lock_turn(self) -> None:
         """Phase B：新推理 turn 重置写串行计数。"""
-        try:
-            from src.repair.execution.edit_lock import get_active_edit_lock
-
-            root = getattr(getattr(self.agent, "tool_context", None), "root", None) or getattr(
-                self.agent, "_cwd", None
-            )
-            lock = get_active_edit_lock(root)
-            if lock is not None and hasattr(lock, "begin_turn"):
-                lock.begin_turn()
-        except Exception:
-            pass
+        lock = self.agent.tool_context.edit_lock
+        if lock is not None:
+            lock.begin_turn()
 
     def _record_tool_outcome(
         self, tool_name: str, result, ts, tool_args: dict | None = None
@@ -1873,13 +1710,13 @@ class AgentLoop:
             run_id=str(getattr(ts, "run_id", "") or ""),
             call_id=str(call.get("call_id", "") or ""),
         )
-        ts.record_tool_rejection(tool_name, normalized.metadata)
+        ts.record_tool_rejection(tool_name, normalized.to_metadata())
         self._emit_tool_trace(tool_name, normalized, tool_args)
 
     def _emit_tool_trace(self, tool_name: str, result, tool_args: dict | None = None) -> None:
         from agent_runtime.tool_rejection import tool_trace_payload
 
-        meta = getattr(result, "metadata", None) or {}
+        meta = result.to_metadata()
         tier = meta.get("execution_tier", "host")
         self._tier_counts[tier] = self._tier_counts.get(tier, 0) + 1
         self._tier_tools.setdefault(tier, {})[tool_name] = (
