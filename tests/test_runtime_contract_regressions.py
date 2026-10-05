@@ -271,5 +271,3 @@ def test_intent_payload_and_memory_shims_stay_removed():
         "topic",
         "strategy",
     ]
-
-

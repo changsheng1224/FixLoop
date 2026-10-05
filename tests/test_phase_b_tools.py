@@ -6,8 +6,9 @@ import tempfile
 from pathlib import Path
 
 from agent_runtime.tool_context import ToolContext
-from agent_runtime.tools import ReadFileArgs, tool_expand_lock, tool_quick_test, tool_write_file
+from agent_runtime.tools import ReadFileArgs, tool_quick_test, tool_write_file
 from src.repair.execution.edit_lock import EditLockState
+from src.tools.repair_control import tool_expand_lock
 
 
 def test_read_file_default_window_is_100():

@@ -10,7 +10,7 @@ def _make_skills(n: int = 10) -> list[SkillSpec]:
     skills = []
     for i in range(n):
         skills.append(
-            SkillSpec(kind="guidance", 
+            SkillSpec(kind="guidance",
                 name=f"python_error_{i:03d}",
                 language="python",
                 trigger_pattern=(

@@ -81,7 +81,7 @@ def test_skill_metadata_is_traceable():
     from src.skills.models import MatchedSkill
     from src.skills.contract import SkillSpec
 
-    spec = SkillSpec(kind="guidance", 
+    spec = SkillSpec(kind="guidance",
         name="python_fix",
         trigger_pattern="TypeError",
         guidance=["inspect", "verify"],

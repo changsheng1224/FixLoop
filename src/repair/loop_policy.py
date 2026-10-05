@@ -116,7 +116,7 @@ class RepairLoopPolicy(LoopPolicy):
                 grounded_paths[:12],
                 [dict(item) for item in ledger[-12:]] if isinstance(ledger, list) else [],
             )
-        self.set_recovery(context, 
+        self.set_recovery(context,
             "grounded_evidence",
             "已读取实现文件并获得可编辑证据。停止继续探索，立即调用 apply_patch/patch_file；"
             "若确实无法形成补丁，只能声明 cannot_patch 并说明具体原因。",
@@ -142,7 +142,7 @@ class RepairLoopPolicy(LoopPolicy):
             "请调用 apply_patch/patch_file；若无法修复请改用 cannot_patch。"
         )
         result.metadata.update({'required_next_action': 'apply_patch_or_cannot_patch'})
-        self.set_recovery(context, 
+        self.set_recovery(context,
             "grounded_finish_blocked",
             "已有实现文件证据，needs_more_context 已拒绝。请直接提交补丁，或声明 cannot_patch。",
             {"apply_patch", "patch_file", "finish_repair"},
@@ -232,7 +232,7 @@ class RepairLoopPolicy(LoopPolicy):
             read_reservation=read_reservation,
         )
         if phase_before == "explore" and context.guard.phase == "converge":
-            self.enter_convergence(context, 
+            self.enter_convergence(context,
                 context.guard.convergence_reason or "duplicate_read", step=step
             )
         if preflight is not None and preflight.action == "allow_targeted_read":
@@ -281,7 +281,7 @@ class RepairLoopPolicy(LoopPolicy):
                 metadata={},
                 retryable=False,
             )
-            self.set_recovery(context, 
+            self.set_recovery(context,
                 "convergence_required",
                 "读取请求被收敛闸门拒绝。请停止重复读取，直接调用 apply_patch/patch_file，"
                 "或调用 finish_repair 说明证据不足。",
@@ -299,7 +299,7 @@ class RepairLoopPolicy(LoopPolicy):
             if context.guard.request_targeted_reread("stale_preimage"):
                 for target_path in target_paths:
                     context.grant_read_reserve(target_path, kind="targeted", step=step)
-            self.set_recovery(context, 
+            self.set_recovery(context,
                 "stale_preimage",
                 f"补丁的旧文本已失效。先对 {', '.join(target_paths) or '目标文件'} "
                 "执行一次精确 read_file，"
@@ -320,7 +320,7 @@ class RepairLoopPolicy(LoopPolicy):
                 },
             )
         elif error_code == "invalid_args":
-            self.set_recovery(context, 
+            self.set_recovery(context,
                 "invalid_args",
                 "写入参数无效。禁止空 old_text/new_text 或重复相同工具调用；"
                 "请改用包含文件路径、上下文行和 +/- 行的 apply_patch，"
@@ -335,7 +335,7 @@ class RepairLoopPolicy(LoopPolicy):
             context.guard.request_targeted_reread("no_change")
             for target_path in target_paths:
                 context.grant_read_reserve(target_path, kind="targeted", step=step)
-            self.set_recovery(context, 
+            self.set_recovery(context,
                 "no_change",
                 f"上一次写入没有产生磁盘变化。先精确读取 "
                 f"{', '.join(target_paths) or '目标文件'} 的当前内容，"
@@ -353,7 +353,7 @@ class RepairLoopPolicy(LoopPolicy):
                 },
             )
         elif error_code == "edit_lint_reject":
-            self.set_recovery(context, 
+            self.set_recovery(context,
                 "edit_lint_reject",
                 "补丁因编辑期语法检查未落盘。请修正语法后用 apply_patch 提交，不要重复相同内容。",
                 {"apply_patch", "finish_repair"},
@@ -383,7 +383,7 @@ class RepairLoopPolicy(LoopPolicy):
                 and consumed_reserve.get("kind") == "targeted"
                 and context.state.recovery_kind in {"stale_preimage", "no_change"}
             ):
-                self.set_recovery(context, 
+                self.set_recovery(context,
                     "post_reread",
                     "精确重读已完成。现在必须基于该读取结果调用 apply_patch/patch_file，"
                     "或调用 finish_repair；不要再次读取同一范围。",
@@ -433,4 +433,3 @@ class RepairLoopPolicy(LoopPolicy):
             chunks.append(chunk)
             used += len(chunk)
         return "\n\n".join(chunks)
-

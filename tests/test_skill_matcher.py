@@ -16,7 +16,7 @@ from src.state import RepairPlan, SkillContext
 
 class TestSkillSpec:
     def test_valid_spec(self):
-        spec = SkillSpec(kind="guidance", 
+        spec = SkillSpec(kind="guidance",
             name="demo",
             language="python",
             trigger_pattern="TypeError",

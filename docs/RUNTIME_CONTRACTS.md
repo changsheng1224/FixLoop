@@ -133,4 +133,3 @@ Skill 注册、上下文装配和持久化格式的其余兼容路径于 2026-10
   `require_canonical` 形参与其旧格式短路。
 - **死代码**：删除 `agent_runtime.tools` 未使用的 `json` 导入；
   修正 `loop_protocols` 中遮蔽 `dataclasses.field` 的循环变量。
-

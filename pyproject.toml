@@ -24,6 +24,7 @@ fixloop = "src.cli:main"
 dev = [
     "pytest>=8.0",
     "pytest-cov>=4.0",
+    "pytest-xdist>=3.8",
     "ruff>=0.5",
 ]
 sandbox = ["docker>=7.0"]
