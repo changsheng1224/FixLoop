@@ -97,8 +97,8 @@ class CandidateEvent:
             severity=str(d.get("severity") or "low"),
             label_strength=str(d.get("label_strength") or "weak"),
             confirmed_label=d.get("confirmed_label"),
-            router_version=str(d.get("router_version") or "legacy"),
-            taxonomy_version=str(d.get("taxonomy_version") or "legacy"),
+            router_version=str(d.get("router_version") or INTENT_ROUTER_VERSION),
+            taxonomy_version=str(d.get("taxonomy_version") or INTENT_TAXONOMY_VERSION),
         )
 
 
