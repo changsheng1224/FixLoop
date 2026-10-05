@@ -583,7 +583,6 @@ class AgentLoop:
     def _budget_payload(self) -> dict:
         """Return the current unified budget view for prompts and trace."""
         payload = self._budget_manager.decision_payload()
-        payload["legacy"] = self._repair_budget.summary()
         payload["latency"] = self._latency_controller.summary()
         self.agent.session["runtime_budget"] = self._budget_manager.snapshot()
         return payload

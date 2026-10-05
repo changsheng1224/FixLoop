@@ -4,12 +4,10 @@ import pytest
 
 from agent_runtime.features.memory import (
     MAX_EPISODIC_NOTES,
-    MAX_FILE_SUMMARIES,
     MAX_RECENT_FILES,
     append_note,
     default_memory_state,
     invalidate_file_summary,
-    normalize_memory_state,
     record_read_evidence,
     remember_file,
     render_evidence_ledger,
@@ -38,15 +36,6 @@ class TestDefaultState:
         assert s["episodic_notes"] == []
         assert s["file_summaries"] == {}
         assert s["next_note_index"] == 0
-
-    def test_normalize_none(self):
-        s = normalize_memory_state(None, ".")
-        assert s["working"]["recent_files"] == []
-
-    def test_normalize_old_format(self):
-        s = normalize_memory_state({}, ".")
-        assert "working" in s
-        assert "episodic_notes" in s
 
 
 class TestWorkingMemory:
@@ -177,17 +166,6 @@ class TestEpisodicMemory:
             append_note(state, f"test result {i}", tags=["test"])
         results = retrieval_candidates(state, "test", limit=2)
         assert len(results) == 2
-
-
-class TestNormalizeMemory:
-    """normalize_memory_state 测试。"""
-
-    def test_trims_file_summaries(self, temp_workspace):
-        s = default_memory_state()
-        for i in range(MAX_FILE_SUMMARIES + 3):
-            set_file_summary(s, f"f{i}.py", f"summary {i}")
-        s = normalize_memory_state(s, str(temp_workspace))
-        assert len(s["file_summaries"]) <= MAX_FILE_SUMMARIES
 
 
 # ---------------------------------------------------------------------------

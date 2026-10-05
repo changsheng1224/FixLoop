@@ -434,10 +434,7 @@ def _print_repair_result(state, verbose: bool, *, dry_run: bool = False) -> None
             total = get_phase_ms(state.node_timings, phase)
             if total == 0:
                 continue
-            legacy_internal = f"{agent}_internal"
-            intern = (state.node_timings.get("phases_internal") or {}).get(
-                phase
-            ) or state.node_timings.get(legacy_internal, {})
+            intern = (state.node_timings.get("phases_internal") or {}).get(phase) or {}
             print(
                 f"  {agent}: {total}ms "
                 f"(prompt={intern.get('prompt_build_ms', 0)}ms, "
