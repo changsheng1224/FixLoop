@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 
-class SandboxToolAccess(str, Enum):
+class SandboxToolAccess(StrEnum):
     TRUSTED_DATA = "trusted_data"
     TRUSTED_CONTROL = "trusted_control"
     TRUSTED_WRITE = "trusted_write"

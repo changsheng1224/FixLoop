@@ -1,3 +1,6 @@
+kind: guidance
+version: "1.0.0"
+scope: builtin
 name: python_composite_fix
 language: python
 trigger_pattern: "(ModuleNotFoundError|ImportError).*(TypeError|Type Error)|composite|两个文件"

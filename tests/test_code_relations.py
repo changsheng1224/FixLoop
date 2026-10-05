@@ -161,7 +161,7 @@ def test_successful_unrelated_write_clears_view_and_deleted_source_is_rejected(t
     _observe(state, context, service, "service.py")
     service.relations({})
     old_epoch = service.epoch
-    result = tool_write_file(context, {"path": "new.py", "content": "value = 1\n"})
+    result = tool_write_file(context, {"path": "new.py", "content": "value = 1\n"}).content
     assert not result.startswith("Error:")
     assert service.epoch != old_epoch
     assert not service.evidence and not service.pending_candidates

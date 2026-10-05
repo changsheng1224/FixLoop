@@ -217,7 +217,9 @@ def test_native_file_version_change_is_partial_and_does_not_grant_edit_lock(
     read_complete = threading.Event()
     changed = threading.Event()
     marked = []
-    agent.tool_context.edit_lock = SimpleNamespace(mark_read=lambda path, **_: marked.append(path))
+    agent.tool_context.edit_lock = SimpleNamespace(
+        mark_read=lambda path, **_: marked.append(path), begin_turn=lambda: None
+    )
     original = agent.tools["read_file"]["run_with_context"]
 
     def slow(ctx, args):

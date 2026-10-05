@@ -1,3 +1,6 @@
+kind: guidance
+version: "1.0.0"
+scope: builtin
 name: python_cannot_import_name_fix
 language: python
 trigger_pattern: "cannot import name"

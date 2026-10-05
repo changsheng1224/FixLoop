@@ -1,8 +1,7 @@
 """Canonical Tool result and error contracts.
 
-The runtime historically accepted arbitrary strings from tools.  This module
-keeps that API compatible while giving every execution a typed status,
-retryability and side-effect metadata that can be persisted and replayed.
+Every tool returns explicit status, retryability and side-effect metadata.
+Text content is presentation only and never determines execution status.
 """
 
 from __future__ import annotations
@@ -57,7 +56,7 @@ class ToolResult:
 
     content: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
-    status: str = ""
+    status: str = ToolStatus.SUCCESS
     error_code: str = ""
     retryable: bool | None = None
     data: Any = None
@@ -67,40 +66,49 @@ class ToolResult:
     duration_ms: int = 0
 
     def __post_init__(self) -> None:
-        self.metadata = dict(self.metadata or {})
-        metadata_status = str(self.metadata.get("tool_status", "") or "")
-        if not self.status:
-            self.status = metadata_status or ToolStatus.SUCCESS.value
-        else:
-            self.status = str(self.status)
-        self.metadata["tool_status"] = self.status
-        if not self.error_code:
-            self.error_code = str(self.metadata.get("tool_error_code", "") or "")
-        if self.error_code:
-            self.metadata["tool_error_code"] = self.error_code
+        self.metadata = dict(self.metadata)
+        self.status = ToolStatus(self.status)
         if self.retryable is None:
-            # Preserve the historical observation contract: unclassified
-            # validation/execution failures are retryable by default. Callers
-            # that must suppress replay can provide ``retryable=False`` in
-            # metadata explicitly (budget, policy and idempotency rejections
-            # do this at their boundary).
-            self.retryable = bool(
-                self.metadata.get(
-                    "retryable",
-                    self.status in {ToolStatus.ERROR.value, ToolStatus.REJECTED.value},
-                )
-            )
-        else:
-            self.retryable = bool(self.retryable)
-        self.metadata.setdefault("retryable", self.retryable)
-        if self.changed_files:
-            self.metadata.setdefault("affected_paths", list(self.changed_files))
-        elif self.metadata.get("affected_paths"):
-            self.changed_files = list(self.metadata["affected_paths"])
-        if self.receipt:
-            self.metadata.setdefault("receipt", dict(self.receipt))
-        elif isinstance(self.metadata.get("receipt"), dict):
-            self.receipt = dict(self.metadata["receipt"])
+            self.retryable = self.status in {ToolStatus.ERROR, ToolStatus.REJECTED}
+        self.validate()
+
+    def validate(self) -> None:
+        ToolStatus(self.status)
+        if not isinstance(self.retryable, bool):
+            raise TypeError("ToolResult.retryable must be a bool")
+        reserved = {
+            "tool_status",
+            "tool_error_code",
+            "retryable",
+            "affected_paths",
+            "receipt",
+            "duration_ms",
+            "output_truncated",
+        }.intersection(self.metadata)
+        if reserved:
+            raise ValueError(f"Use ToolResult fields instead of metadata: {sorted(reserved)}")
+
+    def to_metadata(self) -> dict[str, Any]:
+        """Export a detached observation/trace snapshot from canonical fields."""
+        from copy import deepcopy
+
+        self.validate()
+        return deepcopy(
+            {
+                **self.metadata,
+                "tool_status": str(self.status),
+                "tool_error_code": self.error_code,
+                "retryable": self.retryable,
+                "affected_paths": self.changed_files,
+                "receipt": self.receipt,
+                "duration_ms": self.duration_ms,
+                "output_truncated": self.output_truncated,
+            }
+        )
+
+    @classmethod
+    def error(cls, content: str, *, code: str = "tool_execution_failed", retryable: bool = True):
+        return cls(content=content, status=ToolStatus.ERROR, error_code=code, retryable=retryable)
 
     @property
     def ok(self) -> bool:
@@ -111,41 +119,12 @@ class ToolResult:
         return not self.ok
 
 
-def normalize_tool_result(result: Any, *, tool_name: str = "") -> ToolResult:
-    """Normalize legacy strings/MCP objects into the canonical result."""
-    if isinstance(result, ToolResult):
-        return result
-    if hasattr(result, "content") and hasattr(result, "metadata"):
-        metadata = dict(getattr(result, "metadata", {}) or {})
-        return ToolResult(
-            content=str(getattr(result, "content", "")),
-            metadata=metadata,
-            data=getattr(result, "data", None),
-            receipt=dict(getattr(result, "receipt", {}) or {}),
-        )
-    text = str(result if result is not None else "")
-    if text.lstrip().startswith("Error"):
-        lowered = text.lower()
-        stale_markers = (
-            "stale",
-            "未找到（出现 0 次）",
-            "未匹配",
-            "内容不匹配",
-            "hunk 与文件",
-            "base hash mismatch",
-        )
-        error_code = (
-            ToolErrorCode.STALE_PREIMAGE.value
-            if any(marker.lower() in lowered for marker in stale_markers)
-            else ToolErrorCode.TOOL_EXECUTION_FAILED.value
-        )
-        return ToolResult(
-            content=text,
-            status=ToolStatus.ERROR.value,
-            error_code=error_code,
-            retryable=True,
-        )
-    return ToolResult(content=text, status=ToolStatus.SUCCESS.value)
+def require_tool_result(result: Any, *, tool_name: str = "") -> ToolResult:
+    """Reject untyped tool implementations instead of guessing from text."""
+    if not isinstance(result, ToolResult):
+        raise TypeError(f"tool {tool_name!r} must return ToolResult, got {type(result).__name__}")
+    result.validate()
+    return result
 
 
 def build_tool_receipt(
@@ -160,7 +139,7 @@ def build_tool_receipt(
     import hashlib
     import json
 
-    changed = list(result.changed_files or result.metadata.get("affected_paths") or [])
+    changed = list(result.changed_files)
     body = {
         "schema_version": RECEIPT_SCHEMA_VERSION,
         "tool": str(tool_name),
@@ -169,7 +148,7 @@ def build_tool_receipt(
         "status": str(result.status),
         "error_code": str(result.error_code or ""),
         "retryable": bool(result.retryable),
-        "duration_ms": int(result.duration_ms or result.metadata.get("duration_ms", 0) or 0),
+        "duration_ms": int(result.duration_ms),
         "affected_paths": changed,
         "run_id": str(run_id or ""),
     }
@@ -188,12 +167,12 @@ def attach_tool_receipt(
     run_id: str = "",
     call_id: str = "",
 ) -> ToolResult:
-    """Normalize a tool result and attach its canonical audit receipt.
+    """Validate a tool result and attach its canonical audit receipt.
 
     Receipt assembly is deliberately kept at the result boundary so the
     executor and loop cannot diverge in status, metadata, or receipt fields.
     """
-    normalized = normalize_tool_result(result, tool_name=tool_name)
+    normalized = require_tool_result(result, tool_name=tool_name)
     receipt = build_tool_receipt(
         tool_name,
         normalized,
@@ -202,13 +181,7 @@ def attach_tool_receipt(
         call_id=call_id,
     )
     normalized.receipt = receipt
-    normalized.metadata["receipt"] = receipt
     return normalized
-
-
-def result_metadata(result: Any) -> dict[str, Any]:
-    """Compatibility helper for callers that only need a metadata projection."""
-    return normalize_tool_result(result).metadata
 
 
 __all__ = [
@@ -218,6 +191,5 @@ __all__ = [
     "RECEIPT_SCHEMA_VERSION",
     "attach_tool_receipt",
     "build_tool_receipt",
-    "normalize_tool_result",
-    "result_metadata",
+    "require_tool_result",
 ]

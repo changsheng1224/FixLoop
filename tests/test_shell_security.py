@@ -23,7 +23,7 @@ class TestRunShell:
     """run_shell 工具测试。"""
 
     def test_normal_command(self, ctx):
-        result = tool_run_shell(ctx, {"command": "echo hello world"})
+        result = tool_run_shell(ctx, {"command": "echo hello world"}).content
         assert "exit_code: 0" in result
         assert "hello world" in result
 
@@ -32,24 +32,24 @@ class TestRunShell:
         # 使用一个极短的 timeout 测试
         result = tool_run_shell(
             ctx, {"command": 'python -c "import time; time.sleep(10)"', "timeout": 1}
-        )
+        ).content
         assert "超时" in result or "exit_code" in result
 
     def test_missing_command(self, ctx):
-        result = tool_run_shell(ctx, {})
+        result = tool_run_shell(ctx, {}).content
         assert "Error" in result
 
     def test_child_process_env_excludes_api_key(self, ctx, monkeypatch):
         monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-leak-test-secret-value-99")
         cmd = "set" if sys.platform == "win32" else "env"
-        result = tool_run_shell(ctx, {"command": cmd})
+        result = tool_run_shell(ctx, {"command": cmd}).content
         assert "DEEPSEEK_API_KEY" not in result
         assert "sk-leak-test-secret-value-99" not in result
 
     def test_output_redacts_secret_values(self, ctx, monkeypatch):
         secret = "sk-redact-me-abcdefghijklmnop"
         monkeypatch.setenv("DEEPSEEK_API_KEY", secret)
-        result = tool_run_shell(ctx, {"command": f"echo {secret}"})
+        result = tool_run_shell(ctx, {"command": f"echo {secret}"}).content
         assert secret not in result
         assert "<redacted>" in result
 

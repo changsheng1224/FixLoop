@@ -8,9 +8,10 @@ from agent_runtime.harness_engineering import (
     attribute_harness_failure,
     extract_bad_case,
 )
+from agent_runtime.tool_spec import project_tool_specs
 from src.collaboration_governance import CollaborationGovernance
 from src.state import RepairState
-from src.tools.spec import default_repair_tool_registry, project_tool_specs
+from src.tools.spec import default_repair_tool_registry
 
 
 def test_control_plane_lifecycle_budget_and_terminal_race():

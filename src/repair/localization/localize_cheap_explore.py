@@ -53,7 +53,7 @@ def cheap_explore_suspects(
                     "glob": "*.py",
                     "max_results": max_results_per_kw,
                 },
-            )
+            ).content
         except Exception:
             continue
         if not grep_out or grep_out.startswith("Error") or grep_out == "(无匹配)":

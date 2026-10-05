@@ -8,7 +8,7 @@ from pathlib import Path
 from agent_runtime.apply_patch_format import parse_apply_patch_text, strip_fences
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.tools import _normalize_hunk_headers, tool_apply_patch
-from src.repair.execution.edit_lock import EditLockState, set_active_edit_lock
+from src.repair.execution.edit_lock import EditLockState
 
 SAMPLE = """\
 *** Begin Patch
@@ -40,15 +40,15 @@ def test_tool_apply_patch_ok_with_echo_and_lint():
     ctx = ToolContext(root=str(root))
     lock = EditLockState(repo_root=root, allowed_edit={"a.py"})
     lock.mark_read("a.py")
-    set_active_edit_lock(root, lock)
+    ctx.edit_lock = lock
     try:
-        out = tool_apply_patch(ctx, {"patch": SAMPLE})
+        out = tool_apply_patch(ctx, {"patch": SAMPLE}).content
         assert "ok" in out.lower() or "已修补" in out or "apply_patch" in out.lower()
         assert "new" in (root / "a.py").read_text(encoding="utf-8")
         assert "写后窗口" in out or "after:" in out.lower() or "|" in out
         assert lock.apply_patch_ok_count >= 1
     finally:
-        set_active_edit_lock(root, None)
+        ctx.edit_lock = None
 
 
 def test_bare_multi_hunk_headers_are_located_independently():
@@ -95,15 +95,15 @@ def test_tool_applies_duplicate_preimage_hunks_with_context():
     ctx = ToolContext(root=str(root))
     lock = EditLockState(repo_root=root, allowed_edit={"a.py"})
     lock.mark_read("a.py")
-    set_active_edit_lock(root, lock)
+    ctx.edit_lock = lock
     try:
-        out = tool_apply_patch(ctx, {"patch": patch})
+        out = tool_apply_patch(ctx, {"patch": patch}).content
         assert out.startswith("ok apply_patch")
         assert (root / "a.py").read_text(encoding="utf-8") == (
             "header = 0\nvalue = 10\nmiddle = 2\nvalue = 11\n"
         )
     finally:
-        set_active_edit_lock(root, None)
+        ctx.edit_lock = None
 
 
 def test_tool_apply_patch_lint_rejects_syntax():
@@ -121,15 +121,15 @@ def test_tool_apply_patch_lint_rejects_syntax():
     ctx = ToolContext(root=str(root))
     lock = EditLockState(repo_root=root, allowed_edit={"a.py"})
     lock.mark_read("a.py")
-    set_active_edit_lock(root, lock)
+    ctx.edit_lock = lock
     try:
-        out = tool_apply_patch(ctx, {"patch": bad})
+        out = tool_apply_patch(ctx, {"patch": bad}).content
         assert out.startswith("Error")
         assert "lint" in out.lower() or "syntax" in out.lower()
         assert (root / "a.py").read_text(encoding="utf-8") == "x = 1\n"
         assert lock.edit_lint_reject_count >= 1
     finally:
-        set_active_edit_lock(root, None)
+        ctx.edit_lock = None
 
 
 def test_parse_rejects_empty_update_preimage():
@@ -172,13 +172,13 @@ def test_tool_rejects_empty_original_message():
     ctx = ToolContext(root=str(root))
     lock = EditLockState(repo_root=root, allowed_edit={"a.py"})
     lock.mark_read("a.py")
-    set_active_edit_lock(root, lock)
+    ctx.edit_lock = lock
     try:
-        out = tool_apply_patch(ctx, {"patch": bad})
+        out = tool_apply_patch(ctx, {"patch": bad}).content
         assert out.startswith("Error")
         assert "preimage" in out.lower() or "empty_original" in out.lower() or "上下文" in out
     finally:
-        set_active_edit_lock(root, None)
+        ctx.edit_lock = None
 
 
 def test_stale_returns_near():
@@ -196,10 +196,10 @@ def test_stale_returns_near():
     ctx = ToolContext(root=str(root))
     lock = EditLockState(repo_root=root, allowed_edit={"a.py"})
     lock.mark_read("a.py")
-    set_active_edit_lock(root, lock)
+    ctx.edit_lock = lock
     try:
-        out = tool_apply_patch(ctx, {"patch": stale})
+        out = tool_apply_patch(ctx, {"patch": stale}).content
         assert out.startswith("Error")
         assert "near=" in out.lower() or "未匹配" in out or "stale" in out.lower()
     finally:
-        set_active_edit_lock(root, None)
+        ctx.edit_lock = None

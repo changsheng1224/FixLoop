@@ -133,7 +133,7 @@ def record_canonical_event(record: dict[str, Any], registry: Any | None = None) 
             )
 
         if event in ("model_complete", "model_request_start"):
-            model = payload.get("model") or payload.get("model_name") or "unknown"
+            model = payload.get("model") or "unknown"
             registry.counter_inc(
                 "fixloop_model_events_total",
                 labels=low_cardinality_labels(

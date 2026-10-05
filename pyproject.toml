@@ -10,6 +10,8 @@ authors = [
 
 dependencies = [
     "pydantic>=2.0",
+    "jsonschema>=4.22",
+    "referencing>=0.35",
     "tiktoken>=0.5",
     "sentence-transformers>=3.0",
     "pyyaml>=6.0",
@@ -22,6 +24,7 @@ fixloop = "src.cli:main"
 dev = [
     "pytest>=8.0",
     "pytest-cov>=4.0",
+    "pytest-xdist>=3.8",
     "ruff>=0.5",
 ]
 sandbox = ["docker>=7.0"]

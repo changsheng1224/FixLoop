@@ -7,10 +7,8 @@ from agent_runtime.features.memory.candidate import (  # noqa: F401
 from agent_runtime.features.memory.core import (  # noqa: F401
     MAX_EPISODIC_NOTES,
     MAX_EVIDENCE_ENTRIES,
-    MAX_FILE_SUMMARIES,
     MAX_RECENT_FILES,
     default_memory_state,
-    normalize_memory_state,
     set_memory_identity,
 )
 from agent_runtime.features.memory.durable import (  # noqa: F401

@@ -1,6 +1,7 @@
 # 可执行 Skill 规格（Feature 4，7 skills）
 skills:
   - name: github_issue_ingestion
+    kind: executable
     version: "1.0.0"
     description: "Ingest a GitHub Issue into a structured IssueSpec (title/body/labels/url)."
     positive_triggers:
@@ -57,6 +58,7 @@ skills:
     lifecycle: active
 
   - name: stacktrace_localization
+    kind: executable
     version: "1.0.0"
     description: "Localize failing code from a Python/Java stack trace."
     positive_triggers:
@@ -109,6 +111,7 @@ skills:
     lifecycle: active
 
   - name: regression_test_selection
+    kind: executable
     version: "1.0.0"
     description: "Select regression tests from a diff / changed files and widen verify scope."
     positive_triggers:
@@ -164,6 +167,7 @@ skills:
     lifecycle: active
 
   - name: repo_code_search
+    kind: executable
     version: "1.0.0"
     description: "Search the repository for symbols, error strings, or definitions via grep/read."
     positive_triggers:
@@ -214,6 +218,7 @@ skills:
     lifecycle: active
 
   - name: baseline_verify
+    kind: executable
     version: "1.0.0"
     description: "Run baseline / pre-fix tests to confirm the issue reproduces before patching."
     positive_triggers:
@@ -264,6 +269,9 @@ skills:
     lifecycle: active
 
   - name: patch_apply_check
+    side_effect_level: local_write
+    requires_read_before_write: true
+    kind: executable
     version: "1.0.0"
     description: "Apply a unified diff/patch and run static or smoke checks on the result."
     positive_triggers:
@@ -315,6 +323,8 @@ skills:
     lifecycle: active
 
   - name: draft_pr_prepare
+    side_effect_level: remote_write
+    kind: executable
     version: "1.0.0"
     description: "Prepare Draft PR metadata (title/body/base/head) after a successful fix."
     positive_triggers:

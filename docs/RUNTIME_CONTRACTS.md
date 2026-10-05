@@ -57,3 +57,79 @@ Patcher 通过受治理工具修改磁盘，运行时根据快照差异生成 `C
 L1 和 L2 checkpoint 必须携带当前版本 `2.0` 的 `CheckpointEnvelope`，并通过完整性
 校验。历史无 envelope 的 checkpoint 和 L2 `1.0`/`1.1` 状态不能继续恢复，需创建新运行。
 现有历史结果文件仍可留作人工审计，不会被自动改写。
+
+
+## 2026-10-04：工具契约破坏式更新
+
+- 通用 `ToolSpec`、`ToolRegistry` 与执行投影从 `agent_runtime.tool_spec` 导入。
+  `src.tools.spec` 只声明修复域默认权限；不再提供旧路径兼容导出。
+- 注册表只接受 `schema` 字段中的 object JSON Schema。删除简写参数格式、
+  `json_schema` / `protocol_schema` 双轨字段与隐式类型转换。
+  `auto_schema()` 从 dataclass 生成 JSON Schema，保留 nullable、数组项类型和默认值。
+- 所有工具执行函数返回 `ToolResult`。文本消费者显式读取 `.content`；
+  执行器检查 `.status`、`.error_code`、`.retryable`，不再根据 `Error` 文本猜测失败。
+  自定义工具返回裸字符串会被拒绝为 `invalid_tool_result`。
+- L2 通过 `ToolContext.edit_lock` 注入 `EditPolicy`，通过 `grounding_sink` 接收证据。
+  删除按仓库路径保存的全局编辑锁注册表及静默异常放行。
+  恢复检查点只恢复编辑范围，必须重新读取文件才能写入。
+- `IssueIntentAdapter` 移至 `src.repair.intent_adapter`。L1 不再导入 L2；
+  `tests/test_runtime_contract_boundaries.py` 以 AST 检查保护依赖方向。
+
+自定义工具、外部调用方与测试桩必须直接改用以上契约，不提供自动迁移层。
+Skill 注册、上下文装配和持久化格式的其余兼容路径于 2026-10-05 一并收敛，见下文。
+
+## 2026-10-04：结果、校验与进程执行收敛
+
+- `ToolResult` 的 `status`、`error_code`、`retryable`、`changed_files`、
+  `receipt`、`duration_ms`、`output_truncated` 是运行时唯一状态来源。
+  `metadata` 只保存扩展信息，写入重复控制字段会被拒绝。
+  日志和持久化使用 `to_metadata()` 导出的独立快照；不支持旧 metadata 构造方式。
+  工具执行后的策略判定完成后重新生成回执，再写入 action ledger 和 Observation。
+- 工具参数采用 JSON Schema Draft 2020-12，由 `jsonschema` 完整校验；
+  不进行类型转换。支持组合约束、布尔 schema 和本地 `$ref`，禁用远程引用加载。
+  保留标准的开放对象语义；需要禁止未知字段的工具显式声明
+  `additionalProperties: false`。MCP 发现、模型投影和执行校验保留完整 schema。
+- 宿主 shell 使用统一执行器，持续读取 stdout/stderr，按流限制保留的输出，
+  统一使用 UTF-8 解码和单调时钟计时。取消、超时清理进程组并报告清理是否确认；
+  `data.exit_code` 保存命令退出码，`output_truncated` 标记输出截断。
+- 声明式验证使用解析后的可执行文件路径；启动时的操作系统错误返回
+  `verification_environment_failed`，不再以未捕获异常中断流程。
+
+## 2026-10-05：兼容面收敛（破坏式）
+
+在保持先进实现的前提下删除历史别名、转发壳与死代码，调用方必须改用当前契约。
+
+- **Skill 合同**：删除转发壳 `src.skills.prompt`（直连 `src.skills.skill_block`）；
+  `SkillContext.from_dict` 只认当前键，不再反查旧 `skill_*` 键；
+  删除未接线的 `SkillKind.HYBRID`；`src.skills` 包不再导出内部符号。
+- **上下文运行时**：删除 `ContextPolicyEngine.select`，统一走 `select_with_result`；
+  `ObservationStore.put` 不再接受 `redact` 形参；磁盘缓存不再读取旧单行格式。
+- **停机与状态**：删除 legacy 自由文本停机归一化
+  （`normalize_stop_reason` / `stop_reason_detail_from_legacy`）与未使用的
+  `TaskState.stop()`；`TaskState.from_dict` 原样读取 `stop_reason`。
+- **记忆**：删除无人调用的 `normalize_memory_state` 与孤立的 `MAX_FILE_SUMMARIES`。
+- **预算与 CLI**：删除 trace/prompt 中的 `payload["legacy"]` 旧预算视图；
+  删除 CLI 中无生产者的 `{agent}_internal` 计时回退（仅保留 `phases_internal`）。
+- **执行杂项**：删除 `PhaseTimeoutConfig.from_repair_timeout`
+  （改用 `with_repair_total_cap`）、`patch_applier.extract_json_block`
+  （直接调用 `agent_runtime.json_recovery.repair_structured_output`）、
+  `swebench.harness._parse_resolved` 与 `UserProfileStore.remove`
+  （改用 `invalidate`）。
+
+## 2026-10-05（续）：意图 / 载荷 / 记忆兼容面收敛（破坏式）
+
+- **意图**：删除 `llm_fallback.maybe_refine_graph` 兼容壳，统一使用
+  `maybe_refine(...).graph`；`CandidateEvent.from_dict` 与意图路由指标不再用
+  `"legacy"` 作为 `router_version` / `taxonomy_version` 缺省，改用
+  `INTENT_ROUTER_VERSION` / `INTENT_TAXONOMY_VERSION`。
+- **载荷字段**：读取侧收敛到唯一 canonical 键（删除无生产者的别名）——
+  trace 的 `context_built` 只读 `context_sections`、`tool_executed` 只读
+  `tool_args`；`attribute_failure` 只读 `failure_class`；
+  `tool_observations` 条目只读 `tool`；观测导出只读 `model`。
+  多来源/模型容错与外部协议双拼写（`duration_ms|elapsed_ms`、`status|outcome`、
+  `token_usage`、MCP/LSP/SWE-bench）保留。
+- **记忆/持久化**：`DurableMemoryStore._read_topic` 只接受 topic 名，删除
+  direct-Path 兼容分支；`canonical_trace.validate_event` 删除未使用的
+  `require_canonical` 形参与其旧格式短路。
+- **死代码**：删除 `agent_runtime.tools` 未使用的 `json` 导入；
+  修正 `loop_protocols` 中遮蔽 `dataclasses.field` 的循环变量。

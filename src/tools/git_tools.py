@@ -7,6 +7,8 @@ import json
 import subprocess
 from dataclasses import dataclass
 
+from agent_runtime.tool_result import ToolResult
+
 
 @dataclass
 class GitBlameArgs:
@@ -21,7 +23,7 @@ class GitDiffArgs:
     path: str = ""  # 可选：限定路径
 
 
-def git_blame(context, args: dict) -> str:
+def git_blame(context, args: dict) -> ToolResult:
     """对指定文件的指定行执行 git blame。
 
     Args:
@@ -31,7 +33,7 @@ def git_blame(context, args: dict) -> str:
     file_path = args.get("file", "")
     line = args.get("line", 0)
     if not file_path:
-        return "Error: 缺少必填参数 file"
+        return ToolResult.error("Error: 缺少必填参数 file", code="tool_execution_failed")
 
     try:
         result = subprocess.run(
@@ -43,13 +45,13 @@ def git_blame(context, args: dict) -> str:
         )
         if result.returncode != 0:
             if "not a git repository" in result.stderr.lower():
-                return "Error: 不是 git 仓库"
-            return f"Error: {result.stderr.strip()}"
-        return _parse_blame(result.stdout.strip())
+                return ToolResult.error("Error: 不是 git 仓库", code="tool_execution_failed")
+            return ToolResult.error(f"Error: {result.stderr.strip()}", code="tool_execution_failed")
+        return ToolResult(content=_parse_blame(result.stdout.strip()))
     except FileNotFoundError:
-        return "Error: git 未安装"
+        return ToolResult.error("Error: git 未安装", code="tool_execution_failed")
     except subprocess.TimeoutExpired:
-        return "Error: git blame 超时"
+        return ToolResult.error("Error: git blame 超时", code="tool_timeout")
 
 
 def _parse_blame(line: str) -> str:
@@ -69,7 +71,7 @@ def _parse_blame(line: str) -> str:
     return json.dumps({"raw": line}, ensure_ascii=False)
 
 
-def git_diff(context, args: dict) -> str:
+def git_diff(context, args: dict) -> ToolResult:
     """执行 git diff。
 
     Args:
@@ -93,10 +95,10 @@ def git_diff(context, args: dict) -> str:
             timeout=10,
         )
         if result.returncode != 0:
-            return f"Error: {result.stderr.strip()}"
+            return ToolResult.error(f"Error: {result.stderr.strip()}", code="tool_execution_failed")
         output = result.stdout.strip()
-        return output if output else "(无变更)"
+        return ToolResult(content=output if output else "(无变更)")
     except FileNotFoundError:
-        return "Error: git 未安装"
+        return ToolResult.error("Error: git 未安装", code="tool_execution_failed")
     except subprocess.TimeoutExpired:
-        return "Error: git diff 超时"
+        return ToolResult.error("Error: git diff 超时", code="tool_timeout")

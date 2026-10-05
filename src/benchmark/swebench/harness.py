@@ -370,8 +370,3 @@ def _parse_report_outcome(report_path: Path) -> dict[str, list[str]]:
         outcome.setdefault("error_ids", errors)
         return outcome
     return {}
-
-
-def _parse_resolved(report_path: Path) -> list[str]:
-    """兼容内部调用：返回结构化 report 中的 resolved IDs。"""
-    return _parse_report_outcome(report_path).get("resolved_ids", [])

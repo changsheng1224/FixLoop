@@ -23,6 +23,7 @@ def _tool(name: str, description: str, properties: dict, required: list[str]) ->
         "inputSchema": {
             "type": "object",
             "properties": properties,
+            "additionalProperties": False,
             "required": required,
         },
     }

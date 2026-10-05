@@ -14,22 +14,21 @@ from agent_runtime.context_runtime import (
 )
 from agent_runtime.tool_dag import ToolDAGExecutor, ToolNode
 from agent_runtime.tool_resilience import ToolResilienceController
-from agent_runtime.tool_result import ToolErrorCode, ToolResult, ToolStatus, normalize_tool_result
+from agent_runtime.tool_result import ToolResult, ToolStatus, require_tool_result
 from agent_runtime.tool_schema import schema_to_json, validate_tool_arguments
+from agent_runtime.tool_spec import ToolSpec, project_tool_specs
 from agent_runtime.tool_timeout import ToolTimeoutError, run_with_timeout
-from src.tools.spec import ToolSpec, project_tool_specs
 
 
 def _sleep_forever() -> None:
     time.sleep(10)
 
 
-def test_legacy_error_is_normalized_to_typed_result():
-    result = normalize_tool_result("Error: provider unavailable", tool_name="lookup")
-    assert isinstance(result, ToolResult)
-    assert result.status == ToolStatus.ERROR.value
-    assert result.error_code == ToolErrorCode.TOOL_EXECUTION_FAILED.value
-    assert result.retryable is True
+def test_untyped_results_are_rejected_and_text_does_not_define_status():
+    with pytest.raises(TypeError, match="must return ToolResult"):
+        require_tool_result("Error: provider unavailable", tool_name="lookup")
+    result = ToolResult(content="Error is just source text")
+    assert require_tool_result(result).status == ToolStatus.SUCCESS
 
 
 def test_full_json_schema_validation_and_projection():
@@ -56,8 +55,8 @@ def test_full_json_schema_validation_and_projection():
         "missing_required_argument",
     }
     assert schema_to_json(schema)["additionalProperties"] is False
-    projected = project_tool_specs([ToolSpec(name="inspect", protocol_schema=schema)])["inspect"]
-    assert projected["json_schema"]["properties"]["mode"]["enum"] == ["fast", "safe"]
+    projected = project_tool_specs([ToolSpec(name="inspect", input_schema=schema)])["inspect"]
+    assert projected["schema"]["properties"]["mode"]["enum"] == ["fast", "safe"]
 
 
 def test_action_state_machine_blocks_invalid_transition_and_recovers_uncertain():
@@ -103,7 +102,7 @@ def test_tool_dag_parallel_reads_and_serializes_writes():
         time.sleep(0.02)
         with lock:
             active -= 1
-        return f"{name}:ok"
+        return ToolResult(content=f"{name}:ok")
 
     result = ToolDAGExecutor(execute, max_workers=2).run(
         [

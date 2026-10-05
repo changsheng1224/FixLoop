@@ -43,16 +43,16 @@ class TestRepairPhaseClock:
         clock = RepairPhaseClock(PhaseTimeoutConfig(localize_s=0))
         clock.consume("localize", 999_000)
 
-    def test_from_repair_timeout_zero_disables_all(self):
-        cfg = PhaseTimeoutConfig.from_repair_timeout(0)
+    def test_with_repair_total_cap_zero_disables_all(self):
+        cfg = PhaseTimeoutConfig.with_repair_total_cap(0)
         assert cfg.localize_s == 0
         assert cfg.patch_s == 0
         assert cfg.verify_s == 0
         assert cfg.repair_total_s == 0
         assert not cfg.any_enabled()
 
-    def test_from_repair_timeout_positive_sets_total(self):
-        cfg = PhaseTimeoutConfig.from_repair_timeout(900)
+    def test_with_repair_total_cap_positive_sets_total(self):
+        cfg = PhaseTimeoutConfig.with_repair_total_cap(900)
         assert cfg.repair_total_s == 900
         assert cfg.any_enabled()
         # P1：预留 patch 预算，不让 localize 默认吃满

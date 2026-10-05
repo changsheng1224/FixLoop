@@ -134,19 +134,6 @@ def _parse_candidates(data: dict[str, Any]) -> list[LlmCandidate]:
     return out
 
 
-def maybe_refine_graph(
-    graph: IntentGraph,
-    text: str,
-    client: Any | None,
-    *,
-    tau_llm: float = 0.55,
-    segments: list[str] | None = None,
-    force: bool = False,
-) -> IntentGraph:
-    """Backward-compatible wrapper — returns only the (possibly refined) graph."""
-    return maybe_refine(graph, text, client, tau_llm=tau_llm, segments=segments, force=force).graph
-
-
 def maybe_refine(
     graph: IntentGraph,
     text: str,

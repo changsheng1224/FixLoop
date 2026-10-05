@@ -27,12 +27,12 @@ def _patch_sandbox_available(monkeypatch):
 class TestSandboxToolsValidation:
     def test_sandbox_test_missing_repo(self):
         ctx = ToolContext(root=".")
-        out = sandbox_test(ctx, {})
+        out = sandbox_test(ctx, {}).content
         assert "Error" in out
 
     def test_sandbox_verify_missing_repo(self):
         ctx = ToolContext(root=".")
-        out = sandbox_verify(ctx, {})
+        out = sandbox_verify(ctx, {}).content
         assert "Error" in out
 
 
@@ -41,10 +41,10 @@ class TestSandboxToolsMocked:
         ctx = ToolContext(root=".")
         vr = VerificationResult(all_passed=True, total_tests=2, passed=2)
         monkeypatch.setattr(
-            "src.tools.sandbox_tools._run_test_in_sandbox",
+            "src.tools.sandbox_tools.run_sandbox_verification_flow",
             lambda _ctx, repo, test_path: (vr, {"pytest_ms": 42}),
         )
-        out = sandbox_test(ctx, {"repo_path": ".", "test_path": ""})
+        out = sandbox_test(ctx, {"repo_path": ".", "test_path": ""}).content
         data = json.loads(out)
         assert data["all_passed"] is True
         assert data["total_tests"] == 2
@@ -53,17 +53,17 @@ class TestSandboxToolsMocked:
         ctx = ToolContext(root=".")
         vr = VerificationResult(all_passed=False, total_tests=1, failed=1)
         monkeypatch.setattr(
-            "src.tools.sandbox_tools._run_test_in_sandbox",
+            "src.tools.sandbox_tools.run_sandbox_verification_flow",
             lambda _ctx, repo, test_path: (vr, {"pytest_ms": 10, "build_result": "ok"}),
         )
-        out = sandbox_verify(ctx, {"repo_path": "."})
+        out = sandbox_verify(ctx, {"repo_path": "."}).content
         data = json.loads(out)
         assert data["sandbox_timings"]["pytest_ms"] == 10
 
     def test_run_sandbox_verification_entry(self, monkeypatch):
         vr = VerificationResult(all_passed=True, total_tests=1, passed=1)
         monkeypatch.setattr(
-            "src.tools.sandbox_tools._run_test_in_sandbox",
+            "src.tools.sandbox_tools.run_sandbox_verification_flow",
             lambda _ctx, repo, test_path, cancel_token=None: (vr, {}),
         )
         result, timings = run_sandbox_verification(".")
@@ -79,7 +79,7 @@ class TestSandboxToolsMocked:
             "src.harness.sandbox_verify.SandboxManager",
             lambda: fake_mgr,
         )
-        out = sandbox_build(ctx, {"repo_path": str(temp_workspace)})
+        out = sandbox_build(ctx, {"repo_path": str(temp_workspace)}).content
         assert "pip install" in out or "skipped" in out
         fake_mgr.create.assert_called_once()
 
@@ -96,7 +96,7 @@ class TestSandboxToolsMocked:
             "src.harness.sandbox_verify.SandboxManager",
             lambda: fake_mgr,
         )
-        sandbox_build(ctx, {"repo_path": str(temp_workspace)})
+        sandbox_build(ctx, {"repo_path": str(temp_workspace)}).content
         cmd = fake_mgr.execute.call_args[0][1]
         assert "pip install --user -e /code" in cmd
 

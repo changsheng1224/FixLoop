@@ -46,7 +46,7 @@ class TestDurableMemoryStore:
         """首行完全相同时替换，首行不同时新增。"""
         store.promote([("user-preferences", "Preference: use pytest")])
         store.promote([("user-preferences", "Preference: use pytest")])  # 完全相同 → 替换
-        entries = store._read_topic(store.topics_dir / "user-preferences.md")
+        entries = store._read_topic("user-preferences")
         assert len(entries) == 1
         assert "pytest" in entries[0]
 
@@ -54,13 +54,13 @@ class TestDurableMemoryStore:
         """首行不同时新增条目。"""
         store.promote([("user-preferences", "Preference: use pytest")])
         store.promote([("user-preferences", "Preference: use pytest + coverage")])
-        entries = store._read_topic(store.topics_dir / "user-preferences.md")
+        entries = store._read_topic("user-preferences")
         assert len(entries) == 2
 
     def test_upsert_new_subject_adds(self, store):
         store.promote([("user-preferences", "Preference: use pytest")])
         store.promote([("user-preferences", "Preference: line width is 100")])
-        entries = store._read_topic(store.topics_dir / "user-preferences.md")
+        entries = store._read_topic("user-preferences")
         assert len(entries) == 2
 
     def test_retrieval_finds_match(self, store):
@@ -580,9 +580,9 @@ class TestUserProfileStore:
         pref = store.get("theme")
         assert pref.value == "light"
 
-    def test_remove_sets_empty(self, store):
+    def test_invalidate_sets_empty(self, store):
         store.set("temp", "value")
-        assert store.remove("temp") is True
+        assert store.invalidate("temp") is True
         pref = store.get("temp")
         # 标记删除后存在但值为空
         assert pref is not None
@@ -590,8 +590,8 @@ class TestUserProfileStore:
     def test_get_nonexistent(self, store):
         assert store.get("nonexistent") is None
 
-    def test_remove_nonexistent(self, store):
-        assert store.remove("missing") is False
+    def test_invalidate_nonexistent(self, store):
+        assert store.invalidate("missing") is False
 
     def test_user_preference_to_dict(self):
         from agent_runtime.features.memory.durable import UserPreference

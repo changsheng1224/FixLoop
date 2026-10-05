@@ -21,6 +21,7 @@ from agent_runtime.mcp.registry import build_mock_github_mcp_client
 from agent_runtime.providers.clients import FakeModelClient
 from agent_runtime.runtime import Agent
 from agent_runtime.tool_executor import ToolExecutor
+from agent_runtime.tool_result import ToolResult
 from agent_runtime.tools import build_tool_registry
 from src.middleware import build_repair_gateway
 
@@ -126,19 +127,20 @@ class TestRegistry:
         assert tools["github_create_draft_pr"]["risky"] is True
         assert tools["github_list_issues"]["risky"] is False
 
-    def test_run_returns_observation_string(self, mock_pair):
+    def test_run_returns_structured_observation(self, mock_pair):
         client, _server = mock_pair
         tools = build_github_mcp_tool_registry(client)
         out = tools["github_list_issues"]["run"]({"owner": "acme", "repo": "demo"})
-        assert isinstance(out, str)
-        assert "TypeError" in out
+        assert isinstance(out, ToolResult)
+        assert "TypeError" in out.content
 
     def test_run_normalizes_errors(self):
         client, _ = build_mock_github_mcp_client(timeout_s=0.05, call_delay_s=0.2)
         tools = build_github_mcp_tool_registry(client)
         out = tools["github_get_repo"]["run"]({"owner": "a", "repo": "b"})
-        assert out.startswith("Error:")
-        assert "mcp_timeout" in out
+        assert out.failed
+        assert out.content.startswith("Error:")
+        assert "mcp_timeout" in out.content
 
 
 class TestGatewayPermissions:
@@ -176,13 +178,15 @@ class TestGatewayPermissions:
                 "head": "fix/x",
             },
         )
-        assert result.metadata.get("tool_error_code") == "permission_denied"
+        assert result.error_code == "permission_denied"
         assert result.metadata.get("rejection_layer") == "gateway"
 
 
 class TestDraftPrAskApproval:
     def test_draft_pr_is_ask_tier(self):
-        assert ToolExecutor._approval_tier("github_create_draft_pr") == ToolExecutor._APPROVAL_TIER_ASK
+        assert (
+            ToolExecutor._approval_tier("github_create_draft_pr") == ToolExecutor._APPROVAL_TIER_ASK
+        )
 
     def test_read_mcp_tools_are_auto(self):
         for name in GITHUB_MCP_READ_TOOLS:
@@ -210,7 +214,7 @@ class TestDraftPrAskApproval:
                 "head": "fix/x",
             },
         )
-        assert result.metadata.get("tool_status") == "rejected"
+        assert result.status == "rejected"
         assert result.metadata.get("gate_id") == 7
 
     def test_draft_pr_runs_under_auto_policy(self, workspace):
@@ -235,7 +239,7 @@ class TestDraftPrAskApproval:
                 "head": "fix/x",
             },
         )
-        assert result.metadata.get("tool_status") == "success"
+        assert result.status == "success"
         assert "Fix" in result.content
         assert any(n == "github_create_draft_pr" for n, _ in server.call_log)
 

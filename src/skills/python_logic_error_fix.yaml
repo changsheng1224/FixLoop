@@ -1,3 +1,6 @@
+kind: guidance
+version: "1.0.0"
+scope: builtin
 name: python_logic_error_fix
 language: python
 trigger_pattern: "off-by-one|inclusive_range|closed interval|逻辑错误"

@@ -76,39 +76,6 @@ def _log_loop(msg: str) -> None:
     get_logger("agent_loop").debug(msg.rstrip("\n"))
 
 
-def patch_recovery_anchors(text: str, *, max_chars: int = 6000) -> str:
-    """Keep bounded source/target anchors when a model turn is truncated."""
-    raw = str(text or "")
-    if not raw:
-        return ""
-    lines = raw.splitlines()
-    markers = (
-        "allowed_edit:",
-        "DISK GROUNDING",
-        "嫌疑位置",
-        "相关测试文件",
-        "失败面",
-        "[PATCHER RUNTIME CONTRACT]",
-    )
-    starts = [
-        index for index, line in enumerate(lines) if any(marker in line for marker in markers)
-    ]
-    chunks: list[str] = []
-    used = 0
-    for start in starts:
-        chunk = "\n".join(lines[start : start + 36]).strip()
-        if not chunk:
-            continue
-        remaining = max_chars - used
-        if remaining <= 0:
-            break
-        if len(chunk) > remaining:
-            chunk = chunk[:remaining].rstrip() + "\n... anchors truncated ..."
-        chunks.append(chunk)
-        used += len(chunk)
-    return "\n\n".join(chunks)
-
-
 def build_native_tools(
     tools_registry: dict, *, allowed_names: set[str] | None = None
 ) -> list[dict]:
@@ -119,7 +86,7 @@ def build_native_tools(
     for name, spec in tool_schema_view(tools_registry).items():
         if allowed_names is not None and name not in allowed_names:
             continue
-        schema = spec.get("json_schema") or spec.get("schema", {})
+        schema = spec["schema"]
         result.append(
             {
                 "name": name,
@@ -177,14 +144,14 @@ def validate_final_answer(config, text: str) -> tuple[bool, str]:
             "list": list,
             "dict": dict,
         }
-        for field, ftype in schema.items():
+        for field_name, ftype in schema.items():
             expected = type_map.get(ftype)
             if expected is None:
                 continue
-            value = data.get(field)
+            value = data.get(field_name)
             if value is not None and not isinstance(value, expected):
                 return False, (
-                    f"字段 '{field}' 应为 {ftype} 类型，实际为 {type(value).__name__}。"
+                    f"字段 '{field_name}' 应为 {ftype} 类型，实际为 {type(value).__name__}。"
                     "请修正后重新输出。"
                 )
 
@@ -480,7 +447,7 @@ def handle_native_output(
             and not result.text
             and not result.tool_calls
         ):
-            runtime.control.patch_decision_required = True
+            runtime.control.action_required = True
             runtime.guard.enter_convergence("thinking_only_truncation")
             runtime.hooks.emit(
                 "thinking_only_truncation",
@@ -507,17 +474,7 @@ def handle_native_output(
         )
 
     if recovery_attempt < 1:
-        directive = (
-            "[OUTPUT RECOVERY] The previous model output was truncated and was "
-            "discarded. Do not continue or repeat that analysis. Complete this turn "
-            "with exactly one apply_patch/patch_file call, or call finish_repair with "
-            "a grounded cannot_patch/needs_more_context reason. "
-            "Do not perform more broad exploration."
-            if truncated
-            else "[EMPTY OUTPUT RECOVERY] The previous response was empty. Produce exactly "
-            "one apply_patch/patch_file call, or call finish_repair with a grounded "
-            "cannot_patch/needs_more_context reason."
-        )
+        directive = runtime.agent.loop_policy.output_recovery(truncated=truncated)
         return directive, None
 
     if truncated:
@@ -584,12 +541,12 @@ def native_model_turn(
     from agent_runtime.response import CanonicalResponse
 
     client = runtime.agent.model_client
-    action_required = bool(output_recovery_directive or runtime.control.patch_decision_required)
+    action_required = bool(output_recovery_directive or runtime.control.action_required)
     tools_def = build_native_tools(
         runtime.agent.tools,
         allowed_names=runtime.hooks.native_tool_names(
             action_required=action_required,
-            patch_only_recovery=bool(output_recovery_directive),
+            strict_recovery=bool(output_recovery_directive),
         ),
     )
     phase_output_cap = 4096 if not action_required or output_recovery_directive else 2048
@@ -606,18 +563,14 @@ def native_model_turn(
             )
             user_override = output_recovery_directive
             if summary:
-                user_override += f"\n[REPAIR TASK]\n{summary[:2000]}"
-            anchors = patch_recovery_anchors(user_message)
+                user_override += f"\n[TASK]\n{summary[:2000]}"
+            anchors = runtime.agent.loop_policy.recovery_anchors(user_message)
             if anchors:
-                user_override += f"\n[PATCHER EVIDENCE ANCHORS]\n{anchors}"
-    elif runtime.control.patch_decision_required:
-        directives.append(
-            "[PATCH DECISION REQUIRED] Exploration is closed. "
-            "Call apply_patch/patch_file now, or call finish_repair with a concise "
-            "cannot_patch/needs_more_context reason grounded in the evidence ledger."
-        )
-    if runtime.control.patch_recovery_directive:
-        directives.append("[PATCH RECOVERY]\n" + runtime.control.patch_recovery_directive)
+                user_override += f"\n[EVIDENCE ANCHORS]\n{anchors}"
+    elif runtime.control.action_required:
+        directives.append(runtime.agent.loop_policy.action_directive)
+    if runtime.control.recovery_directive:
+        directives.append("[ACTION RECOVERY]\n" + runtime.control.recovery_directive)
     if user_override and directives:
         user_override += "\n\n" + "\n\n".join(directives)
         directives = []
@@ -757,7 +710,7 @@ def xml_model_turn(runtime, ts, user_message: str, *, step: int, step_clock, cal
         ts.stop_with_reason(
             StopReason.CONTEXT_OVERFLOW,
             "stopped",
-            detail="hard_cap via legacy _check_hard_cap",
+            detail="context hard cap reached",
         )
         return CanonicalResponse.create(
             "final", "stop", {"text": runtime.hooks.complete_run(ts, prompt_text)}

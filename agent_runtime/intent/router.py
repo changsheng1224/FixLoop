@@ -9,7 +9,7 @@ from agent_runtime.intent.clarify import apply_clarify, should_clarify
 from agent_runtime.intent.confidence import apply_breakdown_to_result, fuse_confidence
 from agent_runtime.intent.embed_index import EmbedIndex, EmbedMatch
 from agent_runtime.intent.graph import merge_constraints, recompute_root_ids, validate_graph
-from agent_runtime.intent.llm_fallback import maybe_refine, maybe_refine_graph
+from agent_runtime.intent.llm_fallback import maybe_refine
 from agent_runtime.intent.llm_runtime import IntentLlmPolicy, IntentLlmRuntime
 from agent_runtime.intent.models import (
     INTENT_ROUTER_VERSION,
@@ -439,13 +439,13 @@ class IntentRouter:
             }
             stage_timings["llm"] = refine.latency_ms
         else:
-            graph = maybe_refine_graph(
+            graph = maybe_refine(
                 graph_before,
                 raw,
                 None,
                 tau_llm=ctx.tau_llm,
                 segments=[s.text for s in segs],
-            )
+            ).graph
             llm_outcome = None
 
         if llm_candidates_payload:

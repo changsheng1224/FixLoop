@@ -581,9 +581,9 @@ class Orchestrator(RepairPipelineMixin):
         5. logic_error → 无异常名的错误行为描述
         6. unknown → LLM fallback
         """
-        from agent_runtime.intent.adapters import IssueIntentAdapter
         from agent_runtime.intent.models import RouteContext
         from agent_runtime.intent.router import IntentRouter
+        from src.repair.intent_adapter import IssueIntentAdapter
 
         tracer = None
         repair_ctx = getattr(self, "_repair_ctx", None)
@@ -1488,7 +1488,7 @@ class Orchestrator(RepairPipelineMixin):
         )[observation_start:]
         write_tools = {"write_file", "patch_file", "apply_patch"}
         write_attempted = any(
-            str(item.get("tool") or item.get("tool_name") or "") in write_tools
+            str(item.get("tool") or "") in write_tools
             for item in observations
         )
         state.control.patcher_write_attempted = bool(write_attempted)

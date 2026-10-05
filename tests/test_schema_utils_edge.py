@@ -19,14 +19,16 @@ from agent_runtime.tools import (
 class TestAutoValidateEdge:
     """auto_validate 异常分支。"""
 
-    def test_float_conversion(self):
+    def test_float_requires_number(self):
         from dataclasses import dataclass
 
         @dataclass
         class FloatArgs:
             value: float = 0.5
 
-        r = auto_validate(FloatArgs, {"value": "3.14"})
+        with pytest.raises(ValueError, match="invalid_argument_type"):
+            auto_validate(FloatArgs, {"value": "3.14"})
+        r = auto_validate(FloatArgs, {"value": 3.14})
         assert r["value"] == pytest.approx(3.14)
 
     def test_bool_conversion(self):
@@ -40,7 +42,7 @@ class TestAutoValidateEdge:
         assert r["flag"] is True
 
     def test_invalid_int_raises(self):
-        with pytest.raises(ValueError, match="类型错误"):
+        with pytest.raises(ValueError, match="invalid_argument_type"):
             auto_validate(ReadFileArgs, {"path": "a.py", "start": "not_a_number"})
 
     def test_optional_type_handled(self):
@@ -54,9 +56,10 @@ class TestAutoValidateEdge:
         assert r["name"] == "hello"
 
     def test_type_to_str_unknown(self):
-        from agent_runtime.schema_utils import _type_to_str
+        from agent_runtime.schema_utils import _type_schema
 
-        assert _type_to_str(bytes) == "str"  # 未知类型默认 str
+        with pytest.raises(TypeError, match="unsupported"):
+            _type_schema(bytes)
 
 
 class TestToolEdge:
@@ -64,13 +67,13 @@ class TestToolEdge:
 
     def test_run_shell_invalid_timeout_clamped(self, temp_workspace):
         ctx = ToolContext(root=str(temp_workspace))
-        r = tool_run_shell(ctx, {"command": "echo hi", "timeout": "not_a_number"})
+        r = tool_run_shell(ctx, {"command": "echo hi", "timeout": "not_a_number"}).content
         # 不会 crash
         assert "hi" in r.lower() or "exit_code" in r.lower()
 
     def test_read_file_binary_content(self, temp_workspace):
         ctx = ToolContext(root=str(temp_workspace))
-        r = tool_read_file(ctx, {"path": "__init__.py"})
+        r = tool_read_file(ctx, {"path": "__init__.py"}).content
         # 项目中不存在 __init__.py 在 temp workspace
         # 所以应返回 Error
         assert "Error" in r or "1 |" in r  # 存在则正常读，不存在则报错

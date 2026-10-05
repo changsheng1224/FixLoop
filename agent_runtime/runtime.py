@@ -15,31 +15,6 @@ from agent_runtime.tools import build_tool_registry
 PrefixMode = Literal["default", "repair"]
 
 
-def _role_quota(agent_name: str = ""):
-    """按 Agent 角色返回差异化配额。
-
-    Patcher:   写文件宽松 → writes=8 shell=2 total=15
-    Verifier:  sandbox 仅容器操作 → shell=3 total=6
-    """
-    from agent_runtime.tool_executor import QuotaEnforcer
-
-    role = (agent_name or "").lower()
-    if role == "patcher":
-        return QuotaEnforcer(
-            max_writes=8,
-            max_shell=2,
-            max_total=24,
-            group_limits={"read": 12, "write": 8, "verify": 2, "recovery": 2},
-        )
-    if role == "verifier":
-        return QuotaEnforcer(
-            max_writes=0,
-            max_shell=3,
-            max_total=6,
-            group_limits={"read": 0, "write": 0, "verify": 6, "recovery": 0},
-        )
-    return QuotaEnforcer()
-
 
 class Agent:
     """手写的 LLM Agent。
@@ -63,7 +38,12 @@ class Agent:
         l1_prefix=None,
         warm_context=None,
         tool_context: ToolContext | None = None,
+        loop_policy=None,
+        quota=None,
     ):
+        from agent_runtime.loop_policy import LoopPolicy
+
+        self.loop_policy = loop_policy if loop_policy is not None else LoopPolicy()
         self.config = config
         self.model_client = model_client
         self.light_client = light_client
@@ -104,11 +84,13 @@ class Agent:
 
         self._semantic_memory = None
         self.circuit_breaker = CircuitBreaker()
-        self.quota = _role_quota(agent_name)
+        from agent_runtime.tool_executor import QuotaEnforcer
+
+        self.quota = quota if quota is not None else QuotaEnforcer()
 
     @property
     def agent_name(self) -> str:
-        """角色名（patcher/verifier）；供 AgentLoop stall 等判定。"""
+        """调用方提供的角色标签；执行行为由注入策略决定。"""
         return self._agent_name or ""
 
     @property

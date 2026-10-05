@@ -596,14 +596,6 @@ def _apply_unified_diff(text: str, diff: str, *, file_path: str = "") -> str | N
     return None
 
 
-def extract_json_block(text: str) -> str:
-    """Compatibility wrapper over the canonical structured recovery pipeline."""
-    from agent_runtime.json_recovery import repair_structured_output
-
-    parsed = repair_structured_output(text)
-    return parsed.repaired_text or str(text or "").strip()
-
-
 class PatchApplier:
     """Parse and apply candidate patches under a repo root."""
 

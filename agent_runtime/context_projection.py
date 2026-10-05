@@ -146,7 +146,7 @@ def attach_context_projection(
     agent,
     budget: TokenBudget | Any,
 ) -> None:
-    """写入 metadata.context_sections（保留 legacy sections）。"""
+    """写入 metadata.context_sections（由 metadata.sections 派生）。"""
     impl = metadata.get("sections") or {}
     ctx = build_context_sections(impl, agent=agent, budget=budget)
     metadata["context_schema_version"] = CONTEXT_SCHEMA_VERSION

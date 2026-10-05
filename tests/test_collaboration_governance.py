@@ -78,15 +78,16 @@ def test_skill_policy_is_intersection_only():
 
 
 def test_skill_metadata_is_traceable():
-    from src.skills.models import MatchedSkill, SkillSpec
+    from src.skills.models import MatchedSkill
+    from src.skills.contract import SkillSpec
 
-    spec = SkillSpec(
+    spec = SkillSpec(kind="guidance",
         name="python_fix",
         trigger_pattern="TypeError",
         guidance=["inspect", "verify"],
         source="workspace_local",
         trust_level="untrusted",
-        version="2",
+        version="2.0.0",
     )
     matched = MatchedSkill.from_spec(spec)
     payload = matched.to_trace_payload()

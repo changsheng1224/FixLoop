@@ -13,17 +13,15 @@ from agent_runtime.react_phases import ReactPath, ReactPhase
 from agent_runtime.step_guard import StepContext
 from agent_runtime.stop_reasons import StopReason
 
-_MODIFYING_TOOLS = frozenset({"write_file", "patch_file", "apply_patch", "run_shell"})
-
 
 @dataclass
 class ToolStepState:
     stop_reason: str = ""
     blocked_convergence_reads: int = 0
-    patch_decision_required: bool = False
-    patch_recovery_directive: str = ""
-    patch_recovery_allowed_tools: set[str] | None = None
-    patch_recovery_kind: str = ""
+    action_required: bool = False
+    recovery_directive: str = ""
+    recovery_allowed_tools: set[str] | None = None
+    recovery_kind: str = ""
     in_flight_tool: str = ""
     pending_batch_tools: int = 0
     last_observation_id: str = ""
@@ -34,11 +32,9 @@ class ToolStepState:
 class ToolStepHooks:
     abort_if_cancelled: Callable
     advance_todo: Callable
-    block_grounded_finish: Callable
     budget_allows_tool: Callable
     budget_reserve: Callable
     emit: Callable
-    enter_convergence_gate: Callable
     grant_read_reserve: Callable
     has_targeted_read_reserve: Callable
     matching_read_reservation: Callable
@@ -46,14 +42,13 @@ class ToolStepHooks:
     notify_react_phase: Callable
     persist_step_checkpoint: Callable
     record_tool_outcome: Callable
-    set_patch_recovery: Callable
-    sync_patcher_grounding: Callable
 
 
 @dataclass(frozen=True)
 class ToolStepRuntime:
     agent: Any
     state: ToolStepState
+    policy_context: Any
     guard: Any
     budget: Any
     deadline: Any
@@ -69,35 +64,6 @@ def _log_loop(msg: str) -> None:
     from agent_runtime.logging_setup import get_logger
 
     get_logger("agent_loop").debug(msg.rstrip("\n"))
-
-
-def tool_target_paths(tool_name: str, tool_args: dict | None) -> list[str]:
-    """Return normalized file targets for write/recovery decisions.
-
-    ``apply_patch`` carries its paths in the patch envelope rather than a
-    top-level ``path`` argument.  Recovery must use those exact paths so a
-    stale write cannot fall back to a wildcard read reservation.
-    """
-    args = tool_args or {}
-    direct = str(args.get("path") or "").replace("\\", "/").strip()
-    if tool_name != "apply_patch":
-        return [direct] if direct else []
-
-    patch_text = args.get("patch") or args.get("diff") or args.get("input") or ""
-    if not str(patch_text).strip():
-        return []
-    try:
-        from agent_runtime.apply_patch_format import parse_apply_patch_text
-
-        ops = parse_apply_patch_text(str(patch_text))
-    except (TypeError, ValueError):
-        return []
-    paths: list[str] = []
-    for op in ops:
-        path = str(getattr(op, "path", "") or "").replace("\\", "/").strip()
-        if path and path not in paths:
-            paths.append(path)
-    return paths
 
 
 def run_tool_step(runtime, ts, tool_name, tool_args, **kwargs):
@@ -178,12 +144,8 @@ def tool_step_flow(
             result = ToolResult(
                 content="[idempotent replay] 已复用已验证的工具结果",
                 status="success",
-                metadata={
-                    "tool_status": "success",
-                    "replayed": True,
-                    "observation_id": prior_action.get("result_ref", ""),
-                    "receipt": prior_action.get("receipt", {}),
-                },
+                metadata={"replayed": True, "observation_id": prior_action.get("result_ref", "")},
+                receipt=prior_action.get("receipt", {}),
             )
             replayed = True
         elif prior_status in {"dispatched", "uncertain"} and str(
@@ -195,98 +157,17 @@ def tool_step_flow(
                 content="Error: 幂等操作状态不确定，需先执行 postcondition reconciliation",
                 status="uncertain",
                 error_code="idempotency_conflict",
-                metadata={
-                    "tool_status": "uncertain",
-                    "tool_error_code": "idempotency_conflict",
-                    "retryable": False,
-                    "action": prior_action,
-                },
+                metadata={"action": prior_action},
+                retryable=False,
             )
             replay_blocked = True
-    is_patcher = (
-        getattr(runtime.agent, "agent_name", None)
-        or getattr(runtime.agent, "_agent_name", "")
-        or ""
-    ) == "patcher"
     convergence_blocked = False
-    if is_patcher and not replayed and not replay_blocked:
-        quota_summary = (
-            runtime.agent.quota.quota_summary()
-            if hasattr(getattr(runtime.agent, "quota", None), "quota_summary")
-            else {}
+    if not replayed and not replay_blocked:
+        policy_result = runtime.agent.loop_policy.preflight(
+            runtime.policy_context, tool_name, tool_args, step=step,
         )
-        read_budget = (quota_summary.get("groups") or {}).get("read") or {}
-        remaining = read_budget.get("remaining")
-        if remaining is not None and int(remaining) <= 2:
-            if runtime.guard.enter_convergence("read_budget_low"):
-                runtime.hooks.enter_convergence_gate("read_budget_low", step=step)
-        phase_before = runtime.guard.phase
-        read_reservation = runtime.hooks.matching_read_reservation(tool_name, tool_args)
-        preflight = runtime.guard.preflight(
-            tool_name,
-            tool_args,
-            read_reservation=read_reservation,
-        )
-        if phase_before == "explore" and runtime.guard.phase == "converge":
-            runtime.hooks.enter_convergence_gate(
-                runtime.guard.convergence_reason or "duplicate_read", step=step
-            )
-        if preflight is not None and preflight.action == "allow_targeted_read":
-            runtime.hooks.grant_read_reserve("*", kind="targeted", step=step)
-        elif preflight is not None and preflight.action == "allow_reserved_read":
-            pass
-        elif preflight is not None and preflight.action.startswith("block_"):
-            from agent_runtime.tool_result import ToolResult
-
-            event = (
-                "duplicate_read_blocked"
-                if preflight.action == "block_duplicate_read"
-                else "convergence_read_blocked"
-            )
-            runtime.hooks.emit(
-                event,
-                {
-                    "step": step,
-                    "tool": tool_name,
-                    "path": str(tool_args.get("path") or ""),
-                    "phase": runtime.guard.phase,
-                },
-            )
-            runtime.state.blocked_convergence_reads += 1
-            if runtime.state.blocked_convergence_reads >= 2:
-                runtime.state.patch_decision_required = True
-                runtime.hooks.emit(
-                    "patch_decision_required",
-                    {
-                        "step": step,
-                        "blocked_read_attempts": runtime.state.blocked_convergence_reads,
-                        "allowed_actions": [
-                            "apply_patch",
-                            "patch_file",
-                            "expand_lock",
-                            "terminal",
-                        ],
-                    },
-                )
-            result = ToolResult(
-                content=(
-                    f"Error: {preflight.detail}。{preflight.replan_hint} "
-                    "可用动作: apply_patch/patch_file/expand_lock/终止。"
-                ),
-                status="rejected",
-                error_code="convergence_required",
-                metadata={
-                    "tool_status": "rejected",
-                    "tool_error_code": "convergence_required",
-                    "retryable": False,
-                },
-            )
-            runtime.hooks.set_patch_recovery(
-                "convergence_required",
-                "读取请求被收敛闸门拒绝。请停止重复读取，直接调用 apply_patch/patch_file，"
-                "或调用 finish_repair 说明证据不足。",
-                {"apply_patch", "patch_file", "finish_repair"},
-            )
+        if policy_result is not None:
+            result = policy_result
             convergence_blocked = True
     budget_rejected = runtime.deadline.expired()
     if not replayed and not replay_blocked and not convergence_blocked and budget_rejected:
@@ -294,11 +175,10 @@ def tool_step_flow(
 
         result = ToolResult(
             content="Error: repair 全局执行期限已耗尽",
-            metadata={
-                "tool_status": "rejected",
-                "tool_error_code": "deadline_exceeded",
-                "retryable": False,
-            },
+            metadata={},
+            status="rejected",
+            error_code="deadline_exceeded",
+            retryable=False,
         )
     elif (
         not replayed
@@ -318,12 +198,10 @@ def tool_step_flow(
 
         result = ToolResult(
             content=f"Error: 工具组 {group.value} 预算已耗尽",
-            metadata={
-                "tool_status": "rejected",
-                "tool_error_code": "budget_exceeded",
-                "retryable": False,
-                "budget_group": group.value,
-            },
+            metadata={"budget_group": group.value},
+            status="rejected",
+            error_code="budget_exceeded",
+            retryable=False,
         )
         budget_rejected = True
     runtime.hooks.notify(
@@ -351,7 +229,24 @@ def tool_step_flow(
                 "tool_args": tool_args,
             }
         )
-    t0 = _time.time()
+    t0 = _time.monotonic()
+
+    def seal_result(result):
+        from agent_runtime.tool_executor import _canonical_args_hash
+        from agent_runtime.tool_result import attach_tool_receipt
+
+        result.duration_ms = int((_time.monotonic() - t0) * 1000)
+        raw_call = runtime.agent.session.get("_last_canonical_tool_call", {}) or {}
+        return attach_tool_receipt(
+            result,
+            tool_name,
+            args_hash=_canonical_args_hash(tool_name, tool_args),
+            run_id=call_context.run_id if call_context is not None else ts.run_id,
+            call_id=call_context.call_id
+            if call_context is not None
+            else raw_call.get("call_id", ""),
+        )
+
     if not budget_rejected and not replayed and not replay_blocked and not convergence_blocked:
         runtime.hooks.budget_reserve("tool_calls")
         if group.value in {"write", "verify", "recovery"}:
@@ -380,7 +275,10 @@ def tool_step_flow(
             runtime.agent.session["_in_flight_action"] = action_raw
         try:
             result = yield
-            runtime.hooks.block_grounded_finish(tool_name, tool_args, result)
+            runtime.agent.loop_policy.review_result(
+                runtime.policy_context, tool_name, tool_args, result
+            )
+            result = seal_result(result)
         except BaseException:
             action_raw["status"] = "uncertain"
             action_raw["uncertain_reason"] = "runtime_exception"
@@ -388,9 +286,9 @@ def tool_step_flow(
                 runtime.agent.session.setdefault("action_ledger", []).append(action_raw)
             raise
         else:
-            result_meta = getattr(result, "metadata", {}) or {}
-            result_status = str(result_meta.get("tool_status", "error"))
-            error_code = str(result_meta.get("tool_error_code", "") or "")
+            result_meta = result.to_metadata()
+            result_status = str(result.status)
+            error_code = str(result.error_code)
             if result_status == "success":
                 next_status = (
                     "verified"
@@ -411,7 +309,7 @@ def tool_step_flow(
                     action_raw,
                     next_status,
                     reason=error_code,
-                    receipt=result_meta.get("receipt"),
+                    receipt=result.receipt,
                 )
             except ValueError:
                 action_raw["status"] = "uncertain"
@@ -428,20 +326,10 @@ def tool_step_flow(
                 runtime.state.pending_batch_tools -= 1
     if budget_rejected or replayed or replay_blocked or convergence_blocked:
         result = yield result
-    if call_context is not None:
-        from agent_runtime.tool_executor import _canonical_args_hash
-        from agent_runtime.tool_result import attach_tool_receipt
-
-        result = attach_tool_receipt(
-            result,
-            tool_name,
-            args_hash=_canonical_args_hash(tool_name, tool_args),
-            run_id=call_context.run_id,
-            call_id=call_context.call_id,
-        )
+        result = seal_result(result)
     # Gateway/权限拒绝不计入 tool_steps，避免无效步耗尽预算（E5）
-    _meta = getattr(result, "metadata", None) or {}
-    if _meta.get("tool_status") != "rejected" and prepared_result is None:
+    _meta = result.metadata
+    if result.status != "rejected" and prepared_result is None:
         ts.record_tool(tool_name)
         runtime.budget.record_tool(group.value)
     else:
@@ -452,11 +340,8 @@ def tool_step_flow(
         is not None
     ):
         raise CancelledError("user", answer=msg)
-    result_text = result.content if hasattr(result, "content") else str(result)
-    result_meta = getattr(result, "metadata", {}) or {}
-    if is_patcher:
-        recover_patch_result(runtime, ts, tool_name, tool_args, result_meta, step=step)
-    te_ms = int((_time.time() - t0) * 1000)
+    result_text = result.content
+    te_ms = result.duration_ms
     from agent_runtime.repair_runtime import CanonicalToolCall
 
     raw_call = runtime.agent.session.get("_last_canonical_tool_call", {})
@@ -487,20 +372,10 @@ def tool_step_flow(
     stored = recorded.stored
     runtime.state.last_observation_id = stored.observation_id
     retrieval = _meta.get("retrieval_result")
-    # 权限拒绝：立即回灌，避免反复试 run_shell/sandbox_test
-    if _meta.get("rejection_reason") == "role_not_allowed" or (
-        _meta.get("tool_status") == "rejected" and tool_name in ("run_shell", "sandbox_test")
-    ):
-        if (
-            getattr(runtime.agent, "agent_name", None)
-            or getattr(runtime.agent, "_agent_name", "")
-            or ""
-        ) == "patcher":
-            result_text = (
-                f"{result_text}\n"
-                "【停】patcher 无权限调用此工具。请改用：read_file → apply_patch "
-                "→ quick_test；需要扩锁时用 expand_lock。"
-            )
+    runtime.agent.loop_policy.on_result(
+        runtime.policy_context, tool_name, tool_args, result, step=step,
+    )
+    result_text = runtime.agent.loop_policy.feedback(runtime.policy_context, tool_name, result)
     runtime.hooks.notify(
         "on_post_tool",
         callback,
@@ -519,16 +394,13 @@ def tool_step_flow(
         runtime.agent, tool_name, projection_input
     )
     if len(projected_result_text) < len(projection_input):
-        _meta["output_truncated"] = True
-        if hasattr(result, "output_truncated"):
-            result.output_truncated = True
+        result.output_truncated = True
         if stored.raw_ref:
             projected_result_text += (
                 f"\n[output_truncated=true artifact_ref={stored.raw_ref} "
                 f"observation_id={stored.observation_id}]"
             )
     result_text = projected_result_text
-    _meta["duration_ms"] = te_ms
     ts.node_timings.setdefault("tool_exec_ms", 0)
     ts.node_timings["tool_exec_ms"] += te_ms
     _log_loop(f"  [loop] {tool_name} tool={te_ms}ms\n")
@@ -540,9 +412,8 @@ def tool_step_flow(
             tool=tool_name,
             callback=callback,
         )
-    if _meta.get("tool_status") == "success":
+    if result.status == "success":
         runtime.agent.update_memory_after_tool(tool_name, tool_args, result_text)
-        runtime.hooks.sync_patcher_grounding(tool_name, tool_args, result)
     runtime.hooks.record_tool_outcome(tool_name, result, ts, tool_args)
     if emit_recording:
         runtime.hooks.notify_react_phase(
@@ -552,13 +423,7 @@ def tool_step_flow(
             tool=tool_name,
             callback=callback,
         )
-    # 确定工具执行状态
-    tool_status = "OK"
-    if result.metadata.get("tool_status") != "success":
-        if "Error" in result_text:
-            tool_status = "FAIL"
-        elif "[DRY RUN]" in result_text:
-            tool_status = "DRY"
+    tool_status = "DRY" if result.status == "dry_run" else "OK" if result.ok else "FAIL"
     runtime.hooks.notify(
         "on_tool_executed",
         callback,
@@ -578,83 +443,9 @@ def tool_step_flow(
         stored,
         step=step,
         path=path,
-        is_patcher=is_patcher,
         convergence_blocked=convergence_blocked,
         tool_registry=tool_registry,
     )
-
-
-def recover_patch_result(runtime, ts, tool_name, tool_args, result_meta, *, step):
-    """Convert a rejected patch into a bounded, evidence-directed recovery action."""
-    error_code = str(result_meta.get("tool_error_code", "") or "")
-    target_paths = tool_target_paths(tool_name, tool_args)
-    path_hint = target_paths[0] if target_paths else ""
-    if error_code == "stale_preimage":
-        if runtime.guard.request_targeted_reread("stale_preimage"):
-            for target_path in target_paths:
-                runtime.hooks.grant_read_reserve(target_path, kind="targeted", step=step)
-        runtime.hooks.set_patch_recovery(
-            "stale_preimage",
-            f"补丁的旧文本已失效。先对 {', '.join(target_paths) or '目标文件'} "
-            "执行一次精确 read_file，"
-            "再基于刚读到的上下文调用 apply_patch/patch_file；不要重复旧补丁。",
-            {"read_file", "finish_repair"}
-            if runtime.hooks.has_targeted_read_reserve()
-            else {"apply_patch", "finish_repair"},
-        )
-        runtime.hooks.emit(
-            "stale_patch_rejected",
-            {
-                "step": step,
-                "tool": tool_name,
-                "path": path_hint,
-                "paths": target_paths,
-                "current_sha256": result_meta.get("current_sha256", ""),
-                "recovery_action": "targeted_reread_then_retry",
-            },
-        )
-    elif error_code == "invalid_args":
-        runtime.hooks.set_patch_recovery(
-            "invalid_args",
-            "写入参数无效。禁止空 old_text/new_text 或重复相同工具调用；"
-            "请改用包含文件路径、上下文行和 +/- 行的 apply_patch，"
-            "或调用 finish_repair 说明无法修复。",
-            {"apply_patch", "finish_repair"},
-        )
-        runtime.hooks.emit(
-            "patch_write_rejected",
-            {"step": step, "tool": tool_name, "error_code": error_code},
-        )
-    elif error_code == "no_change":
-        runtime.guard.request_targeted_reread("no_change")
-        for target_path in target_paths:
-            runtime.hooks.grant_read_reserve(target_path, kind="targeted", step=step)
-        runtime.hooks.set_patch_recovery(
-            "no_change",
-            f"上一次写入没有产生磁盘变化。先精确读取 "
-            f"{', '.join(target_paths) or '目标文件'} 的当前内容，"
-            "再提交不同的 apply_patch，或调用 finish_repair。",
-            {"read_file", "finish_repair"},
-        )
-        ts.node_timings["patch_no_change"] = True
-        runtime.hooks.emit(
-            "patch_no_change",
-            {
-                "step": step,
-                "tool": tool_name,
-                "recovery_action": "reread_then_retry_or_finish",
-            },
-        )
-    elif error_code == "edit_lint_reject":
-        runtime.hooks.set_patch_recovery(
-            "edit_lint_reject",
-            "补丁因编辑期语法检查未落盘。请修正语法后用 apply_patch 提交，不要重复相同内容。",
-            {"apply_patch", "finish_repair"},
-        )
-        runtime.hooks.emit(
-            "patch_write_rejected",
-            {"step": step, "tool": tool_name, "error_code": error_code},
-        )
 
 
 def record_step_progress(
@@ -668,23 +459,18 @@ def record_step_progress(
     *,
     step,
     path,
-    is_patcher,
     convergence_blocked,
     tool_registry,
 ):
     """Accept terminal tools, update progress and persist a successful safe point."""
     # 终态工具：成功后结束 loop，payload 作为 final answer
     tool_spec = (tool_registry or {}).get(tool_name) or {}
-    if (
-        tool_spec.get("terminal")
-        and result.metadata.get("tool_status") == "success"
-        and not str(result_text).startswith("Error")
-    ):
+    if tool_spec.get("terminal") and result.status == "success":
         from agent_runtime.terminal_tool import TerminalToolAcceptedError
 
         raise TerminalToolAcceptedError(str(result_text), tool_name=tool_name)
     # 死循环检测：Gate 5.5 rejection → 升级为 stop
-    error_code = result.metadata.get("tool_error_code", "")
+    error_code = result.error_code
     if error_code == "loop_detected":
         from agent_runtime.tool_executor import _canonical_args_hash
 
@@ -705,64 +491,16 @@ def record_step_progress(
         return ts.final_answer or f"任务因死循环检测终止（{tool_name}）。"
 
     # 每 tool 步 checkpoint（成功时），供 --resume 从最后成功步继续
-    tool_success = result.metadata.get("tool_status") == "success"
+    tool_success = result.status == "success"
     if tool_success:
         runtime.hooks.advance_todo()
-        if tool_name in {"write_file", "patch_file", "apply_patch"}:
-            runtime.state.patch_decision_required = False
-            runtime.state.patch_recovery_directive = ""
-            runtime.state.patch_recovery_allowed_tools = None
-            runtime.state.patch_recovery_kind = ""
-        consumed_reserve = result.metadata.get("read_reserve_consumed")
-        if isinstance(consumed_reserve, dict):
-            runtime.hooks.emit(
-                "post_lock_read_consumed"
-                if consumed_reserve.get("kind") == "post_lock"
-                else "targeted_read_consumed",
-                {"step": step, **consumed_reserve},
-            )
-            if (
-                tool_name == "read_file"
-                and consumed_reserve.get("kind") == "targeted"
-                and runtime.state.patch_recovery_kind in {"stale_preimage", "no_change"}
-            ):
-                runtime.hooks.set_patch_recovery(
-                    "post_reread",
-                    "精确重读已完成。现在必须基于该读取结果调用 apply_patch/patch_file，"
-                    "或调用 finish_repair；不要再次读取同一范围。",
-                    {"apply_patch", "patch_file", "finish_repair"},
-                )
-        if tool_name == "expand_lock" and tool_args.get("path") and "expanded:" in str(result_text):
-            generation = 0
-            try:
-                from src.repair.execution.edit_lock import get_active_edit_lock
-
-                root = getattr(getattr(runtime.agent, "tool_context", None), "root", None)
-                lock = get_active_edit_lock(root)
-                if lock is not None:
-                    generation = lock.required_read_generation(str(tool_args["path"]))
-            except Exception:
-                generation = 0
-            runtime.hooks.grant_read_reserve(
-                str(tool_args["path"]).replace("\\", "/"),
-                kind="post_lock",
-                step=step,
-                generation=generation,
-            )
-
-    # StepGuard：仅「改盘」算进展。patcher 的 read/grep 不再伪装成 has_affected，
-    # 否则会空转耗尽 step_limit（R11 django）。
-    meta = result.metadata if hasattr(result, "metadata") else {}
-    affected = meta.get("affected_paths", []) if isinstance(meta, dict) else []
-    runtime.state.no_progress_steps = runtime.guard.stall_count
-    if is_patcher:
-        guard_has_affected = bool(affected) or (
-            tool_name in _MODIFYING_TOOLS
-            and meta.get("tool_status") == "success"
-            and not str(result_text).startswith("Error")
+        runtime.agent.loop_policy.on_success(
+            runtime.policy_context, tool_name, tool_args, result, step=step,
         )
-    else:
-        guard_has_affected = bool(affected) or tool_name not in _MODIFYING_TOOLS
+    runtime.state.no_progress_steps = runtime.guard.stall_count
+    guard_has_affected = runtime.agent.loop_policy.has_progress(
+        runtime.policy_context, tool_name, result,
+    )
     verdict = None
     if not convergence_blocked:
         verdict = runtime.guard.evaluate(
@@ -798,11 +536,7 @@ def record_step_progress(
                     f"\n\n⚠ 进展停滞（连续 {runtime.guard.stall_count} 步无文件变更）。"
                     "请检查当前 todo 列表，考虑重新规划或尝试不同策略。"
                 )
-                if is_patcher:
-                    hint += (
-                        " 【patcher】下一步必须对实现文件 apply_patch（含 - 上下文）；"
-                        "不要继续纯 read/grep；不要用 run_shell/sandbox_test。"
-                    )
+                hint += runtime.agent.loop_policy.stall_hint
                 result_text = result_text + hint
                 runtime.agent.record(
                     {
@@ -830,7 +564,8 @@ def record_step_progress(
             return verdict.replan_hint or f"任务终止：{verdict.detail}"
         else:
             if verdict.action == "enter_convergence":
-                runtime.hooks.enter_convergence_gate(
+                runtime.agent.loop_policy.enter_convergence(
+                    runtime.policy_context,
                     runtime.guard.convergence_reason or "read_limit_without_write",
                     step=step,
                 )

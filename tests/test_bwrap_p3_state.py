@@ -33,7 +33,7 @@ def test_observations_use_external_root(tmp_path):
     workspace.mkdir()
     session = {"id": "s1", "session_scope": {"workspace_id": "w1"}}
     store = ObservationStore(session, str(workspace), str(state))
-    record = store.put("read_file", {"path": "a.py"}, "secret output", redact=True)
+    record = store.put("read_file", {"path": "a.py"}, "secret output")
     store.close()
     assert record.raw_ref.startswith(("memory:", str(state)))
     assert not (workspace / ".agent").exists()

@@ -11,7 +11,7 @@ def _write_trace(run_dir: Path):
         {
             "event": "context_built",
             "payload": {
-                "sections": {"system": 200, "tools": 150, "request": 100},
+                "context_sections": {"system": 200, "tools": 150, "request": 100},
                 "total_tokens": 450,
             },
         },

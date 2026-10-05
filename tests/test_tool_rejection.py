@@ -11,7 +11,7 @@ class TestToolRejection:
     def test_gateway_metadata(self):
         meta = build_gateway_rejection_metadata()
         assert meta["rejection_layer"] == "gateway"
-        assert meta["tool_error_code"] == "permission_denied"
+        assert "tool_error_code" not in meta
 
     def test_tool_trace_payload_filters_keys(self):
         payload = tool_trace_payload(

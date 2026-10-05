@@ -178,7 +178,7 @@ def test_step_checkpoint_not_persisted_if_cancelled_before_persist(temp_workspac
         "工具 list_files 执行完成。\n结果:\nREADME.md",
         ToolResult(
             content="README.md",
-            metadata={"tool_status": "success"},
+            metadata={}, status="success",
         ),
         step=1,
         path="xml",

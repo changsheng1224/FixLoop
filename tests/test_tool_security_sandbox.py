@@ -45,8 +45,8 @@ class TestSensitivePaths:
     def test_gate3_rejects_read_env(self, executor, workspace):
         (Path(workspace.repo_root) / ".env").write_text("SECRET=1\n", encoding="utf-8")
         result = executor.execute_gated("read_file", {"path": ".env"})
-        assert result.metadata["tool_status"] == "rejected"
-        assert result.metadata["tool_error_code"] == "sensitive_path"
+        assert result.status == "rejected"
+        assert result.error_code == "sensitive_path"
         assert result.metadata.get("sandbox_violation") is True
 
     def test_gate3_rejects_write_pem(self, executor):
@@ -54,13 +54,13 @@ class TestSensitivePaths:
             "write_file",
             {"path": "leak.pem", "content": "-----BEGIN-----\n"},
         )
-        assert result.metadata["tool_error_code"] == "sensitive_path"
+        assert result.error_code == "sensitive_path"
 
     def test_direct_tool_blocks_sensitive(self, workspace):
         root = Path(workspace.repo_root)
         (root / ".env").write_text("X=1\n", encoding="utf-8")
         ctx = ToolContext(root=str(root))
-        assert "敏感路径" in tool_read_file(ctx, {"path": ".env"})
+        assert "敏感路径" in tool_read_file(ctx, {"path": ".env"}).content
         assert check_sensitive_access("write_file", ".env") == "sensitive_path"
 
 
@@ -70,7 +70,7 @@ class TestIoLimits:
         big = Path(workspace.repo_root) / "big.txt"
         big.write_text("x" * 200, encoding="utf-8")
         result = executor.execute_gated("read_file", {"path": "big.txt"})
-        assert result.metadata["tool_status"] == "success"
+        assert result.status == "success"
         assert "x" * 200 in result.content
 
     def test_binary_rejected(self, executor, workspace):
@@ -78,7 +78,7 @@ class TestIoLimits:
         blob.write_bytes(b"\x00\x01\x02\x03" + b"\xff" * 100)
         assert is_likely_binary(blob)
         result = executor.execute_gated("read_file", {"path": "a.bin"})
-        assert result.metadata["tool_error_code"] == "binary_file"
+        assert result.error_code == "binary_file"
 
     def test_truncate_text(self):
         text, truncated = truncate_text("abcdefghij", 4, label="t")
@@ -89,20 +89,20 @@ class TestIoLimits:
 class TestPathEscapeAndShell:
     def test_path_escape_sandbox_flag(self, executor):
         result = executor.execute_gated("read_file", {"path": "../outside.txt"})
-        assert result.metadata["tool_error_code"] == "path_escape"
+        assert result.error_code == "path_escape"
         assert result.metadata.get("sandbox_violation") is True
 
     def test_malicious_shell_gate3(self, executor):
         # sudo 在 blocklist；Gate3 早于 Gate7 deny
         result = executor.execute_gated("run_shell", {"command": "sudo rm -rf /"})
         assert result.metadata["gate_id"] == 3
-        assert result.metadata["tool_error_code"] == "sandbox_violation"
+        assert result.error_code == "sandbox_violation"
 
     def test_shell_allowlist_direct(self, workspace):
         ctx = ToolContext(root=str(workspace.repo_root))
-        bad = tool_run_shell(ctx, {"command": "nc -l 9999"})
+        bad = tool_run_shell(ctx, {"command": "nc -l 9999"}).content
         assert "安全策略拒绝" in bad or "Error" in bad
-        ok = tool_run_shell(ctx, {"command": "echo safe"})
+        ok = tool_run_shell(ctx, {"command": "echo safe"}).content
         assert "exit_code: 0" in ok
 
 
@@ -112,7 +112,7 @@ class TestGrepSkipsSensitive:
         (root / ".env").write_text("SECRET_TOKEN=abc\n", encoding="utf-8")
         (root / "ok.py").write_text("SECRET_TOKEN = None\n", encoding="utf-8")
         ctx = ToolContext(root=str(root))
-        out = tool_grep(ctx, {"pattern": "SECRET_TOKEN", "path": ".", "max_results": 20})
+        out = tool_grep(ctx, {"pattern": "SECRET_TOKEN", "path": ".", "max_results": 20}).content
         assert ".env" not in out or "敏感" in out
 
 
@@ -135,6 +135,6 @@ class TestWorktree:
 class TestCancelDoesNotLeaveSensitiveWrite:
     def test_write_sensitive_never_succeeds(self, workspace):
         ctx = ToolContext(root=str(workspace.repo_root))
-        out = tool_write_file(ctx, {"path": "id_rsa", "content": "private"})
+        out = tool_write_file(ctx, {"path": "id_rsa", "content": "private"}).content
         assert "敏感路径" in out
         assert not (Path(workspace.repo_root) / "id_rsa").exists()

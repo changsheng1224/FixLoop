@@ -106,7 +106,7 @@ def suspects_from_issue(issue: str, repo_root: str | Path) -> list[SuspectLocati
 
     frames: list[dict] = []
     try:
-        raw = stack_parse(None, {"traceback": issue or ""})
+        raw = stack_parse(None, {"traceback": issue or ""}).content
         data = json.loads(raw) if raw and not str(raw).startswith("Error") else {}
         frames = list(data.get("frames") or [])
         if data.get("exception_type") == "SyntaxError" and data.get("syntax_file"):
@@ -288,9 +288,7 @@ def refine_suspects(
 
     issue_paths = {
         p
-        for p in (
-            normalize_repo_path(x, repo_root) for x in extract_paths_from_issue(issue or "")
-        )
+        for p in (normalize_repo_path(x, repo_root) for x in extract_paths_from_issue(issue or ""))
         if p
     }
     stack_files = {s.file_path for s in grounded}
@@ -398,7 +396,7 @@ def retrieve_keywords(
     try:
         from src.tools.stack_parser import stack_parse
 
-        raw = stack_parse(None, {"traceback": issue or ""})
+        raw = stack_parse(None, {"traceback": issue or ""}).content
         data = json.loads(raw) if raw and not str(raw).startswith("Error") else {}
         for fr in data.get("frames") or []:
             add(str(fr.get("function") or ""))

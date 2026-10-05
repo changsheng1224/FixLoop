@@ -179,7 +179,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
     ) -> tuple[list[SuspectLocation], RetrievedContext]:
         """规则种子 only：不调用 Localizer/Retriever。"""
         started = time.monotonic()
-        from src.repair.execution.edit_lock import EditLockState, set_active_edit_lock
+        from src.repair.execution.edit_lock import EditLockState
         from src.repair.localization.localize_fastpath import seed_rule_first_suspects
         from src.repair.localization.localize_quality import _is_test_path
 
@@ -234,7 +234,8 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         # primary：允许多 hunk；写串行由模型自行节奏，不做硬拒
         lock.write_serial = False
         self._edit_lock = lock
-        set_active_edit_lock(self._repo_root, lock)
+        if self.patcher is not None:
+            self.patcher.tool_context.edit_lock = lock
         state.control.allowed_edit = sorted(lock.allowed_edit)
         state.node_timings["unread_write_reject_count"] = 0
         state.node_timings["apply_path_reject_count"] = 0
@@ -455,17 +456,14 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
     def _release_repair_resources(self) -> None:
         """Release only this orchestrator's edit lock, including exceptional exits."""
-        from src.repair.execution.edit_lock import clear_active_edit_lock, get_active_edit_lock
-
         lock = getattr(self, "_edit_lock", None)
-        try:
-            if lock is not None and get_active_edit_lock(lock.repo_root) is lock:
-                clear_active_edit_lock(lock.repo_root)
-        finally:
-            self._edit_lock = None
-            emitter = getattr(self, "_progress", None)
-            if emitter is not None:
-                emitter.stop_heartbeat()
+        context = getattr(getattr(self, "patcher", None), "tool_context", None)
+        if context is not None and context.edit_lock is lock:
+            context.edit_lock = None
+        self._edit_lock = None
+        emitter = getattr(self, "_progress", None)
+        if emitter is not None:
+            emitter.stop_heartbeat()
 
     def _repair_impl_with_plan(
         self,
@@ -489,6 +487,14 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         self._init_repair_blackboard()
         if checkpoint is not None:
             self._restore_blackboard_snapshot(state.blackboard_snapshot)
+            from src.repair.execution.edit_lock import EditLockState
+
+            # Restore edit scope, never stale read authorization.
+            lock = EditLockState(repo_root=self._repo_root, allowed_edit=state.control.allowed_edit)
+            lock.write_serial = False
+            self._edit_lock = lock
+            if self.patcher is not None:
+                self.patcher.tool_context.edit_lock = lock
             log.info("[resume] 从 %s 恢复，跳过 parse/localize", state.repair_run_id)
         state.node_timings["repair_mode"] = "patcher_primary"
         state.node_timings["repair_config"] = self.repair_config.snapshot()

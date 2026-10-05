@@ -50,8 +50,11 @@ def test_contract_survives_disk_reload_and_expansion_truncation(tmp_path):
         assert expanded["ok"] and expanded["freshness"] == "fresh"
         assert expanded["output_truncated"]
         assert expanded["retrieval_result"]["completeness"] == "complete_in_scope"
-        assert "output_truncated=true" in tool_expand_observation(
-            context, {"observation_id": record.observation_id, "max_tokens": 1}
+        assert (
+            "output_truncated=true"
+            in tool_expand_observation(
+                context, {"observation_id": record.observation_id, "max_tokens": 1}
+            ).content
         )
     finally:
         restored.close()
@@ -103,7 +106,9 @@ def test_partial_coverage_and_freshness_are_independent(tmp_path):
             scanned_scope={"root": ".", "glob": "*.py"},
             degradation_reason="lsp_unavailable",
         )
-        content = tool_expand_observation(context, {"observation_id": record.observation_id})
+        content = tool_expand_observation(
+            context, {"observation_id": record.observation_id}
+        ).content
         assert "freshness=fresh" in content and "completeness=partial" in content
         assert "hit_limit" in content and "lsp_unavailable" in content
         assert "*.py" in content and "absence applies only" in content
@@ -119,7 +124,9 @@ def test_unversioned_range_is_unknown_and_requires_explicit_reread(tmp_path):
         result = store.expand_for_context(record.observation_id, context=context)
         assert result["freshness"] == "unknown" and result["reason"] == "unversioned_source"
         assert not store.get(record.observation_id).stale
-        content = tool_expand_observation(context, {"observation_id": record.observation_id})
+        content = tool_expand_observation(
+            context, {"observation_id": record.observation_id}
+        ).content
         assert "freshness=unknown" in content and "original = 1" not in content
     finally:
         store.close()

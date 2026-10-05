@@ -48,7 +48,7 @@ def trace_tree_summary(run_dir: str | Path) -> str:
         if name == "run_started":
             lines.append("▶ run_started")
         elif name == "context_built":
-            sections = payload.get("sections") or payload.get("context_sections") or {}
+            sections = payload.get("context_sections") or {}
             total = payload.get("total_tokens", "?")
             lines.append(f"  📋 context_built ({total} tokens)")
             for sname, stokens in sorted(sections.items()):
@@ -148,7 +148,7 @@ class ReplayRunner:
             payload = event.get("payload", {})
             tool_name = payload.get("tool", "")
             result.total += 1
-            tool_args = payload.get("tool_args") or payload.get("args")
+            tool_args = payload.get("tool_args")
             expected_hash = str(payload.get("result_hash") or "")
             if not isinstance(tool_args, dict):
                 # Historical traces predate canonical argument capture. They remain

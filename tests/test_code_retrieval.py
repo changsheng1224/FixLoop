@@ -3,7 +3,7 @@
 from agent_runtime.code_exploration.io import grep_result, read_file_result
 from agent_runtime.context_runtime import ObservationStore
 from agent_runtime.tool_context import ToolContext
-from agent_runtime.tool_result import ToolResult, normalize_tool_result
+from agent_runtime.tool_result import ToolResult, require_tool_result
 from agent_runtime.tools import build_tool_registry, tool_grep, tool_read_file
 
 
@@ -16,12 +16,12 @@ def test_registry_returns_structured_metadata_and_legacy_text(tmp_path):
         ("grep", {"pattern": "answer", "path": "."}),
         ("list_files", {"path": "."}),
     ):
-        result = normalize_tool_result(registry[tool]["run"](args), tool_name=tool)
+        result = require_tool_result(registry[tool]["run"](args), tool_name=tool)
         assert isinstance(result, ToolResult)
         assert result.metadata["retrieval_result"]["schema_version"] == "1"
         assert result.metadata["retrieval_result"]["execution"] == "ok"
-    assert "def answer" in tool_read_file(context, {"path": "mod.py"})
-    assert "mod.py:1" in tool_grep(context, {"pattern": "answer"})
+    assert "def answer" in tool_read_file(context, {"path": "mod.py"}).content
+    assert "mod.py:1" in tool_grep(context, {"pattern": "answer"}).content
     listing = registry["list_files"]["run"]({"path": "."})
     assert listing.metadata["retrieval_result"]["hits"][0]["path"] == "mod.py"
     from src.tools.registry import build_repair_tools

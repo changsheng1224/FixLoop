@@ -9,7 +9,7 @@ from typing import Literal
 import yaml
 from pydantic import ValidationError
 
-from src.skills.models import SkillSpec
+from src.skills.contract import SkillSpec
 
 IssueLevel = Literal["error", "warning"]
 

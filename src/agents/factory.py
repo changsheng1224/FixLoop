@@ -32,6 +32,32 @@ _AGENT_DEFAULTS: dict[RepairAgentRole, dict] = {
 }
 
 
+def _role_quota(agent_name: str = ""):
+    """按 Agent 角色返回差异化配额。
+
+    Patcher:   写文件宽松 → writes=8 shell=2 total=15
+    Verifier:  sandbox 仅容器操作 → shell=3 total=6
+    """
+    from agent_runtime.tool_executor import QuotaEnforcer
+
+    role = (agent_name or "").lower()
+    if role == "patcher":
+        return QuotaEnforcer(
+            max_writes=8,
+            max_shell=2,
+            max_total=24,
+            group_limits={"read": 12, "write": 8, "verify": 2, "recovery": 2},
+        )
+    if role == "verifier":
+        return QuotaEnforcer(
+            max_writes=0,
+            max_shell=3,
+            max_total=6,
+            group_limits={"read": 0, "write": 0, "verify": 6, "recovery": 0},
+        )
+    return QuotaEnforcer()
+
+
 def load_repair_agent_config(
     role: RepairAgentRole,
     root: str,
@@ -146,6 +172,8 @@ def create_repair_agent(
             runtime.before_write()
         return gw.dispatch(agent_name, name, execute)
 
+    from src.repair.loop_policy import RepairLoopPolicy
+
     agent = Agent(
         config=config,
         model_client=model_client,
@@ -160,6 +188,8 @@ def create_repair_agent(
         l1_prefix=l1_prefix,
         warm_context=warm_context,
         tool_context=ctx,
+        loop_policy=RepairLoopPolicy() if role == "patcher" else None,
+        quota=_role_quota(role),
     )
     agent._repair_gateway = gw
     agent._exploration_client_factory = exploration_client_factory

@@ -15,21 +15,20 @@ from src.skills.executable import (
 )
 from src.skills.registry import (
     SkillRegistry,
-    get_default_executable_registry,
-    reset_default_executable_registry_for_tests,
+    get_default_registry,
 )
 from src.skills.router import SkillRouter
 from src.skills.router_eval import evaluate_router, load_router_cases
 
 
 def setup_function() -> None:
-    reset_default_executable_registry_for_tests()
+    get_default_registry.cache_clear()
 
 
 class TestRegistry:
     def test_loads_seven_skills(self):
         reg = SkillRegistry.from_default_specs()
-        names = [s.name for s in reg.list()]
+        names = [s.name for s in reg.list(kind="executable")]
         assert names == [
             "baseline_verify",
             "draft_pr_prepare",
@@ -39,10 +38,10 @@ class TestRegistry:
             "repo_code_search",
             "stacktrace_localization",
         ]
-        assert reg.resolve_version("stacktrace_localization")["version"] == "1.0.0"
+        assert reg.get("stacktrace_localization", kind="executable").version == "1.0.0"
 
     def test_spec_has_triggers_and_tools(self):
-        spec = get_default_executable_registry().require("github_issue_ingestion")
+        spec = get_default_registry().require("github_issue_ingestion", kind="executable")
         assert spec.positive_triggers
         assert "github_get_issue" in spec.allowed_tools
         assert spec.input_schema and spec.output_schema

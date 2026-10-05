@@ -202,7 +202,7 @@ def record_to_ingestion_events(
     if _obs_type(event) == "generation-create":
         model = None
         if isinstance(safe_payload, dict):
-            model = safe_payload.get("model") or safe_payload.get("model_name")
+            model = safe_payload.get("model")
         if model:
             body["model"] = str(model)
         usage = None

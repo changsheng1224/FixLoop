@@ -36,14 +36,7 @@ def stale_read(result: ToolResult):
     result.status = "partial"
     result.error_code = "stale_precondition"
     result.retryable = True
-    result.metadata.update(
-        {
-            "tool_status": "partial",
-            "tool_error_code": "stale_precondition",
-            "freshness": "needs_recheck",
-            "retryable": True,
-        }
-    )
+    result.metadata.update({"freshness": "needs_recheck"})
     result.content = (
         "[partial freshness=needs_recheck error_code=stale_precondition] "
         "文件版本已变化，请重新读取后再使用。\n" + result.content
@@ -57,9 +50,6 @@ def normalize_read_result(result: ToolResult):
         result.status = "partial"
         result.error_code = "partial_result"
         result.retryable = True
-        result.metadata.update(
-            {"tool_status": "partial", "tool_error_code": "partial_result", "retryable": True}
-        )
         result.content = "[partial error_code=partial_result] 读取范围不完整。\n" + result.content
     return result
 

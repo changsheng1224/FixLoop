@@ -13,8 +13,8 @@ from agent_runtime.mcp.github_allowlist import (
     is_github_mcp_tool_allowed,
 )
 from agent_runtime.mcp.mock_server import MockGitHubMcpServer
-from agent_runtime.mcp.schema_map import json_schema_to_fixloop
-from src.tools.spec import ToolSpec, project_tool_specs
+from agent_runtime.tool_result import ToolResult
+from agent_runtime.tool_spec import ToolSpec, project_tool_specs
 
 
 class _McpClientLike(Protocol):
@@ -38,25 +38,6 @@ def build_mock_github_mcp_client(
     return client, server
 
 
-class McpToolExecution(str):
-    """Canonical result passed from an MCP adapter to ToolExecutor."""
-
-    def __new__(
-        cls,
-        content: str,
-        *,
-        metadata: dict[str, Any] | None = None,
-        structured_facts: list[dict[str, Any]] | None = None,
-        raw: dict[str, Any] | None = None,
-    ) -> McpToolExecution:
-        value = super().__new__(cls, content)
-        value.content = content
-        value.metadata = dict(metadata or {})
-        value.structured_facts = list(structured_facts or [])
-        value.raw = dict(raw or {})
-        return value
-
-
 def build_github_mcp_tool_specs(client: _McpClientLike) -> list[ToolSpec]:
     """Discover allowed GitHub tools and build canonical ToolSpecs."""
     specs: list[ToolSpec] = []
@@ -68,13 +49,7 @@ def build_github_mcp_tool_specs(client: _McpClientLike) -> list[ToolSpec]:
             ToolSpec(
                 name=remote.name,
                 description=remote.description or f"GitHub MCP: {remote.name}",
-                input_schema=json_schema_to_fixloop(remote.properties, remote.required),
-                protocol_schema={
-                    "type": "object",
-                    "properties": dict(remote.properties),
-                    "required": list(remote.required),
-                    "additionalProperties": False,
-                },
+                input_schema=dict(remote.input_schema),
                 executor=_make_runner(client, remote.name),
                 roles=frozenset({"patcher"} if is_write else {"*"}),
                 phases=frozenset({"context", "patch", "verify", "verification"}),
@@ -109,29 +84,30 @@ def build_github_mcp_tool_registry(client: _McpClientLike) -> dict[str, dict[str
 
 
 def _make_runner(client: _McpClientLike, tool_name: str):
-    def run(args: dict) -> McpToolExecution:
+    def run(args: dict) -> ToolResult:
         started = time.monotonic()
         try:
             result = client.call_tool(tool_name, args)
             elapsed_ms = int((time.monotonic() - started) * 1000)
             status = "error" if result.is_error else "success"
-            return McpToolExecution(
+            return ToolResult(
                 content=result.observation(),
                 metadata={
-                    "tool_status": status,
-                    "tool_error_code": "tool_execution_failed" if result.is_error else "",
-                    "retryable": False,
                     "provider": "mcp",
+                    "structured_facts": result.structured_facts(),
+                    "raw_result": result.raw,
                     "mcp_server": client.server_name,
                     "mcp_tool": tool_name,
                     "mcp_duration_ms": elapsed_ms,
                 },
-                structured_facts=result.structured_facts(),
-                raw=result.raw,
+                status=status,
+                error_code="tool_execution_failed" if result.is_error else "",
+                retryable=False,
+                data={"structured_facts": result.structured_facts(), "raw": result.raw},
             )
         except McpError as exc:
-            metadata = exc.metadata()
-            metadata.update(
+            result = exc.to_tool_result()
+            result.metadata.update(
                 {
                     "provider": "mcp",
                     "mcp_server": client.server_name,
@@ -139,7 +115,7 @@ def _make_runner(client: _McpClientLike, tool_name: str):
                     "mcp_duration_ms": int((time.monotonic() - started) * 1000),
                 }
             )
-            return McpToolExecution(content=exc.observation(), metadata=metadata)
+            return result
 
     return run
 

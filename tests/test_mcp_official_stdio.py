@@ -90,10 +90,8 @@ class TestStdioFakeServer:
     def test_registry_from_official_mapped(self, fake_stdio_client):
         tools = build_github_mcp_tool_registry(fake_stdio_client)
         assert "github_get_issue" in tools
-        out = tools["github_get_issue"]["run"](
-            {"owner": "acme", "repo": "demo", "number": 1}
-        )
-        assert "get" in out
+        out = tools["github_get_issue"]["run"]({"owner": "acme", "repo": "demo", "number": 1})
+        assert "get" in out.content
         assert "merge_pull_request" not in tools
 
 

@@ -477,7 +477,12 @@ class TestAgentLoopL1Integration:
             tools={
                 "read_file": {
                     "run": read_file,
-                    "schema": {"path": "str"},
+                    "schema": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                        "additionalProperties": False,
+                    },
                     "description": "read",
                 }
             },

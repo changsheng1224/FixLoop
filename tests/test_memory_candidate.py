@@ -260,8 +260,7 @@ class TestGateCandidate:
         # 写入一条
         store.promote([c.promotion])
         # 同 key 再次门控
-        topic_file = store.topics_dir / "project-conventions.md"
-        existing = store._read_topic(topic_file)
+        existing = store._read_topic("project-conventions")
         gate = gate_candidate(c, existing)
         assert gate.allowed is False
 
@@ -284,8 +283,7 @@ class TestGateCandidate:
             confidence=0.9,
             source="user",
         )
-        topic_file = store.topics_dir / "key-decisions.md"
-        existing = store._read_topic(topic_file)
+        existing = store._read_topic("key-decisions")
         gate = gate_candidate(c2, existing, authority="agent")
         # agent > auto → override
         assert gate.allowed is True

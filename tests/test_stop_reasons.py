@@ -1,9 +1,7 @@
-"""stop_reason 枚举与 legacy 归一化单测。"""
+"""stop_reason 枚举与 canonical 停机单测。"""
 
 import json
 from pathlib import Path
-
-import pytest
 
 from agent_runtime.config import AgentConfig
 from agent_runtime.providers.clients import FakeModelClient
@@ -12,33 +10,11 @@ from agent_runtime.stop_reasons import (
     CANONICAL_STOP_REASONS,
     StopReason,
     is_canonical_stop_reason,
-    normalize_stop_reason,
-    stop_reason_detail_from_legacy,
 )
 from agent_runtime.task_state import TaskState
 
 
-class TestStopReasonNormalize:
-    @pytest.mark.parametrize(
-        ("raw", "expected"),
-        [
-            ("final", "final"),
-            ("step_limit", "step_limit"),
-            ("tool_steps > 6", "step_limit"),
-            ("tool_steps >= 3", "step_limit"),
-            ("attempts >= 22", "parse_fail"),
-            ("error: connection reset", "api_error"),
-            ("step_timeout", "step_timeout"),
-            ("custom_unknown", "custom_unknown"),
-        ],
-    )
-    def test_normalize_legacy(self, raw, expected):
-        assert normalize_stop_reason(raw) == expected
-
-    def test_detail_extracted_for_legacy(self):
-        assert stop_reason_detail_from_legacy("tool_steps > 6") == "tool_steps > 6"
-        assert stop_reason_detail_from_legacy("final") == ""
-
+class TestStopReasonCanonical:
     def test_canonical_members(self):
         assert is_canonical_stop_reason("final")
         assert is_canonical_stop_reason("stall")
@@ -59,17 +35,17 @@ class TestTaskStateStopReason:
         assert ts.stop_reason == StopReason.PARSE_FAIL.value
         assert "attempts" in ts.node_timings["stop_reason_detail"]
 
-    def test_from_dict_normalizes_legacy(self):
+    def test_from_dict_reads_stop_reason_verbatim(self):
         ts = TaskState.from_dict(
             {
                 "run_id": "run-1",
                 "task_id": "run-1",
                 "user_request": "hi",
-                "stop_reason": "tool_steps > 6",
+                "stop_reason": "step_limit",
             }
         )
         assert ts.stop_reason == StopReason.STEP_LIMIT.value
-        assert ts.node_timings["stop_reason_detail"] == "tool_steps > 6"
+        assert "stop_reason_detail" not in ts.node_timings
 
 
 def _latest_report(workspace: Path) -> dict:

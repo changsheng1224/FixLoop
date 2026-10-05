@@ -128,7 +128,7 @@ def attribute_failure(
     """Create evidence-backed attribution; never decides a code patch."""
     observations = observations or []
     for item in reversed(observations):
-        failure = str(item.get("failure_class", "") or item.get("failure_type", ""))
+        failure = str(item.get("failure_class", ""))
         for phase, values in _ATTRIBUTION_RULES:
             if failure in values:
                 return {

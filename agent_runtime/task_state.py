@@ -7,11 +7,7 @@ from dataclasses import dataclass, field
 
 from agent_runtime.run_ids import new_run_id
 from agent_runtime.runtime_contracts import RuntimePhase, RuntimeStateMachine, RuntimeStatus
-from agent_runtime.stop_reasons import (
-    StopReason,
-    normalize_stop_reason,
-    stop_reason_detail_from_legacy,
-)
+from agent_runtime.stop_reasons import StopReason
 
 
 @dataclass
@@ -171,14 +167,6 @@ class TaskState:
             "permission_denied_by_tool": dict(self.permission_denied_by_tool),
         }
 
-    def stop(self, reason: str, status: str):
-        """通用停机（legacy 字符串会归一化为 canonical）。"""
-        self.stop_with_reason(
-            normalize_stop_reason(reason),
-            status,
-            detail=stop_reason_detail_from_legacy(reason),
-        )
-
     def stop_with_reason(
         self,
         reason: StopReason | str,
@@ -275,11 +263,7 @@ class TaskState:
     @classmethod
     def from_dict(cls, data: dict) -> "TaskState":
         """从 dict 恢复 TaskState。"""
-        raw_reason = data.get("stop_reason", "")
         node_timings = dict(data.get("node_timings", {}))
-        detail = stop_reason_detail_from_legacy(raw_reason)
-        if detail and "stop_reason_detail" not in node_timings:
-            node_timings["stop_reason_detail"] = detail
         return cls(
             run_id=data.get("run_id", ""),
             task_id=data.get("task_id", ""),
@@ -288,7 +272,7 @@ class TaskState:
             tool_steps=data.get("tool_steps", 0),
             attempts=data.get("attempts", 0),
             last_tool=data.get("last_tool", ""),
-            stop_reason=normalize_stop_reason(raw_reason),
+            stop_reason=data.get("stop_reason", ""),
             final_answer=data.get("final_answer", ""),
             checkpoint_id=data.get("checkpoint_id", ""),
             resume_status=data.get("resume_status", ""),

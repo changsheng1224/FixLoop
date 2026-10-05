@@ -3,17 +3,19 @@
 import re
 from dataclasses import dataclass
 
+from agent_runtime.tool_result import ToolResult
+
 
 @dataclass
 class JavaStackParseArgs:
     traceback: str  # 必填
 
 
-def java_stack_parse(context, args: dict) -> str:
+def java_stack_parse(context, args: dict) -> ToolResult:
     """解析 Java 异常堆栈为结构化数据。"""
     traceback = args.get("traceback", "")
     if not traceback:
-        return "Error: 缺少必填参数 traceback"
+        return ToolResult.error("Error: 缺少必填参数 traceback")
 
     lines = []
     # 异常类型
@@ -36,4 +38,4 @@ def java_stack_parse(context, args: dict) -> str:
         if caused.group(2):
             lines.append(f"  Message: {caused.group(2)}")
 
-    return "\n".join(lines) if lines else "(无法解析)"
+    return ToolResult(content="\n".join(lines) if lines else "(无法解析)")

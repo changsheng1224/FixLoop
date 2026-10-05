@@ -76,6 +76,9 @@ class ToolGateway:
         if not self.can_call(agent_name, tool_name):
             return ToolResult(
                 content=f"Error: 工具 '{tool_name}' 对 '{agent_name}' 不可用。",
+                status="rejected",
+                error_code="permission_denied",
+                retryable=False,
                 metadata=build_gateway_rejection_metadata(),
             )
         if self._policy is not None and agent_name in self._runtime_context:
@@ -96,6 +99,9 @@ class ToolGateway:
                         f"Error: {tool_name} rejected: {decision.reason}; "
                         f"alternatives={decision.alternatives}"
                     ),
+                    status="rejected",
+                    error_code="permission_denied",
+                    retryable=False,
                     metadata=build_gateway_rejection_metadata(
                         rejection_reason=decision.reason,
                         policy_reason=decision.reason,

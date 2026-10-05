@@ -8,7 +8,7 @@ from typing import Any
 
 import yaml
 
-from src.skills.registry import get_default_executable_registry
+from src.skills.registry import get_default_registry
 from src.skills.router import SkillRouter
 
 _CASES_DIR = Path(__file__).with_name("eval_cases")
@@ -111,7 +111,7 @@ def evaluate_router(
         if cases is not None
         else load_router_cases(include_hard=include_hard, include_heldout=include_heldout)
     )
-    router = router or SkillRouter(registry=get_default_executable_registry())
+    router = router or SkillRouter(registry=get_default_registry())
     previous_by_id = previous_by_id or {}
 
     top1_ok = 0

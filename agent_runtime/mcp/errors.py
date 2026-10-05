@@ -22,17 +22,23 @@ class McpError(Exception):
             return f"Error: [{self.code}] {self.message} ({self.detail})"
         return f"Error: [{self.code}] {self.message}"
 
-    def metadata(self) -> dict:
+    def to_tool_result(self):
+        from agent_runtime.tool_result import ToolResult
+
         decision = decide_tool_error(self.canonical_code.value)
-        return {
-            "tool_status": "error",
-            "tool_error_code": self.canonical_code.value,
+        metadata = {
             "mcp_error_code": self.code,
-            "retryable": decision.retryable,
             "retry_limit": decision.retry_limit,
             "model_hint": decision.model_hint,
             "error_detail": self.detail,
         }
+        return ToolResult(
+            content=self.observation(),
+            status="error",
+            error_code=self.canonical_code.value,
+            retryable=decision.retryable,
+            metadata=metadata,
+        )
 
 
 class McpTimeoutError(McpError):

@@ -91,7 +91,7 @@ def test_sandbox_grep_never_resolves_host_rg(tmp_path, monkeypatch):
     monkeypatch.setattr(retrieval.shutil, "which", lambda *_: pytest.fail("host rg lookup"))
     from agent_runtime.tools import tool_grep
 
-    assert "needle" in tool_grep(ctx, {"pattern": "needle"})
+    assert "needle" in tool_grep(ctx, {"pattern": "needle"}).content
 
 
 def test_uncertain_blocks_followup_command_and_write_at_executor(tmp_path, monkeypatch):

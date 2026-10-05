@@ -10,6 +10,7 @@ from agent_runtime.config import AgentConfig
 from agent_runtime.providers.clients import FakeModelClient, FakeNativeToolClient
 from agent_runtime.runtime import Agent
 from agent_runtime.step_clock import StepClock, StepTimeoutError
+from agent_runtime.tool_result import ToolResult
 from agent_runtime.workspace import WorkspaceContext
 
 _TOOL = '<tool>{"name":"list_files","args":{"path":"."}}</tool>'
@@ -110,13 +111,16 @@ class TestStepTimeoutBeforeTool:
             workspace=workspace,
             cwd=str(temp_workspace),
         )
-        agent.tools["list_files"]["run"] = lambda args: time.sleep(3) or "[]"
+        ran: list[int] = []
+        agent.tools["list_files"]["run"] = lambda args: (
+            ran.append(1) or time.sleep(3) or ToolResult(content="[]")
+        )
 
-        t0 = time.time()
         answer = agent.ask("list")
-        elapsed = time.time() - t0
 
         assert "超时" in answer
-        assert elapsed < 2.5
         assert _latest_report(temp_workspace)["stop_reason"] == "step_timeout"
+        # 超时必须在该慢工具执行前中止：以工具体是否被调用为准（因果证明），
+        # 不使用易受环境冷启动影响的 wall-clock 计时断言。
+        assert ran == []
         assert "tool_executed" not in _latest_events(temp_workspace)

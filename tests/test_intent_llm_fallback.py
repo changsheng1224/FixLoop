@@ -2,7 +2,7 @@
 
 from agent_runtime.intent.candidates import events_from_llm_candidates
 from agent_runtime.intent.graph import IntentGraph
-from agent_runtime.intent.llm_fallback import maybe_refine, maybe_refine_graph
+from agent_runtime.intent.llm_fallback import maybe_refine
 from agent_runtime.intent.models import IntentNode, RouteContext
 from agent_runtime.intent.router import IntentRouter
 
@@ -35,7 +35,7 @@ def _weak_graph():
 class TestLlmFallback:
     def test_no_client_skips(self):
         g = _weak_graph()
-        out = maybe_refine_graph(g, "x", None, tau_llm=0.55)
+        out = maybe_refine(g, "x", None, tau_llm=0.55).graph
         assert out is g or out.nodes[0].primary == "ask"
 
     def test_refine_to_multi(self):
@@ -53,14 +53,14 @@ class TestLlmFallback:
           "need_clarify": false
         }"""
         g = _weak_graph()
-        out = maybe_refine_graph(
+        out = maybe_refine(
             g,
             "记住。然后修",
             FakeClient(reply),
             tau_llm=0.55,
             segments=["记住", "修"],
             force=True,
-        )
+        ).graph
         assert out.mode == "multi"
         assert len(out.executable_nodes()) == 2
 
@@ -92,7 +92,7 @@ class TestLlmFallback:
     def test_illegal_primary_clarify_or_keep(self):
         reply = '{"mode":"single","nodes":[{"id":"n0","primary":"NOT_REAL","role":"executable"}],"edges":[]}'
         g = _weak_graph()
-        out = maybe_refine_graph(g, "x", FakeClient(reply), force=True)
+        out = maybe_refine(g, "x", FakeClient(reply), force=True).graph
         assert out.nodes[0].primary in ("clarify", "ask")
 
     def test_router_attaches_llm_candidates(self):

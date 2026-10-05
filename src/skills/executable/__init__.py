@@ -108,7 +108,7 @@ def run_stacktrace_localization(args: dict[str, Any] | None = None) -> dict[str,
 
     args = dict(args or {})
     tb = str(args.get("traceback") or args.get("text") or "")
-    raw = stack_parse(None, {"traceback": tb})
+    raw = stack_parse(None, {"traceback": tb}).content
     parsed = _parse_jsonish(raw)
     localization: dict[str, Any]
     if isinstance(parsed, dict) and "exception_type" in parsed:

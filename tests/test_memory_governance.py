@@ -160,7 +160,7 @@ def test_context_runtime_selects_provenance_and_never_replays_writes():
             relevance=0.9, confidence=0.9, evidence_strength=1.0, hypothesis_ids=["H-1"],
         ),
     ]
-    selected = ContextPolicyEngine().select(items, request)
+    selected = ContextPolicyEngine().select_with_result(items, request).selected
     assert [item.item_id for item in selected] == ["high"]
 
     state = {}

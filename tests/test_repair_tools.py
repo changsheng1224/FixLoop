@@ -17,7 +17,7 @@ class TestStackParser:
             "    return a + b\n"
             "TypeError: unsupported operand type(s) for +\n"
         )
-        result = stack_parse(None, {"traceback": tb})
+        result = stack_parse(None, {"traceback": tb}).content
         data = json.loads(result)
         assert data["exception_type"] == "TypeError"
         assert len(data["frames"]) == 1
@@ -31,24 +31,26 @@ class TestStackParser:
             'File "app.py", line 10, in run\n'
             "ValueError: invalid value\n"
         )
-        result = stack_parse(None, {"traceback": tb})
+        result = stack_parse(None, {"traceback": tb}).content
         data = json.loads(result)
         assert data["is_chained"] is True
 
     def test_missing_traceback(self):
-        result = stack_parse(None, {})
+        result = stack_parse(None, {}).content
         assert "Error" in result
 
 
 class TestGitTools:
     def test_blame_on_committed_file(self, temp_workspace):
         ctx = ToolContext(root=str(temp_workspace))
-        result = git_blame(ctx, {"file": "README.md", "line": 1})
+        result = git_blame(ctx, {"file": "README.md", "line": 1}).content
         assert "author" in result or "Error" in result  # git blame 需要真实 git 历史
 
     def test_diff_no_changes(self, temp_workspace):
         ctx = ToolContext(root=str(temp_workspace))
-        result = git_diff(ctx, {"commit_a": "HEAD", "commit_b": "HEAD", "path": "README.md"})
+        result = git_diff(
+            ctx, {"commit_a": "HEAD", "commit_b": "HEAD", "path": "README.md"}
+        ).content
         assert isinstance(result, str)
 
 
@@ -61,7 +63,7 @@ class TestFindTest:
                 "function_name": "unknown_fn",
                 "file_path": "README.md",
             },
-        )
+        ).content
         assert "未找到" in result
 
     def test_finds_by_filename(self, temp_workspace):
@@ -75,7 +77,7 @@ class TestFindTest:
                 "function_name": "add",
                 "file_path": "calculator.py",
             },
-        )
+        ).content
         assert "test_calculator" in result
 
 
@@ -98,7 +100,9 @@ class TestRepairRegistry:
         ctx = ToolContext(root=str(temp_workspace))
         registry = build_repair_tools(ctx)
         r = registry["ast_parse"]["run"]({"path": "README.md"})
-        assert isinstance(r, str)
+        from agent_runtime.tool_result import ToolResult
+
+        assert isinstance(r, ToolResult)
 
     def test_all_repair_tools_are_host_tier(self, temp_workspace):
         ctx = ToolContext(root=str(temp_workspace))
@@ -174,7 +178,7 @@ class TestRegistrySchemaConsistency:
         tools = build_repair_tools(ctx)
         for name, spec in tools.items():
             schema = spec.get("schema", {})
-            required = [k for k, v in schema.items() if "=" not in str(v)]
+            required = schema["required"]
             desc = spec.get("description", "")
             for param in required:
                 assert param in desc, f"{name}: description 缺少参数 '{param}'"
