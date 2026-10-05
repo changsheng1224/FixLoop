@@ -1488,7 +1488,7 @@ class Orchestrator(RepairPipelineMixin):
         )[observation_start:]
         write_tools = {"write_file", "patch_file", "apply_patch"}
         write_attempted = any(
-            str(item.get("tool") or item.get("tool_name") or "") in write_tools
+            str(item.get("tool") or "") in write_tools
             for item in observations
         )
         state.control.patcher_write_attempted = bool(write_attempted)
