@@ -580,9 +580,9 @@ class TestUserProfileStore:
         pref = store.get("theme")
         assert pref.value == "light"
 
-    def test_remove_sets_empty(self, store):
+    def test_invalidate_sets_empty(self, store):
         store.set("temp", "value")
-        assert store.remove("temp") is True
+        assert store.invalidate("temp") is True
         pref = store.get("temp")
         # 标记删除后存在但值为空
         assert pref is not None
@@ -590,8 +590,8 @@ class TestUserProfileStore:
     def test_get_nonexistent(self, store):
         assert store.get("nonexistent") is None
 
-    def test_remove_nonexistent(self, store):
-        assert store.remove("missing") is False
+    def test_invalidate_nonexistent(self, store):
+        assert store.invalidate("missing") is False
 
     def test_user_preference_to_dict(self):
         from agent_runtime.features.memory.durable import UserPreference

@@ -141,9 +141,6 @@ class UserProfileStore:
         self._store.upsert_preference(pref)
         return True
 
-    # backward-compat alias
-    remove = invalidate
-
 
 DECAY_RATE = 0.95  # 每天衰减 5%（模块级常量）
 CONFIDENCE_FLOOR = 0.1  # 置信度低于此阈值不参与召回

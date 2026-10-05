@@ -7,8 +7,14 @@ import logging
 import re
 from typing import Any
 
-from src.repair.execution.patch_applier import extract_json_block
+from agent_runtime.json_recovery import repair_structured_output
 from src.state import RetrievedContext, SuspectLocation, VerificationResult
+
+
+def _extract_json_block(text: str) -> str:
+    """Canonical structured-recovery extraction of the JSON payload in *text*."""
+    parsed = repair_structured_output(text)
+    return parsed.repaired_text or str(text or "").strip()
 
 
 def _repair_trailing_comma(text: str) -> str:
@@ -33,7 +39,7 @@ def _load_json(text: str) -> Any | None:
     """四级降级解析：strict JSON → repair trailing comma → regex extract → None。"""
     # L1: strict JSON（含 markdown code block 提取）
     try:
-        return json.loads(extract_json_block(text))
+        return json.loads(_extract_json_block(text))
     except Exception:
         pass
 
@@ -41,7 +47,7 @@ def _load_json(text: str) -> Any | None:
     try:
         repaired = _repair_trailing_comma(text)
         repaired = _strip_json_comments(repaired)
-        return json.loads(extract_json_block(repaired))
+        return json.loads(_extract_json_block(repaired))
     except Exception:
         pass
 

@@ -76,7 +76,7 @@ L1 和 L2 checkpoint 必须携带当前版本 `2.0` 的 `CheckpointEnvelope`，�
   `tests/test_runtime_contract_boundaries.py` 以 AST 检查保护依赖方向。
 
 自定义工具、外部调用方与测试桩必须直接改用以上契约，不提供自动迁移层。
-Skill 注册、上下文装配和持久化格式的其余兼容路径不属于本批改动。
+Skill 注册、上下文装配和持久化格式的其余兼容路径于 2026-10-05 一并收敛，见下文。
 
 ## 2026-10-04：结果、校验与进程执行收敛
 
@@ -94,3 +94,24 @@ Skill 注册、上下文装配和持久化格式的其余兼容路径不属于�
   `data.exit_code` 保存命令退出码，`output_truncated` 标记输出截断。
 - 声明式验证使用解析后的可执行文件路径；启动时的操作系统错误返回
   `verification_environment_failed`，不再以未捕获异常中断流程。
+
+## 2026-10-05：兼容面收敛（破坏式）
+
+在保持先进实现的前提下删除历史别名、转发壳与死代码，调用方必须改用当前契约。
+
+- **Skill 合同**：删除转发壳 `src.skills.prompt`（直连 `src.skills.skill_block`）；
+  `SkillContext.from_dict` 只认当前键，不再反查旧 `skill_*` 键；
+  删除未接线的 `SkillKind.HYBRID`；`src.skills` 包不再导出内部符号。
+- **上下文运行时**：删除 `ContextPolicyEngine.select`，统一走 `select_with_result`；
+  `ObservationStore.put` 不再接受 `redact` 形参；磁盘缓存不再读取旧单行格式。
+- **停机与状态**：删除 legacy 自由文本停机归一化
+  （`normalize_stop_reason` / `stop_reason_detail_from_legacy`）与未使用的
+  `TaskState.stop()`；`TaskState.from_dict` 原样读取 `stop_reason`。
+- **记忆**：删除无人调用的 `normalize_memory_state` 与孤立的 `MAX_FILE_SUMMARIES`。
+- **预算与 CLI**：删除 trace/prompt 中的 `payload["legacy"]` 旧预算视图；
+  删除 CLI 中无生产者的 `{agent}_internal` 计时回退（仅保留 `phases_internal`）。
+- **执行杂项**：删除 `PhaseTimeoutConfig.from_repair_timeout`
+  （改用 `with_repair_total_cap`）、`patch_applier.extract_json_block`
+  （直接调用 `agent_runtime.json_recovery.repair_structured_output`）、
+  `swebench.harness._parse_resolved` 与 `UserProfileStore.remove`
+  （改用 `invalidate`）。

@@ -87,11 +87,6 @@ class PhaseTimeoutConfig:
             repair_total_s=total,
         )
 
-    @classmethod
-    def from_repair_timeout(cls, repair_timeout_s: int) -> PhaseTimeoutConfig:
-        """Deprecated alias for :meth:`with_repair_total_cap`."""
-        return cls.with_repair_total_cap(repair_timeout_s)
-
     def any_enabled(self) -> bool:
         return any(
             int(value) > 0
