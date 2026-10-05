@@ -458,18 +458,8 @@ class DurableMemoryStore:
         }
         return m.get(t, "project-conventions")
 
-    def _read_topic(self, topic_or_path: str | Path, strategy: str = "inline") -> list[str]:
+    def _read_topic(self, topic: str, strategy: str = "inline") -> list[str]:
         """读取 topic 全部条目（inline 读单文件，chunked 合并多 chunk）。"""
-        if isinstance(topic_or_path, Path):
-            # backward compat: direct path read
-            path = topic_or_path
-            if not path.exists():
-                return []
-            return [
-                e.strip() for e in path.read_text(encoding="utf-8").split("\n---\n") if e.strip()
-            ]
-
-        topic = topic_or_path
         if strategy == "chunked":
             return self._read_chunked(topic)
         path = self._topic_path(topic)

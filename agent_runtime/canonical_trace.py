@@ -325,18 +325,13 @@ def enrich_record(
     return record
 
 
-def validate_event(record: dict[str, Any], *, require_canonical: bool = True) -> list[str]:
-    """校验事件；返回问题列表（空=通过）。
-
-    旧格式（无 schema_version）在 require_canonical=False 时只检查 event/created_at。
-    """
+def validate_event(record: dict[str, Any]) -> list[str]:
+    """校验事件；返回问题列表（空=通过）。"""
     issues: list[str] = []
     if not record.get("event") and not record.get("event_type"):
         issues.append("missing event/event_type")
     if not record.get("created_at") and not record.get("timestamp"):
         issues.append("missing created_at/timestamp")
-    if not require_canonical and record.get("schema_version") is None:
-        return issues
     for key in ENVELOPE_REQUIRED:
         if key == "parent_span_id":
             continue  # 允许 null

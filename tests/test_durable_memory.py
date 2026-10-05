@@ -46,7 +46,7 @@ class TestDurableMemoryStore:
         """首行完全相同时替换，首行不同时新增。"""
         store.promote([("user-preferences", "Preference: use pytest")])
         store.promote([("user-preferences", "Preference: use pytest")])  # 完全相同 → 替换
-        entries = store._read_topic(store.topics_dir / "user-preferences.md")
+        entries = store._read_topic("user-preferences")
         assert len(entries) == 1
         assert "pytest" in entries[0]
 
@@ -54,13 +54,13 @@ class TestDurableMemoryStore:
         """首行不同时新增条目。"""
         store.promote([("user-preferences", "Preference: use pytest")])
         store.promote([("user-preferences", "Preference: use pytest + coverage")])
-        entries = store._read_topic(store.topics_dir / "user-preferences.md")
+        entries = store._read_topic("user-preferences")
         assert len(entries) == 2
 
     def test_upsert_new_subject_adds(self, store):
         store.promote([("user-preferences", "Preference: use pytest")])
         store.promote([("user-preferences", "Preference: line width is 100")])
-        entries = store._read_topic(store.topics_dir / "user-preferences.md")
+        entries = store._read_topic("user-preferences")
         assert len(entries) == 2
 
     def test_retrieval_finds_match(self, store):
