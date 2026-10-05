@@ -137,13 +137,11 @@ class SkillContext:
         return cls(
             matched_skill=raw.get("matched_skill"),
             suggested_tools=list(raw.get("suggested_tools") or []),
-            example_issue=str(raw.get("example_issue") or raw.get("skill_example_issue") or ""),
-            guidance=list(raw.get("guidance") or raw.get("skill_guidance") or []),
-            avoid=list(raw.get("avoid") or raw.get("skill_avoid") or []),
-            example_patch=str(raw.get("example_patch") or raw.get("skill_example_patch") or ""),
-            fallback_strategy=str(
-                raw.get("fallback_strategy") or raw.get("skill_fallback_strategy") or ""
-            ),
+            example_issue=str(raw.get("example_issue") or ""),
+            guidance=list(raw.get("guidance") or []),
+            avoid=list(raw.get("avoid") or []),
+            example_patch=str(raw.get("example_patch") or ""),
+            fallback_strategy=str(raw.get("fallback_strategy") or ""),
             confidence=float(raw.get("confidence", 0.0)),
             canonical_decision=dict(raw.get("canonical_decision") or {}),
             invocation_refs=list(raw.get("invocation_refs") or []),
@@ -281,8 +279,6 @@ class RepairPlan:
     def from_dict(cls, data: dict) -> RepairPlan:
         """从 dict 反序列化。"""
         skill = SkillContext.from_dict(data.get("skill"))
-        if "skill" not in data:
-            skill = SkillContext.from_dict(data)
         return cls(
             language=data.get("language", "python"),
             language_source=data.get("language_source", ""),

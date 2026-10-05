@@ -18,7 +18,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 class SkillKind(StrEnum):
     GUIDANCE = "guidance"
     EXECUTABLE = "executable"
-    HYBRID = "hybrid"
 
 
 class SkillLifecycle(StrEnum):
@@ -133,7 +132,7 @@ class SkillSpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_kind(self):
-        if self.kind in {SkillKind.GUIDANCE, SkillKind.HYBRID}:
+        if self.kind is SkillKind.GUIDANCE:
             from src.tools.composite import REPAIR_CANONICAL_TOOL_NAMES
 
             if not self.trigger_pattern or not self.guidance:

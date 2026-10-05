@@ -61,9 +61,9 @@ def load_patcher_user_hint(name: str, **format_vars: object) -> str:
 
 def load_skill_miss_hint(role: str) -> str:
     """读取 Skill 未命中时注入的通用 user 提示（canonical：skill_block）。"""
-    from src.skills.prompt import format_skill_miss_hint
+    from src.skills.skill_block import render_skill_miss_hint
 
     key = (role or "").strip().lower() or "patcher"
     if key not in ("patcher", "verifier"):
         key = "patcher"
-    return format_skill_miss_hint(key)  # type: ignore[arg-type]
+    return render_skill_miss_hint(key)  # type: ignore[arg-type]

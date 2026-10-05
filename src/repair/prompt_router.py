@@ -97,7 +97,6 @@ def repair_plan_intent_snapshot(plan: RepairPlan) -> dict:
         "skill": skill,
         "matched_skill": skill["matched_skill"],
         "suggested_tools": skill["suggested_tools"],
-        "skill_fallback_strategy": skill["fallback_strategy"],
         "skill_confidence": skill.get("confidence", 0.0),
         "intent_parser": plan.intent_parser or "rule",
     }

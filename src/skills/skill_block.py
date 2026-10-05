@@ -160,6 +160,11 @@ def render_skill_hint_for_plan(
     return SkillBlockRender(text=text, role=role, source=source)
 
 
+def render_skill_miss_hint(role: SkillHintRole) -> str:
+    """Render the generic Skill-miss block for *role* (no matched skill)."""
+    return _truncate("\n".join(_build_miss_lines(role)), _ROLE_CHAR_LIMITS[role])
+
+
 def skill_hint_rendered_trace(render: SkillBlockRender) -> dict:
     """Trace payload for ``skill_hint_rendered`` events."""
     return {

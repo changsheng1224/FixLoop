@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from src.skills.catalog import SkillCatalog, SkillCatalogError
 from src.skills.matcher import match_skill
 from src.skills.contract import SkillSpec
-from src.skills.prompt import format_skill_hint_block
+from src.skills.skill_block import render_skill_hint_for_plan
 from src.state import RepairPlan, SkillContext
 
 
@@ -121,8 +121,8 @@ class TestMatchSkill:
         assert len(get_default_catalog().skills) == 11
 
 
-class TestSkillPrompt:
-    def test_format_skill_hint_block(self):
+class TestSkillBlock:
+    def test_render_skill_hint_for_plan(self):
         plan = RepairPlan(
             skill=SkillContext(
                 matched_skill="python_type_error_fix",
@@ -133,7 +133,7 @@ class TestSkillPrompt:
                 example_patch="return int(a) + b",
             ),
         )
-        block = format_skill_hint_block(plan)
+        block = render_skill_hint_for_plan(plan, "patcher").text
         assert "[Skill 提示]" in block
         assert "python_type_error_fix" in block
         assert "stack_parse" in block
@@ -146,7 +146,7 @@ class TestSkillPrompt:
         assert "示例修复: return int(a) + b" in block
 
     def test_empty_when_no_match(self):
-        assert format_skill_hint_block(RepairPlan()) == ""
+        assert render_skill_hint_for_plan(RepairPlan(), "patcher").text == ""
 
 
 class TestMatchedSkillApply:
