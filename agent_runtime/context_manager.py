@@ -133,9 +133,6 @@ class _DiskCache(dict):
                 lines = content.split("\n", 1)
                 if len(lines) == 2:
                     super().__setitem__(lines[0], lines[1])
-                elif len(lines) == 1:
-                    # 旧格式兼容（单行 value，key=filename_stem）
-                    super().__setitem__(p.stem, lines[0])
             except Exception:
                 pass
 

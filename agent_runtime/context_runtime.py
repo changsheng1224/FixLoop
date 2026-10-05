@@ -102,9 +102,8 @@ class ContextItem:
 class ContextPolicyEngine:
     """Select governed context items under a token budget.
 
-    ``select`` remains the compatibility API.  New callers should use
-    ``select_with_result`` so dropped candidates and policy decisions are
-    persisted for trace and checkpoint replay.
+    ``select_with_result`` persists dropped candidates and policy decisions so
+    they can be replayed from the trace and checkpoint.
     """
 
     VERSION = "context-policy-v2"
@@ -169,9 +168,6 @@ class ContextPolicyEngine:
             role=request.role,
             policy_version=request.policy_version or self.VERSION,
         )
-
-    def select(self, items: list[ContextItem], request: ContextRequest) -> list[ContextItem]:
-        return self.select_with_result(items, request).selected
 
 
 @dataclass(frozen=True)
@@ -413,7 +409,6 @@ class ObservationStore:
         structured_facts: list[dict[str, Any]] | None = None,
         provenance: dict[str, Any] | None = None,
         status: str = "ok",
-        redact: bool = True,
         dependencies: list[str] | None = None,
         sensitivity: str = "internal",
         error_code: str = "",
@@ -447,7 +442,6 @@ class ObservationStore:
                 summary or str(raw_text)[:500],
                 structured_facts or [],
                 {**(provenance or {}), "_retrieval": retrieval_result or {}},
-                redact,
             )
             safe_facts = self._derive_facts(str(tool), args, safe_facts, source_version, safe_raw)
             result_digest = hashlib.sha256(safe_raw.encode("utf-8", "replace")).hexdigest()
@@ -595,9 +589,8 @@ class ObservationStore:
         )
 
     @classmethod
-    def _sanitize(cls, raw_text, summary, facts, provenance, redact):
-        # ``redact`` is retained for source compatibility, but persistence is
-        # always sanitized at this boundary.
+    def _sanitize(cls, raw_text, summary, facts, provenance):
+        # Persistence is always sanitized at this boundary.
         try:
             from agent_runtime.security import redact_artifact, redact_text
 

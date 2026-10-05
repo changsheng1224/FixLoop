@@ -375,7 +375,6 @@ class SkillExecutionGateway:
                 "invocation_id": invocation.invocation_id,
             },
             status="succeeded",
-            redact=True,
         )
         invocation.observation_id = observation.observation_id
         invocation.output_ref = observation.raw_ref

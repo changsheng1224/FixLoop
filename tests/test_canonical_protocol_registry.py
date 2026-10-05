@@ -79,10 +79,10 @@ def test_mcp_specs_and_capability_query_share_registry():
 def test_mcp_errors_have_canonical_retry_semantics():
     from agent_runtime.mcp.errors import McpSchemaError, McpUnavailableError
 
-    invalid = McpSchemaError("bad arguments").metadata()
-    unavailable = McpUnavailableError("offline").metadata()
+    invalid = McpSchemaError("bad arguments").to_tool_result()
+    unavailable = McpUnavailableError("offline").to_tool_result()
 
-    assert invalid["tool_error_code"] == "invalid_arguments"
-    assert invalid["retryable"] is True
-    assert unavailable["tool_error_code"] == "mcp_unavailable"
-    assert unavailable["retryable"] is True
+    assert invalid.error_code == "invalid_arguments"
+    assert invalid.retryable is True
+    assert unavailable.error_code == "mcp_unavailable"
+    assert unavailable.retryable is True

@@ -97,7 +97,6 @@ class ToolObservationRecorder:
                     (metadata.get("retrieval_result") or {}).get("query_id", "")
                 ),
                 retrieval_result=metadata.get("retrieval_result"),
-                redact=True,
             )
         finally:
             # Also close on failed persistence; do not publish result references on failure.
