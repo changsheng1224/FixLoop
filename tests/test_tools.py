@@ -138,7 +138,12 @@ class TestToolRegistry:
         assert result.metadata["retrieval_result"]["query_type"] == "file_listing"
 
     def test_legal_tool_names(self, ctx):
+        from src.tools.repair_control import build_repair_control_tools
+
         registry = build_tool_registry(ctx)
+        # Terminal repair tools (finish_repair/expand_lock) live in the L2
+        # control registry; merge them to assert the full canonical tool set.
+        registry.update(build_repair_control_tools(ctx))
         names = legal_tool_names(registry)
         expected = {
             "list_files",

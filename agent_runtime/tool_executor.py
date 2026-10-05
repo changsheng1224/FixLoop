@@ -1379,18 +1379,18 @@ class QuotaEnforcer:
         """返回当前配额使用情况。"""
         cnt = self._counts
         lim = self._limits
-        legacy = (
+        base = (
             f"配额: writes {cnt['write']}/{lim['write']}, "
             f"shell {cnt['shell']}/{lim['shell']}, "
             f"total {cnt['total']}/{lim['total']}"
         )
         if self._group_ledger is None:
-            return legacy
+            return base
         groups = self._group_ledger.summary()
         compact = ", ".join(
             f"{name} {values['used']}/{values['limit']}" for name, values in groups.items()
         )
-        return f"{legacy}; groups: {compact}"
+        return f"{base}; groups: {compact}"
 
     @_quota_locked
     def quota_summary(self) -> dict:

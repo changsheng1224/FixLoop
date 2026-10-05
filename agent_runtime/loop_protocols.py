@@ -710,7 +710,7 @@ def xml_model_turn(runtime, ts, user_message: str, *, step: int, step_clock, cal
         ts.stop_with_reason(
             StopReason.CONTEXT_OVERFLOW,
             "stopped",
-            detail="hard_cap via legacy _check_hard_cap",
+            detail="context hard cap reached",
         )
         return CanonicalResponse.create(
             "final", "stop", {"text": runtime.hooks.complete_run(ts, prompt_text)}
