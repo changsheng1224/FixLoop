@@ -300,6 +300,26 @@ def normalize_observation_error(value: Any) -> str:
     return "unknown"
 
 
+def _release_observation_db(store: "ObservationStore") -> None:
+    """Release the SQLite handle without dispatching through ``store.close``.
+
+    ``close`` is a public, overridable method: subclasses and tests may replace
+    it with arbitrary Python code. Running that code from ``__del__`` is unsafe
+    because the store is already being finalized (observed as a hard access
+    violation when a test-installed spy captured its own teardown frame).
+    ``close`` and ``__del__`` therefore share this plain helper so finalization
+    stays independent of whatever ``close`` currently is bound to.
+    """
+    namespace = store.__dict__
+    db = namespace.get("_db")
+    namespace["_db"] = None
+    if db is not None:
+        try:
+            db.close()
+        except sqlite3.Error:
+            pass
+
+
 class ObservationStore:
     """Versioned, isolated and provenance-preserving observation store.
 
@@ -380,16 +400,11 @@ class ObservationStore:
                 self._db = None
 
     def close(self) -> None:
-        db, self._db = self._db, None
-        if db is not None:
-            try:
-                db.close()
-            except sqlite3.Error:
-                pass
+        _release_observation_db(self)
 
     def __del__(self):
         try:
-            self.close()
+            _release_observation_db(self)
         except Exception:
             pass
 
