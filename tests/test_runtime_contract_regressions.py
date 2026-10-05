@@ -216,3 +216,34 @@ def test_profile_launch_failure_is_an_environment_result(tmp_path, monkeypatch):
     assert not result["all_passed"]
     assert result["category"] == "verification_environment_failed"
     assert "disappeared" in result["error"]
+
+
+def test_compatibility_shims_stay_removed():
+    """The 2026-10-05 compat removal must not be silently reintroduced."""
+    import agent_runtime.features.memory.core as memory_core
+    import agent_runtime.stop_reasons as stop_reasons
+
+    assert not hasattr(stop_reasons, "normalize_stop_reason")
+    assert not hasattr(stop_reasons, "stop_reason_detail_from_legacy")
+    assert not hasattr(stop_reasons, "RESERVED_STOP_REASONS")
+    assert not hasattr(memory_core, "normalize_memory_state")
+    assert not hasattr(memory_core, "MAX_FILE_SUMMARIES")
+
+    from agent_runtime.context_runtime import ContextPolicyEngine
+    from agent_runtime.features.memory.durable import UserProfileStore
+    from agent_runtime.task_state import TaskState
+
+    assert not hasattr(TaskState, "stop")
+    assert not hasattr(UserProfileStore, "remove")
+    assert hasattr(ContextPolicyEngine, "select_with_result")
+    assert not hasattr(ContextPolicyEngine, "select")
+
+    from src.benchmark.swebench import harness
+    from src.repair.execution import patch_applier
+    from src.repair.phase_clock import PhaseTimeoutConfig
+
+    assert not hasattr(PhaseTimeoutConfig, "from_repair_timeout")
+    assert hasattr(PhaseTimeoutConfig, "with_repair_total_cap")
+    assert not hasattr(patch_applier, "extract_json_block")
+    assert not hasattr(harness, "_parse_resolved")
+
