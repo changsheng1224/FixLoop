@@ -1,7 +1,11 @@
 """Skill match result projection."""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
+
 from src.skills.contract import SkillSpec
+
 
 @dataclass(frozen=True)
 class MatchedSkill:

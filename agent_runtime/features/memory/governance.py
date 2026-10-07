@@ -240,9 +240,13 @@ def normalize_candidate(
         selected_scope = MemoryScope.USER.value
     raw_key = str(getattr(candidate, "key", "") or "value")
     explicit_id = str(getattr(candidate, "memory_id", "") or "").strip()
-    memory_id = explicit_id or "M-" + hashlib.sha256(
-        f"{selected_scope}|{raw_key}|{getattr(candidate, 'value', '')}".encode()
-    ).hexdigest()[:12]
+    memory_id = (
+        explicit_id
+        or "M-"
+        + hashlib.sha256(
+            f"{selected_scope}|{raw_key}|{getattr(candidate, 'value', '')}".encode()
+        ).hexdigest()[:12]
+    )
     confidence = float(getattr(candidate, "confidence", 0.4) or 0.4)
     if source_type == "model":
         confidence = min(confidence, 0.49)
@@ -275,8 +279,7 @@ def normalize_candidate(
         parent_memory_id=str(getattr(candidate, "parent_memory_id", "") or ""),
         source_observation_ids=list(
             dict.fromkeys(
-                str(item)
-                for item in (getattr(candidate, "source_observation_ids", None) or [])
+                str(item) for item in (getattr(candidate, "source_observation_ids", None) or [])
             )
         ),
         source_run_id=str(getattr(candidate, "source_run_id", "") or ""),
@@ -376,9 +379,7 @@ class MemoryGovernanceService:
         if self.store and memory_id in self.registry:
             raw = self.registry[memory_id]
             expected = int(raw.get("version", 0) or 0) or None
-            version = self.store.upsert_memory(
-                dict(raw), expected_version=expected
-            )
+            version = self.store.upsert_memory(dict(raw), expected_version=expected)
             raw["version"] = version
 
     def _persist_audit(self, action: str, object_id: str, payload: dict[str, Any]) -> None:
@@ -512,9 +513,12 @@ class MemoryGovernanceService:
     ) -> PolicyRecord:
         """Register explicit guidance separately from generated memory."""
         normalized_key = str(key).strip().lower()
-        policy_id = "P-" + hashlib.sha256(
-            f"{authority}|{scope}|{path_prefix}|{normalized_key}|{value}".encode()
-        ).hexdigest()[:12]
+        policy_id = (
+            "P-"
+            + hashlib.sha256(
+                f"{authority}|{scope}|{path_prefix}|{normalized_key}|{value}".encode()
+            ).hexdigest()[:12]
+        )
         policy = PolicyRecord(
             policy_id=policy_id,
             key=str(key).strip(),
@@ -557,10 +561,15 @@ class MemoryGovernanceService:
             repo_fingerprint=repo_fingerprint or self.current_repo_fingerprint,
         )
         memory.user_id = self.user_id if memory.scope == MemoryScope.USER.value else ""
-        memory.task_id = self.task_id if memory.scope in {
-            MemoryScope.RUN.value,
-            MemoryScope.TASK.value,
-        } else ""
+        memory.task_id = (
+            self.task_id
+            if memory.scope
+            in {
+                MemoryScope.RUN.value,
+                MemoryScope.TASK.value,
+            }
+            else ""
+        )
         memory.key = _redact_value(memory.key)
         memory.value = _redact_value(memory.value)
         memory.source = _redact_value(memory.source)
@@ -619,9 +628,7 @@ class MemoryGovernanceService:
         joined = "|".join(sorted(candidate_ids))
         return "C-" + hashlib.sha256(f"{scope}|{key}|{joined}".encode()).hexdigest()[:12]
 
-    def _classify_conflict(
-        self, left: GovernedMemory, right: GovernedMemory
-    ) -> ConflictType:
+    def _classify_conflict(self, left: GovernedMemory, right: GovernedMemory) -> ConflictType:
         if left.allow_multiple or right.allow_multiple:
             return ConflictType.MULTI_VALUE
         if (
@@ -705,10 +712,9 @@ class MemoryGovernanceService:
         if not self.current_repo_fingerprint:
             return
         for raw in self.registry.values():
-            if (
-                raw.get("scope") == MemoryScope.REPOSITORY_VERSION.value
-                and raw.get("repo_fingerprint") not in ("", self.current_repo_fingerprint)
-            ):
+            if raw.get("scope") == MemoryScope.REPOSITORY_VERSION.value and raw.get(
+                "repo_fingerprint"
+            ) not in ("", self.current_repo_fingerprint):
                 raw["status"] = MemoryStatus.STALE.value
                 self.stats["stale_marked"] += 1
                 queue = self.state.setdefault("memory_revalidation_queue", [])
@@ -759,9 +765,7 @@ class MemoryGovernanceService:
             )
             if memory_id in winners:
                 memory_raw["status"] = MemoryStatus.ACTIVE.value
-                memory_raw["confidence"] = min(
-                    1.0, float(memory_raw.get("confidence", 0.0)) + 0.1
-                )
+                memory_raw["confidence"] = min(1.0, float(memory_raw.get("confidence", 0.0)) + 0.1)
                 memory_raw["last_verified_at"] = time.time()
                 memory_raw["allow_multiple"] = len(winners) > 1
             else:
@@ -915,9 +919,7 @@ class MemoryGovernanceService:
 
     def resolve_for_query(self, query: str, *, allow_probe: bool = True) -> int:
         """Resolve only conflicts that could affect the current decision."""
-        required_keys = {
-            str(raw.get("key", "")) for raw in self.conflicts_for_query(query)
-        }
+        required_keys = {str(raw.get("key", "")) for raw in self.conflicts_for_query(query)}
         return self.resolve_pending_conflicts(
             required_keys=required_keys,
             allow_probe=allow_probe,
@@ -1125,18 +1127,21 @@ class MemoryGovernanceService:
             if scope and raw.get("scope") not in {scope, "repository"}:
                 continue
             policy = self.effective_policy(raw.get("key", ""))
-            if policy and str(policy.get("value", "")).strip().lower() != str(
-                raw.get("value", "")
-            ).strip().lower():
+            if (
+                policy
+                and str(policy.get("value", "")).strip().lower()
+                != str(raw.get("value", "")).strip().lower()
+            ):
                 self.stats["policy_shadowed"] += 1
                 continue
             text = f"{raw.get('key', '')} {raw.get('value', '')}".lower()
             overlap = sum(1 for token in tokens if token and token in text)
             if not overlap:
                 continue
-            version_match = not raw.get("repo_fingerprint") or raw.get(
-                "repo_fingerprint"
-            ) == self.current_repo_fingerprint
+            version_match = (
+                not raw.get("repo_fingerprint")
+                or raw.get("repo_fingerprint") == self.current_repo_fingerprint
+            )
             lexical = overlap / max(len(tokens), 1)
             reference_time = float(
                 raw.get("last_verified_at") or raw.get("created_at", time.time())
@@ -1145,10 +1150,7 @@ class MemoryGovernanceService:
             freshness = 1.0 / (1.0 + age_days / 30.0)
             usage_total = int(raw.get("usage_successes", 0)) + int(raw.get("usage_failures", 0))
             usage_quality = (
-                (int(raw.get("usage_successes", 0)) + 1)
-                / (usage_total + 2)
-                if usage_total
-                else 0.5
+                (int(raw.get("usage_successes", 0)) + 1) / (usage_total + 2) if usage_total else 0.5
             )
             score = (
                 0.55 * lexical
@@ -1164,9 +1166,7 @@ class MemoryGovernanceService:
             item["score"] = round(score, 3)
             item["freshness"] = round(freshness, 3)
             item["effective_confidence"] = round(
-                float(raw.get("confidence", 0.0))
-                * freshness
-                * (1.0 if version_match else 0.1),
+                float(raw.get("confidence", 0.0)) * freshness * (1.0 if version_match else 0.1),
                 3,
             )
             item["score_breakdown"] = {
@@ -1177,9 +1177,7 @@ class MemoryGovernanceService:
                 "scope": round(0.05 * scope_weight.get(raw.get("scope", ""), 0.5), 4),
                 "version_factor": 1.0 if version_match else 0.1,
             }
-            item["matched_tokens"] = sorted(
-                token for token in tokens if token and token in text
-            )
+            item["matched_tokens"] = sorted(token for token in tokens if token and token in text)
             item["memory_role"] = (
                 "confirmed_fact"
                 if raw.get("status") in {"verified", "active", "durable"}
@@ -1237,9 +1235,7 @@ class MemoryGovernanceService:
         ):
             return False
         normalized = str(outcome).lower().strip()
-        passed = normalized in {
-            "success", "verified", "fixed", "pass", "supported", "helpful"
-        }
+        passed = normalized in {"success", "verified", "fixed", "pass", "supported", "helpful"}
         contradicted = normalized in {"contradicted", "harmful", "rejected", "failed"}
         inconclusive = normalized in {"inconclusive", "unused", "unknown", ""}
         raw["last_seen_at"] = time.time()

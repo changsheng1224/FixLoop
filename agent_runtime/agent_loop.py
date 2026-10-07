@@ -699,16 +699,20 @@ class AgentLoop:
         from agent_runtime.loop_policy import LoopPolicyContext
 
         return LoopPolicyContext(
-            agent=self.agent, state=self._tool_state, guard=self._step_guard,
+            agent=self.agent,
+            state=self._tool_state,
+            guard=self._step_guard,
             task_state=self._task_state,
-            emit=self._emit, grant_read_reserve=self._grant_read_reserve,
+            emit=self._emit,
+            grant_read_reserve=self._grant_read_reserve,
             matching_read_reservation=self._matching_read_reservation,
             has_targeted_read_reserve=self._has_targeted_read_reserve,
         )
 
     def _native_tool_names(self, *, action_required=False, strict_recovery=False):
         return self.agent.loop_policy.visible_tools(
-            self._policy_context(), action_required=action_required,
+            self._policy_context(),
+            action_required=action_required,
             strict_recovery=strict_recovery,
         )
 
@@ -1364,8 +1368,7 @@ class AgentLoop:
                     )
                 self._begin_native_turn(ts, callback)
                 if recovery_turn and not (
-                    self._tool_state.recovery_directive
-                    or self._tool_state.action_required
+                    self._tool_state.recovery_directive or self._tool_state.action_required
                 ):
                     ts.stop_step_limit(self.max_steps)
                     return self._complete_run(

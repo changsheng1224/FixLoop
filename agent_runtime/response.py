@@ -28,9 +28,9 @@ class CanonicalResponse:
     ) -> CanonicalResponse:
         body = payload or {}
         stable = json.dumps(body, sort_keys=True, ensure_ascii=True, default=str)
-        rid = "RESP-" + hashlib.sha256(
-            f"{response_kind}:{status}:{stable}".encode()
-        ).hexdigest()[:12]
+        rid = (
+            "RESP-" + hashlib.sha256(f"{response_kind}:{status}:{stable}".encode()).hexdigest()[:12]
+        )
         return cls(rid, response_kind, status, body, **kwargs)
 
     def to_dict(self) -> dict[str, Any]:

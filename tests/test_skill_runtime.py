@@ -15,10 +15,10 @@ from src.skills.composition import SkillComposer, SkillStep
 from src.skills.contract import (
     SideEffectLevel,
     SkillLifecycle,
+    SkillSpec,
     validate_json_contract,
 )
 from src.skills.decision import build_canonical_skill_decision
-from src.skills.contract import SkillSpec
 from src.skills.execution import SkillExecutionGateway
 from src.skills.feedback import SkillFeedbackLedger, SkillUsageEvent
 from src.skills.invocation import SkillErrorCode
@@ -102,9 +102,7 @@ def test_read_only_failure_emits_fallback_but_side_effect_failure_does_not():
 def test_gateway_validates_output_and_completion_evidence():
     invalid = _gateway().execute("demo", {"text": "x"}, runner=lambda args: {})
     assert invalid.invocation.error_code == SkillErrorCode.OUTPUT_INVALID.value
-    incomplete = _gateway().execute(
-        "demo", {"text": "x"}, runner=lambda args: {"result": {}}
-    )
+    incomplete = _gateway().execute("demo", {"text": "x"}, runner=lambda args: {"result": {}})
     assert incomplete.invocation.error_code == SkillErrorCode.EVIDENCE_MISSING.value
     assert incomplete.invocation.status == "incomplete"
 
@@ -212,9 +210,7 @@ def test_untrusted_executable_is_guidance_only():
 def test_side_effect_requires_idempotency_and_resume_reuses_result():
     spec = _spec(side_effect_level="local_write")
     gateway = _gateway(spec, state={})
-    denied = gateway.execute(
-        "demo", {"text": "x"}, runner=lambda args: {"result": {"value": 1}}
-    )
+    denied = gateway.execute("demo", {"text": "x"}, runner=lambda args: {"result": {"value": 1}})
     assert denied.invocation.error_code == SkillErrorCode.SIDE_EFFECT_UNCERTAIN.value
     first = gateway.execute(
         "demo",
@@ -354,14 +350,10 @@ def test_composer_passes_structured_outputs_and_rejects_cycles():
 def test_feedback_requires_evidence_for_strong_attribution():
     state = {}
     ledger = SkillFeedbackLedger(state)
-    raw = ledger.record(
-        SkillUsageEvent("demo", "1.0.0", "verified", outcome="helpful")
-    )
+    raw = ledger.record(SkillUsageEvent("demo", "1.0.0", "verified", outcome="helpful"))
     assert raw["outcome"] == "inconclusive"
     supported = ledger.record(
-        SkillUsageEvent(
-            "demo", "1.0.0", "verified", outcome="supported", evidence_refs=["OBS-1"]
-        )
+        SkillUsageEvent("demo", "1.0.0", "verified", outcome="supported", evidence_refs=["OBS-1"])
     )
     assert supported["outcome"] == "supported"
     unused = ledger.record_verification(
@@ -410,8 +402,13 @@ def test_builtin_effects_are_explicit():
 
 def test_registry_unifies_guidance_and_executable_contracts():
     guidance = SkillSpec(
-        name="shared", kind="guidance", trigger_pattern=".*", guidance=["inspect evidence"],
-        source="workspace_local", trust_level="trusted", scope="workspace",
+        name="shared",
+        kind="guidance",
+        trigger_pattern=".*",
+        guidance=["inspect evidence"],
+        source="workspace_local",
+        trust_level="trusted",
+        scope="workspace",
     )
     registry = SkillRegistry([_spec("shared"), guidance])
     assert len(registry.list(name="shared")) == 2

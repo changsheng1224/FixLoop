@@ -37,11 +37,11 @@ def test_complete_turn_recovers_function_calls_in_text():
             system_prompt="sys",
             messages=[{"role": "user", "content": "fix"}],
             tools=[
-            {
-                "name": "read_file",
-                "description": "read",
-                "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
-            }
+                {
+                    "name": "read_file",
+                    "description": "read",
+                    "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+                }
             ],
         )
     )

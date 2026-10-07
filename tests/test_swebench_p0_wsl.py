@@ -144,7 +144,9 @@ class TestReexport:
             encoding="utf-8",
         )
         (out / "adapter_report.json").write_text(
-            json.dumps({"results": [{"instance_id": iid, "model_patch": "", "repair_status": "failed"}]}),
+            json.dumps(
+                {"results": [{"instance_id": iid, "model_patch": "", "repair_status": "failed"}]}
+            ),
             encoding="utf-8",
         )
         summary = reexport_from_snapshots(output_dir=out, work_root=work)
@@ -166,7 +168,9 @@ class TestResolveBackend:
         )
         monkeypatch.setattr(
             "src.benchmark.swebench.harness.probe_wsl",
-            lambda: type("P", (), {"available": False, "error": "no distro", "note": "install Ubuntu"})(),
+            lambda: type(
+                "P", (), {"available": False, "error": "no distro", "note": "install Ubuntu"}
+            )(),
         )
         backend, err = resolve_harness_backend("auto")
         assert backend == ""

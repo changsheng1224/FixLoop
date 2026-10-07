@@ -172,7 +172,10 @@ def validate_json_contract(value: Any, schema: dict[str, Any], path: str = "$") 
     """Use the same Draft 2020-12 implementation as tool argument validation."""
     from agent_runtime.tool_schema import validate_json_value
 
-    return [f"{path}.{error['field']}: {error['message']}" for error in validate_json_value(schema, value)]
+    return [
+        f"{path}.{error['field']}: {error['message']}"
+        for error in validate_json_value(schema, value)
+    ]
 
 
 def resolve_evidence(output: dict[str, Any], dotted_path: str) -> tuple[bool, Any]:

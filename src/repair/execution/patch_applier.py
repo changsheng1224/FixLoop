@@ -114,11 +114,7 @@ def describe_hunk_mismatch(text: str, patch: CandidatePatch) -> str:
 
     preview = first.strip()[:100]
     if near:
-        return (
-            f"hunk_mismatch:{path}: wanted `{preview}` near=["
-            + " | ".join(near)
-            + "]"
-        )
+        return f"hunk_mismatch:{path}: wanted `{preview}` near=[" + " | ".join(near) + "]"
     return f"hunk_mismatch:{path}: wanted `{preview}` (no near lines in file)"
 
 
@@ -312,9 +308,7 @@ def _replace_all_lines_by_strip(text: str, old_line: str, new_line: str) -> str 
     return current if changed else None
 
 
-def _replace_multiline_by_strip_keys(
-    text: str, old_block: str, new_block: str
-) -> str | None:
+def _replace_multiline_by_strip_keys(text: str, old_block: str, new_block: str) -> str | None:
     """多行块：按每行 strip 键在文件中找连续匹配窗口并替换（容忍缩进/尾空白差）。"""
     old_lines = [ln.rstrip("\r\n") for ln in old_block.splitlines()]
     new_lines = [ln.rstrip("\r\n") for ln in new_block.splitlines()]
@@ -360,9 +354,7 @@ def _rebuild_block_at(
     return "".join(out)
 
 
-def _replace_by_collapsed_whitespace(
-    text: str, old_block: str, new_block: str
-) -> str | None:
+def _replace_by_collapsed_whitespace(text: str, old_block: str, new_block: str) -> str | None:
     """按折叠空白后的行键匹配并全部替换窗口（E6a′）。"""
     old_lines = [ln.rstrip("\r\n") for ln in old_block.splitlines()]
     new_lines = [ln.rstrip("\r\n") for ln in new_block.splitlines()]
@@ -415,9 +407,7 @@ def _statement_anchor(line: str) -> str:
     return assign.group(1) if assign else ""
 
 
-def _replace_unique_statement_by_anchor(
-    text: str, old_line: str, new_line: str
-) -> str | None:
+def _replace_unique_statement_by_anchor(text: str, old_line: str, new_line: str) -> str | None:
     """old_line 表达式不精确时，按唯一语句锚点保守替换。"""
     old_anchor = _statement_anchor(old_line)
     new_anchor = _statement_anchor(new_line)
@@ -621,8 +611,7 @@ class PatchApplier:
         sibling_warnings: list[str] = []
         apply_errors: list[str] = []
         normalized_allowed = {
-            str(path).replace("\\", "/").lstrip("./")
-            for path in (allowed_paths or set())
+            str(path).replace("\\", "/").lstrip("./") for path in (allowed_paths or set())
         }
         snapshots: dict[str, tuple[bytes, int]] = {}
 

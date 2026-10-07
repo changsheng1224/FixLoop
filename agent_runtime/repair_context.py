@@ -69,9 +69,10 @@ def render_repair_context(memory: dict, *, max_chars: int = 3600) -> str:
     compact = {key: value for key, value in state.items() if value not in ("", [], {})}
     if not compact:
         return ""
-    return "修复状态（当前任务事实优先；历史记忆仅作候选）:\n" + json.dumps(
-        compact, ensure_ascii=False, separators=(",", ":")
-    )[:max_chars]
+    return (
+        "修复状态（当前任务事实优先；历史记忆仅作候选）:\n"
+        + json.dumps(compact, ensure_ascii=False, separators=(",", ":"))[:max_chars]
+    )
 
 
 def context_integrity(
@@ -87,7 +88,6 @@ def context_integrity(
         "hypothesis": not state.get("current_hypothesis")
         or state["current_hypothesis"][:80] in history_text,
         "verification": not state.get("verification") or "verif" in history_text.lower(),
-        "next_action": not state.get("next_action")
-        or state["next_action"][:80] in history_text,
+        "next_action": not state.get("next_action") or state["next_action"][:80] in history_text,
     }
     return {"ok": all(checks.values()), "checks": checks}

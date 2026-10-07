@@ -26,9 +26,7 @@ def test_frozen_public_input_hash_ids_and_no_answers():
         if line.strip()
     ]
 
-    assert hashlib.sha256(instances_path.read_bytes()).hexdigest() == protocol[
-        "instances_sha256"
-    ]
+    assert hashlib.sha256(instances_path.read_bytes()).hexdigest() == protocol["instances_sha256"]
     assert protocol["instance_ids"] == list(DEV_INSTANCE_IDS)
     assert [row["instance_id"] for row in rows] == list(DEV_INSTANCE_IDS)
     for row in rows:

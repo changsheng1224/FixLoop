@@ -300,7 +300,7 @@ def normalize_observation_error(value: Any) -> str:
     return "unknown"
 
 
-def _release_observation_db(store: "ObservationStore") -> None:
+def _release_observation_db(store: ObservationStore) -> None:
     """Release the SQLite handle without dispatching through ``store.close``.
 
     ``close`` is a public, overridable method: subclasses and tests may replace

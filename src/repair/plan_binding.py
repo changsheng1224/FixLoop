@@ -468,6 +468,7 @@ class RepairPlanBinding:
             refs,
             objective=self.state.issue_input,
             light_client=self._planning_client(),
+            max_new_tokens=self.agent.config.max_new_tokens,
         )
         session.create(plan)
         session.configure_long_task(
@@ -725,6 +726,7 @@ class RepairPlanBinding:
                 objective=self.state.issue_input,
                 reason="verification_failed:" + trigger,
                 light_client=self._planning_client(),
+                max_new_tokens=self.agent.config.max_new_tokens,
                 replan_context=context,
                 before_commit=before_commit,
             )

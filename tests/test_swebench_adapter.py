@@ -123,9 +123,12 @@ class TestPredictionsAndManifest:
     def test_preflight_records_clean_repo(self, work_dir):
         repo = work_dir / "repo"
         _init_mini_repo(repo)
-        report = preflight_repo(repo, base_commit=subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=repo, text=True
-        ).strip())
+        report = preflight_repo(
+            repo,
+            base_commit=subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+            ).strip(),
+        )
         assert report["ok"] is True
         assert report["reasons"] == []
         assert "core.autocrlf" in report["line_endings"]
@@ -264,13 +267,18 @@ class TestAdapterFakeE2E:
             head = subprocess.check_output(
                 ["git", "rev-parse", "HEAD"], cwd=repo, text=True
             ).strip()
-            rows.append({
-                **json.loads(next(
-                    line for line in FIXTURE.read_text(encoding="utf-8").splitlines()
-                    if json.loads(line)["instance_id"] == iid
-                )),
-                "base_commit": head,
-            })
+            rows.append(
+                {
+                    **json.loads(
+                        next(
+                            line
+                            for line in FIXTURE.read_text(encoding="utf-8").splitlines()
+                            if json.loads(line)["instance_id"] == iid
+                        )
+                    ),
+                    "base_commit": head,
+                }
+            )
 
         instances_jsonl = work_dir / "instances.jsonl"
         instances_jsonl.write_text(
@@ -278,14 +286,7 @@ class TestAdapterFakeE2E:
             encoding="utf-8",
         )
 
-        gold = (
-            "diff --git a/pkg.py b/pkg.py\n"
-            "--- a/pkg.py\n"
-            "+++ b/pkg.py\n"
-            "@@ -1 +1 @@\n"
-            "-old\n"
-            "+new\n"
-        )
+        gold = "diff --git a/pkg.py b/pkg.py\n--- a/pkg.py\n+++ b/pkg.py\n@@ -1 +1 @@\n-old\n+new\n"
 
         def factory(repo: str):
             return FakeGoldPatchOrchestrator(repo, gold_patch=gold)
@@ -355,9 +356,7 @@ class TestClassifyPostRepair:
         from src.benchmark.swebench.types import FailureClass
 
         patch = "--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-old\n+new\n"
-        fc, detail = classify_post_repair(
-            model_patch=patch, repair_status="fixed", verified=True
-        )
+        fc, detail = classify_post_repair(model_patch=patch, repair_status="fixed", verified=True)
         assert fc == FailureClass.NONE
         assert detail == "pending_harness"
 
@@ -366,13 +365,7 @@ class TestClassifyPostRepair:
         from src.benchmark.swebench.classify import classify_post_repair
         from src.benchmark.swebench.types import FailureClass
 
-        patch = (
-            "--- a/x.py\n"
-            "+++ b/x.py\n"
-            "@@ -1 +1 @@\n"
-            "-old\n"
-            "+new\n"
-        )
+        patch = "--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-old\n+new\n"
         fc, detail = classify_post_repair(
             model_patch=patch, repair_status="fixed", verified=False, skip_verify=True
         )

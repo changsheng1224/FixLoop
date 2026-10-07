@@ -1,4 +1,5 @@
 """One versioned registry for guidance and executable Skills."""
+
 from __future__ import annotations
 
 from collections.abc import Iterable
@@ -39,10 +40,15 @@ class SkillRegistry:
         self, name: str, version: str | None = None, *, kind: SkillKind | str | None = None
     ) -> SkillSpec | None:
         items = [
-            spec for (item_name, item_version, item_kind), spec in self._items.items()
-            if item_name == name and (kind is None or item_kind == kind)
-            and (item_version == version if version else
-                 self._active.get((item_name, item_kind)) == item_version)
+            spec
+            for (item_name, item_version, item_kind), spec in self._items.items()
+            if item_name == name
+            and (kind is None or item_kind == kind)
+            and (
+                item_version == version
+                if version
+                else self._active.get((item_name, item_kind)) == item_version
+            )
         ]
         if len(items) > 1:
             raise SkillRegistryError(f"ambiguous skill {name!r}; specify kind")
@@ -55,8 +61,13 @@ class SkillRegistry:
         return spec
 
     def list(
-        self, *, lifecycle: str | None = "active", names: Iterable[str] | None = None,
-        name: str = "", kind: SkillKind | str | None = None, all_versions: bool = False,
+        self,
+        *,
+        lifecycle: str | None = "active",
+        names: Iterable[str] | None = None,
+        name: str = "",
+        kind: SkillKind | str | None = None,
+        all_versions: bool = False,
     ) -> list[SkillSpec]:
         allowed = set(names) if names is not None else None
         return [

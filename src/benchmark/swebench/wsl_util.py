@@ -101,14 +101,14 @@ def resolve_wsl_python(explicit: str | None = None) -> str:
     distro = preferred_wsl_distro()
     if distro:
         check = run_wsl(
-            ["bash", "-lc", "test -x \"$HOME/.venvs/swebench/bin/python\" && echo yes"],
+            ["bash", "-lc", 'test -x "$HOME/.venvs/swebench/bin/python" && echo yes'],
             distro=distro,
             timeout_s=15,
         )
         if check.returncode == 0 and "yes" in (check.stdout or ""):
             # 用 login 展开后的绝对路径更稳
             which = run_wsl(
-                ["bash", "-lc", "echo \"$HOME/.venvs/swebench/bin/python\""],
+                ["bash", "-lc", 'echo "$HOME/.venvs/swebench/bin/python"'],
                 distro=distro,
                 timeout_s=15,
             )
@@ -245,8 +245,13 @@ def wsl_proxy_env(distro: str | None = None) -> dict[str, str]:
         out.setdefault("HUGGINGFACE_HUB_CACHE", f"{hf}/hub")
         # 优先离线读 Windows 已缓存的 Lite（无外网时）
         if os.environ.get("HF_HUB_OFFLINE", "").strip() or os.path.isdir(
-            os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub",
-                         "datasets--princeton-nlp--SWE-bench_Lite")
+            os.path.join(
+                os.path.expanduser("~"),
+                ".cache",
+                "huggingface",
+                "hub",
+                "datasets--princeton-nlp--SWE-bench_Lite",
+            )
         ):
             out.setdefault("HF_HUB_OFFLINE", "1")
 

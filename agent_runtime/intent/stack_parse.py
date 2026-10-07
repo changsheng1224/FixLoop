@@ -11,9 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-_TRACEBACK_START = re.compile(
-    r"(?im)^(?P<head>\s*Traceback \(most recent call last\):)"
-)
+_TRACEBACK_START = re.compile(r"(?im)^(?P<head>\s*Traceback \(most recent call last\):)")
 # Also accept leading File frames without the Traceback header (common paste).
 _FILE_FRAME = re.compile(
     r'(?m)^\s*File\s+"(?P<file>[^"]+)",\s*line\s+(?P<line>\d+)(?:,\s+in\s+(?P<func>\S+))?'
@@ -26,9 +24,7 @@ _EXCEPTION_LINE = re.compile(
     r")\s*:\s*(?P<msg>.*)$"
 )
 _AT_FILE = re.compile(r"(?i)\bat\s+(?P<file>[\w./\\-]+\.py):(?P<line>\d+)\b")
-_CANDIDATE_FILES = re.compile(
-    r"(?i)Candidate source files:\s*(?P<body>.+)"
-)
+_CANDIDATE_FILES = re.compile(r"(?i)Candidate source files:\s*(?P<body>.+)")
 _CODE_FENCE = re.compile(r"```[\w+-]*\n.*?```", re.S)
 # Bare .py tokens (noisy inside pasted source).
 _BARE_PY = re.compile(r"(?i)\b([\w./\\-]+\.py)\b")
@@ -227,9 +223,7 @@ def relativize_suspect_path(path: str, *, repo_root: str | Path | None = None) -
     return norm
 
 
-def _prefer_project_files(
-    files: list[str], *, repo_root: str | Path | None = None
-) -> list[str]:
+def _prefer_project_files(files: list[str], *, repo_root: str | Path | None = None) -> list[str]:
     """If both absolute site paths and project-relative exist, keep non-noise only.
 
     Also strip leading workspace roots like /app/, /home/.../project/ when helpful
@@ -262,9 +256,7 @@ def parse_stack(text: str, *, repo_root: str | Path | None = None) -> StackParse
             path = _norm_file(at.group("file"))
             line = int(at.group("line"))
             mapped = relativize_suspect_path(path, repo_root=repo_root) or path
-            if _is_noise_frame(mapped) or (
-                _is_absolute_foreign_path(path) and mapped == path
-            ):
+            if _is_noise_frame(mapped) or (_is_absolute_foreign_path(path) and mapped == path):
                 mapped_list = _prefer_project_files([path], repo_root=repo_root)
                 mapped = mapped_list[0] if mapped_list else ""
             result.has_traceback = True
@@ -327,9 +319,7 @@ def parse_stack(text: str, *, repo_root: str | Path | None = None) -> StackParse
     return result
 
 
-def extract_issue_slots(
-    text: str, *, repo_root: str | Path | None = None
-) -> dict[str, Any]:
+def extract_issue_slots(text: str, *, repo_root: str | Path | None = None) -> dict[str, Any]:
     """Slots for intent routing: stack-first, then safe fallbacks (no fence noise)."""
     parsed = parse_stack(text, repo_root=repo_root)
     if parsed.has_traceback:
@@ -358,8 +348,7 @@ def extract_issue_slots(
     # Short utterances: allow bare .py; skip source-like lines (def/class/=).
     if not files and len(scrubbed) < 400:
         source_like = bool(
-            re.search(r"(?m)^(def |class |import |from )", scrubbed)
-            or scrubbed.count("=") >= 3
+            re.search(r"(?m)^(def |class |import |from )", scrubbed) or scrubbed.count("=") >= 3
         )
         if not source_like:
             for m in _BARE_PY.finditer(scrubbed):

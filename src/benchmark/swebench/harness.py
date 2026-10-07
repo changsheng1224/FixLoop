@@ -66,10 +66,9 @@ def resolve_harness_backend(requested: str = "auto") -> tuple[str, str]:
         probe = probe_wsl()
         if probe.available:
             return "wsl", ""
-        return "", (
-            probe.error
-            or "WSL harness unavailable"
-        ) + (f" | {probe.note}" if probe.note else "")
+        return "", (probe.error or "WSL harness unavailable") + (
+            f" | {probe.note}" if probe.note else ""
+        )
     return "", "swebench package not installed (pip install swebench)"
 
 

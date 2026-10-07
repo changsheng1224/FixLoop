@@ -156,8 +156,15 @@ def test_context_runtime_selects_provenance_and_never_replays_writes():
     items = [
         ContextItem("low", "memory", "old", token_cost=8, relevance=0.2),
         ContextItem(
-            "high", "observation", "evidence", source_ref="OBS-1", token_cost=3,
-            relevance=0.9, confidence=0.9, evidence_strength=1.0, hypothesis_ids=["H-1"],
+            "high",
+            "observation",
+            "evidence",
+            source_ref="OBS-1",
+            token_cost=3,
+            relevance=0.9,
+            confidence=0.9,
+            evidence_strength=1.0,
+            hypothesis_ids=["H-1"],
         ),
     ]
     selected = ContextPolicyEngine().select_with_result(items, request).selected

@@ -50,7 +50,10 @@ def test_plan_checkpoint_seals_and_verifies_long_task_state(tmp_path):
         session.verify_long_task_checkpoint(seal)
         with pytest.raises(ValueError, match="checkpoint_identity_or_checksum"):
             session.verify_long_task_checkpoint(
-                {**seal, "long_task_state": {**seal["long_task_state"], "original_request": "tampered"}}
+                {
+                    **seal,
+                    "long_task_state": {**seal["long_task_state"], "original_request": "tampered"},
+                }
             )
 
 
@@ -64,10 +67,15 @@ def test_context_manager_projects_long_task_state_into_protected_section(tmp_pat
             session={},
             _cwd=str(tmp_path),
             _prefix=SimpleNamespace(
-                tool_signature="", assets_fingerprint="", stable_system_text="",
-                stable_tools_text="", stable_skills_text="", stable_workspace_text="",
+                tool_signature="",
+                assets_fingerprint="",
+                stable_system_text="",
+                stable_tools_text="",
+                stable_skills_text="",
+                stable_workspace_text="",
                 role_text="",
-                hash="", workspace_fingerprint="",
+                hash="",
+                workspace_fingerprint="",
             ),
             tool_context=SimpleNamespace(),
             config=SimpleNamespace(prompt_budget=6000, model="", provider=""),
@@ -78,7 +86,9 @@ def test_context_manager_projects_long_task_state_into_protected_section(tmp_pat
         assert "长任务状态" in text
         assert metadata["long_task_context"]["original_request"] == "request"
         assert agent.session["long_task_context"]["hard_constraints"] == ["constraint"]
-        assert is_repair_state_item({"content": text.split("长任务状态", 1)[1], "long_task_state": True})
+        assert is_repair_state_item(
+            {"content": text.split("长任务状态", 1)[1], "long_task_state": True}
+        )
 
 
 def test_refresh_observation_with_new_plan_node_records_replacement(tmp_path):
@@ -89,7 +99,11 @@ def test_refresh_observation_with_new_plan_node_records_replacement(tmp_path):
         old_ref = session.plan.node("read-0").output_evidence_refs[0]
         session.long_task.add_evidence([old_ref])
         (tmp_path / "value.py").write_text("value = 2\n")
-        new_ref = session.refresh_observation_with_node(old_ref, "read-1", lambda attempt: read(session, attempt))
+        new_ref = session.refresh_observation_with_node(
+            old_ref, "read-1", lambda attempt: read(session, attempt)
+        )
         assert new_ref != old_ref
         assert session.evidence.valid(new_ref)
-        assert any(item.get("supersedes") == old_ref for item in session.long_task_state.key_decisions)
+        assert any(
+            item.get("supersedes") == old_ref for item in session.long_task_state.key_decisions
+        )

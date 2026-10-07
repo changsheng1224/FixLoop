@@ -1,8 +1,10 @@
 """Repair convergence, grounding, action projection and recovery decisions (L2)."""
+
 from __future__ import annotations
 
 from agent_runtime.loop_policy import LoopPolicy
 from agent_runtime.tool_result import ToolResult
+
 
 def tool_target_paths(tool_name: str, tool_args: dict | None) -> list[str]:
     """Return normalized file targets for write/recovery decisions.
@@ -99,6 +101,7 @@ class RepairLoopPolicy(LoopPolicy):
         if lock is None:
             return
         path = str(tool_args.get("path") or "")
+        lock.mark_read(path, auto_allow_impl=True)
         grounded_paths = lock.grounded_paths()
         if not grounded_paths:
             return
@@ -116,7 +119,8 @@ class RepairLoopPolicy(LoopPolicy):
                 grounded_paths[:12],
                 [dict(item) for item in ledger[-12:]] if isinstance(ledger, list) else [],
             )
-        self.set_recovery(context,
+        self.set_recovery(
+            context,
             "grounded_evidence",
             "已读取实现文件并获得可编辑证据。停止继续探索，立即调用 apply_patch/patch_file；"
             "若确实无法形成补丁，只能声明 cannot_patch 并说明具体原因。",
@@ -129,7 +133,9 @@ class RepairLoopPolicy(LoopPolicy):
 
     def review_result(self, context, tool_name: str, tool_args: dict, result) -> bool:
         """Reject needs_more_context after implementation evidence exists."""
-        if tool_name != "finish_repair" or not self.grounded(context, ):
+        if tool_name != "finish_repair" or not self.grounded(
+            context,
+        ):
             return False
         status = str(tool_args.get("status") or "").strip().lower()
         if status != "needs_more_context":
@@ -141,8 +147,9 @@ class RepairLoopPolicy(LoopPolicy):
             "Error: 已有实现文件证据，不能以 needs_more_context 结束。"
             "请调用 apply_patch/patch_file；若无法修复请改用 cannot_patch。"
         )
-        result.metadata.update({'required_next_action': 'apply_patch_or_cannot_patch'})
-        self.set_recovery(context,
+        result.metadata.update({"required_next_action": "apply_patch_or_cannot_patch"})
+        self.set_recovery(
+            context,
             "grounded_finish_blocked",
             "已有实现文件证据，needs_more_context 已拒绝。请直接提交补丁，或声明 cannot_patch。",
             {"apply_patch", "patch_file", "finish_repair"},
@@ -196,8 +203,7 @@ class RepairLoopPolicy(LoopPolicy):
         reserves = list((quota.quota_summary() if quota else {}).get("read_reserves") or [])
         has_post_lock = any(item.get("kind") == "post_lock" for item in reserves)
         if has_post_lock or (
-            context.guard.targeted_read_available
-            and not context.state.action_required
+            context.guard.targeted_read_available and not context.state.action_required
         ):
             writes.add("read_file")
         return writes
@@ -232,15 +238,14 @@ class RepairLoopPolicy(LoopPolicy):
             read_reservation=read_reservation,
         )
         if phase_before == "explore" and context.guard.phase == "converge":
-            self.enter_convergence(context,
-                context.guard.convergence_reason or "duplicate_read", step=step
+            self.enter_convergence(
+                context, context.guard.convergence_reason or "duplicate_read", step=step
             )
         if preflight is not None and preflight.action == "allow_targeted_read":
             context.grant_read_reserve("*", kind="targeted", step=step)
         elif preflight is not None and preflight.action == "allow_reserved_read":
             pass
         elif preflight is not None and preflight.action.startswith("block_"):
-
             event = (
                 "duplicate_read_blocked"
                 if preflight.action == "block_duplicate_read"
@@ -281,7 +286,8 @@ class RepairLoopPolicy(LoopPolicy):
                 metadata={},
                 retryable=False,
             )
-            self.set_recovery(context,
+            self.set_recovery(
+                context,
                 "convergence_required",
                 "读取请求被收敛闸门拒绝。请停止重复读取，直接调用 apply_patch/patch_file，"
                 "或调用 finish_repair 说明证据不足。",
@@ -299,7 +305,8 @@ class RepairLoopPolicy(LoopPolicy):
             if context.guard.request_targeted_reread("stale_preimage"):
                 for target_path in target_paths:
                     context.grant_read_reserve(target_path, kind="targeted", step=step)
-            self.set_recovery(context,
+            self.set_recovery(
+                context,
                 "stale_preimage",
                 f"补丁的旧文本已失效。先对 {', '.join(target_paths) or '目标文件'} "
                 "执行一次精确 read_file，"
@@ -320,7 +327,8 @@ class RepairLoopPolicy(LoopPolicy):
                 },
             )
         elif error_code == "invalid_args":
-            self.set_recovery(context,
+            self.set_recovery(
+                context,
                 "invalid_args",
                 "写入参数无效。禁止空 old_text/new_text 或重复相同工具调用；"
                 "请改用包含文件路径、上下文行和 +/- 行的 apply_patch，"
@@ -335,7 +343,8 @@ class RepairLoopPolicy(LoopPolicy):
             context.guard.request_targeted_reread("no_change")
             for target_path in target_paths:
                 context.grant_read_reserve(target_path, kind="targeted", step=step)
-            self.set_recovery(context,
+            self.set_recovery(
+                context,
                 "no_change",
                 f"上一次写入没有产生磁盘变化。先精确读取 "
                 f"{', '.join(target_paths) or '目标文件'} 的当前内容，"
@@ -353,7 +362,8 @@ class RepairLoopPolicy(LoopPolicy):
                 },
             )
         elif error_code == "edit_lint_reject":
-            self.set_recovery(context,
+            self.set_recovery(
+                context,
                 "edit_lint_reject",
                 "补丁因编辑期语法检查未落盘。请修正语法后用 apply_patch 提交，不要重复相同内容。",
                 {"apply_patch", "finish_repair"},
@@ -362,7 +372,6 @@ class RepairLoopPolicy(LoopPolicy):
                 "patch_write_rejected",
                 {"step": step, "tool": tool_name, "error_code": error_code},
             )
-
 
     def on_success(self, context, tool_name, tool_args, result, *, step):
         if tool_name in {"write_file", "patch_file", "apply_patch"}:
@@ -383,7 +392,8 @@ class RepairLoopPolicy(LoopPolicy):
                 and consumed_reserve.get("kind") == "targeted"
                 and context.state.recovery_kind in {"stale_preimage", "no_change"}
             ):
-                self.set_recovery(context,
+                self.set_recovery(
+                    context,
                     "post_reread",
                     "精确重读已完成。现在必须基于该读取结果调用 apply_patch/patch_file，"
                     "或调用 finish_repair；不要再次读取同一范围。",
@@ -400,7 +410,6 @@ class RepairLoopPolicy(LoopPolicy):
                 step=step,
                 generation=generation,
             )
-
 
     def recovery_anchors(self, text: str, *, max_chars: int = 6000) -> str:
         """Keep bounded source/target anchors when a model turn is truncated."""

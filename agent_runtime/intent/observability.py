@@ -110,7 +110,9 @@ def record_intent_route(
         "fixloop_intent_router_version_total",
         labels={
             "router_version": str(signals.get("router_version") or INTENT_ROUTER_VERSION)[:32],
-            "taxonomy_version": str(signals.get("taxonomy_version") or INTENT_TAXONOMY_VERSION)[:32],
+            "taxonomy_version": str(signals.get("taxonomy_version") or INTENT_TAXONOMY_VERSION)[
+                :32
+            ],
         },
     )
     for stage, value in (signals.get("stage_latency_ms") or {}).items():

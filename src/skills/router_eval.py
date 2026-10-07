@@ -61,7 +61,7 @@ def _load_one(path: Path) -> list[RouterEvalCase]:
         prev = raw.get("previous")
         out.append(
             RouterEvalCase(
-                id=str(raw.get("id") or f"case-{len(out)+1}"),
+                id=str(raw.get("id") or f"case-{len(out) + 1}"),
                 text=str(raw.get("text") or ""),
                 expect=raw.get("expect"),
                 tags=list(raw.get("tags") or []),

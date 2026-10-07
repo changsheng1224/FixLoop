@@ -106,10 +106,6 @@ class ApplyPatchArgs:
     patch: str = ""
 
 
-
-
-
-
 @dataclass
 class QuickTestArgs:
     """环内快检。"""
@@ -433,8 +429,6 @@ def _normalize_hunk_headers(diff: str, file_text: str) -> str:
             out_lines.append(ln)
     _flush_hunk()
     return "\n".join(out_lines)
-
-
 
 
 def _patch_transaction_paths(context, patch_text: str) -> dict:
@@ -1141,8 +1135,6 @@ def _format_shell_result(returncode: int, stdout: str, stderr: str) -> ToolResul
 # ============================================================================
 # 工具注册表
 # ============================================================================
-
-
 
 
 def tool_expand_observation(context: ToolContext, args: dict) -> ToolResult:

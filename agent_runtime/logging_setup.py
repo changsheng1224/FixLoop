@@ -73,6 +73,16 @@ def _build_formatter(log_format: str) -> logging.Formatter:
     return logging.Formatter(_DEFAULT_FORMAT, datefmt=_DATE_FORMAT)
 
 
+class _StderrStream:
+    """Resolve stderr at each write so temporary captures cannot outlive their stream."""
+
+    def write(self, text: str) -> int:
+        return sys.stderr.write(text)
+
+    def flush(self) -> None:
+        sys.stderr.flush()
+
+
 def configure_logging(level: str | int | None = None) -> None:
     """配置 fixloop 命名空间 logger（stderr，单例 handler）。"""
     if level is None:
@@ -85,7 +95,7 @@ def configure_logging(level: str | int | None = None) -> None:
     logger.setLevel(numeric)
 
     if not getattr(configure_logging, "_configured", False):
-        handler = logging.StreamHandler(sys.stderr)
+        handler = logging.StreamHandler(_StderrStream())
         handler.setFormatter(formatter)
         logger.addHandler(handler)
         logger.propagate = False

@@ -19,9 +19,7 @@ def test_blackboard_same_value_merges_evidence():
 
     board = Blackboard()
     first = board.merge_proposal(board.propose("file", "a.py", "patcher", evidence_refs=["E1"]))
-    second = board.merge_proposal(
-        board.propose("file", "a.py", "verifier", evidence_refs=["E2"])
-    )
+    second = board.merge_proposal(board.propose("file", "a.py", "verifier", evidence_refs=["E2"]))
     assert first["status"] == "accepted"
     assert second["status"] == "accepted"
 
@@ -30,8 +28,12 @@ def test_tool_policy_uses_role_mode_and_phase():
     from src.collaboration_governance import CollaborationGovernance
 
     policy = CollaborationGovernance()
-    assert not policy.authorize("apply_patch", role="patcher", phase="context", evidence=True).allowed
-    assert not policy.authorize("apply_patch", role="verifier", phase="patch", evidence=True).allowed
+    assert not policy.authorize(
+        "apply_patch", role="patcher", phase="context", evidence=True
+    ).allowed
+    assert not policy.authorize(
+        "apply_patch", role="verifier", phase="patch", evidence=True
+    ).allowed
     assert policy.authorize("apply_patch", role="patcher", phase="patch", evidence=True).allowed
 
 
@@ -78,10 +80,11 @@ def test_skill_policy_is_intersection_only():
 
 
 def test_skill_metadata_is_traceable():
-    from src.skills.models import MatchedSkill
     from src.skills.contract import SkillSpec
+    from src.skills.models import MatchedSkill
 
-    spec = SkillSpec(kind="guidance",
+    spec = SkillSpec(
+        kind="guidance",
         name="python_fix",
         trigger_pattern="TypeError",
         guidance=["inspect", "verify"],

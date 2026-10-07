@@ -100,6 +100,24 @@ class TestJsonLogging:
 
 
 class TestConfigureLogging:
+    def test_logs_follow_stderr_after_previous_capture_closes(self, monkeypatch):
+        import sys
+
+        previous = io.StringIO()
+        with monkeypatch.context() as capture:
+            capture.setattr(sys, "stderr", previous)
+            configure_logging("INFO")
+        previous.close()
+
+        current = io.StringIO()
+        with monkeypatch.context() as capture:
+            capture.setattr(sys, "stderr", current)
+            logging.getLogger("fixloop").info("after capture")
+
+        output = current.getvalue()
+        assert "INFO [fixloop] after capture" in output
+        assert "--- Logging error ---" not in output
+
     def test_configure_json_via_env(self, monkeypatch):
         monkeypatch.setenv("FIXLOOP_LOG", "json")
         reset_logging_for_tests()

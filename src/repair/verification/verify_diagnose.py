@@ -182,11 +182,7 @@ def diagnose_verification(result: VerificationResult | None) -> VerifyDiagnosis:
     if any(m in text for m in _LOGIC_MARKERS) or result.failed > 0:
         tip = ""
         if nodeids:
-            tip = (
-                "先用 read_file 打开失败测试："
-                + "；".join(nodeids[:3])
-                + "。对照断言再改实现。"
-            )
+            tip = "先用 read_file 打开失败测试：" + "；".join(nodeids[:3]) + "。对照断言再改实现。"
         else:
             tip = "对照失败断言修改实现；避免无关文件改动。"
         return VerifyDiagnosis(

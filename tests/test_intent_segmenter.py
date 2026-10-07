@@ -40,7 +40,7 @@ class TestSegmenter:
 
     def test_traceback_stays_one_block(self):
         text = (
-            'Traceback (most recent call last):\n'
+            "Traceback (most recent call last):\n"
             '  File "app.py", line 1, in <module>\n'
             "TypeError: bad"
         )

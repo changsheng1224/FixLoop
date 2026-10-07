@@ -47,12 +47,16 @@ class SkillFeedbackLedger:
         self.events = state.setdefault("skill_usage_events", [])
 
     def record(self, event: SkillUsageEvent) -> dict[str, Any]:
-        if event.outcome in {
-            SkillUsageOutcome.HELPFUL.value,
-            SkillUsageOutcome.SUPPORTED.value,
-            SkillUsageOutcome.CONTRADICTED.value,
-            SkillUsageOutcome.HARMFUL.value,
-        } and not event.evidence_refs:
+        if (
+            event.outcome
+            in {
+                SkillUsageOutcome.HELPFUL.value,
+                SkillUsageOutcome.SUPPORTED.value,
+                SkillUsageOutcome.CONTRADICTED.value,
+                SkillUsageOutcome.HARMFUL.value,
+            }
+            and not event.evidence_refs
+        ):
             event = SkillUsageEvent(
                 skill_name=event.skill_name,
                 skill_version=event.skill_version,

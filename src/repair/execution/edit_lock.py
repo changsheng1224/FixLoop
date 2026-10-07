@@ -89,7 +89,7 @@ class EditLockState:
             if path in self.read_set and not _is_test_path(path)
         ]
 
-    def mark_read(self, path: str, *, auto_allow_impl: bool = True) -> bool:
+    def mark_read(self, path: str, *, auto_allow_impl: bool = False) -> bool:
         rel = normalize_repo_rel(path, self.repo_root)
         if not rel:
             return False

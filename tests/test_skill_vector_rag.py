@@ -1,8 +1,8 @@
 """Skill 向量 RAG 单测：SkillCatalog.embed_index + match_skill_semantic + regex 回退。"""
 
 from src.skills.catalog import SkillCatalog
-from src.skills.matcher import match_skill, match_skill_semantic
 from src.skills.contract import SkillSpec
+from src.skills.matcher import match_skill, match_skill_semantic
 
 
 def _make_skills(n: int = 10) -> list[SkillSpec]:
@@ -10,7 +10,8 @@ def _make_skills(n: int = 10) -> list[SkillSpec]:
     skills = []
     for i in range(n):
         skills.append(
-            SkillSpec(kind="guidance",
+            SkillSpec(
+                kind="guidance",
                 name=f"python_error_{i:03d}",
                 language="python",
                 trigger_pattern=(

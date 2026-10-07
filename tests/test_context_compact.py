@@ -33,13 +33,9 @@ def test_compact_thrash_stops():
     ]
     r1 = compact_tool_history(history, thrash_threshold=2, prior_compacts=1)
     assert r1.compacted
-    r2 = compact_tool_history(
-        r1.messages, thrash_threshold=2, prior_compacts=r1.compact_count
-    )
+    r2 = compact_tool_history(r1.messages, thrash_threshold=2, prior_compacts=r1.compact_count)
     # 再次仍爆 → thrash
     bloated = r2.messages + [{"role": "user", "content": "y" * 5000}]
-    r3 = compact_tool_history(
-        bloated, thrash_threshold=2, prior_compacts=2, max_total_chars=1000
-    )
+    r3 = compact_tool_history(bloated, thrash_threshold=2, prior_compacts=2, max_total_chars=1000)
     assert r3.thrash is True
     assert r3.compact_thrash_count >= 1

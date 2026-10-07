@@ -15,6 +15,7 @@ def test_selected_source_in_later_native_model_request(tmp_path):
     (tmp_path / "service.py").write_text(
         "def render(value):\n    return f'<{value}>'\n", encoding="utf-8"
     )
+
     class RecordingClient(FakeNativeToolClient):
         def __init__(self, outputs):
             super().__init__(outputs)
@@ -24,15 +25,17 @@ def test_selected_source_in_later_native_model_request(tmp_path):
             self.requests.append(request)
             return super().complete_turn(request)
 
-    client = RecordingClient([
-        '<tool>{"name":"read_file","args":{"path":"service.py"}}</tool>',
-        '<tool>{"name":"code_relations","args":{}}</tool>',
-        "<final>done</final>",
-    ])
+    client = RecordingClient(
+        [
+            '<tool>{"name":"read_file","args":{"path":"service.py"}}</tool>',
+            '<tool>{"name":"code_relations","args":{}}</tool>',
+            "<final>done</final>",
+        ]
+    )
     agent = Agent(
-        config=AgentConfig(provider="fake", max_steps=5,
-                           code_exploration={"mode": "relations"}),
-        model_client=client, workspace=WorkspaceContext.build(str(tmp_path)),
+        config=AgentConfig(provider="fake", max_steps=5, code_exploration={"mode": "relations"}),
+        model_client=client,
+        workspace=WorkspaceContext.build(str(tmp_path)),
         cwd=str(tmp_path),
     )
     assert agent.ask("Find the render implementation", skip_plan=True) == "done"
@@ -57,7 +60,8 @@ def test_changed_source_is_not_injected_again(tmp_path):
     agent = Agent(
         config=AgentConfig(provider="fake", code_exploration={"mode": "relations"}),
         model_client=FakeNativeToolClient(["<final>done</final>"]),
-        workspace=WorkspaceContext.build(str(root)), cwd=str(root),
+        workspace=WorkspaceContext.build(str(root)),
+        cwd=str(root),
         tool_context=context,
     )
     agent.tool_context.exploration_service = service

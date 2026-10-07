@@ -40,6 +40,23 @@ def failed_binding(tmp_path, request):
         binding.close()
 
 
+@pytest.mark.parametrize("output_budget", [4096, 8192])
+def test_replan_uses_role_output_budget(failed_binding, output_budget):
+    binding, client, _, _ = failed_binding
+    binding.agent.config.max_new_tokens = output_budget
+    requested = []
+    complete = client.complete
+
+    def record(prompt, max_new_tokens, **kwargs):
+        requested.append(max_new_tokens)
+        return complete(prompt, max_new_tokens=max_new_tokens, **kwargs)
+
+    client.complete = record
+    binding._retry_from_verification()
+    assert requested == [output_budget]
+    assert binding.session.plan.plan_version == 2
+
+
 def test_replan_prompt_progress_and_duplicate_commit(failed_binding):
     binding, client, events, output = failed_binding
     trigger = binding._verification_trigger()[0]

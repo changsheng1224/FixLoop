@@ -15,7 +15,7 @@ def _route(text: str, *, channel: str = "repl", **kwargs):
 class TestIntentRouterGold:
     def test_type_error_issue_single_repair(self):
         text = (
-            'Traceback (most recent call last):\n'
+            "Traceback (most recent call last):\n"
             '  File "calculator.py", line 42, in add\n'
             "TypeError: unsupported operand type(s)"
         )
@@ -49,7 +49,7 @@ class TestIntentRouterGold:
 
     def test_pure_stack_not_multi(self):
         text = (
-            'Traceback (most recent call last):\n'
+            "Traceback (most recent call last):\n"
             '  File "a.py", line 1\n'
             '  File "b.py", line 2\n'
             "TypeError: x"

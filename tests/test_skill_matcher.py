@@ -8,15 +8,16 @@ import pytest
 from pydantic import ValidationError
 
 from src.skills.catalog import SkillCatalog, SkillCatalogError
-from src.skills.matcher import match_skill
 from src.skills.contract import SkillSpec
+from src.skills.matcher import match_skill
 from src.skills.skill_block import render_skill_hint_for_plan
 from src.state import RepairPlan, SkillContext
 
 
 class TestSkillSpec:
     def test_valid_spec(self):
-        spec = SkillSpec(kind="guidance",
+        spec = SkillSpec(
+            kind="guidance",
             name="demo",
             language="python",
             trigger_pattern="TypeError",
@@ -101,7 +102,11 @@ class TestMatchSkill:
         assert match_skill("Error", language="javascript", catalog=catalog).name == "js"
 
     def test_no_match_returns_none(self, tmp_path: Path):
-        self._write(tmp_path, "a.yaml", "name: a\nkind: guidance\ntrigger_pattern: FooError\nguidance: [fix]\n")
+        self._write(
+            tmp_path,
+            "a.yaml",
+            "name: a\nkind: guidance\ntrigger_pattern: FooError\nguidance: [fix]\n",
+        )
         catalog = SkillCatalog.load_from_directory(tmp_path)
         assert match_skill("TypeError", catalog=catalog) is None
 

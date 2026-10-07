@@ -141,7 +141,6 @@ class ReplayRunner:
         result.integrity_issues = validate_trace(events, require_terminal=False)
 
         for event in events:
-
             if event.get("event") != "tool_executed":
                 continue
 

@@ -842,7 +842,7 @@ class ToolExecutor:
             "code_relations",
             "inspect_file",
             "find_test",
-                "git_blame",
+            "git_blame",
             "git_diff",
             "github_list_issues",
             "github_get_issue",

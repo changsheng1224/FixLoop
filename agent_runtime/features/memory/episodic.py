@@ -128,7 +128,8 @@ def retrieval_candidates(
             "memory_role": "historical_candidate",
             "retrieval_reason": "keyword_or_tag_match",
             "matched_tokens": sorted(
-                token for token in query_tokens
+                token
+                for token in query_tokens
                 if token in str(note.get("text", "")).lower()
                 or token in {str(tag).lower() for tag in note.get("tags", [])}
             ),

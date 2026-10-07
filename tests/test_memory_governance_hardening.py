@@ -63,8 +63,7 @@ def test_expired_memory_forget_removes_canonical_usage(tmp_path):
     assert service.inspect(memory.memory_id) is None
     assert service.store.get_memory(memory.memory_id) is None
     assert not any(
-        event.get("memory_id") == memory.memory_id
-        for event in state.get("memory_usage_events", [])
+        event.get("memory_id") == memory.memory_id for event in state.get("memory_usage_events", [])
     )
 
 

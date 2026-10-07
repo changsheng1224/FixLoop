@@ -98,12 +98,7 @@ class TestE17FailToPassNormalize:
 
 class TestE6aSiblingReplaceAll:
     def test_replace_all_identical_snippets(self):
-        text = (
-            "class A:\n"
-            "    regex = r'^[\\w.@+-]+$'\n"
-            "class B:\n"
-            "    regex = r'^[\\w.@+-]+$'\n"
-        )
+        text = "class A:\n    regex = r'^[\\w.@+-]+$'\nclass B:\n    regex = r'^[\\w.@+-]+$'\n"
         patch = CandidatePatch(
             file_path="v.py",
             original_lines="    regex = r'^[\\w.@+-]+$'",

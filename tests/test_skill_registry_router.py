@@ -49,9 +49,7 @@ class TestRegistry:
 
 class TestRunners:
     def test_github_ingestion_from_url(self):
-        out = run_github_issue_ingestion(
-            {"text": "see https://github.com/acme/demo/issues/12"}
-        )
+        out = run_github_issue_ingestion({"text": "see https://github.com/acme/demo/issues/12"})
         assert out["ok"]
         assert out["issue_spec"]["owner"] == "acme"
         assert out["issue_spec"]["number"] == 12
@@ -77,24 +75,14 @@ class TestRunners:
         assert out["issue_spec"]["source"] == "github_get_issue"
 
     def test_stack_localization(self):
-        tb = (
-            'Traceback (most recent call last):\n'
-            '  File "calc.py", line 12, in add\n'
-            "TypeError: bad"
-        )
+        tb = 'Traceback (most recent call last):\n  File "calc.py", line 12, in add\nTypeError: bad'
         out = run_stacktrace_localization({"traceback": tb})
         assert out["ok"]
         assert out["localization"]["exception_type"] == "TypeError"
         assert out["localization"]["frames"]
 
     def test_regression_selection_from_diff(self):
-        diff = (
-            "diff --git a/calc.py b/calc.py\n"
-            "--- a/calc.py\n"
-            "+++ b/calc.py\n"
-            "@@ -1 +1 @@\n"
-            "+x\n"
-        )
+        diff = "diff --git a/calc.py b/calc.py\n--- a/calc.py\n+++ b/calc.py\n@@ -1 +1 @@\n+x\n"
         out = run_regression_test_selection({"diff": diff})
         assert out["ok"]
         assert "calc.py" in out["selection"]["changed_files"]
@@ -112,10 +100,7 @@ class TestRunners:
 
     def test_patch_apply_check(self):
         out = run_patch_apply_check(
-            {
-                "text": "apply the patch\n"
-                "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n"
-            }
+            {"text": "apply the patch\ndiff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n"}
         )
         assert out["ok"]
         assert out["apply"]["status"] in ("ready", "dry_run")
@@ -128,9 +113,7 @@ class TestRunners:
 
 class TestRouter:
     def test_route_github(self):
-        d = SkillRouter().route(
-            "Please ingest GitHub issue https://github.com/acme/demo/issues/12"
-        )
+        d = SkillRouter().route("Please ingest GitHub issue https://github.com/acme/demo/issues/12")
         assert d.selected == "github_issue_ingestion"
         assert d.selection_reason in ("rule_short_circuit", "top1_margin")
         assert d.skill_version == "1.0.0"
@@ -141,16 +124,13 @@ class TestRouter:
             == "repo_code_search"
         )
         assert (
-            SkillRouter().route("Run baseline tests before the fix").selected
-            == "baseline_verify"
+            SkillRouter().route("Run baseline tests before the fix").selected == "baseline_verify"
         )
         assert (
-            SkillRouter().route("Apply the patch and smoke-check").selected
-            == "patch_apply_check"
+            SkillRouter().route("Apply the patch and smoke-check").selected == "patch_apply_check"
         )
         assert (
-            SkillRouter().route("Create a draft PR against master").selected
-            == "draft_pr_prepare"
+            SkillRouter().route("Create a draft PR against master").selected == "draft_pr_prepare"
         )
 
     def test_route_fallback_negative(self):

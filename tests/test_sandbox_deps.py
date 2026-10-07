@@ -43,8 +43,7 @@ def test_collect_declared_from_requirements(tmp_path: Path):
 
 def test_collect_from_setup_py_install_requires(tmp_path: Path):
     (tmp_path / "setup.py").write_text(
-        "from setuptools import setup\n"
-        "setup(install_requires=['packaging>=20', 'six'])\n",
+        "from setuptools import setup\nsetup(install_requires=['packaging>=20', 'six'])\n",
         encoding="utf-8",
     )
     pkgs = collect_declared_pip_packages(tmp_path)

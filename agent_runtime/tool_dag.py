@@ -59,7 +59,7 @@ class ToolDAGExecutor:
                     content=f"Error: dependency failed for {node.node_id}",
                     status=ToolStatus.REJECTED.value,
                     error_code=ToolErrorCode.STALE_PRECONDITION.value,
-                    metadata={'blocked_by': list(node.depends_on)},
+                    metadata={"blocked_by": list(node.depends_on)},
                 )
             pending.difference_update(node.node_id for node in blocked)
             ready = [node for node in ready if node not in blocked]

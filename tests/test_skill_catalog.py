@@ -14,6 +14,7 @@ from src.skills.catalog import SkillCatalog
 def _compute_directory_hash(directory: Path) -> str:
     return SkillCatalog.load_from_directory(directory).content_hash
 
+
 # ---------------------------------------------------------------------------
 # content_hash
 # ---------------------------------------------------------------------------

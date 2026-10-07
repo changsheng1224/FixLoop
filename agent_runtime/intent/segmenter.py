@@ -194,17 +194,13 @@ def segment(text: str) -> list[Segment]:
             keep_before: list[Segment] = []
             for j in range(si):
                 head = segments[j].text.split("\n", 1)[0]
-                if _INTENT_LEAD.search(head) and re.search(
-                    r"(?i)记住|remember", head
-                ):
+                if _INTENT_LEAD.search(head) and re.search(r"(?i)记住|remember", head):
                     keep_before.append(segments[j])
                 else:
                     lead.append(segments[j].text)
             if lead:
                 merged_text = "\n\n".join(lead + [segments[si].text])
-                new_segs = keep_before + [
-                    Segment(index=0, text=merged_text, cue=segments[si].cue)
-                ]
+                new_segs = keep_before + [Segment(index=0, text=merged_text, cue=segments[si].cue)]
                 new_segs.extend(segments[si + 1 :])
                 segments = new_segs
 

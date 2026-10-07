@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+from agent_runtime.tool_result import ToolResult
 from src.repair.localization.localize_cheap_explore import cheap_explore_suspects
 from src.repair.localization.localize_fastpath import (
     filter_llm_suspects_to_disk,
@@ -35,7 +36,7 @@ def test_cheap_explore_grep_hits(tmp_path):
     root = _repo(tmp_path)
     issue = "Bug in compute function returning wrong value"
     with patch("agent_runtime.tools.tool_grep") as g:
-        g.return_value = "pkg/core.py:1:def compute(x):"
+        g.return_value = ToolResult(content="pkg/core.py:1:def compute(x):")
         hits = cheap_explore_suspects(issue, root, max_keywords=4)
     paths = [s.file_path.replace("\\", "/") for s in hits]
     assert "pkg/core.py" in paths

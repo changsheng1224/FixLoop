@@ -124,10 +124,7 @@ class TaskDAG:
                 raise TaskDAGError("; ".join(errors))
             dag.tasks[task.task_id] = task
         unknown = [
-            dep
-            for task in dag.tasks.values()
-            for dep in task.depends_on
-            if dep not in dag.tasks
+            dep for task in dag.tasks.values() for dep in task.depends_on if dep not in dag.tasks
         ]
         if unknown:
             raise TaskDAGError(f"unknown dependencies in snapshot: {sorted(set(unknown))}")

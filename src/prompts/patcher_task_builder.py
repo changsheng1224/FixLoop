@@ -116,7 +116,9 @@ def assemble_patcher_variables(
     effective_allowed = (
         list(allowed_edit)
         if allowed_edit is not None
-        else list(plan.suspect_files or []) if plan else []
+        else list(plan.suspect_files or [])
+        if plan
+        else []
     )
     effective_allowed = list(dict.fromkeys(path for path in effective_allowed if path))
     allowed_files_line = ""
