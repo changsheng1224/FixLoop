@@ -97,17 +97,9 @@ def plan(
     constraint_items = [(s, h) for s, h, r in classified if r == "constraint"]
 
     # Ask/explain merge: peers in ask-family → single node (prefer explain)
-    if (
-        exec_items
-        and all(h.primary in _ASK_FAMILY for _, h in exec_items)
-        and len(exec_items) >= 2
-    ):
+    if exec_items and all(h.primary in _ASK_FAMILY for _, h in exec_items) and len(exec_items) >= 2:
         joined = " ".join(s.text for s, _ in segment_hits)
-        primary = (
-            "explain"
-            if any(h.primary == "explain" for _, h in exec_items)
-            else "ask"
-        )
+        primary = "explain" if any(h.primary == "explain" for _, h in exec_items) else "ask"
         hit = RuleHit(
             primary,
             PRIMARY_ACTIONS[primary],
@@ -150,9 +142,7 @@ def plan(
             mode = "hybrid"
             for i, (cseg, chit) in enumerate(constraint_items, start=1):
                 cid = f"n{i}"
-                nodes.append(
-                    _node_from_hit(cid, chit, cseg, role="constraint", span_start=i * 10)
-                )
+                nodes.append(_node_from_hit(cid, chit, cseg, role="constraint", span_start=i * 10))
                 edges.append(
                     IntentEdge(src=cid, dst="n0", kind="constrains", reason="constraint attach")
                 )
@@ -184,9 +174,7 @@ def plan(
     base = len(nodes)
     for j, (cseg, chit) in enumerate(constraint_items):
         cid = f"n{base + j}"
-        nodes.append(
-            _node_from_hit(cid, chit, cseg, role="constraint", span_start=(base + j) * 10)
-        )
+        nodes.append(_node_from_hit(cid, chit, cseg, role="constraint", span_start=(base + j) * 10))
         edges.append(
             IntentEdge(
                 src=cid,
@@ -254,13 +242,9 @@ def _plan_repair_channel(
             mode = "hybrid"
             cid = f"n{idx}"
             idx += 1
-            nodes.append(
-                _node_from_hit(cid, hit, seg, role="constraint", span_start=idx * 10)
-            )
+            nodes.append(_node_from_hit(cid, hit, seg, role="constraint", span_start=idx * 10))
             edges.append(
-                IntentEdge(
-                    src=cid, dst="n0", kind="constrains", reason="repair constraint"
-                )
+                IntentEdge(src=cid, dst="n0", kind="constrains", reason="repair constraint")
             )
     g = IntentGraph(nodes=nodes, edges=edges, mode=mode, root_ids=["n0"])
     if mode == "hybrid":

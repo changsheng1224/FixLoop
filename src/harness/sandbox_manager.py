@@ -68,8 +68,7 @@ class SandboxRuntimeProbeError(RuntimeError):
         self.output = str(output or "")[-800:]
         detail = self.output.strip() or "no probe output"
         super().__init__(
-            f"{self.code}: entrypoint={self.entrypoint} "
-            f"exit_code={self.exit_code}: {detail}"
+            f"{self.code}: entrypoint={self.entrypoint} exit_code={self.exit_code}: {detail}"
         )
 
     def to_dict(self) -> dict[str, str | int]:
@@ -95,9 +94,7 @@ def sandbox_tmpfs_mounts() -> dict[str, str]:
         return f"{raw},mode=1777" if raw else "mode=1777"
 
     return {
-        "/tmp": _ensure_world_writable(
-            os.getenv("FIXLOOP_SANDBOX_TMPFS_TMP", DEFAULT_TMPFS_TMP)
-        ),
+        "/tmp": _ensure_world_writable(os.getenv("FIXLOOP_SANDBOX_TMPFS_TMP", DEFAULT_TMPFS_TMP)),
         "/code": _ensure_world_writable(
             os.getenv("FIXLOOP_SANDBOX_TMPFS_CODE", DEFAULT_TMPFS_CODE)
         ),
@@ -204,7 +201,7 @@ def sandbox_pip_install_command(
         quoted = " ".join(pkgs)
         # 额外依赖尽力安装，不覆盖 -e 的 exit code
         extra_step = (
-            f'/entrypoint.sh build python -m pip install --user {quoted} '
+            f"/entrypoint.sh build python -m pip install --user {quoted} "
             f"> /tmp/pip_extra.txt 2>&1 || true; "
             f"tail -20 /tmp/pip_extra.txt; "
         )
@@ -483,17 +480,40 @@ class SandboxManager:
             stderr="",
         )
 
-    def destroy(self, sandbox: Sandbox):
-        """销毁容器、释放 semaphore（若 create 时持有）、移除持久层。"""
+    def destroy(self, sandbox: Sandbox) -> bool:
+        """Remove the container and return whether Docker confirmed its absence."""
+        from docker.errors import APIError, NotFound
+
         try:
             container = self.docker.containers.get(sandbox.id)
-            container.kill()
+            try:
+                container.kill()
+            except Exception:
+                # Force removal also stops a running container.
+                pass
             container.remove(force=True)
+            return True
+        except NotFound:
+            return True
+        except APIError as exc:
+            if exc.response is None or exc.response.status_code != 409:
+                return False
+            # auto_remove can race with explicit removal after kill. Confirm absence.
+            for _ in range(40):
+                try:
+                    self.docker.containers.get(sandbox.id)
+                except NotFound:
+                    return True
+                except Exception:
+                    return False
+                time.sleep(0.05)
+            return False
         except Exception:
-            pass
+            return False
         finally:
             if getattr(sandbox, "_semaphore_held", False):
                 _sandbox_semaphore.release()
+                sandbox._semaphore_held = False
                 log.debug(
                     "sandbox semaphore released (%d/%d)",
                     _MAX_SANDBOXES - _sandbox_semaphore._value,

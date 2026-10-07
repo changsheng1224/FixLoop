@@ -35,8 +35,7 @@ def load_instances_from_hf(
         from datasets import load_dataset
     except ImportError as e:
         raise DatasetError(
-            "huggingface `datasets` not installed; "
-            "pip install datasets 或使用 --instances-jsonl"
+            "huggingface `datasets` not installed; pip install datasets 或使用 --instances-jsonl"
         ) from e
     try:
         ds = load_dataset(dataset_name, split=split)

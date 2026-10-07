@@ -21,9 +21,7 @@ def _hist(*users: str) -> list[dict]:
 
 class TestResolveHistoryFirst:
     def test_deixis_uses_history_when_no_projection(self):
-        history = _hist(
-            'Traceback (most recent call last):\n  File "foo.py", line 1\nTypeError: x'
-        )
+        history = _hist('Traceback (most recent call last):\n  File "foo.py", line 1\nTypeError: x')
         r = resolve_utterance("刚才那个", history=history)
         assert r.outcome == "resolved"
         assert "TypeError" in r.text or "foo.py" in r.text
@@ -111,11 +109,7 @@ class TestRouterMultiTurn:
 
     def test_two_turn_route_with_projection(self):
         router = IntentRouter()
-        t1 = (
-            'Traceback (most recent call last):\n'
-            '  File "billing.py", line 4\n'
-            "AttributeError: x"
-        )
+        t1 = 'Traceback (most recent call last):\n  File "billing.py", line 4\nAttributeError: x'
         r1 = router.route(t1, RouteContext(channel="repl"))
         proj = update_projection(DialogueProjection(), r1, user_text=t1)
         history = _hist(t1)

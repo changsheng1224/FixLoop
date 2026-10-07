@@ -94,9 +94,7 @@ class CanonicalMemoryStore:
     def _json(value: Any) -> str:
         return json.dumps(value, ensure_ascii=False, default=str, sort_keys=True)
 
-    def upsert_memory(
-        self, memory: dict[str, Any], *, expected_version: int | None = None
-    ) -> int:
+    def upsert_memory(self, memory: dict[str, Any], *, expected_version: int | None = None) -> int:
         memory_id = str(memory.get("memory_id", ""))
         if not memory_id:
             return 0

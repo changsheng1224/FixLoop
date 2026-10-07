@@ -171,11 +171,14 @@ class SessionStore:
                     pass
             session.clear()
             session.update(payload)
-            self._emit("session_saved", {
-                "session_id": session_id,
-                "revision": payload["revision"],
-                "workspace_id": scope.get("workspace_id", ""),
-            })
+            self._emit(
+                "session_saved",
+                {
+                    "session_id": session_id,
+                    "revision": payload["revision"],
+                    "workspace_id": scope.get("workspace_id", ""),
+                },
+            )
             return payload
 
     def load(
@@ -210,11 +213,14 @@ class SessionStore:
                     return None
                 if workspace_id and str(scope.get("workspace_id", "")) != str(workspace_id):
                     return None
-                self._emit("session_loaded", {
-                    "session_id": session_id,
-                    "revision": data.get("revision", 0),
-                    "workspace_id": scope.get("workspace_id", ""),
-                })
+                self._emit(
+                    "session_loaded",
+                    {
+                        "session_id": session_id,
+                        "revision": data.get("revision", 0),
+                        "workspace_id": scope.get("workspace_id", ""),
+                    },
+                )
                 return data
             except (json.JSONDecodeError, OSError):
                 bak = path.with_suffix(".json.bak")

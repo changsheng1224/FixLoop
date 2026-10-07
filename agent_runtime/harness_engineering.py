@@ -668,9 +668,7 @@ def extract_bad_case(snapshot: dict[str, Any]) -> BadCaseRecord | None:
         manifest_fingerprint=str(snapshot.get("manifest_fingerprint") or ""),
         primary_cause=primary,
         contributing_causes=list(
-            failure.get("contributing_causes")
-            or attribution.get("contributing_causes")
-            or []
+            failure.get("contributing_causes") or attribution.get("contributing_causes") or []
         ),
         evidence_refs=list(failure.get("evidence_refs") or attribution.get("evidence_refs") or []),
         trace_refs=list(snapshot.get("trace_refs") or []),

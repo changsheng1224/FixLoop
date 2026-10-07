@@ -73,11 +73,7 @@ def remember_confirmed_impls(
     mem = load_localize_memory(state)
     confirmed = list(mem["confirmed_impls"])
     seen = {c["file_path"] for c in confirmed}
-    root = (
-        repo_root
-        or str(state.node_timings.get("_repo_root_hint") or "")
-        or ""
-    )
+    root = repo_root or str(state.node_timings.get("_repo_root_hint") or "") or ""
     for s in suspects or []:
         fp = str(getattr(s, "file_path", "") or "").replace("\\", "/")
         if not fp or fp in seen:

@@ -76,7 +76,9 @@ def test_observation_normalizes_validation_error():
     from agent_runtime.tool_result import ToolResult
 
     result = ToolResult(
-        "Error", status="rejected", error_code="invalid_args",
+        "Error",
+        status="rejected",
+        error_code="invalid_args",
     )
     observation = observation_from_result(CanonicalToolCall.create("read_file", {}), result)
     assert observation.status == "validation_error"

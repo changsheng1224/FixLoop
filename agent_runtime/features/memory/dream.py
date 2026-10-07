@@ -68,7 +68,12 @@ class MemoryDreamer:
             self._trim()
             self._suggest_promotions(hit_min=PROMOTE_SUGGEST_HIT_MIN)
             governance_stats = self.governance.run()
-            self.stats.update(governance_stats)
+            self.stats.update(
+                {
+                    **governance_stats,
+                    "expired": self.stats["expired"] + governance_stats.get("expired", 0),
+                }
+            )
             if max_durable > 0:
                 self._gc_durable(max_durable)
             self._rebuild_routing_table()
@@ -118,7 +123,6 @@ class MemoryDreamer:
         ttl_cutoff = time.time() - ttl_days * 86400 if ttl_days > 0 else 0
         notes = self._state.get("episodic_notes", [])
         kept = []
-        decay_expired = 0
         for n in notes:
             created = n.get("created_at", float("inf"))
             # TTL 过期
@@ -129,13 +133,12 @@ class MemoryDreamer:
                 decayed, valid = apply_confidence_decay(n["confidence"], created)
                 n["confidence"] = decayed
                 if not valid:
-                    decay_expired += 1
                     continue
             kept.append(n)
 
         removed = len(notes) - len(kept)
         self._state["episodic_notes"] = kept
-        self.stats["expired"] = removed + decay_expired
+        self.stats["expired"] = removed
         return removed
 
     @staticmethod

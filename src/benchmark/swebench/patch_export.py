@@ -24,10 +24,7 @@ def looks_like_unified_diff(text: str) -> bool:
     """至少含一个带路径的 unified 文件头（E13）。"""
     if not (text or "").strip():
         return False
-    return bool(
-        re.search(r"(?m)^--- [^\n]+$", text)
-        and re.search(r"(?m)^\+\+\+ [^\n]+$", text)
-    )
+    return bool(re.search(r"(?m)^--- [^\n]+$", text) and re.search(r"(?m)^\+\+\+ [^\n]+$", text))
 
 
 def count_diff_files(text: str) -> int:
@@ -83,12 +80,7 @@ def candidate_to_unified(patch) -> str:
     else:
         d = {}
 
-    raw_diff = str(
-        getattr(patch, "diff", None)
-        or d.get("diff")
-        or d.get("unified_diff")
-        or ""
-    )
+    raw_diff = str(getattr(patch, "diff", None) or d.get("diff") or d.get("unified_diff") or "")
     if raw_diff.strip():
         norm = _normalize_existing_diff(raw_diff, file_path)
         if norm:

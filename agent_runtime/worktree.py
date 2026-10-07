@@ -134,9 +134,7 @@ def create_worktree(
     )
     if add.returncode != 0:
         lease.unlink(missing_ok=True)
-        raise WorktreeError(
-            f"git worktree add failed: {(add.stderr or add.stdout or '').strip()}"
-        )
+        raise WorktreeError(f"git worktree add failed: {(add.stderr or add.stdout or '').strip()}")
     return WorktreeHandle(run_id=run_id, repo_root=root, path=wt_path, branch=branch)
 
 

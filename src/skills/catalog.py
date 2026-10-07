@@ -24,7 +24,9 @@ class SkillCatalog:
     """In-memory Skill registry（含向量索引用于 N>100 大目录场景）。"""
 
     def __init__(
-        self, skills: list[SkillSpec] = (), *,
+        self,
+        skills: list[SkillSpec] = (),
+        *,
         registry: SkillRegistry | None = None,
     ) -> None:
         self.registry = registry if registry is not None else SkillRegistry(skills)

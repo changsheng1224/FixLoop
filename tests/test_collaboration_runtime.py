@@ -27,7 +27,11 @@ def test_dag_snapshot_rejects_unknown_dependency():
 
     with pytest.raises(TaskDAGError, match="unknown dependencies"):
         TaskDAG.from_snapshot(
-            {"tasks": {"t1": {"task_id": "t1", "role": "x", "kind": "x", "depends_on": ["missing"]}}}
+            {
+                "tasks": {
+                    "t1": {"task_id": "t1", "role": "x", "kind": "x", "depends_on": ["missing"]}
+                }
+            }
         )
 
 

@@ -15,7 +15,6 @@ from agent_runtime.tools import build_tool_registry
 PrefixMode = Literal["default", "repair"]
 
 
-
 class Agent:
     """手写的 LLM Agent。
 

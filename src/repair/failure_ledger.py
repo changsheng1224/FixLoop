@@ -58,12 +58,7 @@ def _assertions(result: VerificationResult | None, *, limit: int = 4) -> list[st
             if not s:
                 continue
             low = s.lower()
-            if (
-                "assert" in low
-                or s.startswith("E ")
-                or "Error" in s
-                or "FAILED" in s
-            ):
+            if "assert" in low or s.startswith("E ") or "Error" in s or "FAILED" in s:
                 if s not in out:
                     out.append(s[:220])
             if len(out) >= limit:
@@ -279,18 +274,13 @@ def build_ledger_prompt_block(ledger: FailureLedger, *, max_chars: int = 2200) -
     if negated:
         lines.append("已否定假设:")
         for h in negated:
-            lines.append(
-                f"  - {h.id} files={', '.join(h.files)}; reason={h.note or 'negated'}"
-            )
+            lines.append(f"  - {h.id} files={', '.join(h.files)}; reason={h.note or 'negated'}")
     if ledger.regression_files:
         lines.append(
-            "回归源文件（本轮勿再改，除非有更强证据）: "
-            + ", ".join(ledger.regression_files[:6])
+            "回归源文件（本轮勿再改，除非有更强证据）: " + ", ".join(ledger.regression_files[:6])
         )
     if ledger.negated_files:
-        lines.append(
-            "已否定文件: " + ", ".join(ledger.negated_files[:8])
-        )
+        lines.append("已否定文件: " + ", ".join(ledger.negated_files[:8]))
     lines.append(
         "动作: 若当前假设被否定，换文件/换符号；对照反例断言做最小修改；"
         "回归时先缩 scope，不要继续堆叠同一文件 diff。"

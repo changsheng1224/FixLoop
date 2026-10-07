@@ -7,7 +7,40 @@ import sys
 import threading
 import time
 
+import pytest
+
 from tests.plan_l2_support import repair_fixture
+
+
+@pytest.mark.parametrize("output_budget", [4096, 8192])
+def test_planning_uses_role_output_budget(tmp_path, output_budget):
+    orch, state, client = repair_fixture(tmp_path)
+    orch.patcher.config.max_new_tokens = output_budget
+    requested = []
+    complete = client.complete
+
+    def reasoning_response(prompt, max_new_tokens, **kwargs):
+        if prompt.startswith("Create a small repair task DAG"):
+            requested.append(max_new_tokens)
+            # A reasoning-only response at a small cap has no final JSON text.
+            if max_new_tokens < 4096:
+                return ""
+        return complete(prompt, max_new_tokens=max_new_tokens, **kwargs)
+
+    client.complete = reasoning_response
+    try:
+        patches, meta = orch._run_patcher_toolized(state, "Read and fix the source", {})
+        assert patches, (meta, state.agent_errors)
+        assert requested == [output_budget]
+        assert any(
+            e["kind"] == "trace"
+            and e["payload"].get("event") == "node_succeeded"
+            and e["payload"].get("node_id") == "analyze"
+            for e in orch._plan_binding.session.store.events()
+        )
+    finally:
+        if orch._plan_binding:
+            orch._plan_binding.close()
 
 
 def test_read_cancellation_propagates_while_tool_is_running():

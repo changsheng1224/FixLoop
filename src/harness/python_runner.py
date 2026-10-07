@@ -4,6 +4,7 @@
 """
 
 import json
+from uuid import uuid4
 
 from src.harness.sandbox_manager import TEST_TIMEOUT_S
 from src.harness.sandbox_results import (
@@ -20,6 +21,25 @@ class PythonTestRunner:
 
     def __init__(self, sandbox_manager):
         self.manager = sandbox_manager
+        self.execution_receipt: dict = {}
+
+    def _record_execution(self, sandbox, command: str, execution) -> None:
+        stopped = not is_exec_cancelled(execution) and not is_exec_timeout(execution)
+        code = execution.exit_code
+        self.execution_receipt = {
+            "command": ["/bin/sh", "-c", command],
+            "completed": stopped and isinstance(code, int) and code >= 0,
+            "pytest_exit_code": code,
+            "receipt_id": "docker-" + uuid4().hex,
+            "sandbox_id": sandbox.id,
+            "category": "passed"
+            if code == 0
+            else "failed"
+            if code == 1
+            else "no-tests"
+            if code == 5
+            else "environment",
+        }
 
     def run(
         self,
@@ -86,12 +106,14 @@ class PythonTestRunner:
         )
         prefix = f"{env_prefix} && " if env_prefix.strip() else ""
         # runtests 自行管理 django；经 entrypoint test 包装以统一超时/日志
+        command = f"{prefix}/entrypoint.sh test {cmd}"
         test = self.manager.execute(
             sandbox,
-            f"{prefix}/entrypoint.sh test {cmd}",
+            command,
             timeout=TEST_TIMEOUT_S,
             cancel_token=cancel_token,
         )
+        self._record_execution(sandbox, command, test)
         if is_exec_cancelled(test):
             return verification_result_for_user_cancel()
         if is_exec_timeout(test):
@@ -117,12 +139,14 @@ class PythonTestRunner:
         pytest_target = f"/code/{target}" if target != "." else "/code"
         test_cmd = f"pytest {pytest_target} --json-report --json-report-file=/code/.report.json -v"
         prefix = f"{env_prefix} && " if env_prefix.strip() else ""
+        command = f"{prefix}/entrypoint.sh test {test_cmd}"
         test = self.manager.execute(
             sandbox,
-            f"{prefix}/entrypoint.sh test {test_cmd}",
+            command,
             timeout=TEST_TIMEOUT_S,
             cancel_token=cancel_token,
         )
+        self._record_execution(sandbox, command, test)
 
         if is_exec_cancelled(test):
             return verification_result_for_user_cancel()

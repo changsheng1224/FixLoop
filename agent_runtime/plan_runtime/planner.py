@@ -18,6 +18,7 @@ def grounded_plan(
     *,
     objective: str,
     light_client=None,
+    max_new_tokens: int = 1800,
     plan_id: str = "",
     replan_context: dict | None = None,
 ) -> tuple[Plan, str]:
@@ -127,6 +128,9 @@ def grounded_plan(
             "Unknown locations remain hypotheses requiring explore nodes. "
             'Return JSON {"conclusion":"...","nodes":[...]} with the supplied node '
             "fields. Keep one analyze, one edit, one final verify node. "
+            "Each explore node must include a nonempty tool_name from its tool_allowlist "
+            "and arguments_json as a JSON-encoded string of the exact tool arguments. "
+            "Preserve these fields from the supplied explore nodes. "
             "No commands in read nodes. "
             + (
                 "Revise the old hypothesis and DAG using the actual failed verification and fresh "
@@ -148,7 +152,7 @@ def grounded_plan(
             )
         )
         try:
-            raw = light_client.complete(prompt, max_new_tokens=1800)
+            raw = light_client.complete(prompt, max_new_tokens=max_new_tokens)
             candidate = json.loads(raw[raw.index("{") : raw.rindex("}") + 1])
             payload = plan.to_dict()
             payload["nodes"] = candidate.get("nodes", payload["nodes"])
@@ -203,6 +207,7 @@ def retry_plan(
     objective,
     reason,
     light_client=None,
+    max_new_tokens: int = 1800,
     replan_context=None,
     before_commit=None,
 ):
@@ -216,6 +221,7 @@ def retry_plan(
         refs,
         objective=objective,
         light_client=light_client,
+        max_new_tokens=max_new_tokens,
         plan_id=session.plan.plan_id,
         replan_context=replan_context,
     )

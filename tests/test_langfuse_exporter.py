@@ -152,9 +152,7 @@ class TestFailSoftAndRedaction:
         body = items[0]["body"]
         meta_payload = body.get("metadata", {}).get("payload") or {}
         # 敏感 key 应被脱敏
-        assert meta_payload.get("api_key") == "<redacted>" or "sk-live" not in json.dumps(
-            body
-        )
+        assert meta_payload.get("api_key") == "<redacted>" or "sk-live" not in json.dumps(body)
 
     def test_disabled_without_keys(self, monkeypatch):
         monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)

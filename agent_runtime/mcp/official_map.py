@@ -225,9 +225,7 @@ OFFICIAL_TOOL_MAPS: tuple[OfficialToolMap, ...] = (
     ),
 )
 
-OFFICIAL_MAP_BY_LOCAL: dict[str, OfficialToolMap] = {
-    m.local_name: m for m in OFFICIAL_TOOL_MAPS
-}
+OFFICIAL_MAP_BY_LOCAL: dict[str, OfficialToolMap] = {m.local_name: m for m in OFFICIAL_TOOL_MAPS}
 
 # 官方侧危险工具（即使 list 出来也不经本地名暴露）
 OFFICIAL_DENIED_REMOTE_TOOLS: frozenset[str] = frozenset(

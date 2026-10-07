@@ -100,6 +100,17 @@ class TestExpire:
         remaining = {n["note_index"] for n in state["episodic_notes"]}
         assert remaining == {2}
 
+    def test_confidence_expiry_is_counted_once(self):
+        state = default_memory_state()
+        state["episodic_notes"] = [
+            {**_make_note("low confidence", 1, created_at=time.time() - 86400), "confidence": 0.01}
+        ]
+        dreamer = MemoryDreamer(state)
+
+        assert dreamer._expire(ttl_days=30) == 1
+        assert dreamer.stats["expired"] == 1
+        assert state["episodic_notes"] == []
+
     def test_zero_ttl_skips(self):
         state = default_memory_state()
         state["episodic_notes"] = [_make_note("x", 1)]

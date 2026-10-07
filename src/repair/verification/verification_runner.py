@@ -68,8 +68,6 @@ def run_profile(
         }
         results.append(item)
         if proc.returncode != 0:
-            category = (
-                "static_failed" if step.phase == "static" else "target_tests_failed"
-            )
+            category = "static_failed" if step.phase == "static" else "target_tests_failed"
             return {"all_passed": False, "category": category, "steps": results}
     return {"all_passed": True, "category": "target_tests_passed", "steps": results}

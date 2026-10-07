@@ -14,9 +14,7 @@ def test_latency_slo_triggers_adaptive_degradation():
 
 
 def test_latency_deadline_is_a_degradation_signal():
-    controller = LatencySLOController(
-        LatencySLOPolicy(), DegradationPolicy(max_output_floor=256)
-    )
+    controller = LatencySLOController(LatencySLOPolicy(), DegradationPolicy(max_output_floor=256))
     decision = controller.decide(remaining_s=10, max_output_tokens=1000)
     assert decision["degraded"]
     assert "deadline_tight" in decision["reasons"]

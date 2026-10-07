@@ -51,9 +51,7 @@ class TestLoadRolePrompt:
     def test_verifier_ignores_issue_type(self):
         from src.prompts.loader import load_role_prompt, load_system_prompt
 
-        assert load_role_prompt("verifier", "type_error") == load_system_prompt(
-            "verifier"
-        ).strip()
+        assert load_role_prompt("verifier", "type_error") == load_system_prompt("verifier").strip()
 
 
 class TestLoadPatcherUserHints:

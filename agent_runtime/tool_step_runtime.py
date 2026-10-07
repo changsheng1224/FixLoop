@@ -164,7 +164,10 @@ def tool_step_flow(
     convergence_blocked = False
     if not replayed and not replay_blocked:
         policy_result = runtime.agent.loop_policy.preflight(
-            runtime.policy_context, tool_name, tool_args, step=step,
+            runtime.policy_context,
+            tool_name,
+            tool_args,
+            step=step,
         )
         if policy_result is not None:
             result = policy_result
@@ -373,7 +376,11 @@ def tool_step_flow(
     runtime.state.last_observation_id = stored.observation_id
     retrieval = _meta.get("retrieval_result")
     runtime.agent.loop_policy.on_result(
-        runtime.policy_context, tool_name, tool_args, result, step=step,
+        runtime.policy_context,
+        tool_name,
+        tool_args,
+        result,
+        step=step,
     )
     result_text = runtime.agent.loop_policy.feedback(runtime.policy_context, tool_name, result)
     runtime.hooks.notify(
@@ -495,11 +502,17 @@ def record_step_progress(
     if tool_success:
         runtime.hooks.advance_todo()
         runtime.agent.loop_policy.on_success(
-            runtime.policy_context, tool_name, tool_args, result, step=step,
+            runtime.policy_context,
+            tool_name,
+            tool_args,
+            result,
+            step=step,
         )
     runtime.state.no_progress_steps = runtime.guard.stall_count
     guard_has_affected = runtime.agent.loop_policy.has_progress(
-        runtime.policy_context, tool_name, result,
+        runtime.policy_context,
+        tool_name,
+        result,
     )
     verdict = None
     if not convergence_blocked:

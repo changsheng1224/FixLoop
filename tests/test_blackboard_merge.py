@@ -113,9 +113,7 @@ class TestMergeBlackboardForPatch:
 
     def test_conflict_recorded_before_resolve(self):
         bb = Blackboard()
-        bb.write(
-            "suspect:k.py:1", {"file_path": "k.py", "start_line": 1, "end_line": 1}, "patcher"
-        )
+        bb.write("suspect:k.py:1", {"file_path": "k.py", "start_line": 1, "end_line": 1}, "patcher")
         bb.write(
             "suspect:k.py:1", {"file_path": "k.py", "start_line": 1, "end_line": 2}, "verifier"
         )

@@ -56,4 +56,3 @@ def test_compression_contract_flags_empty_repair_state():
     )
     assert result["ok"] is False
     assert "empty_repair_state" in result["violations"]
-

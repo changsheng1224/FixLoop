@@ -16,10 +16,10 @@ from agent_runtime.workspace import WorkspaceContext
 
 def _agent(root, outputs):
     return Agent(
-        config=AgentConfig(provider="fake", max_steps=5,
-                           code_exploration={"mode": "relations"}),
+        config=AgentConfig(provider="fake", max_steps=5, code_exploration={"mode": "relations"}),
         model_client=FakeModelClient(outputs),
-        workspace=WorkspaceContext.build(str(root)), cwd=str(root),
+        workspace=WorkspaceContext.build(str(root)),
+        cwd=str(root),
     )
 
 
@@ -30,9 +30,7 @@ def test_step_resume_uses_new_epoch_and_no_old_source_context(tmp_path):
     state = TaskState.create(user_request="inspect render")
     state.advance_runtime("reasoning")
     loop._task_state = state
-    loop._run_tool_step(
-        state, "read_file", {"path": "service.py"}, step=1, path="xml"
-    )
+    loop._run_tool_step(state, "read_file", {"path": "service.py"}, step=1, path="xml")
     service = first.tool_context.exploration_service
     assert service is not None and service.evidence
     old_epoch = service.epoch
@@ -43,9 +41,10 @@ def test_step_resume_uses_new_epoch_and_no_old_source_context(tmp_path):
     store = SessionStore(str(tmp_path))
     restored = Agent.from_session(
         FakeModelClient(["<final>resumed</final>"]),
-        WorkspaceContext.build(str(tmp_path)), store, first.session["id"],
-        config=AgentConfig(provider="fake", max_steps=5,
-                           code_exploration={"mode": "relations"}),
+        WorkspaceContext.build(str(tmp_path)),
+        store,
+        first.session["id"],
+        config=AgentConfig(provider="fake", max_steps=5, code_exploration={"mode": "relations"}),
         cwd=str(tmp_path),
     )
     assert restored is not None

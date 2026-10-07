@@ -22,7 +22,7 @@ from agent_runtime.context_manager import TOTAL_BUDGET, TokenBudget
 
 # 分 Agent 预算表（prompt_budget，token 数）
 _DEFAULT_ALLOCATIONS: dict[str, int] = {
-    "patcher": 4000,
+    "patcher": 8000,
     "verifier": 1000,
 }
 

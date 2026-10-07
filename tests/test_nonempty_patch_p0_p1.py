@@ -26,7 +26,9 @@ def _tmp_repo(tmp_path: Path) -> Path:
     (root / "pkg").mkdir()
     (root / "pkg" / "core.py").write_text("x = 1\n", encoding="utf-8")
     (root / "tests").mkdir()
-    (root / "tests" / "test_core.py").write_text("def test_x():\n    assert True\n", encoding="utf-8")
+    (root / "tests" / "test_core.py").write_text(
+        "def test_x():\n    assert True\n", encoding="utf-8"
+    )
     return root
 
 
@@ -148,13 +150,9 @@ class TestExportSuspectFallback:
         state = RepairState(
             issue_input="x",
             candidate_patches=[],
-            suspect_locations=[
-                SuspectLocation(file_path="pkg/core.py", start_line=1, end_line=1)
-            ],
+            suspect_locations=[SuspectLocation(file_path="pkg/core.py", start_line=1, end_line=1)],
         )
-        out = export_model_patch(
-            state=state, original_repo=original, modified_repo=modified
-        )
+        out = export_model_patch(state=state, original_repo=original, modified_repo=modified)
         assert "pkg/core.py" in out
         assert "noise.py" not in out
         assert out.strip()
@@ -169,6 +167,4 @@ class TestPromotePaths:
             state, ["django/contrib/auth/validators.py"], repo_root=str(root)
         )
         assert promoted
-        assert any(
-            s.file_path.endswith("validators.py") for s in state.suspect_locations
-        )
+        assert any(s.file_path.endswith("validators.py") for s in state.suspect_locations)

@@ -1,9 +1,11 @@
 """Repair-only terminal and edit-scope tools."""
+
 import json
 from dataclasses import dataclass
 
 from agent_runtime.schema_utils import auto_schema
 from agent_runtime.tool_result import ToolResult
+
 
 @dataclass
 class ExpandLockArgs:

@@ -17,9 +17,7 @@ def unified_diff_for_path(file_path: str, before: str, after: str) -> str:
         old[-1] = old[-1] + "\n"
     if new and not new[-1].endswith("\n"):
         new[-1] = new[-1] + "\n"
-    return "".join(
-        difflib.unified_diff(old, new, fromfile=f"a/{rel}", tofile=f"b/{rel}")
-    )
+    return "".join(difflib.unified_diff(old, new, fromfile=f"a/{rel}", tofile=f"b/{rel}"))
 
 
 def patches_from_snapshot_diff(

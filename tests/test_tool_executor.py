@@ -33,7 +33,8 @@ class TestToolResult:
     def test_success_result(self):
         result = ToolResult(
             content="done",
-            metadata={}, status="success",
+            metadata={},
+            status="success",
         )
         assert result.content == "done"
         assert result.status == "success"
@@ -41,7 +42,9 @@ class TestToolResult:
     def test_rejected_result(self):
         result = ToolResult(
             content="Error: rejected",
-            metadata={}, status="rejected", error_code="allowed_tools",
+            metadata={},
+            status="rejected",
+            error_code="allowed_tools",
         )
         assert "rejected" in result.status
 

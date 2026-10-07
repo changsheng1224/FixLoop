@@ -206,8 +206,7 @@ def parse_django_runtests_output(
             logs.append("labels=" + ",".join(labels[:5]))
     elif not all_passed:
         logs.append(
-            f"django_runtests: exit={exit_code} ran={ran} "
-            f"failures={failures} errors={errors}"
+            f"django_runtests: exit={exit_code} ran={ran} failures={failures} errors={errors}"
         )
     # 附带 stderr/stdout 尾部
     tail = text.strip()[-1200:]

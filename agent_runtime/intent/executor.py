@@ -44,9 +44,7 @@ class IntentGraphExecutor:
             node = result.graph.nodes[0] if result.graph.nodes else None
             if node is None:
                 return ExecutorReport(
-                    outcomes=[
-                        StepOutcome("n0", action, False, error="missing node")
-                    ],
+                    outcomes=[StepOutcome("n0", action, False, error="missing node")],
                     aborted=True,
                 )
             return self._run_one(node)

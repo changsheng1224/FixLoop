@@ -53,9 +53,7 @@ _ALLOWED_PHASES: dict[RuntimePhase, frozenset[RuntimePhase]] = {
     RuntimePhase.CANCELLED: frozenset(),
 }
 
-_TERMINAL_PHASES = frozenset(
-    {RuntimePhase.COMPLETED, RuntimePhase.FAILED, RuntimePhase.CANCELLED}
-)
+_TERMINAL_PHASES = frozenset({RuntimePhase.COMPLETED, RuntimePhase.FAILED, RuntimePhase.CANCELLED})
 
 _TERMINAL_STATUS_PHASES: dict[str, tuple[RuntimePhase, RuntimeStatus]] = {
     RuntimeStatus.COMPLETED.value: (RuntimePhase.COMPLETED, RuntimeStatus.COMPLETED),

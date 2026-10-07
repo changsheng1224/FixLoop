@@ -134,9 +134,7 @@ def compute_metrics(results: list[CaseResult]) -> EvalReport:
         judge_summary=judge,
         by_language=_bucket_metrics(results, lambda r: r.language),
         by_failure_class=_bucket_metrics(results, lambda r: r.failure_class),
-        by_permission_profile=_bucket_metrics(
-            results, lambda r: r.tool_permission_profile
-        ),
+        by_permission_profile=_bucket_metrics(results, lambda r: r.tool_permission_profile),
     )
     if by_variant:
         report.by_variant = by_variant
@@ -232,11 +230,7 @@ def _wilson_interval(successes: int, total: int, z: float = 1.96) -> tuple[float
     p = successes / total
     denominator = 1 + (z * z / total)
     center = (p + z * z / (2 * total)) / denominator
-    margin = (
-        z
-        * math.sqrt((p * (1 - p) / total) + (z * z / (4 * total * total)))
-        / denominator
-    )
+    margin = z * math.sqrt((p * (1 - p) / total) + (z * z / (4 * total * total))) / denominator
     return round(max(0.0, center - margin), 4), round(min(1.0, center + margin), 4)
 
 

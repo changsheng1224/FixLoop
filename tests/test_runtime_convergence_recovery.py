@@ -12,8 +12,8 @@ from agent_runtime.model_turn import (
 from agent_runtime.runtime import Agent
 from agent_runtime.step_guard import StepContext, StepGuard
 from agent_runtime.tool_executor import QuotaEnforcer
-from src.repair.loop_policy import tool_target_paths
 from agent_runtime.workspace import WorkspaceContext
+from src.repair.loop_policy import tool_target_paths
 
 
 def test_apply_patch_recovery_extracts_exact_envelope_paths():
@@ -134,9 +134,7 @@ def _native_loop(tmp_path, results: list[ModelTurnResult], *, patcher: bool = Tr
     ctx = ToolContext(root=str(tmp_path))
     tools = build_repair_agent_tools(ctx, "patcher") if patcher else None
     agent = Agent(
-        config=AgentConfig(
-            provider="fake", max_steps=3, max_new_tokens=512, approval="auto"
-        ),
+        config=AgentConfig(provider="fake", max_steps=3, max_new_tokens=512, approval="auto"),
         model_client=client,
         workspace=WorkspaceContext.build(str(tmp_path)),
         cwd=str(tmp_path),
@@ -405,13 +403,13 @@ def test_reading_editable_implementation_syncs_grounding_and_forces_patch(tmp_pa
     lock = EditLockState(repo_root=tmp_path, allowed_edit=set())
     agent.tool_context.edit_lock = lock
     try:
-        lock.mark_read("module.py", auto_allow_impl=True)
-        result = ToolResult(
-            content="module.py", status="success", metadata={}
-        )
+        lock.mark_read("module.py")
+        assert "module.py" not in lock.allowed_edit
+        result = ToolResult(content="module.py", status="success", metadata={})
         loop.agent.loop_policy.sync_grounding(
             loop._policy_context(), "read_file", {"path": "module.py"}, result
         )
+        assert "module.py" in lock.allowed_edit
         assert state.node_timings["patcher_grounded"] is True
         assert state.node_timings["patch_required"] is True
         assert loop._tool_state.action_required is True

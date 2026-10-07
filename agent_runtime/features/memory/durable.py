@@ -355,8 +355,7 @@ class DurableMemoryStore:
             texts = [self._sanitize_text(text) for text in texts]
             strategy = self._topic_strategy(topic)
             existing = [
-                self._sanitize_text(text)
-                for text in self._read_topic(topic, strategy=strategy)
+                self._sanitize_text(text) for text in self._read_topic(topic, strategy=strategy)
             ]
             for text in texts:
                 existing = self._upsert_entry(existing, text, authority=authority)

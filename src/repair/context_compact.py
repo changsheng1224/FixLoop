@@ -75,9 +75,7 @@ def compact_tool_history(
         if i in keep_fail or role == "system":
             out.append(m)
             continue
-        if role == "user" and len(content) > max_success_chars and not _is_failure_content(
-            content
-        ):
+        if role == "user" and len(content) > max_success_chars and not _is_failure_content(content):
             # 疑似成功 tool 大输出 → 摘要
             head = content[: max_success_chars // 2]
             tail = content[-80:] if len(content) > 80 else ""

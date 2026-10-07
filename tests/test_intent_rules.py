@@ -26,7 +26,7 @@ class TestClassifyRules:
 
     def test_repair_channel_stack(self):
         text = (
-            'Traceback (most recent call last):\n'
+            "Traceback (most recent call last):\n"
             '  File "calculator.py", line 42, in add\n'
             "TypeError: unsupported operand"
         )

@@ -125,6 +125,7 @@ def supervise(policy: SandboxPolicy, request: SandboxRequest, digest: str) -> Sa
     store.transition(request.call_id, "running", supervisor_identity=process_identity(os.getpid()))
     try:
         from agent_runtime.linux_sandbox.backend import _validate_owner_envelope
+
         _validate_owner_envelope(policy, request)
         proc = subprocess.Popen(
             policy.argv(request),
@@ -140,7 +141,8 @@ def supervise(policy: SandboxPolicy, request: SandboxRequest, digest: str) -> Sa
         result = SandboxResult(
             "rejected" if isinstance(exc, ValueError) else "start_failed",
             error_code=str(exc).split(":", 1)[0]
-            if isinstance(exc, ValueError) else "tool_start_failed",
+            if isinstance(exc, ValueError)
+            else "tool_start_failed",
             cleanup="confirmed",
             mutation_status="not_started",
             receipt_id=request.call_id,

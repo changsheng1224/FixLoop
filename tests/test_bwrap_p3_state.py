@@ -1,4 +1,3 @@
-
 import pytest
 
 from agent_runtime.checkpoint import create_checkpoint, evaluate_resume_state
@@ -60,11 +59,25 @@ def test_sandbox_step_resume_is_uncertain(tmp_path):
         config=SimpleNamespace(provider="fake", model="m", approval="auto", max_steps=3),
         _prefix=Prefix(),
         session=session,
-        tool_context=SimpleNamespace(sandbox_identity={"backend": "wsl_bwrap", "policy_digest": "p1"}),
+        tool_context=SimpleNamespace(
+            sandbox_identity={"backend": "wsl_bwrap", "policy_digest": "p1"}
+        ),
         _loop=None,
     )
     ts = TaskState.create(user_request="run")
-    create_checkpoint(agent, ts, "run", trigger="step_end", last_tool="run_shell", step_payload={"resume_kind": "tool_step", "tool": "run_shell", "next_user_message": "continue", "result_metadata": {"call_id": "call-1"}})
+    create_checkpoint(
+        agent,
+        ts,
+        "run",
+        trigger="step_end",
+        last_tool="run_shell",
+        step_payload={
+            "resume_kind": "tool_step",
+            "tool": "run_shell",
+            "next_user_message": "continue",
+            "result_metadata": {"call_id": "call-1"},
+        },
+    )
     result = evaluate_resume_state(agent)
     assert result["status"] == "sandbox-step-uncertain"
     assert "tool_args" not in result["resume_observation"]

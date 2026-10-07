@@ -64,9 +64,12 @@ def test_provider_error_and_retry_policy_are_deterministic():
     error = normalize_provider_error(TimeoutError("model timed out"), provider="test")
     assert error.code == ProviderErrorCode.TIMEOUT
     assert error.retryable is True
-    assert RetryPolicy(max_attempts=2, idempotent=False).should_retry(
-        attempt=1, retryable=True, deadline_s=10
-    ) is False
+    assert (
+        RetryPolicy(max_attempts=2, idempotent=False).should_retry(
+            attempt=1, retryable=True, deadline_s=10
+        )
+        is False
+    )
     assert RetryPolicy(max_attempts=2, base_delay_s=0).delay(1) == 0
 
 

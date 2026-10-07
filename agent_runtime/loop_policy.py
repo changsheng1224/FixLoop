@@ -1,4 +1,5 @@
 """Application-injected decisions; the L1 loop owns execution and persistence."""
+
 from __future__ import annotations
 
 from collections.abc import Callable

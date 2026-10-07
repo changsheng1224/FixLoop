@@ -136,10 +136,7 @@ def symbols_from_python_file(
     targets: list[ast.AST] = []
     if focus_func:
         for node in tree.body:
-            if (
-                isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
-                and node.name == focus_func
-            ):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == focus_func:
                 targets.append(node)
             elif isinstance(node, ast.ClassDef):
                 for item in node.body:
@@ -231,10 +228,7 @@ def find_definitions(
         for node in tree.body:
             kind = ""
             lineno = 0
-            if (
-                isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
-                and node.name == name
-            ):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == name:
                 kind, lineno = "function", int(node.lineno)
             elif isinstance(node, ast.ClassDef) and node.name == name:
                 kind, lineno = "class", int(node.lineno)
@@ -317,10 +311,7 @@ def expand_suspects_semantic(
     """多跳扩展：失败测试/相关测试 → 导入与调用 → 定义；再补调用方。"""
     root = Path(repo_root)
     seeds = list(suspects or [])
-    existing_files = {
-        normalize_repo_path(s.file_path or "", root) or ""
-        for s in seeds
-    }
+    existing_files = {normalize_repo_path(s.file_path or "", root) or "" for s in seeds}
     existing_files.discard("")
 
     # 收集测试入口
@@ -350,11 +341,7 @@ def expand_suspects_semantic(
         if key in seen_keys:
             return
         # 同文件无函数名的粗粒度命中跳过；调用方扩展按行保留
-        if (
-            rel in existing_files
-            and not s.function_name
-            and s.reason != "调用方扩展"
-        ):
+        if rel in existing_files and not s.function_name and s.reason != "调用方扩展":
             return
         seen_keys.add(key)
         expanded.append(
@@ -437,9 +424,7 @@ def expand_suspects_semantic(
 
     # Hop 2: issue 符号 → 定义
     for name in extract_symbols_from_issue(issue, limit=10):
-        for hpath, line, kind in find_definitions(
-            root, name, prefer_dirs=prefer_dirs, max_hits=1
-        ):
+        for hpath, line, kind in find_definitions(root, name, prefer_dirs=prefer_dirs, max_hits=1):
             push(
                 SuspectLocation(
                     file_path=hpath,

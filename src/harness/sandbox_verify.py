@@ -147,23 +147,25 @@ def run_sandbox_verification_flow(
             profile=profile,
             repo_path=str(repo_for_env or ""),
         )
+        timings.update(runner.execution_receipt)
         timings["pytest_ms"] = int((time.time() - t0) * 1000)
         if cancel_token is not None and cancel_token.is_cancelled:
             timings["user_cancel"] = True
             return verification_result_for_user_cancel(), timings
         if timings.get("pip_failed") and result.total_tests == 0:
             pip_note = (
-                "sandbox pip soft-continue after failure:\n"
-                f"{timings.get('build_result', '')}"
+                f"sandbox pip soft-continue after failure:\n{timings.get('build_result', '')}"
             )
             result.failure_logs = list(result.failure_logs or []) + [pip_note[:800]]
         return result, timings
     finally:
         if sandbox is not None and mgr is not None and created_here:
             try:
-                mgr.destroy(sandbox)
+                removed = mgr.destroy(sandbox) is True
             except Exception:
-                pass
+                removed = False
+            timings["cleanup"] = "confirmed" if removed else "unconfirmed"
+            timings["completed"] = bool(timings.get("completed") and removed)
             context._sandbox_id = None
             context._sandbox_mgr = None
 
@@ -381,7 +383,5 @@ def maybe_pip_install(
     )
     pip_ms = int((time.time() - t0) * 1000)
     extra_note = f" extras={extras[:12]}" if extras else ""
-    build_result = (
-        f"pip install: exit_code={result.exit_code}{extra_note}\n{result.stdout}"
-    )
+    build_result = f"pip install: exit_code={result.exit_code}{extra_note}\n{result.stdout}"
     return build_result, pip_ms, result

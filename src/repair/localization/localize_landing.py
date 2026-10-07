@@ -38,9 +38,7 @@ def refine_suspect_landing(
 
     out: list[SuspectLocation] = []
     for s in suspects:
-        rel = normalize_repo_path(s.file_path or "", root) or (
-            s.file_path or ""
-        ).replace("\\", "/")
+        rel = normalize_repo_path(s.file_path or "", root) or (s.file_path or "").replace("\\", "/")
         if not rel or _is_test_path(rel):
             out.append(s)
             continue

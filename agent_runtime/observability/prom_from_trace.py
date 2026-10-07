@@ -73,13 +73,13 @@ def record_canonical_event(record: dict[str, Any], registry: Any | None = None) 
                     labels=low_cardinality_labels(phase=_phase_label(payload)),
                 )
             elif category == "evaluation":
-                registry.histogram_observe(
-                    "fixloop_eval_duration_ms", duration_ms
-                )
+                registry.histogram_observe("fixloop_eval_duration_ms", duration_ms)
             elif event in {"repair_finished", "run_finished"}:
                 registry.histogram_observe("fixloop_repair_duration_ms", duration_ms)
-            slo_kind = "evaluation" if category == "evaluation" else (
-                "tool" if category == "tool" else "repair"
+            slo_kind = (
+                "evaluation"
+                if category == "evaluation"
+                else ("tool" if category == "tool" else "repair")
             )
             if duration_ms > SLO_THRESHOLDS_MS[slo_kind]:
                 registry.counter_inc(

@@ -16,9 +16,7 @@ from src.state import CandidatePatch
 
 def test_shell_parser_rejects_composition_but_allows_python_probe():
     assert check_shell_command("echo ok && whoami")[0] is False
-    assert parse_shell_argv('python -c "import time; time.sleep(0)"')[-1].startswith(
-        "import time"
-    )
+    assert parse_shell_argv('python -c "import time; time.sleep(0)"')[-1].startswith("import time")
 
 
 def test_sensitive_control_plane_paths_are_blocked():
@@ -63,7 +61,9 @@ def test_patch_allowlist_rejects_unapproved_path(tmp_path):
     target = tmp_path / "a.py"
     target.write_text("old\n", encoding="utf-8")
     patch = CandidatePatch(file_path="a.py", original_lines="old", patched_lines="new")
-    assert PatchApplier(str(tmp_path)).apply_patches(patch and [patch], allowed_paths={"b.py"}) == []
+    assert (
+        PatchApplier(str(tmp_path)).apply_patches(patch and [patch], allowed_paths={"b.py"}) == []
+    )
     assert target.read_text(encoding="utf-8") == "old\n"
 
 

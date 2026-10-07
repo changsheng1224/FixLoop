@@ -81,9 +81,7 @@ class TestValidateGraph:
 
     def test_too_many_executable_clarify(self):
         nodes = [_node(f"n{i}", "ask", span_start=i) for i in range(5)]
-        edges = [
-            IntentEdge(src=f"n{i}", dst=f"n{i + 1}", kind="sequence") for i in range(4)
-        ]
+        edges = [IntentEdge(src=f"n{i}", dst=f"n{i + 1}", kind="sequence") for i in range(4)]
         g = IntentGraph(nodes=nodes, edges=edges, mode="multi", root_ids=["n0"])
         out = validate_graph(g, max_executable_nodes=4)
         assert out.nodes[0].primary == "clarify"

@@ -18,9 +18,7 @@ from src.state import RepairPlan, RetrievedContext, SuspectLocation
 class TestSubscribePrefixes:
     def test_subscribe_prefixes_batch_read(self):
         bb = Blackboard()
-        bb.write(
-            "suspect:a.py:1", {"file_path": "a.py", "start_line": 1, "end_line": 1}, "patcher"
-        )
+        bb.write("suspect:a.py:1", {"file_path": "a.py", "start_line": 1, "end_line": 1}, "patcher")
         bb.write("context:related_tests", ["test_a.py"], "verifier")
         result = subscribe_prefixes(bb, ["suspect:", "context:"])
         assert len(result["suspect:"]) == 1

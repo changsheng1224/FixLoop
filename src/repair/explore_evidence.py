@@ -84,9 +84,7 @@ def record_explore_quality(
     )
     state.node_timings["explore_quality"] = q
     if not q.get("grounded_impl") and not q["ok"]:
-        state.agent_errors["explore_insufficient"] = (
-            "no_suspects_tests_or_snippets"
-        )
+        state.agent_errors["explore_insufficient"] = "no_suspects_tests_or_snippets"
     elif root and not q.get("grounded_impl"):
         state.agent_errors["localize_weak_grounding"] = "no_grounded_impl_file"
     else:

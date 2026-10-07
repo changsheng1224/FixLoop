@@ -37,9 +37,7 @@ class ToolResilienceController:
         with self._lock:
             bucket = self._buckets.setdefault(name, _Bucket())
             if bucket.open_until > now:
-                return ResilienceDecision(
-                    False, "circuit_open", max(0.0, bucket.open_until - now)
-                )
+                return ResilienceDecision(False, "circuit_open", max(0.0, bucket.open_until - now))
             if rate > 0:
                 bucket.calls = [stamp for stamp in bucket.calls if now - stamp < 60.0]
                 if len(bucket.calls) >= rate:

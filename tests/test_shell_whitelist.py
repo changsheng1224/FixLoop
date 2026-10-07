@@ -87,7 +87,8 @@ class TestToolsRunShellIntegration:
         ctx = ToolContext(root=str(temp_workspace))
         registry = build_tool_registry(ctx)
         result = registry["run_shell"]["run"]({"command": "echo hello"})
-        assert "hello" in result
+        assert result.ok
+        assert "hello" in result.content
 
     def test_blocked_command_rejected(self, temp_workspace):
         """黑名单命令被 tool_run_shell 拒绝。"""
@@ -97,4 +98,5 @@ class TestToolsRunShellIntegration:
         ctx = ToolContext(root=str(temp_workspace))
         registry = build_tool_registry(ctx)
         result = registry["run_shell"]["run"]({"command": "sudo ls"})
-        assert "安全策略拒绝" in result or "blocked" in result
+        assert not result.ok
+        assert "安全策略拒绝" in result.content or "blocked" in result.content

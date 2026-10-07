@@ -48,9 +48,7 @@ def test_phase_a_required_events_accepted():
 def test_heartbeat_hidden_from_text_by_default():
     sink = StringIO()
     events: list[ProgressEvent] = []
-    em = ProgressEmitter(
-        quiet=False, text_sink=sink, record=events.append, heartbeat_to_text=False
-    )
+    em = ProgressEmitter(quiet=False, text_sink=sink, record=events.append, heartbeat_to_text=False)
     em.emit("heartbeat", summary="alive")
     em.emit("seed_ready", summary="ok")
     assert events[0].event == "heartbeat"

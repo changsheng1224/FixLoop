@@ -77,3 +77,60 @@ verification_environment_failed、verification_failed、runtime_failed、no_chan
 一致，本次没有改动。未执行全量测试或发布级验证。
 
 wheel 构建、Layer 2 源码/提示/Skill 资源、缓存排除、隔离安装和 CLI 帮助入口已验证。
+
+## 修复链路验收（2026-10-07）
+
+新增 `tests/test_github_repair_chain.py`，直接调用公开 CLI 和真实 runtime 工厂。
+使用独立合成 Python 项目，原有测试先失败，Agent 经文件工具修改源码，再由真实
+pytest 验证；交付补丁重新应用到同 SHA 的干净克隆后再次执行测试。断言覆盖固定
+基线、run_id、阶段进度、trace、实际验证后端、完成回执、原有测试不变和补丁范围。
+错误补丁也必须留下失败证据，不能标记为 `fixed`。
+
+各层外部依赖边界如下：
+
+| 验收层 | 实际执行 | 受控部分 |
+| --- | --- | --- |
+| XML / native CLI 回归 | parser、Git clone/checkout、工厂、Agent、文件工具、宿主 pytest、补丁交付 | 模型响应；Git URL 通过进程环境重写到本地 fixture |
+| 默认 Docker CLI | 同上，且默认选择真实 Docker pytest，确认容器删除后再交付 | 模型响应、本地 Git fixture |
+| GitHub 联网 smoke | GitHub HTTPS 拉取、指定 SHA、detached HEAD、干净工作树 | 不执行 Agent 修复 |
+| 真实模型验收 | 实际模型 provider、CLI、Agent 工具、Docker 验证和补丁重新应用 | 使用本地合成 Git fixture |
+
+这几层组合覆盖入口与外部依赖；没有在同一次运行里串联真实 GitHub 仓库和真实
+模型修复。公开仓库 HTTPS smoke 使用 Git，无需 GitHub MCP 或 PAT；私有仓库仍需
+预先配置 Git 认证。GitHub MCP 的工具联网测试另行维护。
+
+离线回归与 Docker 回执测试：
+
+```powershell
+python -m pytest tests/test_github_repair_chain.py tests/test_docker_verification_receipt.py -v --basetemp=.runtime-tools/p-chain
+```
+
+默认跳过需主动启用的外部依赖验收。启用后缺少环境会失败，不会静默跳过：
+
+```powershell
+$env:FIXLOOP_CHAIN_DOCKER = '1'
+python -m pytest tests/test_github_repair_chain.py::test_public_cli_default_docker_verifies_real_patch -v --basetemp=.runtime-tools/p-docker
+
+$env:FIXLOOP_CHAIN_GITHUB = '1'
+$env:FIXLOOP_CHAIN_GITHUB_REPO = 'https://github.com/pypa/sampleproject'
+$env:FIXLOOP_CHAIN_GITHUB_SHA = '621e4974ca25ce531773def586ba3ed8e736b3fc'
+python -m pytest tests/test_github_repair_chain.py::test_live_github_clone_pins_requested_commit -v --basetemp=.runtime-tools/p-github
+
+# 复用调用目录 .env 的模型配置；会产生实际 API 调用费用。
+$env:FIXLOOP_CHAIN_MODEL = '1'
+$env:FIXLOOP_CHAIN_DOCKER = '1'
+python -m pytest tests/test_github_repair_chain.py::test_live_model_cli -v --basetemp=.runtime-tools/p-model
+```
+
+验收限制为 8 个工具步骤、8 次全局模型调用、90 秒修复期限及 30 秒工具期限。
+规划与重新规划复用 Patcher 已配置的输出 token 上限，让推理模型有空间生成最终
+JSON。Windows 使用较短的 `--basetemp`，避免深层运行产物路径超过系统限制。
+
+`tests/test_docker_verification_receipt.py` 覆盖正常结束、测试失败、超时、取消、
+删除失败，以及 Docker 自动删除与显式删除产生 409 的竞态。执行完成与容器删除
+均确认后，验证回执才允许 `completed=true`。
+
+本次按影响范围及精确复验累计 154 个不同用例通过，包含 21 个新增用例。真实
+GitHub smoke、默认 Docker CLI 和真实模型 CLI 均已实际执行通过；模型验收使用
+本地合成 Git 源，成功不代表任意 GitHub 项目的修复成功率。Ruff 全目录 lint、
+格式检查和 `git diff --check` 通过。本次补测未重复执行全量测试。

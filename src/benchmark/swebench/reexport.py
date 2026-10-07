@@ -60,9 +60,7 @@ def reexport_from_snapshots(
         # 新 diff 空时保留旧 patch，但旧 patch 也须通过 size/unified 门禁
         from src.benchmark.swebench.patch_export import gate_export_size
 
-        final_patch = gate_export_size(
-            normalize_patch_lf(patch if patch.strip() else prev)
-        )
+        final_patch = gate_export_size(normalize_patch_lf(patch if patch.strip() else prev))
         fc = FailureClass.NONE if final_patch.strip() else FailureClass.AGENT
         detail = "reexported" if final_patch.strip() else "empty_after_reexport"
         if old.get("failure_class") == "env" and final_patch.strip():

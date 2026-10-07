@@ -24,6 +24,7 @@ def _tools_allowed_for_role(role: SkillHintRole) -> set[str]:
     registry = default_repair_tool_registry()
     return {spec.name for spec in registry.visible_to(role)}
 
+
 _ROLE_CHAR_LIMITS: dict[SkillHintRole, int] = {
     "patcher": 1200,
     "verifier": 300,

@@ -176,9 +176,7 @@ def test_complete_turn_serializes_required_tool_choice(monkeypatch):
     from agent_runtime.model_timing import ModelCallTiming
     from agent_runtime.model_turn import ModelTurnRequest, ToolChoice, ToolChoiceMode
 
-    client = AnthropicCompatibleModelClient(
-        model="test", base_url="http://test", api_key="k"
-    )
+    client = AnthropicCompatibleModelClient(model="test", base_url="http://test", api_key="k")
     captured = {}
 
     def fake_post(body, *, deadline=None):
@@ -222,9 +220,7 @@ def test_complete_turn_omits_tool_choice_by_default(monkeypatch):
     from agent_runtime.model_timing import ModelCallTiming
     from agent_runtime.model_turn import ModelTurnRequest
 
-    client = AnthropicCompatibleModelClient(
-        model="test", base_url="http://test", api_key="k"
-    )
+    client = AnthropicCompatibleModelClient(model="test", base_url="http://test", api_key="k")
     captured = {}
 
     def fake_post(body, *, deadline=None):

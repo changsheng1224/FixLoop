@@ -391,9 +391,7 @@ class Blackboard:
                 if entry.key and not entry.expired()
             }
             self._conflicts = copy.deepcopy(data.get("conflicts") or [])
-            self._conflict_history = copy.deepcopy(
-                data.get("conflict_history") or self._conflicts
-            )
+            self._conflict_history = copy.deepcopy(data.get("conflict_history") or self._conflicts)
             self._revision = max(
                 int(data.get("revision", 0) or 0),
                 max((entry.revision for entry in self._entries.values()), default=0),
@@ -460,18 +458,28 @@ class Blackboard:
                     continue
                 sources = set(conflict.get("sources") or [])
                 existing_source = conflict.get("existing_source")
-                if sources and winner_source not in sources and winner_source not in {
-                    "merge",
-                    "manual",
-                }:
+                if (
+                    sources
+                    and winner_source not in sources
+                    and winner_source
+                    not in {
+                        "merge",
+                        "manual",
+                    }
+                ):
                     remaining.append(conflict)
                     continue
-                if existing_source and not sources and winner_source not in {
-                    existing_source,
-                    conflict.get("source_agent"),
-                    "merge",
-                    "manual",
-                }:
+                if (
+                    existing_source
+                    and not sources
+                    and winner_source
+                    not in {
+                        existing_source,
+                        conflict.get("source_agent"),
+                        "merge",
+                        "manual",
+                    }
+                ):
                     remaining.append(conflict)
                     continue
                 resolved = {
