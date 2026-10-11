@@ -1,0 +1,19 @@
+{
+  "status": "failed",
+  "checks": {
+    "factory_uses_sandbox_context": true,
+    "no_host_or_docker_verifier": true
+  },
+  "environment": {
+    "release_id": "519fb6b3dcf0fde8eafb75f879ce6092c1f665b121c5e0deeef28e77372f11d2",
+    "distribution": "FixLoop-Sandbox-s6-v1-519fb6b3dcf0",
+    "runtime_digest": "9b02a74bc9fcf2791602c5e16b4bb33e86f2d40b729925fe0410ab080fe867a0",
+    "runtime_version": "s6-v1",
+    "distribution_version": "26.04"
+  },
+  "workspace": "C:\\Users\\haoyu\\Documents\\FixLoop",
+  "fixture": "C:\\Users\\haoyu\\Documents\\FixLoop\\.tmp\\s7-live-84e8c97211ca4f099e9c0a5cec23046e",
+  "base_commit": "921134c5f9b2e09cb90ba5a85285c4218410c5d0",
+  "error_type": "StaleGenerationError",
+  "error": "owner generation is stale"
+}

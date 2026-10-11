@@ -90,6 +90,50 @@ def test_actual_write_and_tests_are_required(session):
     assert session.plan.node("verify").status == "failed"
 
 
+def test_grounded_edit_runs_quick_test_without_completing_final_verify(tmp_path):
+    from agent_runtime.plan_runtime.planner import grounded_plan
+    from agent_runtime.tool_result import ToolResult
+    from tests.plan_support import tool
+
+    (tmp_path / "value.py").write_text("value = 1\n")
+    with session_for(tmp_path) as session:
+        plan, _ = grounded_plan(
+            session, [{"tool": "read_file", "arguments": {"path": "value.py"}}], [],
+            objective="repair value",
+        )
+        session.create(plan)
+        assert "run_shell" not in session.plan.node("edit").tool_allowlist
+        assert "quick_test" not in session.plan.node("analyze").tool_allowlist
+        session.run_node("explore-1", lambda a: read(session, a))
+        refs = session.plan.node("explore-1").output_evidence_refs
+        session.run_node("analyze", lambda a: session.analysis(a, "repair value", refs))
+        executed = []
+
+        def edit(attempt):
+            write(session, attempt)
+
+            def quick():
+                executed.append("quick_test")
+                return ToolResult(content="1 passed")
+
+            result = tool(session, "quick_test", {"nodeid": "test_value.py::test_value"}, quick)
+            assert result.ok
+            return session.tool_result(attempt)
+
+        session.run_node("edit", edit)
+        assert executed == ["quick_test"]
+        assert session.plan.node("edit").status == "succeeded"
+        assert session.plan.node("verify").status == "ready"
+        operations = session.operations(session.plan.node("edit").attempt_id)
+        assert operations[-1]["tool"] == "quick_test"
+        assert operations[-1]["effect"] == "verify"
+        assert operations[-1]["execution_stopped"] is True
+        assert not any(
+            session.evidence.get(ref)["kind"] == "tests_passed"
+            for ref in operations[-1]["evidence_refs"]
+        )
+
+
 def test_two_reads_have_atomic_budget_and_owner_reducer(tmp_path):
     (tmp_path / "value.py").write_text("value = 1\n")
     with session_for(tmp_path) as session:

@@ -1,0 +1,72 @@
+{
+  "status": "passed",
+  "checks": {
+    "factory_uses_sandbox_context": true,
+    "no_host_or_docker_verifier": true,
+    "repair_finished_successfully": true,
+    "coordination_released": true,
+    "task_binding_created": true,
+    "single_backend_identity": true,
+    "worktree_is_task_owned": true,
+    "patch_applied_in_worktree": true,
+    "source_repository_unchanged": true,
+    "final_pytest_passed": true,
+    "backend_closed_after_repair": true,
+    "backend_context_identity_shared": true
+  },
+  "environment": {
+    "release_id": "83ecffc0a46c7644ce9c7b8255a2a9282743c8bcdd97d2e2eaf705b3014cc31c",
+    "distribution": "FixLoop-Sandbox-s6-v1-83ecffc0a46c",
+    "runtime_digest": "ffa81db422d58c3d21fa0674ff9c3465dd54bdf66bd03ff6ad4237d8529304af",
+    "runtime_version": "s6-v1",
+    "distribution_version": "26.04"
+  },
+  "workspace": "C:\\Users\\haoyu\\Documents\\FixLoop",
+  "fixture": "C:\\Users\\haoyu\\Documents\\FixLoop\\.tmp\\s7-live-50da8e7480314b4698d7e5a9cdbb3edc",
+  "base_commit": "66c69099c5541d0ff44302eac59925e94875b993",
+  "repair_status": "fixed",
+  "coordination_status": "released",
+  "repair_run_id": "s7-live-b7511e8ddcc9",
+  "binding": {
+    "task_id": "s7-live-b7511e8ddcc9",
+    "run_id": "s7-live-b7511e8ddcc9",
+    "repository_root": "C:\\Users\\haoyu\\Documents\\FixLoop\\.tmp\\s7-live-50da8e7480314b4698d7e5a9cdbb3edc\\repo",
+    "mapping": {
+      "host_root": "C:\\Users\\haoyu\\Documents\\FixLoop\\.tmp\\s7-state-live5\\worktrees\\s7-live-b7511e8ddcc9",
+      "wsl_source": "/mnt/c/Users/haoyu/Documents/FixLoop/.tmp/s7-state-live5/worktrees/s7-live-b7511e8ddcc9",
+      "sandbox_root": "/workspace",
+      "filesystem_identity": [
+        3528101224439424254,
+        1125899909835916
+      ],
+      "workspace_id": "d9c0fbd320e102da",
+      "mapping_id": "8030b3b3cb808a5d31f4e85e20c4f89ef96c7520f42a1fdbae665003c8565f0d",
+      "profile": "windows_guarded"
+    },
+    "environment": {
+      "distribution": "FixLoop-Sandbox-s6-v1-83ecffc0a46c",
+      "distribution_version": "26.04",
+      "runtime_version": "s6-v1",
+      "runtime_digest": "ffa81db422d58c3d21fa0674ff9c3465dd54bdf66bd03ff6ad4237d8529304af",
+      "backend": "wsl_bwrap"
+    },
+    "policy_version": "wsl-bwrap-v1",
+    "policy_digest": "61dbd3bb255ac98cd58df010de6ee9e502f017ef9ddc70bbdce1564f9227a0b1",
+    "state_root": "C:\\Users\\haoyu\\Documents\\FixLoop\\.tmp\\s7-state-live5\\tasks\\s7-live-b7511e8ddcc9",
+    "workspace_ownership": "task",
+    "worktree_branch": "fixloop/wt-s7-live-b7511e8ddcc9",
+    "schema_version": 1
+  },
+  "verification": {
+    "all_passed": true,
+    "total_tests": 1,
+    "passed": 1,
+    "failed": 0,
+    "error": 0,
+    "failure_logs": [],
+    "build_log": "",
+    "lint_issues": [],
+    "schema_version": "1.0"
+  },
+  "model_calls": 4
+}

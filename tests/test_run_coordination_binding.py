@@ -173,6 +173,35 @@ def test_finalize_preserves_worktree_when_resource_cleanup_is_unknown(tmp_path, 
         binding.close()
 
 
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_finalize_closes_sandbox_before_releasing_owner(tmp_path, monkeypatch, cleanup_fails):
+    orch, state, _ = repair_fixture(tmp_path)
+    binding = RepairPlanBinding(orch, state, defer_plan=True)
+    orch._plan_binding = binding
+    closed, removed = [], []
+
+    def close():
+        snapshot = binding.coordinator.store.snapshot(state.repair_run_id)
+        assert snapshot.owner_token == binding.coordinator.lease.owner_token
+        closed.append(True)
+        if cleanup_fails:
+            raise ValueError("execution_uncertain")
+
+    monkeypatch.setattr(orch, "_sandbox_context", SimpleNamespace(sandbox_backend=SimpleNamespace(close=close)))
+    monkeypatch.setattr(orch, "_maybe_leave_worktree", lambda **_: removed.append(True))
+    try:
+        orch._end_repair_trace(state)
+        assert closed == [True]
+        snapshot = binding.coordinator.store.snapshot(state.repair_run_id)
+        if cleanup_fails:
+            assert state.status == "recovery_required" and removed == []
+            assert snapshot.owner_token
+        else:
+            assert snapshot.status == "released" and not snapshot.owner_token
+    finally:
+        binding.close()
+
+
 def test_binding_heartbeat_renews_owner_and_stale_close_preserves_replacement(tmp_path):
     orch, state, _ = repair_fixture(tmp_path)
     entry = RunCoordinator(

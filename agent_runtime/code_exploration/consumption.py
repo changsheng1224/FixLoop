@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from pathlib import Path
 
@@ -61,6 +62,10 @@ class SourceChecks:
         return status, reason
 
     def check(self, versions: dict, workspace: Path | None) -> tuple[str, str]:
+        from agent_runtime.linux_sandbox.workspace_routing import sandbox_enabled
+
+        if sandbox_enabled(self.context):
+            return self._check_sandbox(versions, workspace)
         if workspace is None or Path(self.context.root).resolve() != workspace:
             return "unknown", "workspace_mismatch"
         if not isinstance(versions, dict) or not versions:
@@ -116,6 +121,75 @@ class SourceChecks:
             if status != "fresh":
                 return status, actual
             if actual != expected:
+                return "stale", "source_changed"
+        return "fresh", ""
+
+    def _check_sandbox(self, versions, workspace):
+        from agent_runtime.linux_sandbox.workspace_contract import relative_path
+        from agent_runtime.linux_sandbox.workspace_routing import execute_workspace_tool
+
+        # Root identity is control metadata; never traverse host source paths.
+        if workspace is None or os.path.normcase(os.path.abspath(self.context.root)) != (
+            os.path.normcase(os.path.abspath(workspace))
+        ):
+            return "unknown", "workspace_mismatch"
+        if not isinstance(versions, dict) or not versions:
+            return "unknown", "unversioned_source"
+        for relative, expected in versions.items():
+            if (
+                not isinstance(expected, str)
+                or len(expected) != 64
+                or any(c not in "0123456789abcdef" for c in expected)
+            ):
+                return "unknown", "invalid_source_version"
+            try:
+                key = relative_path(relative)
+            except ValueError:
+                return "stale", "source_policy_changed"
+            stopped = _stop_reason(self.context, self.deadline)
+            if stopped:
+                return "unknown", stopped
+            if key not in self.cache:
+                if self.checked_files >= self.limits.search_files:
+                    return "unknown", "source_file_budget"
+                remaining = min(
+                    self.limits.file_hash_bytes, self.limits.search_read_bytes - self.bytes_read
+                )
+                if remaining < 0:
+                    return "unknown", "source_byte_budget"
+                self.checked_files += 1
+                probe = execute_workspace_tool(
+                    self.context,
+                    "workspace_source_version",
+                    {"path": key, "max_bytes": remaining},
+                    mark_read=False,
+                    record_versions=False,
+                    timeout_s=max(0.001, self.deadline - time.monotonic()),
+                )
+                stopped = _stop_reason(self.context, self.deadline)
+                if stopped:
+                    return "unknown", stopped
+                if not probe.ok:
+                    if probe.error_code == "output_too_large":
+                        return "unknown", "source_byte_budget"
+                    if probe.error_code in {
+                        "sensitive_path",
+                        "policy_denied",
+                        "workspace_mapping_rejected",
+                    }:
+                        return "stale", "source_policy_changed"
+                    return "unknown", "source_unavailable"
+                count = probe.data.get("bytes_read") if isinstance(probe.data, dict) else None
+                actual = probe.metadata.get("workspace_versions", {}).get(key)
+                if (
+                    type(count) is not int
+                    or not 0 <= count <= remaining
+                    or not isinstance(actual, str)
+                ):
+                    return "unknown", "invalid_source_version"
+                self.bytes_read += count
+                self.cache[key] = ("fresh", actual)
+            if self.cache[key][1] != expected:
                 return "stale", "source_changed"
         return "fresh", ""
 

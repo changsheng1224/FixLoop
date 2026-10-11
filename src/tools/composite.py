@@ -68,11 +68,16 @@ def build_repair_canonical_tools(ctx: ToolContext) -> dict:
     }
     # L1 owns generic file and process tools; L2 adds repair control.
     selected = {name: tools[name] for name in REPAIR_CANONICAL_TOOL_NAMES}
+    from agent_runtime.linux_sandbox.workspace_routing import bind_workspace_tools
     from agent_runtime.tool_spec import bind_execution_tools
     from src.tools.spec import default_repair_tool_registry
 
-    return bind_execution_tools(
-        selected, default_repair_tool_registry(sandbox_mode=ctx.sandbox_backend is not None)
+    sandbox_mode = bool(
+        getattr(ctx, "sandbox_mode", False) or ctx.sandbox_backend is not None
+    )
+    return bind_workspace_tools(
+        ctx,
+        bind_execution_tools(selected, default_repair_tool_registry(sandbox_mode=sandbox_mode)),
     )
 
 
@@ -86,7 +91,10 @@ def tool_inspect_file(context, args: dict) -> ToolResult:
 
     Args 必须包含 'path'，可选 'start'/'end'（同 read_file）。
     """
-    from agent_runtime.tools import tool_read_file
+    from agent_runtime.tools import _sandbox_workspace_result, tool_read_file
+
+    if (routed := _sandbox_workspace_result(context, "inspect_file", args)) is not None:
+        return routed
     from src.tools.ast_parser import ast_parse as _ast_parse
 
     read_out = tool_read_file(context, args)

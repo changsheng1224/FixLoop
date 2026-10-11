@@ -1,0 +1,25 @@
+{
+  "status": "passed",
+  "checks": {
+    "active_task_admission_bounded": true,
+    "never_started_retirement_at_active_limit": true,
+    "retirement_does_not_create_dependencies": true,
+    "retired_task_fenced": true,
+    "native_retirement_idempotent": true,
+    "retired_task_frees_active_slot": true,
+    "total_task_evidence_bounded": true,
+    "dependency_byte_budget": true,
+    "dependency_entry_budget": true,
+    "idle_pin_blocks_environment_collection": true,
+    "idle_task_retired": true,
+    "exact_environment_unregistered": true,
+    "environment_retirement_idempotent": true,
+    "other_distributions_unchanged": true,
+    "installation_and_recovery_evidence_retained": true,
+    "user_workspace_and_task_state_retained": true,
+    "retired_environment_cannot_reopen": true
+  },
+  "release_id": "2816c1bd97ab113368fa5fa07b03c363f5b9ffbf0329512afe753ae1f7eab773",
+  "runtime_digest": "5a86f67852f7373fb4f376071acfde3c27a8cc469bbebee0dd855f4a43668cc8",
+  "distribution": "FixLoop-Sandbox-s6-gc-v1-2816c1bd97ab"
+}

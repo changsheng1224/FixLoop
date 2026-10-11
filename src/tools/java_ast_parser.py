@@ -12,6 +12,10 @@ class JavaAstParseArgs:
 
 def java_ast_parse(context, args: dict) -> ToolResult:
     """解析 Java 文件为结构化类/方法列表。"""
+    from agent_runtime.tools import _sandbox_workspace_result
+
+    if (routed := _sandbox_workspace_result(context, "java_ast_parse", args)) is not None:
+        return routed
     import javalang
 
     raw_path = args.get("path", "")

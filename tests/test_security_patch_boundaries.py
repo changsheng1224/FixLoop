@@ -70,10 +70,13 @@ def test_patch_allowlist_rejects_unapproved_path(tmp_path):
 def test_worktree_path_jail_rejects_escape(tmp_path):
     from agent_runtime.worktree import create_worktree
 
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    external = tmp_path / "external-state"
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     with pytest.raises(WorktreeError):
-        create_worktree(tmp_path, "escape", path=tmp_path / ".." / "outside")
-    assert worktree_base(tmp_path).is_dir()
+        create_worktree(repo, "escape", path=tmp_path / "outside", state_base=external)
+    assert worktree_base(repo, external).is_dir()
 
 
 def test_binary_snapshot_roundtrip(temp_workspace):

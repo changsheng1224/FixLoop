@@ -226,6 +226,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             repo_root=self._repo_root,
             allowed_edit=set(),
             max_auto_allow=5,
+            sandbox_only=bool(self.patcher is not None and (
+                self.patcher.tool_context.sandbox_task_binding is not None
+                or self.patcher.tool_context.sandbox_backend is not None)),
         )
         lock.seed_and_preread(allowed_unique)
         if not lock.allowed_edit:
@@ -406,12 +409,18 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         initial_snapshot: dict | None = None,
     ) -> RepairState:
         from agent_runtime.cancellation import CancelledError
+        from agent_runtime.linux_sandbox.permissions import SandboxApprovalRequired
         from agent_runtime.run_coordination import OwnerConflictError
         from src.repair.plan_binding import ResumeRecoveryRequiredError
         from src.repair.recovery_outcome import publish_recovery_outcome
 
         try:
             return self._repair_impl_with_plan(state, initial_snapshot)
+        except SandboxApprovalRequired as exc:
+            state.status = "waiting_approval"
+            state.node_timings["sandbox_approval_id"] = exc.approval_id
+            self._checkpoint_progress(state)
+            return state
         except OwnerConflictError as exc:
             state.set_status("recovery_required", exc.code)
             state.agent_errors["coordination"] = exc.code
@@ -448,6 +457,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         finally:
             binding = getattr(self, "_plan_binding", None)
             try:
+                self._close_sandbox_backend_before_binding_close(state)
                 if binding is not None:
                     binding.close()
             finally:
@@ -456,6 +466,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
     def _release_repair_resources(self) -> None:
         """Release only this orchestrator's edit lock, including exceptional exits."""
+        runtime = getattr(self, "_collaboration_runtime", None)
+        if runtime is not None and hasattr(runtime, "close"):
+            runtime.close()
         lock = getattr(self, "_edit_lock", None)
         context = getattr(getattr(self, "patcher", None), "tool_context", None)
         if context is not None and context.edit_lock is lock:

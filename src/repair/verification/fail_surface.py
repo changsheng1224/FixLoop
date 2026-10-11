@@ -146,6 +146,7 @@ def read_test_function_excerpt(
     nodeid: str,
     *,
     max_lines: int = 60,
+    sandbox_context=None,
 ) -> str:
     """按 pytest nodeid 截取测试函数正文（含装饰器）。"""
     root = Path(repo_root)
@@ -154,12 +155,19 @@ def read_test_function_excerpt(
     if "::" in nodeid:
         parts = nodeid.split("::")
         func = parts[-1].split("[", 1)[0].strip()
-    path = root / rel
-    if not path.is_file() or not func:
+    if not func:
         return ""
     try:
-        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
-    except OSError:
+        if sandbox_context is not None:
+            from agent_runtime.linux_sandbox.workspace_state import workspace_text
+
+            lines = workspace_text(sandbox_context, nodeid.split("::", 1)[0]).splitlines()
+        else:
+            path = root / rel
+            if not path.is_file():
+                return ""
+            lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except (OSError, ValueError):
         return ""
 
     start = -1
@@ -210,6 +218,7 @@ def build_fail_surface(
     *,
     repo_root: str = "",
     result: VerificationResult | None = None,
+    sandbox_context=None,
 ) -> FailSurface:
     """从 state / 最近 verify 结果构建失败面。"""
     vr = result if result is not None else getattr(state, "verification_result", None)
@@ -234,7 +243,7 @@ def build_fail_surface(
     root = repo_root or ""
     if root:
         for nid in nodeids[:3]:
-            text = read_test_function_excerpt(root, nid)
+            text = read_test_function_excerpt(root, nid, sandbox_context=sandbox_context)
             if text:
                 excerpts[nid] = text
 
@@ -333,6 +342,7 @@ def build_verify_feedback_payload(
     *,
     repo_root: str = "",
     result: VerificationResult | None = None,
+    sandbox_context=None,
 ) -> VerifyFeedbackPayload:
     """Build reusable verifier feedback without encoding case-specific hints."""
     from src.repair.verification.verify_diagnose import diagnose_verification
@@ -341,7 +351,9 @@ def build_verify_feedback_payload(
     diag = diagnose_verification(vr) if vr is not None else None
     bucket = diag.bucket.value if diag is not None else ""
     reason = diag.reason if diag is not None else ""
-    surface = build_fail_surface(state, repo_root=repo_root, result=vr)
+    surface = build_fail_surface(
+        state, repo_root=repo_root, result=vr, sandbox_context=sandbox_context
+    )
     failing_tests = list(surface.nodeids)
     if diag is not None and diag.failed_nodeids:
         seen = set(failing_tests)

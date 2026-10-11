@@ -287,6 +287,12 @@ class AgentLoop:
         return self._finish_user_cancel(ts, phase=phase, in_flight=inflight)
 
     def _finish_user_cancel(self, ts, *, phase: str, in_flight: str = "") -> str:
+        from agent_runtime.linux_sandbox.workspace_routing import sandbox_enabled
+
+        if sandbox_enabled(self.agent.tool_context):
+            from agent_runtime.linux_sandbox.permissions import permission_service
+
+            permission_service(self.agent.tool_context).cancel_pending()
         inflight = in_flight or self._tool_state.in_flight_tool
         if ts.stop_reason != StopReason.USER_CANCEL.value:
             ts.stop_user_cancel(in_flight=inflight, phase=phase)
@@ -346,6 +352,14 @@ class AgentLoop:
         recording: dict | None = None,
     ) -> str:
         """TaskState 已写入终态后：同步 stop_reason、可选 recording、落盘。"""
+        if ts.stop_reason == StopReason.APPROVAL_REQUIRED:
+            # Waiting is a resumable state, not a terminal run or cancellation.
+            self._sync_stop_reason(ts)
+            self.agent._last_task_state = ts
+            self.agent.session["resume_status"] = "approval-pending"
+            self._emit("run_waiting_approval", {"checkpoint_id": ts.checkpoint_id})
+            self._get_store().write_task_state(ts)
+            return answer
         self._close_turn_progress(status=str(ts.status))
         self._sync_stop_reason(ts)
         runtime_snapshot = ts.runtime_contract or {}
@@ -734,6 +748,8 @@ class AgentLoop:
             emit=self._emit,
             on_changed_paths=self._invalidate_tool_exploration,
             on_retrieval=self._observe_tool_retrieval,
+            sandbox_bound=(self.agent.tool_context.sandbox_task_binding is not None
+                           or self.agent.tool_context.sandbox_backend is not None),
         )
 
     def _invalidate_tool_exploration(self, tool_name):
@@ -743,6 +759,9 @@ class AgentLoop:
                 service.invalidate("tool_write")
 
     def _observe_tool_retrieval(self, tool_name, tool_args, retrieval, observation_id):
+        if (self.agent.tool_context.sandbox_task_binding is not None
+                or self.agent.tool_context.sandbox_backend is not None):
+            return
         if self.agent.tool_context.exploration_mode == "relations" and isinstance(retrieval, dict):
             from agent_runtime.tools import _exploration_service
 
@@ -1044,21 +1063,35 @@ class AgentLoop:
         if token is not None and token.is_cancelled:
             return
         meta = result.to_metadata()
-        if result.status != "success":
+        approval = result.error_code in {"approval_required", "approval_pending"}
+        if result.status != "success" and not approval:
             return
         try:
             from agent_runtime.checkpoint import create_checkpoint, file_content_hash
             from agent_runtime.session_store import SessionStore
 
             affected_paths = list(result.changed_files)
-            if tool_name in ("write_file", "patch_file", "apply_patch") and tool_args.get("path"):
+            if (
+                not approval
+                and tool_name in ("write_file", "patch_file", "apply_patch")
+                and tool_args.get("path")
+            ):
                 affected_path = str(tool_args["path"])
                 if affected_path not in affected_paths:
                     affected_paths.append(affected_path)
+            if self.agent.tool_context.sandbox_backend is not None:
+                from agent_runtime.linux_sandbox.workspace_state import workspace_versions
+
+                current_versions = (
+                    workspace_versions(self.agent.tool_context) if affected_paths else {}
+                )
+            else:
+                current_versions = None
             effects = [
                 {
                     "path": path,
-                    "post_hash": file_content_hash(self.agent._cwd, path),
+                    "post_hash": (current_versions.get(path, "") if current_versions is not None
+                                  else file_content_hash(self.agent._cwd, path)),
                 }
                 for path in affected_paths
             ]
@@ -1075,11 +1108,18 @@ class AgentLoop:
                 "task_state": ts.to_dict(),
                 "effects": effects,
             }
+            if approval:
+                from copy import deepcopy
+
+                self.agent.session["_sandbox_approval_call"] = {
+                    "tool": tool_name, "args": deepcopy(tool_args),
+                    "approval_id": result.metadata.get("approval_id", ""),
+                }
             cp = create_checkpoint(
                 self.agent,
                 ts,
                 ts.user_request,
-                trigger="step_end",
+                trigger="approval_required" if approval else "step_end",
                 last_tool=tool_name,
                 step_payload=payload,
             )
@@ -1091,7 +1131,9 @@ class AgentLoop:
             ).save(self.agent.session)
             self._get_store().write_task_state(ts)
         except Exception:
-            pass
+            if approval:
+                self._emit("approval_checkpoint_failed", {"tool": tool_name})
+                raise
 
     # ---- 入口 ----
 
@@ -1103,6 +1145,22 @@ class AgentLoop:
         from agent_runtime.log_context import log_context
         from agent_runtime.task_state import TaskState
 
+        checkpoints = self.agent.session.get("checkpoints") or []
+        if checkpoints and checkpoints[-1].get("trigger") == "approval_required":
+            token = getattr(self.agent, "cancel_token", None)
+            if token is not None and token.is_cancelled:
+                from agent_runtime.linux_sandbox.permissions import permission_service
+
+                permission_service(self.agent.tool_context).cancel_pending()
+                return "用户已取消当前任务，审批调用未执行。"
+            from agent_runtime.checkpoint import evaluate_resume_state
+
+            checked = evaluate_resume_state(self.agent)
+            self.agent.session["resume_state"] = checked
+            if checked["status"] != "approval-resumable":
+                return "等待审批。" if checked["status"] == "approval-pending" else (
+                    "审批调用无法恢复：" + checked["status"]
+                )
         resume_state = self._consume_step_resume_state()
         if resume_state is not None:
             self._reset_exploration_on_resume()
@@ -1199,7 +1257,7 @@ class AgentLoop:
         resume_state = self.agent.session.get("resume_state")
         if not isinstance(resume_state, dict):
             return None
-        if resume_state.get("status") != "step-resumable":
+        if resume_state.get("status") not in {"step-resumable", "approval-resumable"}:
             return None
         checkpoint = resume_state.get("last_checkpoint")
         if not isinstance(checkpoint, dict):
@@ -1290,6 +1348,28 @@ class AgentLoop:
                     and hasattr(self.agent.model_client, "complete_turn")
                     else "xml"
                 )
+                if checkpoint.get("trigger") == "approval_required":
+                    sealed = checkpoint["checkpoint_envelope"]["runtime_control"][
+                        "sandbox_approval_call"
+                    ]
+                    if resume_state.get("approval_status") == "approved":
+                        # Run the sealed invocation first. Routing validates the original
+                        # owner/arguments/preimages and consumes the approval exactly once.
+                        try:
+                            user_message = self._run_tool_step(
+                                ts, sealed["tool"], sealed["args"],
+                                step=int(checkpoint.get("step_index", 0)),
+                                path="xml",
+                                callback=callback,
+                            )
+                        except TerminalToolAcceptedError as exc:
+                            return self._finish_terminal_tool(ts, exc)
+                        if self.stop_reason:
+                            return self._complete_run(ts, user_message)
+                    else:
+                        user_message = "审批已拒绝；原调用未执行。请在现有授权范围内继续。"
+                        self.agent.record({"role": "user", "content": user_message})
+                    self.agent.session.pop("_sandbox_approval_call", None)
                 answer = self._run_loop(user_message, ts, callback, path=path)
                 self._run_memory_dream()
                 return answer
@@ -1532,8 +1612,11 @@ class AgentLoop:
                 return e.answer or self._finish_user_cancel(
                     ts, phase="tool_batch" if native else "tool"
                 )
-            if not native and self.stop_reason:
-                return self._complete_run(ts, user_message, recording=recording)
+            if self.stop_reason:
+                return self._complete_run(
+                    ts, "等待工具审批。" if native else user_message,
+                    recording=None if native else recording,
+                )
 
     def _run_text_tool(self, ts, call, step, callback):
         from agent_runtime.repair_runtime import CanonicalToolCall, ToolSource
@@ -1721,9 +1804,8 @@ class AgentLoop:
         meta = result.to_metadata()
         tier = meta.get("execution_tier", "host")
         self._tier_counts[tier] = self._tier_counts.get(tier, 0) + 1
-        self._tier_tools.setdefault(tier, {})[tool_name] = (
-            self._tier_tools[tier].get(tool_name, 0) + 1
-        )
+        tier_tools = self._tier_tools.setdefault(tier, {})
+        tier_tools[tool_name] = tier_tools.get(tool_name, 0) + 1
         try:
             from agent_runtime.metrics import get_registry
 

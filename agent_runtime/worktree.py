@@ -1,18 +1,20 @@
-"""每任务 Git Worktree：隔离文件访问范围，支持取消/失败后回收。"""
+"""Trusted Git administration; ownership records live outside the checkout."""
 
 from __future__ import annotations
 
 import json
 import os
-import shutil
+import re
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
+
+from agent_runtime.state_root import managed_state_base
 
 
 class WorktreeError(RuntimeError):
-    """Worktree 创建 / 清理失败。"""
+    """Worktree creation or ownership-safe cleanup failed."""
 
 
 @dataclass
@@ -21,50 +23,111 @@ class WorktreeHandle:
     repo_root: Path
     path: Path
     branch: str
+    state_base: Path | None = None
+    ownership: str = "task"
+    retention: str = "preserve"
+    directory_identity: tuple[int, int] = ()
 
     def as_dict(self) -> dict:
         return {
-            "run_id": self.run_id,
-            "repo_root": str(self.repo_root),
-            "path": str(self.path),
-            "branch": self.branch,
+            key: str(value)
+            if isinstance(value, Path)
+            else list(value)
+            if isinstance(value, tuple)
+            else value
+            for key, value in asdict(self).items()
         }
 
 
-def _git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", *args],
+def git_administration_options(cwd: Path) -> tuple[dict[str, str], list[str]]:
+    # Never inherit alternate indexes/worktrees or project hooks for administration.
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    # Read only scalar newline settings; `git config` does not run filter drivers.
+    config = subprocess.run(
+        [
+            "git",
+            "config",
+            "--null",
+            "--get-regexp",
+            r"^(core\.(autocrlf|eol)|filter\..*\.(clean|smudge|process|required))$",
+        ],
         cwd=str(cwd),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if config.returncode not in (0, 1):
+        raise WorktreeError("git configuration unavailable")
+    overrides = {
+        "core.hooksPath": os.devnull,
+        "core.fsmonitor": "false",
+        "submodule.recurse": "false",
+    }
+    for entry in config.stdout.split("\x00"):
+        if not entry:
+            continue
+        key, value = entry.split("\n", 1)
+        if key == "core.autocrlf":
+            if value.lower() not in {"true", "false", "input"}:
+                raise WorktreeError("unsupported git newline configuration")
+            overrides[key] = value.lower()
+        elif key == "core.eol":
+            if value.lower() not in {"lf", "crlf", "native"}:
+                raise WorktreeError("unsupported git newline configuration")
+            overrides[key] = value.lower()
+        elif re.fullmatch(r"filter\..*\.(clean|smudge|process|required)", key):
+            overrides[key] = "false" if key.endswith(".required") else ""
+    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT="0")
+    options = [item for key, value in overrides.items() for item in ("-c", f"{key}={value}")]
+    return env, options
+
+
+def _git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+    env, options = git_administration_options(cwd)
+    return subprocess.run(
+        ["git", *options, *args],
+        cwd=str(cwd),
+        env=env,
         capture_output=True,
         text=True,
         check=check,
+        timeout=30,
     )
 
 
-def worktree_base(repo_root: Path | str) -> Path:
-    return Path(repo_root).resolve() / ".agent" / "worktrees"
-
-
-def default_worktree_path(repo_root: Path | str, run_id: str) -> Path:
-    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in (run_id or "run"))[:80]
-    return worktree_base(repo_root) / safe
-
-
 def _safe_run_id(run_id: str) -> str:
-    return "".join(c if c.isalnum() or c in "-_" else "_" for c in (run_id or "run"))[:80]
+    from agent_runtime.linux_sandbox.task_context import checked_id
 
-
-def _lease_path(repo_root: Path | str, run_id: str) -> Path:
-    return worktree_base(repo_root) / f".{_safe_run_id(run_id)}.lease"
-
-
-def _assert_worktree_path(repo_root: Path, path: Path) -> Path:
-    base = worktree_base(repo_root).resolve()
-    candidate = (base / path if not path.is_absolute() else path).resolve()
     try:
-        candidate.relative_to(base)
+        return checked_id(run_id)
     except ValueError as exc:
-        raise WorktreeError(f"worktree path outside managed base: {candidate}") from exc
+        raise WorktreeError("invalid worktree run_id") from exc
+
+
+def worktree_base(repo_root: Path | str, state_base: Path | str | None = None) -> Path:
+    return managed_state_base(repo_root, state_base) / "worktrees"
+
+
+def default_worktree_path(repo_root: Path | str, run_id: str, *, state_base=None) -> Path:
+    return worktree_base(repo_root, state_base) / _safe_run_id(run_id)
+
+
+def _lease_path(repo_root: Path | str, run_id: str, state_base=None) -> Path:
+    return (
+        managed_state_base(repo_root, state_base)
+        / "worktree-leases"
+        / f"{_safe_run_id(run_id)}.json"
+    )
+
+
+def _assert_worktree_path(repo_root: Path, path: Path, state_base=None) -> Path:
+    base = worktree_base(repo_root, state_base).resolve()
+    candidate = (base / path if not path.is_absolute() else path).resolve()
+    if candidate == base or not candidate.is_relative_to(base):
+        raise WorktreeError(f"worktree path outside managed base: {candidate}")
+    if candidate == repo_root or candidate.is_relative_to(repo_root):
+        raise WorktreeError("worktree inside source repository")
     return candidate
 
 
@@ -74,134 +137,192 @@ def create_worktree(
     *,
     path: Path | None = None,
     base_ref: str = "HEAD",
+    state_base=None,
 ) -> WorktreeHandle:
-    """在 ``.agent/worktrees/<run_id>`` 创建独立 worktree。
+    """Create from a clean source. Never replace a directory, branch or old lease.
 
-    需要 *repo_root* 为 git 仓库。失败抛 ``WorktreeError``。
+    A dirty source must be used directly (or supplied as an existing worktree),
+    rather than silently dropping its modifications when branching from HEAD.
     """
     root = Path(repo_root).resolve()
-    if not (root / ".git").exists() and not (root / ".git").is_file():
-        # bare check: git rev-parse
-        probe = _git(root, "rev-parse", "--is-inside-work-tree", check=False)
-        if probe.returncode != 0 or "true" not in (probe.stdout or "").lower():
-            raise WorktreeError(f"not a git repository: {root}")
-
-    base = worktree_base(root)
+    run_id = _safe_run_id(run_id)
+    if not base_ref or base_ref.startswith("-") or "\x00" in base_ref:
+        raise WorktreeError("invalid worktree base_ref")
+    base = worktree_base(root, state_base)
     base.mkdir(parents=True, exist_ok=True)
-    wt_path = _assert_worktree_path(root, path or default_worktree_path(root, run_id))
-    lease = _lease_path(root, run_id)
-    if lease.exists():
-        try:
-            payload = json.loads(lease.read_text(encoding="utf-8"))
-            heartbeat = float(payload.get("heartbeat", payload.get("created_at", 0)))
-            if time.time() - heartbeat < 24 * 3600:
-                raise WorktreeError(f"worktree lease already active: {run_id}")
-        except WorktreeError:
-            raise
-        except (OSError, ValueError, json.JSONDecodeError):
-            pass
-        lease.unlink(missing_ok=True)
-    try:
-        with lease.open("x", encoding="utf-8") as handle:
-            json.dump(
-                {"run_id": run_id, "created_at": time.time(), "heartbeat": time.time()},
-                handle,
-            )
-    except FileExistsError as exc:
-        raise WorktreeError(f"worktree lease already active: {run_id}") from exc
-    except OSError as exc:
-        raise WorktreeError(f"cannot acquire worktree lease: {run_id}") from exc
-    wt_path.parent.mkdir(parents=True, exist_ok=True)
-    if wt_path.exists():
-        try:
-            remove_worktree(root, wt_path, force=True)
-        except WorktreeError:
-            lease.unlink(missing_ok=True)
-            raise
-
-    branch = f"fixloop/wt-{_safe_run_id(run_id)[:32]}"
-    # 若分支已存在则删除
-    _git(root, "branch", "-D", branch, check=False)
-    add = _git(
-        root,
-        "worktree",
-        "add",
-        "-b",
-        branch,
-        str(wt_path),
-        base_ref,
-        check=False,
+    wt = _assert_worktree_path(
+        root, path or default_worktree_path(root, run_id, state_base=state_base), state_base
     )
-    if add.returncode != 0:
-        lease.unlink(missing_ok=True)
-        raise WorktreeError(f"git worktree add failed: {(add.stderr or add.stdout or '').strip()}")
-    return WorktreeHandle(run_id=run_id, repo_root=root, path=wt_path, branch=branch)
+    branch = f"fixloop/wt-{run_id}"
+    try:
+        probe = _git(root, "rev-parse", "--is-inside-work-tree", check=False)
+        if probe.returncode or probe.stdout.strip() != "true":
+            raise WorktreeError(f"not a git repository: {root}")
+        top = _git(root, "rev-parse", "--show-toplevel")
+        if Path(top.stdout.strip()).resolve() != root:
+            raise WorktreeError("worktree source must be the repository root")
+        dirty = _git(root, "status", "--porcelain", "--untracked-files=all", check=False)
+        if dirty.returncode:
+            raise WorktreeError("worktree source status unavailable")
+        if dirty.stdout:
+            raise WorktreeError("worktree source has user changes; use the existing workspace")
+        exists = _git(root, "show-ref", "--verify", f"refs/heads/{branch}", check=False)
+        if exists.returncode == 0 or wt.exists():
+            raise WorktreeError("worktree path or branch already exists")
+        lease = _lease_path(root, run_id, state_base)
+        lease.parent.mkdir(parents=True, exist_ok=True)
+        handle = WorktreeHandle(run_id, root, wt, branch, managed_state_base(root, state_base))
+        with lease.open("x", encoding="utf-8") as stream:
+            json.dump({**handle.as_dict(), "status": "creating", "heartbeat": time.time()}, stream)
+        add = _git(root, "worktree", "add", "-b", branch, str(wt), base_ref, check=False)
+        if add.returncode:
+            # Retain ambiguous partial creation for inspection, never force cleanup.
+            if not wt.exists():
+                lease.unlink(missing_ok=True)
+            raise WorktreeError(f"git worktree add failed: {(add.stderr or add.stdout).strip()}")
+        stat = wt.stat()
+        handle.directory_identity = (stat.st_dev, stat.st_ino)
+        _write_record(lease, {**handle.as_dict(), "status": "active", "heartbeat": time.time()})
+        return handle
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise WorktreeError(f"worktree creation failed: {exc}") from exc
+
+
+def _owned_record(handle: WorktreeHandle) -> tuple[Path, dict]:
+    lease = _lease_path(handle.repo_root, handle.run_id, handle.state_base)
+    try:
+        raw = json.loads(lease.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise WorktreeError("worktree ownership unavailable")
+        for key in ("run_id", "repo_root", "path", "branch", "state_base", "ownership"):
+            if raw.get(key) != handle.as_dict()[key]:
+                raise WorktreeError("worktree ownership mismatch")
+        stat = handle.path.stat()
+        if raw.get("directory_identity") != list(
+            handle.directory_identity
+        ) or handle.directory_identity != (stat.st_dev, stat.st_ino):
+            raise WorktreeError("worktree directory identity changed")
+        return lease, raw
+    except (OSError, ValueError, TypeError) as exc:
+        raise WorktreeError("worktree ownership unavailable") from exc
 
 
 def refresh_worktree_lease(handle: WorktreeHandle) -> None:
-    """Refresh the managed lease; called by long-running repair loops."""
-    payload = {"run_id": handle.run_id, "heartbeat": time.time()}
-    _lease_path(handle.repo_root, handle.run_id).write_text(json.dumps(payload), encoding="utf-8")
+    lease, raw = _owned_record(handle)
+    raw.update(status="active", heartbeat=time.time())
+    _write_record(lease, raw)
+
+
+def _write_record(path: Path, raw: dict) -> None:
+    import uuid
+
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with tmp.open("x", encoding="utf-8") as stream:
+            json.dump(raw, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def retain_worktree(handle: WorktreeHandle, *, reason: str = "task_ended") -> None:
+    if handle.ownership != "task":
+        return
+    lease, raw = _owned_record(handle)
+    raw.update(status="retained", reason=reason, heartbeat=time.time(), retention="preserve")
+    _write_record(lease, raw)
+
+
+def adopt_worktree(
+    repo_root: Path | str,
+    path: Path | str,
+    run_id: str,
+    *,
+    state_base=None,
+    ownership: str = "user",
+    branch: str = "",
+) -> WorktreeHandle:
+    """Validate a retained task checkout or a user-owned existing worktree."""
+    root, wt = Path(repo_root).resolve(strict=True), Path(path).resolve(strict=True)
+    try:
+        common = _git(wt, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        original = _git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        if Path(common.stdout.strip()).resolve() != Path(original.stdout.strip()).resolve():
+            raise WorktreeError("worktree belongs to another repository")
+        actual = _git(wt, "symbolic-ref", "--short", "HEAD", check=False).stdout.strip()
+        if branch and actual != branch:
+            raise WorktreeError("worktree branch changed")
+        handle = WorktreeHandle(
+            _safe_run_id(run_id), root, wt, actual, managed_state_base(root, state_base), ownership
+        )
+        stat = wt.stat()
+        handle.directory_identity = (stat.st_dev, stat.st_ino)
+        if ownership == "task":
+            _assert_worktree_path(root, wt, state_base)
+            _owned_record(handle)
+        elif ownership != "user":
+            raise WorktreeError("invalid worktree ownership")
+        return handle
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise WorktreeError("worktree identity unavailable") from exc
 
 
 def remove_worktree(
-    repo_root: Path | str,
-    path: Path | str,
-    *,
-    force: bool = True,
+    repo_root: Path | str, path: Path | str, *, force: bool = False, state_base=None
 ) -> bool:
-    """移除 worktree 目录；返回是否成功清理。"""
+    """Remove only an owned checkout. Dirty data requires explicit force."""
     root = Path(repo_root).resolve()
-    wt = _assert_worktree_path(root, Path(path))
-    args = ["worktree", "remove"]
-    if force:
-        args.append("--force")
-    args.append(str(wt))
-    lease_run_id = wt.name
-    lease_meta = wt / ".fixloop-worktree-lease.json"
-    if lease_meta.is_file():
+    wt = _assert_worktree_path(root, Path(path), state_base)
+    records = managed_state_base(root, state_base) / "worktree-leases"
+    matches = []
+    for record in records.glob("*.json"):
         try:
-            lease_run_id = str(
-                json.loads(lease_meta.read_text(encoding="utf-8")).get("run_id") or wt.name
-            )
-        except (OSError, ValueError, json.JSONDecodeError):
-            pass
+            raw = json.loads(record.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                continue
+            if raw.get("path") == str(wt) and raw.get("repo_root") == str(root):
+                matches.append(raw)
+        except (OSError, ValueError, TypeError):
+            continue
+    if len(matches) != 1:
+        raise WorktreeError("worktree ownership unavailable")
+    raw = matches[0]
+    handle = adopt_worktree(
+        root, wt, raw["run_id"], state_base=state_base, ownership="task", branch=raw["branch"]
+    )
+    lease, _ = _owned_record(handle)
+    args = ["worktree", "remove"] + (["--force"] if force else []) + [str(wt)]
     result = _git(root, *args, check=False)
-    if wt.exists():
-        shutil.rmtree(wt, ignore_errors=True)
-    _git(root, "worktree", "prune", check=False)
-    _lease_path(root, lease_run_id).unlink(missing_ok=True)
-    lease_meta.unlink(missing_ok=True)
-    return not wt.exists() or result.returncode == 0
+    if result.returncode or wt.exists():
+        return False  # Never rmtree as a fallback to a failed Git operation.
+    lease.unlink()
+    return True
 
 
 def cleanup_stale_worktrees(
-    repo_root: Path | str,
-    *,
-    max_age_hours: float = 24.0,
+    repo_root: Path | str, *, max_age_hours: float = 24.0, state_base=None
 ) -> int:
-    """删除超过 *max_age_hours* 的 worktree 目录。返回删除数量。"""
-    base = worktree_base(repo_root)
-    if not base.is_dir():
-        return 0
-    cutoff = time.time() - max_age_hours * 3600
+    """Only explicitly disposable, clean, inactive task worktrees may be removed."""
+    records = managed_state_base(repo_root, state_base) / "worktree-leases"
     deleted = 0
-    root = Path(repo_root).resolve()
-    for child in list(base.iterdir()):
-        if child.name.startswith(".") or child.name.endswith(".lease"):
-            continue
-        if not child.is_dir():
-            continue
+    for record in records.glob("*.json"):
         try:
-            mtime = child.stat().st_mtime
-        except OSError:
-            continue
-        if mtime < cutoff:
-            if remove_worktree(root, child, force=True):
+            raw = json.loads(record.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                continue
+            if (
+                raw.get("retention") == "discard_if_clean"
+                and raw.get("status") == "released"
+                and float(raw["heartbeat"]) < time.time() - max_age_hours * 3600
+                and remove_worktree(repo_root, raw["path"], state_base=state_base)
+            ):
                 deleted += 1
+        except (WorktreeError, OSError, ValueError, KeyError, TypeError):
+            continue
     return deleted
 
 
 def worktree_enabled() -> bool:
-    flag = os.environ.get("FIXLOOP_USE_WORKTREE", "").strip().lower()
-    return flag in ("1", "true", "yes", "on")
+    return os.environ.get("FIXLOOP_USE_WORKTREE", "").strip().lower() in ("1", "true", "yes", "on")

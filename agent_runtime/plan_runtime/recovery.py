@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from .processes import confirmed_exited
 from .reducer import restart_safe, transition
-from .workspace import changes, snapshot
+from .workspace import changes
 
 
 def recover(session, *, stopped_probe=None) -> dict:
@@ -19,13 +19,14 @@ def recover(session, *, stopped_probe=None) -> dict:
             "uncertain",
             "blocked",
             "resume_rejected",
+            "waiting_approval",
         )
     }
     checkpoints = [e["payload"] for e in session.store.events() if e["kind"] == "checkpoint"]
     for seal in checkpoints:
         session.store.verify_checkpoint(seal)
     attempts = session.store.latest("attempt", "attempt_id")
-    current = snapshot(session.workspace)
+    current = session.snapshot_workspace()
     for attempt in attempts.values():
         if attempt["phase"] == "reconciled":
             continue
@@ -63,6 +64,14 @@ def recover(session, *, stopped_probe=None) -> dict:
         if node.attempt_id and node.attempt_id != attempt["attempt_id"]:
             raise ValueError("resume_attempt_identity_mismatch")
         operations = session.operations(attempt["attempt_id"])
+        if attempt.get("waiting_approval"):
+            if (attempt.get("workspace_after") == current and operations
+                    and operations[-1].get("not_started")
+                    and operations[-1].get("approval_id")
+                    and all(o["phase"] == "result_recorded" and o.get("execution_stopped")
+                            for o in operations)):
+                report["waiting_approval"].append(node.node_id)
+                continue
         prepared = attempt["phase"] == "prepared" and not operations
         if prepared:
             session.commit(

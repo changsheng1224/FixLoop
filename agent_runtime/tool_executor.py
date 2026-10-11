@@ -160,29 +160,51 @@ class ToolExecutor:
             return self._rejected(
                 2, "execution_uncertain", "Error: previous cleanup unverified; resume required."
             )
-        if getattr(ctx, "sandbox_backend", None) is not None:
+        if (
+            getattr(ctx, "sandbox_backend", None) is not None
+            or getattr(ctx, "sandbox_task_binding", None) is not None
+        ):
             from agent_runtime.linux_sandbox.tool_policy import (
                 SandboxToolAccess,
                 sandbox_tool_access,
             )
 
             access = sandbox_tool_access(name)
-            if getattr(ctx, "sandbox_uncertain", False) and access in {
-                SandboxToolAccess.TRUSTED_WRITE,
+            sandbox_access = {
+                SandboxToolAccess.SANDBOX_READ,
+                SandboxToolAccess.SANDBOX_WRITE,
                 SandboxToolAccess.SANDBOX_COMMAND,
-            }:
+            }
+            if access in sandbox_access and ctx.sandbox_backend is None:
+                return self._rejected(2, "policy_denied", "Error: sandbox backend unavailable.")
+            if access is SandboxToolAccess.SANDBOX_COMMAND and (
+                ctx.sandbox_backend is None
+                or getattr(ctx.sandbox_backend, "workspace_tools_only", False)
+            ):
+                return self._rejected(2, "policy_denied", "Error: command sandbox not available.")
+            if (ctx.sandbox_uncertain or ctx.sandbox_uncertain_event.is_set()) and (
+                access in sandbox_access
+            ):
                 return self._rejected(
                     2,
                     "execution_uncertain",
-                    "Error: sandbox cleanup unverified; writes and commands blocked.",
+                    "Error: sandbox cleanup unverified; workspace execution blocked.",
                 )
-            if access is SandboxToolAccess.DENIED or (
-                access is SandboxToolAccess.SANDBOX_COMMAND
-                and tool_spec.get("execution_tier") != "linux_sandbox"
-            ):
+            if access is SandboxToolAccess.DENIED or name.startswith("workspace_"):
                 return self._rejected(
                     2, "policy_denied", f"Error: tool '{name}' is not audited for wsl_bwrap."
                 )
+            # Execution authority comes from the fixed access table, never the
+            # mutable model registry (including batch registry snapshots).
+            tool_spec = dict(tool_spec)
+            tool_spec.update(
+                execution_tier="linux_sandbox" if access in sandbox_access else "trusted_host",
+                execution_mode="thread",
+                terminal=name == "finish_repair",
+                side_effect="write" if access is SandboxToolAccess.SANDBOX_WRITE else (
+                    "process" if access is SandboxToolAccess.SANDBOX_COMMAND else "read"
+                ),
+            )
 
         # ---- Gate 3: 参数校验 ----
         validated_args, args_reject = self._validate_args(name, args)
@@ -278,8 +300,19 @@ class ToolExecutor:
 
         # ---- Gate 8: 执行前工作区快照 ----
         sandbox_command = tool_spec.get("execution_tier") == "linux_sandbox"
+        sandbox_workspace = sandbox_command and name in {
+            "read_file",
+            "list_files",
+            "grep",
+            "ast_parse",
+            "inspect_file",
+            "find_test",
+            "write_file",
+            "patch_file",
+            "apply_patch",
+        }
         is_risky = name in self._ASK_TOOLS | self._DENY_TOOLS or sandbox_command
-        before_snapshot = self._capture_snapshot() if is_risky else {}
+        before_snapshot = self._capture_snapshot() if is_risky and not sandbox_command else {}
         restore_snapshot = (
             self._capture_restore_snapshot() if is_risky and not sandbox_command else {}
         )
@@ -335,6 +368,8 @@ class ToolExecutor:
             ):
                 self.agent.tool_context.sandbox_uncertain = True
                 result.metadata["workspace_diff_status"] = "pending_cleanup"
+            elif sandbox_command:
+                result.metadata["workspace_diff_status"] = "broker_receipt"
             else:
                 if not sandbox_command and result.status in {
                     ToolStatus.ERROR.value,
@@ -372,7 +407,7 @@ class ToolExecutor:
                         "recovery_action": "reread_then_retry_or_finish",
                     }
                 )
-            elif result.error_code == "stale_preimage":
+            elif result.error_code == "stale_preimage" and not sandbox_workspace:
                 self._attach_stale_preimage_metadata(result, name, args)
         result = attach_tool_receipt(
             result,
@@ -538,6 +573,13 @@ class ToolExecutor:
             preview_text = f"[{mode}] {raw_path} ({content_len} 字符)"
             return {"path": raw_path, "preview_text": preview_text}, None
         if name == "patch_file":
+            from agent_runtime.linux_sandbox.workspace_routing import sandbox_enabled
+
+            if sandbox_enabled(self.agent.tool_context):
+                return {
+                    "path": args.get("path", ""),
+                    "preview_text": str(args.get("diff") or args.get("old_text") or ""),
+                }, None
             patch_preview_meta, preview_err = self._build_patch_preview(args)
             if preview_err:
                 # A preimage mismatch is a recoverable workspace race.  Let
@@ -566,12 +608,14 @@ class ToolExecutor:
         token,
     ) -> tuple[dict | None, ToolResult | None]:
         """Gate 7：执行分级审批策略。"""
+        from agent_runtime.linux_sandbox.workspace_routing import sandbox_enabled
+
+        if sandbox_enabled(self.agent.tool_context):
+            # Scope decisions belong to the shared native dispatch gate. Tool names
+            # cannot authorize a broader command, or bypass the OS restrictions.
+            self.agent.tool_context.sandbox_approval_policy = self.approval_policy
+            return None, None
         tier = self._approval_tier(name)
-        if (
-            name in {"run_shell", "quick_test"}
-            and getattr(self.agent.tool_context, "sandbox_backend", None) is not None
-        ):
-            tier = self._APPROVAL_TIER_ASK
         if tier == self._APPROVAL_TIER_DENY:
             return None, self._rejected(
                 7,
@@ -672,6 +716,11 @@ class ToolExecutor:
         ctx.idempotency_key = str(tool_spec.get("idempotency_key", "") or "")
         try:
             from agent_runtime.cancellation import CancelledError
+            from agent_runtime.linux_sandbox.workspace_routing import (
+                execute_canonical_tool,
+                execute_workspace_tool,
+                sandbox_enabled,
+            )
             from agent_runtime.tool_timeout import (
                 ToolCancelledError,
                 ToolIsolationError,
@@ -679,7 +728,12 @@ class ToolExecutor:
                 run_with_timeout,
             )
 
-            if tool_spec.get("isolated_read"):
+            if sandbox_enabled(ctx):
+                from agent_runtime.linux_sandbox.workspace_contract import WORKSPACE_TOOLS
+
+                result = (execute_workspace_tool(ctx, name, args)
+                          if name in WORKSPACE_TOOLS else execute_canonical_tool(ctx, name, args))
+            elif tool_spec.get("isolated_read"):
                 # Audited pure filesystem readers run in the batch worker.
                 # The scheduler owns timeout/cleanup; no nested orphan thread.
                 result = tool_spec["run"](args)
@@ -775,6 +829,16 @@ class ToolExecutor:
         else:
             raw_path = getattr(args, "path", None)
         if not raw_path:
+            return None
+        from agent_runtime.linux_sandbox.workspace_routing import sandbox_enabled
+
+        if sandbox_enabled(self.agent.tool_context):
+            from agent_runtime.linux_sandbox.workspace_contract import relative_path
+
+            try:
+                relative_path(str(raw_path), allow_root=name in {"grep", "list_files"})
+            except ValueError as exc:
+                return self._rejected(3, str(exc).split(":", 1)[0], "Error: " + str(exc))
             return None
         try:
             resolved = self.agent.tool_context.resolve(str(raw_path))
@@ -993,6 +1057,12 @@ class ToolExecutor:
 
     def _capture_snapshot(self) -> dict[str, str]:
         """对 workspace 根目录下所有文件做 SHA256 快照。"""
+        from agent_runtime.linux_sandbox.workspace_routing import sandbox_enabled
+
+        if sandbox_enabled(self.agent.tool_context):
+            from agent_runtime.linux_sandbox.workspace_state import workspace_versions
+
+            return workspace_versions(self.agent.tool_context)
         root = Path(self.agent.tool_context.root)
         if not root.exists():
             return {}

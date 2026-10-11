@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,10 +42,15 @@ class ToolContext:
     lsp_argv: tuple[str, ...] | None = None
     exploration_event_sink: Callable[[str, dict], None] | None = None
     sandbox_backend: object | None = None
+    # The production WSL profile is selected before a task binding exists.
+    # This lets the canonical registry and gateway fail closed during startup.
+    sandbox_mode: bool = False
+    sandbox_task_binding: object | None = None
     sandbox_workspace_id: str = "workspace"
     sandbox_task_id: str = "task"
     sandbox_run_id: str = "run"
     sandbox_uncertain: bool = False
+    sandbox_uncertain_event: object = field(default_factory=threading.Event, repr=False)
     execution_uncertain: bool = False
     state_root: str = ""
     sandbox_identity: dict = field(default_factory=dict)
@@ -53,6 +59,14 @@ class ToolContext:
     sandbox_generation: int = 0
     sandbox_coordination_revision: int = 0
     sandbox_parent_resource_id: str = ""
+    sandbox_workspace_versions: dict[str, str] = field(default_factory=dict)
+    sandbox_owned_versions: dict[str, str | None] = field(default_factory=dict)
+    sandbox_versions_lock: object = field(default_factory=threading.RLock, repr=False)
+    sandbox_dispatch_lock: object = field(default_factory=threading.Lock, repr=False)
+    sandbox_permissions: object | None = None
+    sandbox_initial_scope: object | None = None
+    sandbox_approval_callback: Callable[[dict], bool | None] | None = None
+    sandbox_approval_policy: str = "ask"
 
     def __post_init__(self):
         if self.path_resolver is None:

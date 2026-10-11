@@ -25,8 +25,12 @@ def grounded_plan(
     reads = tuple(
         name for name in session.registry if tool_effect(name, session.registry) == "read"
     )
+    # Patcher may test within its edit loop; only the final verify node can
+    # satisfy tests_passed. Command authorization still uses the tool policy.
     edits = tuple(
-        name for name in session.registry if tool_effect(name, session.registry) != "verify"
+        name
+        for name in session.registry
+        if tool_effect(name, session.registry) != "verify" or name == "quick_test"
     )
     nodes = []
     for index, operation in enumerate(operations[:2]):

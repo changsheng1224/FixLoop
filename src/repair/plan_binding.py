@@ -18,7 +18,6 @@ from agent_runtime.plan_runtime.reducer import transition
 from agent_runtime.plan_runtime.replan import check_replan
 from agent_runtime.plan_runtime.scheduler import PlanScheduler, ReadBudget
 from agent_runtime.plan_runtime.session import PlanSession
-from agent_runtime.plan_runtime.workspace import snapshot
 from agent_runtime.run_coordination import CoordinationError, RunCoordinator
 from agent_runtime.tool_executor import QuotaEnforcer
 from src.repair.replan_decision import decide_replan
@@ -152,12 +151,31 @@ class RepairPlanBinding:
         )
 
     def _request_cancel(self):
+        from agent_runtime.linux_sandbox.workspace_routing import sandbox_enabled
+
+        if sandbox_enabled(self.agent.tool_context):
+            from agent_runtime.linux_sandbox.permissions import permission_service
+
+            permission_service(self.agent.tool_context).cancel_pending()
         request_id = self.coordinator.request_cancel()
         self.publish_recovery(stage="cancel")
         return request_id
 
     def _open(self, context, *, defer_plan):
         orchestrator, state = self.orchestrator, self.state
+        snapshot_provider = environment_provider = None
+        if context.sandbox_task_binding is not None or context.sandbox_backend is not None:
+            from agent_runtime.linux_sandbox.workspace_state import (
+                environment_binding,
+                workspace_versions,
+            )
+
+            def snapshot_provider():
+                return workspace_versions(context)
+
+            def environment_provider():
+                return environment_binding(context)
+
         self.read_budget = ReadBudget(4)
         self.session = PlanSession(
             orchestrator._repo_root,
@@ -170,6 +188,8 @@ class RepairPlanBinding:
             fault=getattr(orchestrator, "_plan_fault", None),
             owner_lease=self.owner_lease,
             coordination_store=self.coordinator.store,
+            snapshot_provider=snapshot_provider,
+            environment_provider=environment_provider,
         )
         from agent_runtime.run_coordination.adapters import (
             CollaborationTaskAdapter,
@@ -250,7 +270,7 @@ class RepairPlanBinding:
                 "baseline",
                 {
                     "files": {p: self.session.store.put_blob(text) for p, text in before.items()},
-                    "workspace": snapshot(orchestrator._repo_root),
+                    "workspace": self.session.snapshot_workspace(),
                 },
             )
         self.operations = self._seed_operations(state)
@@ -694,7 +714,7 @@ class RepairPlanBinding:
             "verification_receipt": receipt,
             "failure_excerpt": collect_log_excerpt(result),
             "failed_workspace": failed_workspace,
-            "current_workspace": snapshot(session.workspace),
+            "current_workspace": session.snapshot_workspace(),
             "fresh_source_evidence_refs": refs,
         }
         request = {
@@ -829,7 +849,11 @@ class RepairPlanBinding:
             self._retry_from_verification()
         self._prepare_owner_stages()
         edit = self._kind("edit")
-        if edit.status != "ready":
+        attempts = session.store.latest("attempt", "attempt_id")
+        waiting = edit.status == "running" and attempts.get(edit.attempt_id, {}).get(
+            "waiting_approval"
+        )
+        if edit.status != "ready" and not waiting:
             raise ValueError("plan_edit_dependency_not_satisfied")
         value = []
 
@@ -840,8 +864,12 @@ class RepairPlanBinding:
                 self.exploration.drain(cancel=True)
             return session.tool_result(attempt)
 
-        session.run_node(edit.node_id, execute)
+        result = session.run_node(edit.node_id, execute)
         self.sync()
+        if result.get("status") == "waiting_approval":
+            from agent_runtime.linux_sandbox.permissions import SandboxApprovalRequired
+
+            raise SandboxApprovalRequired(result["approval_id"])
         if self._kind("edit").status != "succeeded":
             raise ValueError("plan_edit_completion_not_confirmed")
         return value[0]
@@ -854,6 +882,9 @@ class RepairPlanBinding:
         verify = self._kind("verify")
         if verify.status == "succeeded":
             attempts = session.store.latest("attempt", "attempt_id")
+            refs = attempts[verify.attempt_id]["result"].get("evidence_refs", [])
+            if not refs or not all(session.evidence.valid(ref) for ref in refs):
+                raise ValueError("verification_stale: completed verification changed")
             return VerificationResult.from_dict(
                 attempts[verify.attempt_id]["result"]["verification_result"]
             )
@@ -886,14 +917,14 @@ class RepairPlanBinding:
             raise ValueError("rollback_conflicts_with_unconfirmed_execution")
         payload = {
             "plan_version": session.plan.plan_version if session.plan else 0,
-            "workspace_before": snapshot(session.workspace),
+            "workspace_before": session.snapshot_workspace(),
             "expected_after": expected_after,
             "completed": False,
         }
         session.store.append("rollback", payload)
         session.cut("rollback_dispatched")
         callback()
-        after = snapshot(session.workspace)
+        after = session.snapshot_workspace()
         session.store.append(
             "rollback", {**payload, "workspace_after": after, "completed": after == expected_after}
         )

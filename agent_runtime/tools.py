@@ -13,6 +13,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from agent_runtime.patch_engine import normalize_hunk_headers as _normalize_hunk_headers
 from agent_runtime.schema_utils import auto_schema
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.tool_result import ToolResult, ToolStatus
@@ -159,12 +160,16 @@ IGNORED_PATH_NAMES = {
 
 
 def tool_list_files(context, args: dict):
+    if (routed := _sandbox_workspace_result(context, "list_files", args)) is not None:
+        return routed
     from agent_runtime.code_exploration.io import list_files_result
 
     return list_files_result(context, args)
 
 
 def _code_lookup_structured(context, args: dict):
+    if (routed := _sandbox_workspace_result(context, "code_lookup", args)) is not None:
+        return routed
     service = _exploration_service(context)
     service.emit(
         "query_start",
@@ -203,6 +208,8 @@ def _exploration_service(context):
 
 
 def _code_relations_structured(context, args: dict):
+    if (routed := _sandbox_workspace_result(context, "code_relations", args)) is not None:
+        return routed
     service = _exploration_service(context)
     service.emit("query_start", {"query_type": "code_relations"})
     result = service.relations(args)
@@ -219,6 +226,8 @@ def _code_relations_structured(context, args: dict):
 
 
 def tool_read_file(context, args: dict):
+    if (routed := _sandbox_workspace_result(context, "read_file", args)) is not None:
+        return routed
     from agent_runtime.code_exploration.io import read_file_result
 
     result = read_file_result(context, args)
@@ -231,10 +240,25 @@ def _resolve_edit_lock(context):
     return context.edit_lock
 
 
-def _mark_edit_lock_read(context, raw_path: str) -> None:
+def _sandbox_workspace_result(context, name, args):
+    from agent_runtime.linux_sandbox.workspace_routing import (
+        execute_workspace_tool,
+        sandbox_enabled,
+    )
+
+    return execute_workspace_tool(context, name, args) if sandbox_enabled(context) else None
+
+
+def _mark_edit_lock_read(context, raw_path: str, *, result=None) -> None:
     lock = _resolve_edit_lock(context)
     if lock is not None:
-        lock.mark_read(raw_path)
+        from agent_runtime.linux_sandbox.workspace_routing import sandbox_enabled
+
+        if sandbox_enabled(context):
+            if result is not None:
+                lock.mark_read_evidence(raw_path, result)
+        else:
+            lock.mark_read(raw_path)
 
 
 def _reject_if_edit_locked(context, raw_path: str) -> str | None:
@@ -324,113 +348,6 @@ def _edit_time_lint_py(path: str, new_text: str) -> str | None:
     return None
 
 
-def _normalize_hunk_headers(diff: str, file_text: str) -> str:
-    """Lenient：补全裸 ``@@`` / 无 @@ 的 +/- 块为可应用 unified hunk。"""
-    import re
-
-    d = (diff or "").strip()
-    if not d:
-        return d
-
-    def _locate(body: str, *, minimum_line: int = 1) -> tuple[int, int, int]:
-        lines = body.splitlines()
-        first_preimage = next(
-            (
-                index
-                for index, line in enumerate(lines)
-                if line.startswith(" ") or (line.startswith("-") and not line.startswith("---"))
-            ),
-            0,
-        )
-        first_removed = next(
-            (
-                index
-                for index, line in enumerate(lines)
-                if line.startswith("-") and not line.startswith("---")
-            ),
-            None,
-        )
-        anchor_index = first_removed if first_removed is not None else first_preimage
-        needle = next(
-            (x[1:] for x in lines if x.startswith("-") and not x.startswith("---")),
-            lines[first_preimage][1:] if lines and lines[first_preimage].startswith(" ") else "",
-        )
-        start = max(1, minimum_line)
-        if needle:
-            for i, fl in enumerate(file_text.splitlines(), 1):
-                if i < start:
-                    continue
-                if fl == needle or needle in fl:
-                    prefix = sum(
-                        1
-                        for line in lines[:anchor_index]
-                        if line.startswith(" ")
-                        or (line.startswith("-") and not line.startswith("---"))
-                    )
-                    start = max(1, i - prefix)
-                    break
-        old_n = (
-            sum(
-                1
-                for x in lines
-                if x.startswith(" ") or (x.startswith("-") and not x.startswith("---"))
-            )
-            or 1
-        )
-        new_n = (
-            sum(
-                1
-                for x in lines
-                if x.startswith(" ") or (x.startswith("+") and not x.startswith("+++"))
-            )
-            or 1
-        )
-        return start, old_n, new_n
-
-    if "@@" not in d:
-        start, old_n, new_n = _locate(d)
-        return f"@@ -{start},{old_n} +{start},{new_n} @@\n{d}"
-
-    hunk_re = re.compile(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@")
-    out_lines: list[str] = []
-    current_header = ""
-    current_body: list[str] = []
-    search_from = 1
-
-    def _flush_hunk() -> None:
-        nonlocal search_from
-        if not current_header:
-            return
-        header = current_header.strip()
-        if not hunk_re.match(header):
-            start, old_n, new_n = _locate("\n".join(current_body), minimum_line=search_from)
-            header = f"@@ -{start},{old_n} +{start},{new_n} @@"
-            consumed = sum(
-                1
-                for line in current_body
-                if line.startswith((" ", "-")) and not line.startswith("---")
-            )
-            search_from = start + max(1, consumed)
-        else:
-            match = re.match(r"^@@ -(\d+)(?:,(\d+))? \+", header)
-            if match:
-                search_from = int(match.group(1)) + int(match.group(2) or 1)
-        out_lines.append(header)
-        out_lines.extend(current_body)
-
-    for ln in d.splitlines():
-        if ln.strip().startswith("@@"):
-            _flush_hunk()
-            current_header = ln
-            current_body = []
-        elif current_header:
-            current_body.append(ln)
-        else:
-            out_lines.append(ln)
-    _flush_hunk()
-    return "\n".join(out_lines)
-
-
 def _patch_transaction_paths(context, patch_text: str) -> dict:
     """Capture only paths named by an apply_patch envelope."""
     import re
@@ -472,6 +389,8 @@ def _restore_patch_transaction(snapshot: dict) -> None:
 
 def tool_apply_patch(context, args: dict) -> ToolResult:
     """Transactional wrapper around the canonical apply_patch implementation."""
+    if (routed := _sandbox_workspace_result(context, "apply_patch", args)) is not None:
+        return routed
     patch_text = args.get("patch") or args.get("diff") or args.get("input") or ""
     snapshot = _patch_transaction_paths(context, str(patch_text))
     expected = args.get("base_sha256") or args.get("base_hash")
@@ -674,6 +593,14 @@ def tool_quick_test(context, args: dict) -> ToolResult:
     """环内快检：优先跑给定 nodeid / 路径（失败不阻断主环语义，只回灌）。"""
     import subprocess
 
+    from agent_runtime.linux_sandbox.workspace_routing import sandbox_enabled
+
+    if sandbox_enabled(context) and (
+        context.sandbox_backend is None
+        or getattr(context.sandbox_backend, "workspace_tools_only", False)
+    ):
+        return sandbox_tool_result_rejection("command sandbox not available")
+
     nodeid = (args.get("nodeid") or args.get("target") or "").strip()
     path = (args.get("path") or "").strip()
     target = nodeid or path
@@ -690,7 +617,12 @@ def tool_quick_test(context, args: dict) -> ToolResult:
         )
 
         try:
-            target = pytest_target(context.root, target)
+            if getattr(context.sandbox_backend, "guarded_commands", False):
+                from agent_runtime.linux_sandbox.command_profile import test_target
+
+                target = test_target(target)
+            else:
+                target = pytest_target(context.root, target)
             timeout = max(1, min(int(args.get("timeout", 60) or 60), 120))
         except (ValueError, TypeError) as exc:
             return sandbox_tool_result_rejection(str(exc))
@@ -740,6 +672,8 @@ def tool_quick_test(context, args: dict) -> ToolResult:
 
 
 def tool_grep(context, args: dict):
+    if (routed := _sandbox_workspace_result(context, "grep", args)) is not None:
+        return routed
     from agent_runtime.code_exploration.io import grep_result
 
     return grep_result(context, args)
@@ -755,6 +689,8 @@ def tool_write_file(context, args: dict) -> ToolResult:
 
     Args 必须包含 'path' 和 'content'，可选 'append'（默认 False）。
     """
+    if (routed := _sandbox_workspace_result(context, "write_file", args)) is not None:
+        return routed
     raw_path = args.get("path", "")
     if not raw_path:
         return ToolResult.error("Error: 缺少必填参数 path", code="tool_execution_failed")
@@ -805,6 +741,8 @@ def tool_patch_file(context, args: dict) -> ToolResult:
     Args 必须包含 path，以及 diff 或 (old_text + new_text)。
     old_text 必须出现恰好 1 次；diff 支持多个 @@ hunk。
     """
+    if (routed := _sandbox_workspace_result(context, "patch_file", args)) is not None:
+        return routed
     raw_path = args.get("path", "")
     if not raw_path:
         return ToolResult.error("Error: 缺少必填参数 path", code="tool_execution_failed")
@@ -916,6 +854,13 @@ def tool_run_shell(context, args: dict) -> ToolResult:
     Args 必须包含 'command'，可选 'timeout'(默认20s)。
     环境变量经过白名单过滤；输出经 redact_text 脱敏。
     """
+    from agent_runtime.linux_sandbox.workspace_routing import sandbox_enabled
+
+    if sandbox_enabled(context) and (
+        context.sandbox_backend is None
+        or getattr(context.sandbox_backend, "workspace_tools_only", False)
+    ):
+        return sandbox_tool_result_rejection("command sandbox not available")
     from agent_runtime.security import check_shell_command, parse_shell_argv, redact_text
     from agent_runtime.security import shell_env as _shell_env
 
@@ -1336,7 +1281,9 @@ def build_tool_registry(context) -> dict:
     for name, handler in (("read_file", audited_read_file), ("list_files", list_files_result)):
         registry[name]["run_with_context"] = handler
         registry[name]["parallel_run"] = registry[name]["run"]
-    return registry
+    from agent_runtime.linux_sandbox.workspace_routing import bind_workspace_tools
+
+    return bind_workspace_tools(context, registry)
 
 
 def legal_tool_names(registry: dict) -> set[str]:

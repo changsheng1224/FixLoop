@@ -25,8 +25,10 @@ from agent_runtime.session_contract import (
 )
 
 CHECKPOINT_SCHEMA_VERSION = "1.0"
-CheckpointTrigger = Literal["step_end", "user_cancel", "ask_end"]
-VALID_TRIGGERS: frozenset[str] = frozenset({"step_end", "user_cancel", "ask_end"})
+CheckpointTrigger = Literal["step_end", "user_cancel", "ask_end", "approval_required"]
+VALID_TRIGGERS: frozenset[str] = frozenset(
+    {"step_end", "user_cancel", "ask_end", "approval_required"}
+)
 
 # 组成 runtime 身份的配置字段
 RUNTIME_IDENTITY_KEYS = [
@@ -104,8 +106,14 @@ def create_checkpoint(
     key_files = {}
     memory = agent.session.get("memory", {})
     working = memory.get("working", {})
+    sandbox = _sandbox_context(agent)
+    source_versions = _sandbox_versions(agent) if sandbox else None
     for path in working.get("recent_files", [])[-5:]:
-        freshness = _file_freshness(agent._cwd, path)
+        freshness = (
+            source_versions.get(path, "")
+            if sandbox
+            else _file_freshness(agent._cwd, path)
+        )
         if freshness:
             key_files[path] = freshness
 
@@ -129,7 +137,7 @@ def create_checkpoint(
         parent_run_id=str(getattr(task_state, "l2_repair_run_id", "") or ""),
     )
     control = _runtime_control_snapshot(agent, task_state)
-    manifest = workspace_manifest(agent._cwd, key_files=list(key_files))
+    manifest = _checkpoint_manifest(agent, source_versions, key_files=list(key_files))
     checkpoint = {
         "schema_version": CHECKPOINT_SCHEMA_VERSION,
         "checkpoint_envelope_version": "2.0",
@@ -161,7 +169,9 @@ def create_checkpoint(
             else {}
         ),
         "last_tool_observation": dict(agent.session.get("_last_tool_observation", {}) or {}),
-        "workspace_fingerprint": _workspace_fingerprint(agent._cwd),
+        "workspace_fingerprint": (
+            manifest["fingerprint"] if sandbox else _workspace_fingerprint(agent._cwd)
+        ),
         "identity": identity.to_dict(),
         "runtime_control": control,
         "workspace_manifest": manifest,
@@ -220,7 +230,9 @@ def create_checkpoint(
         checkpoint_id=checkpoint["checkpoint_id"],
         sequence=sequence,
         trigger=trigger,
-        safe_point="tool_step" if trigger == "step_end" else "full_session",
+        safe_point="approval" if trigger == "approval_required" else (
+            "tool_step" if trigger == "step_end" else "full_session"
+        ),
         identity=identity.to_dict(),
         runtime_control=control,
         task_state=checkpoint.get("task_state", {}),
@@ -284,6 +296,14 @@ def _runtime_control_snapshot(agent, task_state) -> dict:
     plan_session = getattr(agent, "_plan_session", None)
     if plan_session is not None:
         control["plan_checkpoint"] = plan_session.checkpoint()
+    if _sandbox_context(agent):
+        from agent_runtime.linux_sandbox.permissions import permission_service
+
+        control["sandbox_permissions"] = permission_service(agent.tool_context).checkpoint()
+    if getattr(task_state, "stop_reason", "") == "approval_required":
+        control["sandbox_approval_call"] = deepcopy(
+            agent.session.get("_sandbox_approval_call", {})
+        )
     return control
 
 
@@ -313,6 +333,7 @@ def evaluate_resume_state(agent) -> dict:
             "action_ledger",
             "side_effects",
             "observation_manifest",
+            "runtime_control",
         ):
             if field in last and last.get(field) != getattr(envelope, field):
                 return _emit_resume_result(agent, _resume_result("integrity-failure", last))
@@ -341,6 +362,7 @@ def evaluate_resume_state(agent) -> dict:
         return _emit_resume_result(agent, result)
 
     result = _resume_result("full-valid", last)
+    source_versions = _sandbox_versions(agent) if _sandbox_context(agent) else None
 
     saved_context = last.get("context_contract") or last.get("context_manifest") or {}
     current_context = agent.session.get("context_manifest", {}) or {}
@@ -359,10 +381,8 @@ def evaluate_resume_state(agent) -> dict:
     if isinstance(saved_manifest, dict) and saved_manifest:
         manifest_diff = compare_workspace_manifest(
             saved_manifest,
-            workspace_manifest(
-                agent._cwd,
-                key_files=list((saved_manifest.get("files") or {}).keys()),
-            ),
+            _checkpoint_manifest(agent, source_versions,
+                                 key_files=list((saved_manifest.get("files") or {}).keys())),
         )
         result["workspace_manifest_diff"] = manifest_diff
         result["stale_files"].extend(manifest_diff["stale_files"])
@@ -437,7 +457,8 @@ def evaluate_resume_state(agent) -> dict:
 
     # 检查 key_files freshness
     for path, saved_hash in last.get("key_files", {}).items():
-        current = _file_freshness(agent._cwd, path)
+        current = (source_versions.get(path, "") if source_versions is not None
+                   else _file_freshness(agent._cwd, path))
         if current and current != saved_hash:
             result["stale_files"].append(path)
         elif not current:
@@ -461,13 +482,63 @@ def evaluate_resume_state(agent) -> dict:
         if expected and str(expected) != str(current):
             result["identity_diff"].append(key)
 
-    _validate_step_effects(agent, last, result)
+    _validate_step_effects(agent, last, result, source_versions=source_versions)
 
     # 判定状态
     if result["stale_files"] or result["identity_diff"]:
         result["status"] = "workspace-mismatch" if result["identity_diff"] else "partial-stale"
     elif observation_diff or context_diff or long_task_diff:
         result["status"] = "partial-stale"
+    elif last.get("trigger") == "approval_required":
+        from agent_runtime.linux_sandbox.permissions import approval_for_owner, permission_service
+
+        sealed = envelope.runtime_control.get("sandbox_approval_call") or {}
+        saved = envelope.runtime_control.get("sandbox_permissions") or {}
+        current = permission_service(agent.tool_context).snapshot()
+        pending = current.get("pending") or {}
+        saved_pending = saved.get("pending") or {}
+        original = (pending.get("action") or {}).get("request") or {}
+        ctx = agent.tool_context
+        coordinator = getattr(ctx, "run_coordinator", None)
+        authority = coordinator.lease if coordinator is not None else ctx
+        authority_changed = any(
+            original.get(key, default) != getattr(authority, attr, default)
+            for key, attr, default in (
+                ("owner_token", "owner_token" if coordinator else "sandbox_owner_token", ""),
+                ("generation", "generation" if coordinator else "sandbox_generation", 0),
+                (
+                    "coordination_revision",
+                    "coordination_revision" if coordinator else "sandbox_coordination_revision",
+                    0,
+                ),
+            )
+        ) if "operation" in original else any(
+            original.get(key, default) != getattr(ctx, attr, default)
+            for key, attr, default in (
+                ("owner", "sandbox_owner_token", ""),
+                ("generation", "sandbox_generation", 0),
+                ("coordination_revision", "sandbox_coordination_revision", 0),
+            )
+        )
+        if authority_changed and coordinator is not None:
+            authority_changed = approval_for_owner(
+                pending.get("action", {}), coordinator, current["identity"]
+            ) is None
+        if (not sealed or sealed.get("tool") != last.get("tool")
+                or sealed.get("args") != last.get("tool_args")
+                or saved.get("identity") != current["identity"]
+                or pending.get("id") != saved_pending.get("id")
+                or pending.get("action_digest") != saved_pending.get("action_digest")
+                or sealed.get("approval_id") != pending.get("id")
+                or pending.get("revision") != current["revision"] or authority_changed):
+            result["status"] = "approval-stale"
+        else:
+            result["status"] = {
+                "pending": "approval-pending",
+                "approved": "approval-resumable",
+                "denied": "approval-resumable",
+            }.get(pending["status"], "approval-stale")
+            result["approval_status"] = pending["status"]
     elif (
         last.get("trigger") == "step_end"
         and last.get("resume_kind") == "tool_step"
@@ -556,7 +627,7 @@ def file_content_hash(root: str, path: str) -> str:
     return ""
 
 
-def _validate_step_effects(agent, checkpoint: dict, result: dict) -> None:
+def _validate_step_effects(agent, checkpoint: dict, result: dict, *, source_versions=None) -> None:
     """校验写类工具的 post-state hash，避免重复/错误续跑。"""
     if checkpoint.get("resume_kind") != "tool_step":
         return
@@ -567,6 +638,33 @@ def _validate_step_effects(agent, checkpoint: dict, result: dict) -> None:
         expected = str(effect.get("post_hash", "") or "")
         if not expected:
             continue
-        current = file_content_hash(agent._cwd, path)
+        current = (source_versions.get(path, "") if source_versions is not None
+                   else file_content_hash(agent._cwd, path))
         if current != expected:
             result["stale_files"].append(path if current else f"{path} (deleted)")
+
+
+def _sandbox_context(agent):
+    context = getattr(agent, "tool_context", None)
+    return context is not None and (
+        getattr(context, "sandbox_backend", None) is not None
+        or getattr(context, "sandbox_task_binding", None) is not None
+    )
+
+
+def _sandbox_versions(agent):
+    from agent_runtime.linux_sandbox.workspace_contract import validate_versions
+    from agent_runtime.linux_sandbox.workspace_state import workspace_versions
+
+    versions = workspace_versions(agent.tool_context)
+    validate_versions(versions)
+    return versions
+
+
+def _checkpoint_manifest(agent, versions=None, *, key_files=None):
+    if versions is None:
+        return workspace_manifest(agent._cwd, key_files=key_files)
+    from agent_runtime.linux_sandbox.receipts import receipt_checksum
+
+    payload = {"root": agent._cwd, "git_head": "", "files": versions}
+    return {**payload, "fingerprint": receipt_checksum(payload)[:16]}

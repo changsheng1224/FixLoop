@@ -72,6 +72,34 @@ def test_unknown_write_keeps_disk_and_blocks_followup_writes(agent, executor, te
     assert not (temp_workspace / "next.txt").exists()
 
 
+def test_sandbox_timeout_with_confirmed_cleanup_allows_followup(agent, executor, monkeypatch):
+    from agent_runtime.linux_sandbox.models import SandboxResult
+    from tests.test_sandbox_workspace_routing import Backend
+    backend = agent.tool_context.sandbox_backend = Backend()
+    backend.workspace_tools_only = False
+    (Path(agent.tool_context.root) / "test_a.py").write_text("def test_a(): pass\n")
+    (Path(agent.tool_context.root) / "test_b.py").write_text("def test_b(): pass\n")
+    backend.handler = lambda request: SandboxResult(
+        "cancelled",
+        error_code="deadline_exceeded",
+        cleanup="confirmed",
+        actual_backend="linux_sandbox",
+        receipt_id="timeout-receipt",
+    )
+
+    def host_snapshot_forbidden():
+        raise AssertionError("sandbox timeout must not snapshot host source")
+
+    monkeypatch.setattr(executor, "_capture_snapshot", host_snapshot_forbidden)
+    result = executor.execute_gated("quick_test", {"path": "test_a.py"})
+    assert result.error_code == "deadline_exceeded"
+    assert result.metadata["termination_guaranteed"] is True
+    assert not agent.tool_context.execution_uncertain
+    assert result.metadata["workspace_diff_status"] == "broker_receipt"
+    following = executor.execute_gated("quick_test", {"path": "test_b.py"})
+    assert following.error_code == "deadline_exceeded"
+
+
 class TestToolExecutorGates:
     """闸口逐道测试。"""
 

@@ -1,0 +1,320 @@
+{
+  "schema": "fixloop-sandbox-s0-v1",
+  "diagnostic_only": true,
+  "product_enabled": false,
+  "environment": {
+    "windows": "10.0.19045",
+    "distribution": "Ubuntu",
+    "wsl_inventory": "NAME              STATE           VERSION\r\n* docker-desktop    Stopped         2\r\n  Ubuntu            Stopped         2",
+    "kernel": "6.18.40.1-microsoft-standard-WSL2",
+    "architecture": "x86_64",
+    "workspace_filesystem": "v9fs",
+    "bwrap": "bubblewrap 0.11.1",
+    "python": "Python 3.14.4",
+    "interop_registered_outside": true
+  },
+  "checks": {
+    "wsl_inventory": {
+      "passed": true
+    },
+    "selected_wsl2": {
+      "passed": true
+    },
+    "repo.secret-alias_setup": {
+      "passed": true
+    },
+    "repo.outside-alias_setup": {
+      "passed": true
+    },
+    "repo.junction_setup": {
+      "passed": true
+    },
+    "worktree.secret-alias_setup": {
+      "passed": true
+    },
+    "worktree.outside-alias_setup": {
+      "passed": true
+    },
+    "worktree.junction_setup": {
+      "passed": true
+    },
+    "supported_environment": {
+      "passed": true
+    },
+    "interop_control": {
+      "passed": true,
+      "exit_code": 0,
+      "stderr": ""
+    },
+    "windows_mount_verified": {
+      "passed": true
+    },
+    "bwrap_features": {
+      "passed": true
+    },
+    "repo.symlink_setup": {
+      "passed": true
+    },
+    "repo.listener_control": {
+      "passed": true
+    },
+    "repo.sandbox_started": {
+      "passed": true
+    },
+    "repo.workspace_read": {
+      "passed": true
+    },
+    "repo.workspace_write": {
+      "passed": true
+    },
+    "repo.unicode_and_spaces": {
+      "passed": true
+    },
+    "repo.env_mask": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "repo.git_mask": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "repo.git_entry_mask": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "repo.control_mask": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "repo.env_case_alias": {
+      "passed": false,
+      "readable": true,
+      "writable": true
+    },
+    "repo.git_case_alias": {
+      "passed": false,
+      "readable": true,
+      "writable": true
+    },
+    "repo.control_case_alias": {
+      "passed": false,
+      "readable": true,
+      "writable": true
+    },
+    "repo.secret_hardlink": {
+      "passed": false,
+      "readable": true,
+      "writable": true
+    },
+    "repo.external_hardlink": {
+      "passed": false,
+      "readable": true,
+      "writable": true
+    },
+    "repo.junction_escape": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "repo.external_symlink": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "repo.relative_escape": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "repo.proc_root_escape": {
+      "passed": true
+    },
+    "repo.host_paths_hidden": {
+      "passed": true
+    },
+    "repo.private_pid": {
+      "passed": true,
+      "pid": 2
+    },
+    "repo.environment_clean": {
+      "passed": true
+    },
+    "repo.no_inherited_fds": {
+      "passed": true
+    },
+    "repo.network_isolated": {
+      "passed": true
+    },
+    "repo.windows_execution_blocked": {
+      "passed": false,
+      "exit_code": 1,
+      "windows_execution_confirmed": false,
+      "handler_started": true,
+      "stdout": "",
+      "stderr": "<3>WSL (3 - ) ERROR: UtilGetPpid:1359: Failed to parse: /proc/1/stat, content: 1 (bwrap) S 0 1 1 0 -1 4194624 47 0 0 0 0 0 0 0 20 0 1 0 652 3862528 271 18446744073709551615 105941018779648 105941018818985 140731224256256 0 0 0 65536 0 0 1 0 0 17 25 0 0 0 0 0 105941018843376 105941018845448 105941563179008 140731224258096 140731224264543 140731224264543 140731224264681 0\n"
+    },
+    "repo.toolchain_read_only": {
+      "passed": true,
+      "errno": 30
+    },
+    "repo.tmpfs_capacity": {
+      "passed": true
+    },
+    "repo.write_persisted": {
+      "passed": true
+    },
+    "repo.source_unchanged": {
+      "passed": true
+    },
+    "repo.pytest": {
+      "passed": true,
+      "exit_code": 0,
+      "stderr": ""
+    },
+    "worktree.symlink_setup": {
+      "passed": true
+    },
+    "worktree.listener_control": {
+      "passed": true
+    },
+    "worktree.sandbox_started": {
+      "passed": true
+    },
+    "worktree.workspace_read": {
+      "passed": true
+    },
+    "worktree.workspace_write": {
+      "passed": true
+    },
+    "worktree.unicode_and_spaces": {
+      "passed": true
+    },
+    "worktree.env_mask": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "worktree.git_mask": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "worktree.git_entry_mask": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "worktree.control_mask": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "worktree.env_case_alias": {
+      "passed": false,
+      "readable": true,
+      "writable": true
+    },
+    "worktree.git_case_alias": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "worktree.control_case_alias": {
+      "passed": false,
+      "readable": true,
+      "writable": true
+    },
+    "worktree.secret_hardlink": {
+      "passed": false,
+      "readable": true,
+      "writable": true
+    },
+    "worktree.external_hardlink": {
+      "passed": false,
+      "readable": true,
+      "writable": true
+    },
+    "worktree.junction_escape": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "worktree.external_symlink": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "worktree.relative_escape": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "worktree.proc_root_escape": {
+      "passed": true
+    },
+    "worktree.host_paths_hidden": {
+      "passed": true
+    },
+    "worktree.private_pid": {
+      "passed": true,
+      "pid": 2
+    },
+    "worktree.environment_clean": {
+      "passed": true
+    },
+    "worktree.no_inherited_fds": {
+      "passed": true
+    },
+    "worktree.network_isolated": {
+      "passed": true
+    },
+    "worktree.windows_execution_blocked": {
+      "passed": false,
+      "exit_code": 1,
+      "windows_execution_confirmed": false,
+      "handler_started": true,
+      "stdout": "",
+      "stderr": "<3>WSL (3 - ) ERROR: UtilGetPpid:1359: Failed to parse: /proc/1/stat, content: 1 (bwrap) S 0 1 1 0 -1 4194624 47 0 0 0 0 0 0 0 20 0 1 0 712 3862528 271 18446744073709551615 99975640219648 99975640258985 140730661292528 0 0 0 65536 0 0 1 0 0 17 22 0 0 0 0 0 99975640283376 99975640285448 99976429355008 140730661299773 140730661306207 140730661306207 140730661306345 0\n"
+    },
+    "worktree.toolchain_read_only": {
+      "passed": true,
+      "errno": 30
+    },
+    "worktree.tmpfs_capacity": {
+      "passed": true
+    },
+    "worktree.write_persisted": {
+      "passed": true
+    },
+    "worktree.source_unchanged": {
+      "passed": true
+    },
+    "worktree.pytest": {
+      "passed": true,
+      "exit_code": 0,
+      "stderr": ""
+    },
+    "fixture_cleanup": {
+      "passed": true
+    }
+  },
+  "blockers": [
+    "repo.env_case_alias",
+    "repo.git_case_alias",
+    "repo.control_case_alias",
+    "repo.secret_hardlink",
+    "repo.external_hardlink",
+    "repo.windows_execution_blocked",
+    "worktree.env_case_alias",
+    "worktree.control_case_alias",
+    "worktree.secret_hardlink",
+    "worktree.external_hardlink",
+    "worktree.windows_execution_blocked"
+  ],
+  "probe_passed": false,
+  "decision": "no_go"
+}

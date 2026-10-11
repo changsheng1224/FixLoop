@@ -12,7 +12,7 @@ import json
 import sqlite3
 import time
 import uuid
-from contextlib import closing
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -228,6 +228,11 @@ class RunCoordinationStore:
         identity = owner_identity or process_owner_identity()
         with closing(self._connect()) as conn:
             conn.execute("BEGIN IMMEDIATE")
+            from agent_runtime.linux_sandbox.receipts import _read
+
+            lifecycle = _read(self.root.parent.parent / "sandbox-lifecycle.json")
+            if lifecycle and lifecycle.get("state") != "active":
+                raise CoordinationError("sandbox_task_retired")
             rows = conn.execute(
                 "SELECT * FROM runs WHERE workspace_id=? AND status IN "
                 "('acquiring','reconciling','active','cancel_requested','cancelli"
@@ -300,6 +305,21 @@ class RunCoordinationStore:
             conn.commit()
         self.bind_run(run_id)
         return OwnerLease(task_id, run_id, self.workspace_id, token, generation, revision, expires)
+
+    @contextmanager
+    def retirement_guard(self, run_id):
+        """Serialize a sandbox retirement marker with existing owner acquisition."""
+        with closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM runs WHERE run_key=?", (self._key(run_id),)
+            ).fetchone()
+            if row and (
+                row["owner_token"] or row["status"] not in {"released", "failed", "cancelled"}
+            ):
+                raise ValueError("sandbox_retirement_blocked: run not terminal")
+            yield
+            conn.commit()
 
     def assert_request_owner(
         self,

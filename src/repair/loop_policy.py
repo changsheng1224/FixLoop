@@ -101,7 +101,12 @@ class RepairLoopPolicy(LoopPolicy):
         if lock is None:
             return
         path = str(tool_args.get("path") or "")
-        lock.mark_read(path, auto_allow_impl=True)
+        from agent_runtime.linux_sandbox.workspace_routing import sandbox_enabled
+
+        if sandbox_enabled(context.agent.tool_context):
+            lock.mark_read_evidence(path, result, auto_allow_impl=True)
+        else:
+            lock.mark_read(path, auto_allow_impl=True)
         grounded_paths = lock.grounded_paths()
         if not grounded_paths:
             return
