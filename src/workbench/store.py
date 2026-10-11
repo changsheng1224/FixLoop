@@ -145,7 +145,11 @@ class WorkbenchStore:
         )
 
     def create_conversation(
-        self, title: str = "新对话", *, project_path: str | None = None
+        self,
+        title: str = "新对话",
+        *,
+        project_path: str | None = None,
+        baseline: tuple[str, dict] | None = None,
     ) -> Conversation:
         _text(title, "title")
         if project_path is not None:
@@ -161,6 +165,14 @@ class WorkbenchStore:
                 "INSERT INTO branches VALUES (?, ?, ?, NULL, NULL, ?)",
                 (branch_id, identity, "main", now),
             )
+            if baseline is not None:
+                if project_path is None:
+                    raise ValueError("baseline requires a project")
+                snapshot = self._insert_snapshot(db, identity, *baseline)
+                db.execute(
+                    "UPDATE conversations SET base_snapshot_id = ? WHERE id = ?",
+                    (snapshot, identity),
+                )
             return _record(Conversation, self._conversation(db, identity))
 
     def get_conversation(self, conversation_id: str) -> Conversation:
@@ -564,3 +576,74 @@ class WorkbenchStore:
             )
             self._select(db, conversation_id, branch["id"], identity)
             return _record(Node, self._get(db, "nodes", identity))
+
+    def _insert_snapshot(self, db, conversation_id, storage_key, manifest):
+        _text(storage_key, "storage_key")
+        identity = _id("snapshot")
+        db.execute(
+            "INSERT INTO snapshots VALUES (?, ?, ?, ?, ?)",
+            (identity, conversation_id, storage_key, _json(manifest), time.time()),
+        )
+        return identity
+
+    def _checkpoint(self, db, conversation_id, branch_id, snapshot_id, label):
+        branch = self._get(db, "branches", branch_id, conversation_id)
+        identity = _id("node")
+        db.execute(
+            "INSERT INTO nodes VALUES (?, ?, ?, 'local_checkpoint', ?, NULL, ?, ?, ?)",
+            (
+                identity,
+                conversation_id,
+                branch["head_node_id"],
+                label,
+                self._effective_snapshot(db, conversation_id, branch["head_node_id"]),
+                snapshot_id,
+                time.time(),
+            ),
+        )
+        db.execute("UPDATE branches SET head_node_id = ? WHERE id = ?", (identity, branch_id))
+        self._select(db, conversation_id, branch_id, identity)
+        return _record(Node, self._get(db, "nodes", identity))
+
+    def save_checkpoint(
+        self, conversation_id, key, manifest, *, label="本地修改", expected_revision=None
+    ):
+        """Snapshot reference and checkpoint are one history transaction."""
+        _text(label, "label")
+        with self._transaction() as db:
+            conversation = self._conversation(db, conversation_id, expected_revision)
+            self._idle(db, conversation_id)
+            if conversation["base_snapshot_id"] is None:
+                raise ValueError("checkpoint requires a project baseline")
+            snapshot = self._insert_snapshot(db, conversation_id, key, manifest)
+            return self._checkpoint(
+                db, conversation_id, conversation["active_branch_id"], snapshot, label
+            )
+
+    def commit_restore(self, plan):
+        """Save manual changes on the source, then move the destination cursor.
+
+        A receipt on the immutable target snapshot reconciles a crash after the
+        SQLite commit but before the external file journal's terminal update.
+        """
+        cid = plan["conversation_id"]
+        with self._transaction() as db:
+            conversation = self._conversation(db, cid, plan["revision"])
+            self._idle(db, cid)
+            source_branch = conversation["active_branch_id"]
+            if plan["manual"]:
+                snapshot = self._insert_snapshot(db, cid, plan["before_key"], plan["before"])
+                self._checkpoint(db, cid, source_branch, snapshot, "本地修改")
+            action = plan["action"]
+            if action == "switch" and not (plan["manual"] and plan["branch_id"] == source_branch):
+                branch_id = plan["branch_id"]
+                branch = self._get(db, "branches", branch_id, cid)
+                self._select(db, cid, branch_id, branch["head_node_id"])
+            else:
+                branch = self._fork(db, cid, plan["destination_node"], plan["name"])
+                branch_id = branch.id
+                self._select(db, cid, branch_id, plan["destination_node"])
+            manifest = {**plan["target"], "restore_operation": plan["id"]}
+            snapshot = self._insert_snapshot(db, cid, plan["target_key"], manifest)
+            self._checkpoint(db, cid, branch_id, snapshot, "恢复检查点")
+            return _record(Branch, self._get(db, "branches", branch_id, cid))

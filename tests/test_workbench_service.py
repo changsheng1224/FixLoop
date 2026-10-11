@@ -123,8 +123,8 @@ def test_stale_revision_and_project_execution_rejected_before_mutation(service, 
         service.send(chat.id, "ignored", expected_revision=chat.revision)
     with pytest.raises(UnsupportedModeError):
         service.send(chat.id, "ignored", mode="repair")
-    with pytest.raises(UnsupportedModeError):
-        service.create_conversation(project_path=str(tmp_path / "repo"))
+    with pytest.raises(FileNotFoundError):
+        service.create_conversation(project_path=str(tmp_path / "missing-repo"))
     assert service.store.get_tree(chat.id).nodes == ()
     project = service.store.create_conversation(project_path=str(tmp_path / "repo"))
     before = service.store.get_tree(project.id)

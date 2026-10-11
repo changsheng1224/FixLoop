@@ -15,6 +15,7 @@ from src.workbench.chat import ChatExecutor
 from src.workbench.events import EventJournal
 from src.workbench.models import ConflictError, Run, Turn
 from src.workbench.ownership import ServiceOwnership
+from src.workbench.restore import RestoreCoordinator
 from src.workbench.store import WorkbenchStore
 
 _TERMINAL = {"succeeded", "failed", "cancelled", "interrupted"}
@@ -52,6 +53,8 @@ class WorkbenchService:
         executor=None,
         max_active_runs: int = 8,
         max_output_bytes: int = 1_000_000,
+        project_lock_dir: str | Path | None = None,
+        restore_fault=None,
     ):
         if max_active_runs < 1 or max_output_bytes < 1:
             raise ValueError("execution limits must be positive")
@@ -68,8 +71,13 @@ class WorkbenchService:
         try:
             self.store = WorkbenchStore(self.state_dir / "workbench.sqlite3")
             self.journal = EventJournal(self.state_dir / "events.sqlite3")
+            self.restoration = RestoreCoordinator(
+                self.store, self.state_dir, lock_dir=project_lock_dir, fault=restore_fault
+            )
             self._recover()
         except BaseException:
+            if hasattr(self, "restoration"):
+                self.restoration.close()
             self._ownership.close()
             raise
 
@@ -103,7 +111,9 @@ class WorkbenchService:
     def _chat_only(self, conversation_id):
         conversation = self.store.get_conversation(conversation_id)
         if conversation.project_path is not None:
-            raise UnsupportedModeError("project sessions require S3 file recovery and S4 execution")
+            raise UnsupportedModeError(
+                "project execution requires S4; file restore uses preview/apply"
+            )
         return conversation
 
     def _admit(self, conversation_id, mode="chat"):
@@ -118,12 +128,13 @@ class WorkbenchService:
         with self._lock:
             self._open()
             if project_path is not None:
-                raise UnsupportedModeError("S2 creates projectless conversations only")
+                return self.restoration.create(title, project_path)
             return self.store.create_conversation(title)
 
     def rename_conversation(self, conversation_id, title, *, expected_revision=None):
         with self._lock:
             self._open()
+            self._project_idle(conversation_id)
             return self.store.rename_conversation(
                 conversation_id, title, expected_revision=expected_revision
             )
@@ -163,6 +174,7 @@ class WorkbenchService:
     def view(self, conversation_id, node_id, *, expected_revision=None):
         with self._lock:
             self._open()
+            self._project_idle(conversation_id)
             return self.store.view_node(
                 conversation_id, node_id, expected_revision=expected_revision
             )
@@ -182,6 +194,35 @@ class WorkbenchService:
             return self.store.fork_at(
                 conversation_id, node_id, name=name, expected_revision=expected_revision
             )
+
+    def _project_idle(self, conversation_id):
+        if self.store.get_conversation(conversation_id).project_path is not None:
+            self.restoration.project(conversation_id)
+
+    def project_status(self, conversation_id):
+        with self._lock:
+            self._open()
+            return self.restoration.status(conversation_id)
+
+    def save_checkpoint(self, conversation_id, **kwargs):
+        with self._lock:
+            self._open()
+            return self.restoration.checkpoint(conversation_id, **kwargs)
+
+    def preview_restore(self, conversation_id, **kwargs):
+        with self._lock:
+            self._open()
+            return self.restoration.preview(conversation_id, **kwargs)
+
+    def apply_restore(self, conversation_id, plan_id):
+        with self._lock:
+            self._open()
+            return self.restoration.apply(conversation_id, plan_id)
+
+    def recover_restore(self, conversation_id, operation_id, *, decision):
+        with self._lock:
+            self._open()
+            return self.restoration.recover(conversation_id, operation_id, decision=decision)
 
     def _schedule(self, turn: Turn) -> Turn:
         execution = _Execution(turn.run.conversation_id, turn.run.id)
@@ -331,6 +372,7 @@ class WorkbenchService:
         with self._lock:
             if self._active:
                 raise TimeoutError("workers have not exited; service ownership retained")
+            self.restoration.close()
             self._ownership.close()
 
     def __enter__(self):

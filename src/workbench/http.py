@@ -184,7 +184,9 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         service = self.server.service
         store = service.store
         if parts == ["health"] and method == "GET":
-            self._json(200, {"status": "ok", "stage": "S2", "modes": ["chat"]})
+            self._json(
+                200, {"status": "ok", "stage": "S3", "modes": ["chat"], "file_restore": True}
+            )
             return
         if parts == ["conversations"]:
             if method == "GET":
@@ -209,6 +211,26 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         revision = {"expected_revision": body.get("expected_revision")}
         if method == "GET" and tail == ["tree"]:
             self._json(200, store.get_tree(cid))
+        elif method == "GET" and tail == ["workspace"]:
+            self._json(200, service.project_status(cid))
+        elif method == "POST" and tail == ["checkpoints"]:
+            self._fields(body, allowed={"label", "expected_revision"})
+            self._json(201, service.save_checkpoint(cid, **body))
+        elif method == "POST" and tail == ["restores", "preview"]:
+            self._fields(
+                body,
+                allowed={"action", "node_id", "branch_id", "name", "expected_revision"},
+                required={"action"},
+            )
+            self._json(201, service.preview_restore(cid, **body))
+        elif method == "POST" and tail == ["restores", "apply"]:
+            self._fields(body, allowed={"plan_id"}, required={"plan_id"})
+            self._json(200, service.apply_restore(cid, **body))
+        elif method == "POST" and tail == ["restores", "recover"]:
+            self._fields(
+                body, allowed={"operation_id", "decision"}, required={"operation_id", "decision"}
+            )
+            self._json(200, service.recover_restore(cid, **body))
         elif method == "GET" and tail == ["messages"]:
             if set(query) - {"node_id"}:
                 raise ValueError("unknown message query")
