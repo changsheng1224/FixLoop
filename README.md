@@ -38,6 +38,10 @@
 
 **Layer 1** 是通用 Agent 内核，不依赖 LangChain/LangGraph 等 LLM 编排框架。
 
+工作台 S1 在 `src/workbench/` 提供 SQLite 会话树持久化，支持历史编辑分叉、重跑记录、
+分支切换及执行/快照关联。当前是存储 API，尚未接入聊天界面或文件回退；
+接口与边界见 [Workbench S1 指南](docs/WORKBENCH_S1.md)。
+
 **Layer 2** 当前主路径是 Patcher 工具环、轻量 Critic 和独立 Verifier；定位与检索通过规则种子、只读探索和上下文数据模型提供，不再装配为两个独立 LLM Agent。
 
 修复只消费公开 Issue、仓库源码、工具结果和实际验证反馈。`FAIL_TO_PASS`、
