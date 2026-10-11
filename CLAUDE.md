@@ -77,6 +77,11 @@ M{m}/D{d}/{task-slug}
 git remote -v  # origin git@github.com:changsheng1224/FixLoop.git
 ```
 
+## Python 环境
+
+- 安装依赖、运行程序和测试使用同一个 Python 解释器；依赖安装统一用 `python -m pip`，测试用 `python -m pytest`，不混用 PATH 中独立的 `pip` / `pytest`。
+- `jsonschema` 和 `referencing` 已是 `pyproject.toml` 的默认依赖；新环境用 `python -m pip install -e ".[dev]"` 一次性安装，后续沿用该解释器。
+
 ## 网络环境
 
 GitHub HTTPS (443) 被 GFW 阻断，需通过代理访问。SSH (22) 直连正常。
