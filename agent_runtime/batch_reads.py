@@ -17,6 +17,13 @@ def file_version(path: Path):
 
 
 def audited_read_file(context, arguments):
+    from agent_runtime.linux_sandbox.workspace_routing import (
+        execute_workspace_tool,
+        sandbox_enabled,
+    )
+
+    if sandbox_enabled(context):
+        return execute_workspace_tool(context, "read_file", arguments, mark_read=False)
     # The reader still owns path/sensitive-file rejection. A failed version
     # probe adds no authority and never widens the path boundary.
     try:
@@ -54,8 +61,28 @@ def normalize_read_result(result: ToolResult):
     return result
 
 
-def recheck_read(result: ToolResult):
+def recheck_read(result: ToolResult, context=None):
     version = result.metadata.get("read_version")
+    if isinstance(version, dict) and version.get("authority") == "sandbox_workspace":
+        if not result.ok:
+            return result
+        from agent_runtime.linux_sandbox.workspace_routing import execute_workspace_tool
+
+        if context is None:
+            return stale_read(result)
+        path = version["path"]
+        expected = result.metadata.get("workspace_versions", {}).get(path)
+        probe = execute_workspace_tool(context, "workspace_source_version", {"path": path},
+                                       mark_read=False, record_versions=False)
+        observed = probe.metadata.get("workspace_versions", {}).get(path)
+        # FUSE inode/dev values belong to a single mounted view. Only a content
+        # hash can establish freshness across separately mounted calls.
+        if not probe.ok or expected is None or expected != observed:
+            stale_read(result)
+            with context.sandbox_versions_lock:
+                if context.sandbox_workspace_versions.get(path) == expected:
+                    context.sandbox_workspace_versions.pop(path, None)
+        return result
     if result.ok and isinstance(version, dict):
         if version.get("version") != file_version(Path(version["path"])):
             stale_read(result)

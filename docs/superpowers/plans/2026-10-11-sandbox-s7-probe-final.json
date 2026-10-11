@@ -1,0 +1,1227 @@
+{
+  "status": "passed",
+  "checks": {
+    "factory_uses_sandbox_context": true,
+    "no_host_or_docker_verifier": true,
+    "cli_exit_success": true,
+    "cli_report_fixed": true,
+    "cli_patch_exported": true,
+    "cli_patch_applies_to_source": true,
+    "repair_finished_successfully": true,
+    "coordination_released": true,
+    "task_binding_created": true,
+    "single_backend_identity": true,
+    "worktree_is_task_owned": true,
+    "patch_applied_in_worktree": true,
+    "source_repository_unchanged": true,
+    "final_pytest_passed": true,
+    "backend_closed_after_repair": true,
+    "backend_context_identity_shared": true,
+    "baseline_pytest_reproduced_failure": true,
+    "quick_and_final_pytest_executed": true,
+    "quick_and_final_pytest_passed": true,
+    "pytest_receipts_confirmed": true
+  },
+  "environment": {
+    "release_id": "83ecffc0a46c7644ce9c7b8255a2a9282743c8bcdd97d2e2eaf705b3014cc31c",
+    "distribution": "FixLoop-Sandbox-s6-v1-83ecffc0a46c",
+    "runtime_digest": "ffa81db422d58c3d21fa0674ff9c3465dd54bdf66bd03ff6ad4237d8529304af",
+    "runtime_version": "s6-v1",
+    "distribution_version": "26.04"
+  },
+  "workspace": "C:\\Users\\haoyu\\Documents\\FixLoop",
+  "fixture": "C:\\Users\\haoyu\\Documents\\FixLoop\\.tmp\\s7-live-5619c62365764acb94cc7f4cafedd5c0",
+  "base_commit": "ba30adf48577d9321dc04fd7c96cbbbdf6eb4adc",
+  "cli_exit_code": 0,
+  "delivery": "C:\\Users\\haoyu\\Documents\\FixLoop\\.tmp\\s7-live-5619c62365764acb94cc7f4cafedd5c0\\delivery",
+  "repair_status": "fixed",
+  "coordination_status": "released",
+  "repair_run_id": "s7-live-ded5aa5b0d21",
+  "binding": {
+    "task_id": "s7-live-ded5aa5b0d21",
+    "run_id": "s7-live-ded5aa5b0d21",
+    "repository_root": "C:\\Users\\haoyu\\Documents\\FixLoop\\.tmp\\s7-live-5619c62365764acb94cc7f4cafedd5c0\\repo",
+    "mapping": {
+      "host_root": "C:\\Users\\haoyu\\Documents\\FixLoop\\.tmp\\s7-state-live7\\worktrees\\s7-live-ded5aa5b0d21",
+      "wsl_source": "/mnt/c/Users/haoyu/Documents/FixLoop/.tmp/s7-state-live7/worktrees/s7-live-ded5aa5b0d21",
+      "sandbox_root": "/workspace",
+      "filesystem_identity": [
+        3528101224439424254,
+        1125899909836670
+      ],
+      "workspace_id": "ca604e74f346ff76",
+      "mapping_id": "69eda19f330d3e6b5ca1d67a4acf9718b744bc2c988113d271e4093f323382c1",
+      "profile": "windows_guarded"
+    },
+    "environment": {
+      "distribution": "FixLoop-Sandbox-s6-v1-83ecffc0a46c",
+      "distribution_version": "26.04",
+      "runtime_version": "s6-v1",
+      "runtime_digest": "ffa81db422d58c3d21fa0674ff9c3465dd54bdf66bd03ff6ad4237d8529304af",
+      "backend": "wsl_bwrap"
+    },
+    "policy_version": "wsl-bwrap-v1",
+    "policy_digest": "61dbd3bb255ac98cd58df010de6ee9e502f017ef9ddc70bbdce1564f9227a0b1",
+    "state_root": "C:\\Users\\haoyu\\Documents\\FixLoop\\.tmp\\s7-state-live7\\tasks\\s7-live-ded5aa5b0d21",
+    "workspace_ownership": "task",
+    "worktree_branch": "fixloop/wt-s7-live-ded5aa5b0d21",
+    "schema_version": 1
+  },
+  "verification": {
+    "all_passed": true,
+    "total_tests": 1,
+    "passed": 1,
+    "failed": 0,
+    "error": 0,
+    "failure_logs": [],
+    "build_log": "",
+    "lint_issues": [],
+    "schema_version": "1.0"
+  },
+  "model_calls": 5,
+  "executions": [
+    {
+      "call_id": "call-6d1ad6f3efde4bec8593a906cd6264f6",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-84eb9d97f09a4c388eded856c10e4d94",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-f534f0e4fb94485d957905918a680cb2",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-4891edede0f64d3d95bd8b6ab8528a88",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-4725e0f7128e4044b64a7bca24468ff4",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-84f1bf452b7f47dcb8dedf19ab712967",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-a82e6455810349e5b91c76de06eaea98",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-edebcc2f3cab4308b3bec5166dfb2b1b",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-19ffddd2abbd46cc8735a4031779cb12",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-ed7bb15271bc41a3810c5a484383db94",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-b83a1c7b35f04610b6fc9e4d3257af8b",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-22f0420d0dc647dfbdbb5771e8b76553",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-8d3e4eeb23464b55af030cb7d8763eb3",
+      "operation": "pytest",
+      "argv": [
+        "/toolchain/bin/python",
+        "-I",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=line"
+      ],
+      "execution_status": "completed",
+      "exit_code": 1,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-9fb7c2cbe4cf491392f6dd880c21f5fd",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-9759cd6460b9430ebf50c54646193717",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-6e95ff8cc7ab473bab875982d1ec9232",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-5b34a1e34ed24895b38aa4de9ef3f588",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-64332f04cd3c41ef982c8a8e4101542d",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-9b6c0e1532224992b4d3493073db5fc0",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-0621eded20c746b9b55f2d8660cb7b1f",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-4ba5d214fcec4d42a3d65d38b1f32eaa",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-29a7adb8eaca4fafabfe0ff2b978904f",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-9ee06cadaec940c8ab2d601cea130228",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-528c129cbb964f52833f8eb9e0e86711",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-ee019fccd78a49e0a92c5a5d84f9dc88",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-4e6096c32b5e48bcb3fb1d892f626acc",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-4e2c9420719d4e1983a0ca3e4ec9f816",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-a14e0876556f4839906ef9f5c6f9202c",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-4fbac5be82d545c9a2f0deb968fb48cd",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-11758be3187f4c509e9179528a615aa5",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-9e672a82fd104cbfbc1b9e32bb9a7cc1",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-a6390828d60c454584b014833fd7369c",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-de7dad13ce31441da9c9bdd530ede5ca",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-3af504ab82e145b7abdd82bc3ef1201f",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-f82bbee1f27d401281c14756588990a2",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-ddab7d2d72ae44408363cad668c263ef",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-5d2740f83fcb4e198e62fb5231ef79e8",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-919f7d03b01c49ecbbf3e4cf53133766",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-015f2c1f0c164093816af23d2f69f6b0",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-3adb0f748ae44ec3b00b3755275d0687",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-430a6aac26e94fcda527847c1fd3fd52",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-dfe59fd5d9724baebc16dbe1b3c8aebc",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-31e4d5132c424171b40904a1c3f32460",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-b8b2d4b9189143f3b9006b4a74f6b40f",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-71d74f30d2bf41ea85147b3b7a0333f0",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-fdee23a803a449569f7e1ecfc9e11a8a",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-c8441b1a62b041a888568f1c6544e766",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-41fb1b953a5548f88b917763f8ab0b1c",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-2ea088353c744b2da1bde113fff69394",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-6fd5e309377b4a35af6993ee0aacc142",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-618d7fb14f9d464faa8f6ee2daa08ada",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-80edd774b69747eba0242e600db17e4b",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-a2a2317036c94a5b9dfe7422f430d1cb",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-f5b175d37d994fa9b18f563e882bd813",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-cef1371a05b54218ba477232f1dadeb4",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-e313e4436e874eaf99eb6d938636046f",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-9f1658cefff64aa6adf82bb742be95ff",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-da5f957e50c74840b46226234fc0484d",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-9630a337eef246e6a262acca6d13d705",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-f214bc3b94db48df94d80b08ca27d8ad",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-14553a0771de4a9ca4249e14a6cd00d6",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-4f09c60c7b9040468316373527f17e52",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-50a0ea5bc0e14102a0b32194faecea93",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-7013eb0048384e84a75be5714ba63362",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-92295a92d29244f391be20bb6df1a3b7",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-145a5b933c644d449c18a0d387f10789",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-6ee6ee79035544f39d5dd5893f95b9a8",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-647830a494504238aa3a83e8beed0e80",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-3f9eab123fa04cc1bc2909e9c1548fde",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-c7d25e279154454baf2275b050cc05a6",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-b5b9cd66a4f24045b336bc2d52077d2f",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-39a2313d9b564a139379173ceb384c34",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-3867fbee87d04b828a593459a8d69e90",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-67b17f5411f3498ab2acf09f6cc7fa5b",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-219bb7ed9e034b60b07b769595dc0090",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-6abd7f18325b4b09babe7dee40bd5190",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-eafc277a23bb49818ea2c9bb87f1c509",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-4199615e5752456cafe49462866d160a",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-8e15bfc55dbe42c8ae1b1f8d0314f495",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-47599af850dd40a0880eec775837adf3",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-b0aa70b2a6b745aeb43e69f169b9016d",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-aa817f27fca04aa79e46316f92f7908e",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-87c51bf67dc447bba109ad76b4272fca",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-8e464bb599134f729b04d935154abef9",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-2c87fbfb067b4e60a2d5836209ed8b84",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-d9396e9f34eb4cd68981ed08814cc308",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-90407a034e3c46aa96399a21bde03185",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-57088f6a7d3146bf94e3c5201658eab4",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-bea6701d33474af99e91bba9e72ab817",
+      "operation": "pytest",
+      "argv": [
+        "/toolchain/bin/python",
+        "-I",
+        "-m",
+        "pytest",
+        "test_value.py::test_answer",
+        "-q",
+        "--tb=line",
+        "--maxfail=3"
+      ],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-2be1628c4623400d9f45ea06ecbc4c8e",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-48ad75f05e794422a9c45f652075d98b",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-e44987304c1f418b9b97bf803ba65bb6",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-99b5b523f80c4235809caa549483db03",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-4204c73c85f04405b9c5a11331a67fa5",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-cde48e42a3df47a6b9863b343410841a",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-dde2f1f21e834bca9b112ee5b6961984",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-8f3d91d5a0a54f2aaa624db90b59ae21",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-7542f0ed2fea4cbdb56cc414a951e0d0",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-f844767dd98742b38422571d47836d83",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-46bb0d20afea4923816ab94dcff2dcf7",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-ab54da225fd64b6694d11baa41966413",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-4079be53c6834397998c38064beadfe0",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-5d5e2e31859d4fc0b7cde6cbb2c99d89",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-8cc3eedd28ad4013b8ad860284e1c97e",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-ac5c3c771fd94ee3b9f1a04b52762fee",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-78e5dd7bdd4546ae8f7842f047fe8eca",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-c071993787344e23a4070817d43019c7",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-99e06e3621ba427d9d3eec5dde278512",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-19a844f7cc7f47c49688f4f5695f7fc8",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-1adf5cd62a2549a6b82b8a159ae21e91",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-4404d45f260243e98f7502bdc105d7d1",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-9de06e489a47495b8624a7b95422ef2c",
+      "operation": "pytest",
+      "argv": [
+        "/toolchain/bin/python",
+        "-I",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=line"
+      ],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-7324b05a1cff48a7867a2a3e054d85bd",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-61da3007135948a399aa65188bc70c0e",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-804bfc5194ef410f9770dafc114dc7ed",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-6aa8a60cd0054d7c9e6adf3d3c46e73b",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-c6cb259d55884a07bb2c7baa6b8b7743",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    },
+    {
+      "call_id": "call-59bdc40b00004de484b5ee769233c743",
+      "operation": "workspace",
+      "argv": [],
+      "execution_status": "completed",
+      "exit_code": 0,
+      "cleanup": "confirmed"
+    }
+  ],
+  "pytest_receipts": [
+    {
+      "actual_backend": "linux_sandbox",
+      "cleanup": "confirmed",
+      "cleanup_ms": 0,
+      "coordination_revision": 22,
+      "duration_ms": 3323,
+      "error_code": "command_failed",
+      "execution_status": "completed",
+      "exit_code": 1,
+      "generation": 1,
+      "mutation_status": "not_started",
+      "output_truncated": false,
+      "owner_token": "f832274a10ff4f90a210c2e7c97e2a90",
+      "permission": {
+        "action_digest": "9493e9e5e8eaae1e32cac3f134e6c718fbac3ea20afbeb1893248066baf31e49",
+        "authorization_id": "auth-a74e561b4d5e495d88ef2e592f7e82b0",
+        "call_id": "call-8d3e4eeb23464b55af030cb7d8763eb3",
+        "policy_digest": "bc30b6dc1b439297118047eaf937dfc38048882c3acab1fb9728195e62ed83ca",
+        "revision": 1,
+        "status": "allowed"
+      },
+      "policy_digest": "61dbd3bb255ac98cd58df010de6ee9e502f017ef9ddc70bbdce1564f9227a0b1",
+      "receipt_id": "call-8d3e4eeb23464b55af030cb7d8763eb3",
+      "requested_backend": "wsl_bwrap",
+      "startup_ms": 0,
+      "stderr_excerpt": "",
+      "stdout_excerpt": "F                                                                        [100%]\n=================================== FAILURES ===================================\nE   assert 1 == 2\n     +  where 1 = answer()\n/workspace/test_value.py:4: assert 1 == 2\n=========================== short test summary info ============================\nFAILED test_value.py::test_answer - assert 1 == 2\n1 failed in 0.09s\n",
+      "tool_result": {
+        "changed_files": [],
+        "content": "command completed",
+        "data": null,
+        "duration_ms": 0,
+        "error_code": "command_failed",
+        "metadata": {
+          "command_exit_code": 1,
+          "command_stderr": "",
+          "command_stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\nE   assert 1 == 2\n     +  where 1 = answer()\n/workspace/test_value.py:4: assert 1 == 2\n=========================== short test summary info ============================\nFAILED test_value.py::test_answer - assert 1 == 2\n1 failed in 0.09s\n",
+          "environment_after": {
+            "dependency_version": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "runtime_digest": "ffa81db422d58c3d21fa0674ff9c3465dd54bdf66bd03ff6ad4237d8529304af",
+            "source_version": "a50dc75262db9503aa6c43b72c74437c98b2b3fd7fb79386d4f8f38c42b5572c",
+            "task_environment": "4eb41b25f8c0a0c77e4dffe8dcc79c5bed2a86e008253aaf3418fbbd0a09f6cb"
+          },
+          "verification_binding": {
+            "dependency_version": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "runtime_digest": "ffa81db422d58c3d21fa0674ff9c3465dd54bdf66bd03ff6ad4237d8529304af",
+            "source_version": "a50dc75262db9503aa6c43b72c74437c98b2b3fd7fb79386d4f8f38c42b5572c",
+            "task_environment": "4eb41b25f8c0a0c77e4dffe8dcc79c5bed2a86e008253aaf3418fbbd0a09f6cb"
+          },
+          "verification_current": true,
+          "workspace_read_only": true
+        },
+        "output_truncated": false,
+        "receipt": {},
+        "retryable": false,
+        "status": "error"
+      }
+    },
+    {
+      "actual_backend": "linux_sandbox",
+      "cleanup": "confirmed",
+      "cleanup_ms": 0,
+      "coordination_revision": 280,
+      "duration_ms": 3360,
+      "error_code": "",
+      "execution_status": "completed",
+      "exit_code": 0,
+      "generation": 1,
+      "mutation_status": "not_started",
+      "output_truncated": false,
+      "owner_token": "f832274a10ff4f90a210c2e7c97e2a90",
+      "permission": {
+        "action_digest": "cec4a06e2c25fee22d943e2261d36a30d624703471657b309dcada1b22282a5a",
+        "authorization_id": "auth-7ff64bb4fb3744f8be59ae8da41f2f98",
+        "call_id": "call-bea6701d33474af99e91bba9e72ab817",
+        "policy_digest": "bc30b6dc1b439297118047eaf937dfc38048882c3acab1fb9728195e62ed83ca",
+        "revision": 1,
+        "status": "allowed"
+      },
+      "policy_digest": "61dbd3bb255ac98cd58df010de6ee9e502f017ef9ddc70bbdce1564f9227a0b1",
+      "receipt_id": "call-bea6701d33474af99e91bba9e72ab817",
+      "requested_backend": "wsl_bwrap",
+      "startup_ms": 0,
+      "stderr_excerpt": "",
+      "stdout_excerpt": ".                                                                        [100%]\n1 passed in 0.09s\n",
+      "tool_result": {
+        "changed_files": [],
+        "content": "command completed",
+        "data": null,
+        "duration_ms": 0,
+        "error_code": "",
+        "metadata": {
+          "command_exit_code": 0,
+          "command_stderr": "",
+          "command_stdout": ".                                                                        [100%]\n1 passed in 0.09s\n",
+          "environment_after": {
+            "dependency_version": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "runtime_digest": "ffa81db422d58c3d21fa0674ff9c3465dd54bdf66bd03ff6ad4237d8529304af",
+            "source_version": "0909540b00d1073181a030cd9b001402dc8ab25ed7004e3656d70767a27afb89",
+            "task_environment": "4eb41b25f8c0a0c77e4dffe8dcc79c5bed2a86e008253aaf3418fbbd0a09f6cb"
+          },
+          "verification_binding": {
+            "dependency_version": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "runtime_digest": "ffa81db422d58c3d21fa0674ff9c3465dd54bdf66bd03ff6ad4237d8529304af",
+            "source_version": "0909540b00d1073181a030cd9b001402dc8ab25ed7004e3656d70767a27afb89",
+            "task_environment": "4eb41b25f8c0a0c77e4dffe8dcc79c5bed2a86e008253aaf3418fbbd0a09f6cb"
+          },
+          "verification_current": true,
+          "workspace_read_only": true
+        },
+        "output_truncated": false,
+        "receipt": {},
+        "retryable": false,
+        "status": "success"
+      }
+    },
+    {
+      "actual_backend": "linux_sandbox",
+      "cleanup": "confirmed",
+      "cleanup_ms": 0,
+      "coordination_revision": 356,
+      "duration_ms": 3390,
+      "error_code": "",
+      "execution_status": "completed",
+      "exit_code": 0,
+      "generation": 1,
+      "mutation_status": "not_started",
+      "output_truncated": false,
+      "owner_token": "f832274a10ff4f90a210c2e7c97e2a90",
+      "permission": {
+        "action_digest": "74627a963638050acf963540c42cce65cb64500bdfe946488f85eeceac9cd43e",
+        "authorization_id": "auth-31e2bbff59be4dd491a5cdf2fef1835a",
+        "call_id": "call-9de06e489a47495b8624a7b95422ef2c",
+        "policy_digest": "bc30b6dc1b439297118047eaf937dfc38048882c3acab1fb9728195e62ed83ca",
+        "revision": 1,
+        "status": "allowed"
+      },
+      "policy_digest": "61dbd3bb255ac98cd58df010de6ee9e502f017ef9ddc70bbdce1564f9227a0b1",
+      "receipt_id": "call-9de06e489a47495b8624a7b95422ef2c",
+      "requested_backend": "wsl_bwrap",
+      "startup_ms": 0,
+      "stderr_excerpt": "",
+      "stdout_excerpt": ".                                                                        [100%]\n1 passed in 0.09s\n",
+      "tool_result": {
+        "changed_files": [],
+        "content": "command completed",
+        "data": null,
+        "duration_ms": 0,
+        "error_code": "",
+        "metadata": {
+          "command_exit_code": 0,
+          "command_stderr": "",
+          "command_stdout": ".                                                                        [100%]\n1 passed in 0.09s\n",
+          "environment_after": {
+            "dependency_version": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "runtime_digest": "ffa81db422d58c3d21fa0674ff9c3465dd54bdf66bd03ff6ad4237d8529304af",
+            "source_version": "0909540b00d1073181a030cd9b001402dc8ab25ed7004e3656d70767a27afb89",
+            "task_environment": "4eb41b25f8c0a0c77e4dffe8dcc79c5bed2a86e008253aaf3418fbbd0a09f6cb"
+          },
+          "verification_binding": {
+            "dependency_version": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "runtime_digest": "ffa81db422d58c3d21fa0674ff9c3465dd54bdf66bd03ff6ad4237d8529304af",
+            "source_version": "0909540b00d1073181a030cd9b001402dc8ab25ed7004e3656d70767a27afb89",
+            "task_environment": "4eb41b25f8c0a0c77e4dffe8dcc79c5bed2a86e008253aaf3418fbbd0a09f6cb"
+          },
+          "verification_current": true,
+          "workspace_read_only": true
+        },
+        "output_truncated": false,
+        "receipt": {},
+        "retryable": false,
+        "status": "success"
+      }
+    }
+  ]
+}

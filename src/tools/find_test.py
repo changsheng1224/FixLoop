@@ -26,6 +26,10 @@ def find_test_for_function(context, args: dict) -> ToolResult:
         context: ToolContext 实例。
         args: 包含 'function_name' 和 'file_path' 的字典。
     """
+    from agent_runtime.tools import _sandbox_workspace_result
+
+    if (routed := _sandbox_workspace_result(context, "find_test", args)) is not None:
+        return routed
     func_name = args.get("function_name", "")
     file_path = args.get("file_path", "")
     if not func_name or not file_path:

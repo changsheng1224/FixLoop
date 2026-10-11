@@ -117,12 +117,13 @@ class TestGrepSkipsSensitive:
 
 
 class TestWorktree:
-    def test_create_and_remove(self, temp_workspace):
+    def test_create_and_remove(self, temp_workspace, tmp_path):
         repo = Path(temp_workspace)
-        handle = create_worktree(repo, "run-demo-1")
+        state = tmp_path / "external-state"
+        handle = create_worktree(repo, "run-demo-1", state_base=state)
         assert handle.path.is_dir()
         assert (handle.path / "README.md").exists()
-        assert remove_worktree(repo, handle.path, force=True)
+        assert remove_worktree(repo, handle.path, state_base=state)
         assert not handle.path.exists()
 
     def test_worktree_enabled_flag(self, monkeypatch):

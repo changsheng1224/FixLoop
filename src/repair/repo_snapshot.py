@@ -14,8 +14,13 @@ def snapshot_repo(
     *,
     include: Callable[[str], bool] | None = None,
     skip_dirs: frozenset[str] = DEFAULT_SKIP_DIRS,
+    sandbox_context=None,
 ) -> dict[str, str]:
     """读取 repo 文本快照。include(rel_path) 为 None 时包含除 skip_dirs 外全部文件。"""
+    if sandbox_context is not None:
+        from agent_runtime.linux_sandbox.workspace_state import workspace_snapshot
+
+        return workspace_snapshot(sandbox_context, include=include)
     root = Path(repo_root)
     snap: dict[str, str] = {}
     if not root.is_dir():
@@ -40,7 +45,13 @@ def restore_repo_snapshot(
     snapshot: dict[str, str],
     *,
     clear_pycache: bool = True,
+    sandbox_context=None,
 ) -> None:
+    if sandbox_context is not None:
+        from agent_runtime.linux_sandbox.workspace_state import restore_workspace
+
+        restore_workspace(sandbox_context, snapshot)
+        return
     root = Path(repo_root)
     for rel, content in snapshot.items():
         target = root / rel
@@ -65,5 +76,9 @@ def repo_changed(
     before: dict[str, str],
     *,
     include: Callable[[str], bool] | None = None,
+    sandbox_context=None,
 ) -> bool:
-    return snapshot_repo(repo_root, include=include) != before
+    current = snapshot_repo(repo_root, include=include, sandbox_context=sandbox_context)
+    if sandbox_context is not None:
+        return current.versions != before.versions
+    return current != before

@@ -362,7 +362,9 @@ def tool_step_flow(
     ):
         from agent_runtime.tools import _mark_edit_lock_read
 
-        _mark_edit_lock_read(runtime.agent.tool_context, str(tool_args.get("path", "")))
+        _mark_edit_lock_read(
+            runtime.agent.tool_context, str(tool_args.get("path", "")), result=result
+        )
     recorded = runtime.recorder.record(
         canonical_call,
         result,
@@ -472,12 +474,36 @@ def record_step_progress(
     """Accept terminal tools, update progress and persist a successful safe point."""
     # 终态工具：成功后结束 loop，payload 作为 final answer
     tool_spec = (tool_registry or {}).get(tool_name) or {}
-    if tool_spec.get("terminal") and result.status == "success":
+    from agent_runtime.linux_sandbox.workspace_routing import sandbox_enabled
+
+    terminal = (
+        tool_name == "finish_repair"
+        if sandbox_enabled(runtime.agent.tool_context)
+        else tool_spec.get("terminal")
+    )
+    if terminal and result.status == "success":
         from agent_runtime.terminal_tool import TerminalToolAcceptedError
 
         raise TerminalToolAcceptedError(str(result_text), tool_name=tool_name)
     # 死循环检测：Gate 5.5 rejection → 升级为 stop
     error_code = result.error_code
+    if error_code == "approval_deferred":
+        runtime.agent.record({"role": "tool", "tool_name": tool_name,
+                              "content": result_text, "observation_id": stored.observation_id})
+        return result_text
+    if error_code in {"approval_required", "approval_pending"}:
+        ts.stop_with_reason(StopReason.APPROVAL_REQUIRED, "waiting_approval")
+        runtime.state.stop_reason = StopReason.APPROVAL_REQUIRED
+        runtime.agent.record({"role": "tool", "tool_name": tool_name,
+                              "content": result_text, "observation_id": stored.observation_id})
+        runtime.hooks.emit("approval_required", {
+            "tool": tool_name, "approval_id": result.metadata.get("approval_id", ""),
+        })
+        next_message = "调用尚未执行，等待批准或拒绝。\n" + result_text
+        runtime.hooks.persist_step_checkpoint(
+            ts, tool_name, tool_args, result_text, next_message, result, step=step, path=path,
+        )
+        return next_message
     if error_code == "loop_detected":
         from agent_runtime.tool_executor import _canonical_args_hash
 

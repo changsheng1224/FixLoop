@@ -1,0 +1,25 @@
+{
+  "status": "ready",
+  "release_id": "83ecffc0a46c7644ce9c7b8255a2a9282743c8bcdd97d2e2eaf705b3014cc31c",
+  "distribution": "FixLoop-Sandbox-s6-v1-83ecffc0a46c",
+  "runtime_digest": "ffa81db422d58c3d21fa0674ff9c3465dd54bdf66bd03ff6ad4237d8529304af",
+  "health": {
+    "schema_version": 1,
+    "release_id": "83ecffc0a46c7644ce9c7b8255a2a9282743c8bcdd97d2e2eaf705b3014cc31c",
+    "runtime_digest": "ffa81db422d58c3d21fa0674ff9c3465dd54bdf66bd03ff6ad4237d8529304af",
+    "distribution_version": "26.04",
+    "runtime_version": "s6-v1",
+    "python": "Python 3.14.4",
+    "pytest": "pytest 9.1.1",
+    "bwrap": "bubblewrap 0.11.1",
+    "kernel": "6.18.40.1-microsoft-standard-WSL2",
+    "checks": {
+      "unprivileged_namespaces": true,
+      "network_namespace": true,
+      "tmpfs_limit": true,
+      "clean_environment": true,
+      "control_paths_hidden": true,
+      "fuse_device": true
+    }
+  }
+}

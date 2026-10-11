@@ -260,7 +260,12 @@ class BwrapVerifyStrategy:
             )
         started = time.time()
         try:
-            target = pytest_target(repo_root, test_path) if test_path else ""
+            if getattr(self.context.sandbox_backend, "guarded_commands", False):
+                from agent_runtime.linux_sandbox.command_profile import test_target
+
+                target = test_target(test_path) if test_path else ""
+            else:
+                target = pytest_target(repo_root, test_path) if test_path else ""
         except ValueError as exc:
             return VerifyRun(
                 VerificationResult(all_passed=False, failure_logs=[str(exc)]),
@@ -301,9 +306,36 @@ class BwrapVerifyStrategy:
         else:
             category = "environment"
         output = (result.stdout_excerpt + "\n" + result.stderr_excerpt).strip()
+        binding = {}
+        if getattr(self.context.sandbox_backend, "guarded_commands", False):
+            from agent_runtime.linux_sandbox.workspace_contract import tool_result_from_wire
+
+            typed = tool_result_from_wire(result.tool_result) if result.tool_result else None
+            if typed is not None:
+                binding = typed.metadata.get("verification_binding", {})
+            if not binding or typed is None or not typed.metadata.get("verification_current"):
+                if category == "passed":
+                    category = "environment"
+            if result.error_code == "deadline_exceeded":
+                category = "timeout"
+            elif typed is not None and typed.status == "cancelled":
+                category = "interrupted"
+        counts = {
+            name: int(count)
+            for count, name in re.findall(r"(\d+) (passed|failed|skipped|error)s?\b", output)
+        }
+        total = sum(counts.values())
+        if (
+            category == "passed"
+            and total == 0
+            and getattr(self.context.sandbox_backend, "guarded_commands", False)
+        ):
+            category = "no-tests"
         run = VerifyRun(
             result=VerificationResult(
                 all_passed=category == "passed",
+                total_tests=total,
+                passed=counts.get("passed", 0),
                 failed=1 if category == "failed" else 0,
                 failure_logs=[output or result.error_code or category]
                 if category != "passed"
@@ -325,12 +357,20 @@ class BwrapVerifyStrategy:
                 cleanup=result.cleanup,
                 sandbox_status=result.execution_status,
                 pytest_exit_code=result.exit_code,
+                completed=result.execution_status == "completed"
+                and result.cleanup == "confirmed"
+                and result.actual_backend == "linux_sandbox"
+                and bool(result.receipt_id),
+                command=["python", "-m", "pytest", target],
+                verification_binding=binding,
             ),
             error=None
             if category == "passed"
             else (
                 "verification_failed"
                 if category == "failed"
+                else "verification_timeout"
+                if category == "timeout"
                 else "user_cancel"
                 if category == "interrupted"
                 else "verification_environment_failed"
@@ -640,6 +680,7 @@ def record_verify_timings(state, run: VerifyRun, *, log_sandbox: bool = False) -
         "exit_code": run.internal.get("pytest_exit_code"),
         "category": run.internal.get("category", run.error or "unknown"),
         "receipt_id": run.internal.get("receipt_id", ""),
+        "verification_binding": run.internal.get("verification_binding", {}),
     }
     if run.error:
         state.agent_errors["verifier"] = run.error

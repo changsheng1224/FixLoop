@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import threading
+
 from agent_runtime.run_coordination.models import process_owner_identity
 from src.collaboration.contracts import AgentResult, AgentTask, TaskStatus
 from src.collaboration.effects import EffectLedger
 from src.collaboration.scheduler import TaskScheduler
-from src.collaboration.store import CollaborationStore
+from src.collaboration.store import CollaborationStore, LeaseConflictError
 
 
 class RepairCollaborationRuntime:
@@ -17,13 +19,67 @@ class RepairCollaborationRuntime:
     bypass the repair FSM.
     """
 
-    def __init__(self, repo_root: str, run_id: str, state):
-        self.store = CollaborationStore(repo_root)
+    def __init__(
+        self,
+        repo_root: str,
+        run_id: str,
+        state,
+        *,
+        state_root: str = "",
+        task_lease_seconds: float = 60.0,
+    ):
+        self.store = CollaborationStore(repo_root, state_root=state_root)
         self.scheduler = TaskScheduler(self.store)
         self.effects = EffectLedger(self.store)
         self.run_id = run_id
         self.worker = "orchestrator"
+        self.task_lease_seconds = max(0.1, float(task_lease_seconds))
+        self._task_lock = threading.RLock()
+        self._heartbeat_stop = threading.Event()
+        self._heartbeat_worker = threading.Thread(
+            target=self._maintain_task_leases,
+            name="fixloop-collaboration-task-lease",
+            daemon=True,
+        )
+        self._closed = False
         self._ensure_plan(state)
+
+    def _maintain_task_leases(self) -> None:
+        interval = max(0.05, self.task_lease_seconds / 3)
+        while not self._heartbeat_stop.wait(interval):
+            with self._task_lock:
+                coordinator = getattr(self, "coordinator", None)
+                if coordinator is not None:
+                    try:
+                        coordinator.assert_lease(allow_cancelling=True)
+                    except Exception:
+                        return  # A stale run owner must not renew phase tasks.
+                for task in self.store.list_tasks(self.run_id):
+                    if (
+                        not self._owns_phase(task)
+                        or task.status != TaskStatus.RUNNING
+                        or task.lease_owner != self.worker
+                    ):
+                        continue
+                    try:
+                        self.store.heartbeat(
+                            task.task_id,
+                            self.worker,
+                            lease_seconds=self.task_lease_seconds,
+                        )
+                    except (KeyError, LeaseConflictError):
+                        # External cancellation/recovery remains authoritative;
+                        # never reclaim an expired or replaced lease here.
+                        continue
+
+    def close(self) -> None:
+        """Stop lease renewal after the repair has finalized its resources."""
+        if self._closed:
+            return
+        self._closed = True
+        self._heartbeat_stop.set()
+        if self._heartbeat_worker.ident is not None:
+            self._heartbeat_worker.join(timeout=1)
 
     def _owns_phase(self, task: AgentTask) -> bool:
         return task.task_id in {
@@ -145,7 +201,11 @@ class RepairCollaborationRuntime:
                 worker=self.worker,
             )
         elif task.status in {TaskStatus.PENDING, TaskStatus.READY}:
-            claimed = self.store.claim_task(task.task_id, self.worker)
+            claimed = self.store.claim_task(
+                task.task_id,
+                self.worker,
+                lease_seconds=self.task_lease_seconds,
+            )
             self.store.complete_task(
                 claimed.task_id,
                 AgentResult(claimed.task_id, status=status),
@@ -154,6 +214,13 @@ class RepairCollaborationRuntime:
 
     def advance(self, phase: str, state, *, terminal_status: str = "") -> None:
         """Claim the current phase and complete its predecessor."""
+        with self._task_lock:
+            self._advance(phase, state, terminal_status=terminal_status)
+            # Recovery must adopt/reconcile persisted tasks before any renewal.
+            if not self._closed and self._heartbeat_worker.ident is None:
+                self._heartbeat_worker.start()
+
+    def _advance(self, phase: str, state, *, terminal_status: str) -> None:
         normalized = str(phase)
         coordinator = getattr(self, "coordinator", None)
         if coordinator is not None:
@@ -185,12 +252,20 @@ class RepairCollaborationRuntime:
         else:
             current = None
         if current and current.status in {TaskStatus.PENDING, TaskStatus.READY}:
-            self.store.claim_task(current.task_id, self.worker)
+            self.store.claim_task(
+                current.task_id,
+                self.worker,
+                lease_seconds=self.task_lease_seconds,
+            )
         self.scheduler.refresh(self.run_id)
         self.sync_state(state)
 
     def finish_cancelled(self, state) -> None:
         """Called after this runtime's phase callback has returned."""
+        with self._task_lock:
+            self._finish_cancelled(state)
+
+    def _finish_cancelled(self, state) -> None:
         for task in self.store.list_tasks(self.run_id):
             if not self._owns_phase(task):
                 self.store.request_cancel_task(task.task_id, "phase_cancelled")

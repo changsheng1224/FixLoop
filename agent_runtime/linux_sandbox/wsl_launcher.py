@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import threading
 from dataclasses import dataclass
@@ -16,10 +17,17 @@ class WslLauncherConfig:
     python: str
     controller: str
     config: str
+    user: str = ""
 
     def argv(self) -> list[str]:
-        if self.distribution != "Ubuntu":
+        if self.distribution != "Ubuntu" and not re.fullmatch(
+            r"FixLoop-Sandbox-[a-z0-9-]{1,31}-[a-f0-9]{12}", self.distribution
+        ):
             raise ValueError("distribution_mismatch")
+        if self.user not in {"", "fixloop"}:
+            raise ValueError("policy_denied: controller user")
+        if self.distribution != "Ubuntu" and self.user != "fixloop":
+            raise ValueError("policy_denied: dedicated controller must be unprivileged")
         for path in (self.python, self.controller, self.config):
             if not path.startswith("/") or "\x00" in path or ".." in path.split("/"):
                 raise ValueError("policy_denied: trusted controller path")
@@ -27,12 +35,17 @@ class WslLauncherConfig:
             "wsl.exe",
             "--distribution",
             self.distribution,
+            *(["--user", self.user] if self.user else []),
             "--exec",
             self.python,
             "-I",
             self.controller,
             self.config,
         ]
+
+    @classmethod
+    def from_environment(cls, environment, config: str):
+        return cls(**environment.launcher_paths, config=config)
 
 
 class WindowsWslBackend:

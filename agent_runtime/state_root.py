@@ -8,7 +8,19 @@ from pathlib import Path
 
 
 def workspace_id(root: str | Path) -> str:
-    return hashlib.sha256(str(Path(root).resolve()).encode()).hexdigest()[:16]
+    return hashlib.sha256(os.path.normcase(str(Path(root).resolve())).encode()).hexdigest()[:16]
+
+
+def managed_state_base(root: str | Path, explicit: str | Path | None = None) -> Path:
+    """Product-owned storage, never an implicit in-checkout .agent directory."""
+    value = explicit or os.environ.get("FIXLOOP_STATE_ROOT")
+    if not value:
+        if os.name == "nt":
+            parent = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+        else:
+            parent = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
+        value = parent / "FixLoop" / "state" / workspace_id(root)
+    return trusted_state_root(root, value)
 
 
 def trusted_state_root(root: str | Path, explicit: str | Path | None = None) -> Path | None:
@@ -30,6 +42,19 @@ def state_root_for(root: str | Path, explicit: str | Path | None = None) -> Path
     return trusted_state_root(root, explicit) or Path(root).resolve()
 
 
+def native_io_path(path: str | Path) -> Path:
+    """Use Windows extended paths for deep external-state files at the I/O boundary."""
+    value = Path(path)
+    if os.name != "nt":
+        return value
+    raw = str(value.resolve())
+    if raw.startswith("\\\\?\\"):
+        return Path(raw)
+    if raw.startswith("\\\\"):
+        return Path("\\\\?\\UNC\\" + raw[2:])
+    return Path("\\\\?\\" + raw)
+
+
 def runtime_identity(
     *,
     backend: str = "",
@@ -49,4 +74,11 @@ def runtime_identity(
     }
 
 
-__all__ = ["runtime_identity", "state_root_for", "trusted_state_root", "workspace_id"]
+__all__ = [
+    "managed_state_base",
+    "native_io_path",
+    "runtime_identity",
+    "state_root_for",
+    "trusted_state_root",
+    "workspace_id",
+]

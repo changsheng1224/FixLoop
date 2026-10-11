@@ -38,8 +38,11 @@ class PlanSession:
         fault=None,
         owner_lease: OwnerLease | None = None,
         coordination_store: RunCoordinationStore | None = None,
+        snapshot_provider=None,
+        environment_provider=None,
     ):
         self.workspace = str(Path(workspace).resolve())
+        self.snapshot_provider = snapshot_provider
         self.registry = registry
         self.state_root = state_root
         self.identity = {
@@ -60,7 +63,12 @@ class PlanSession:
                 validate_plan(self.plan, registry, identity=self.identity)
             self.observation_state = observation_state if observation_state is not None else {}
             self.evidence = EvidenceLedger(
-                self.store, workspace, self.observation_state, state_root
+                self.store,
+                workspace,
+                self.observation_state,
+                state_root,
+                snapshot_provider=snapshot_provider,
+                environment_provider=environment_provider,
             )
             raw_long_task = self.store.latest("long_task_state", "state_id")
             latest_long_task = next(iter(raw_long_task.values()), None)
@@ -84,6 +92,13 @@ class PlanSession:
         self.owner_thread = threading.get_ident()
         self._closed = False
         self.resource_parent = None
+
+    def snapshot_workspace(self):
+        return (
+            self.snapshot_provider()
+            if self.snapshot_provider is not None
+            else snapshot(self.workspace)
+        )
 
     def _fence(self, *, allow_cancelling: bool = False) -> None:
         if self.owner_lease is not None and self.coordination_store is not None:
@@ -535,7 +550,7 @@ class PlanSession:
                 self.plan.plan_version,
                 node_id,
                 self.plan.state_revision,
-                snapshot(self.workspace),
+                self.snapshot_workspace(),
                 node.tool_allowlist,
                 new_id("dispatch"),
                 kind=node.kind,
@@ -575,7 +590,7 @@ class PlanSession:
                 0,
                 new_id("preplan"),
                 0,
-                snapshot(self.workspace),
+                self.snapshot_workspace(),
                 allowed_tools,
                 new_id("dispatch"),
                 owner=process_identity(os.getpid()) or {},
@@ -639,7 +654,7 @@ class PlanSession:
             raise ValueError("readonly_tool_violation")
         operation_id = new_id("op")
         call_id = call_context.call_id if call_context is not None else new_id("call")
-        before = snapshot(self.workspace)
+        before = self.snapshot_workspace()
         prior_operations = self.operations(attempt["attempt_id"])
         expected = attempt["workspace_before"]
         if prior_operations:
@@ -684,7 +699,7 @@ class PlanSession:
         self.cut("tool_prepared")
         if effect != "read" and any(n.status == "uncertain" for n in self.plan.nodes):
             raise ValueError("workspace_execution_uncertain")
-        if before != snapshot(self.workspace):
+        if before != self.snapshot_workspace():
             raise ValueError("workspace_changed_before_dispatch")
         # A legitimate owner transition may advance the revision while reads
         # are prepared. Rebuild, but never dispatch an obsolete node/attempt.
@@ -706,7 +721,7 @@ class PlanSession:
                 run_id=self.identity["run_id"],
                 call_id=call_id,
             )
-        after = snapshot(self.workspace)
+        after = self.snapshot_workspace()
         receipt = result.receipt
         if (
             receipt.get("call_id") != call_id
@@ -790,6 +805,9 @@ class PlanSession:
             "receipt": result.receipt,
             "observation_id": stored.observation_id,
         }
+        if result.error_code in {"approval_required", "approval_pending"}:
+            durable["approval_id"] = result.metadata.get("approval_id", "")
+            durable["not_started"] = result.metadata.get("sandbox_mutation_status") == "not_started"
         if effect == "read" and changed:
             durable["execution_stopped"] = False
             durable["error_code"] = "readonly_workspace_changed"
@@ -810,7 +828,7 @@ class PlanSession:
 
     def record_result(self, attempt: dict, result: dict):
         self._fence(allow_cancelling=True)
-        after = snapshot(self.workspace)
+        after = self.snapshot_workspace()
         raw = {**attempt, "phase": "result_recorded", "workspace_after": after, "result": result}
         self.store.append("attempt", raw)
         self.cut("result_recorded")
@@ -834,6 +852,16 @@ class PlanSession:
                 or (o.get("changed_paths") and o.get("status") != "success")
                 for o in operations
             )
+            if result.get("status") == "waiting_approval" and not unknown:
+                self.store.append("attempt", {**attempt, "waiting_approval": True})
+                self.emit(
+                    "node_waiting_approval",
+                    node_id=node.node_id,
+                    attempt_id=attempt["attempt_id"],
+                    approval_id=result.get("approval_id", ""),
+                )
+                self.checkpoint()
+                return "waiting_approval"
             if unknown or result.get("status") == "uncertain":
                 status = "uncertain"
             elif result.get("status") == "cancelled":
@@ -946,7 +974,14 @@ class PlanSession:
             self.local.attempt = None
 
     def run_node(self, node_id: str, callback) -> dict:
-        attempt = self.prepare(node_id)
+        node = self.plan.node(node_id)
+        attempt = self.store.latest("attempt", "attempt_id").get(node.attempt_id)
+        if node.status == "running" and attempt and attempt.get("waiting_approval"):
+            if attempt.get("workspace_after") != self.snapshot_workspace():
+                raise ValueError("external_workspace_change_requires_replan")
+            attempt = {**attempt, "waiting_approval": False}
+        else:
+            attempt = self.prepare(node_id)
         try:
             recorded = self.invoke(attempt, callback)
         except Exception as exc:
@@ -962,14 +997,22 @@ class PlanSession:
             status="success",
             conclusion=conclusion,
             input_refs=refs,
-            file_versions=snapshot(self.workspace),
+            file_versions=self.snapshot_workspace(),
             whole_workspace=True,
         )
         return {"status": "success", "evidence_refs": [ref]}
 
     def tool_result(self, attempt: dict) -> dict:
         operations = self.operations(attempt["attempt_id"])
-        refs = [r for op in operations for r in op.get("evidence_refs", ())]
+        # Only the latest action can pause the attempt. Earlier waits remain
+        # immutable history after the exact call is resumed by the Agent.
+        if operations and operations[-1].get("approval_id"):
+            pending = operations[-1]
+            if pending.get("not_started") and not pending.get("changed_paths"):
+                return {"status": "waiting_approval", "approval_id": pending["approval_id"],
+                        "evidence_refs": []}
+        refs = [r for op in operations if not op.get("approval_id")
+                for r in op.get("evidence_refs", ())]
         if attempt["kind"] == "edit":
             # Preimage reads stay in the operation history; edit outputs refer
             # only to current, receipt-backed patches.
@@ -993,7 +1036,7 @@ class PlanSession:
             "tests_passed",
             attempt_id=attempt["attempt_id"],
             status="success",
-            file_versions=snapshot(self.workspace),
+            file_versions=self.snapshot_workspace(),
             whole_workspace=True,
             receipt=receipt,
             execution_stopped=receipt.get("completed") is True,

@@ -1,0 +1,30 @@
+{
+  "status": "ready",
+  "release_id": "64765fbcba7f3e2b0fb1fff2fb3115d122a92bd41d8f1365cf2fa5096a5bcdbb",
+  "distribution": "FixLoop-Sandbox-s2-v1-64765fbcba7f",
+  "runtime_digest": "4027177d6e3596b8da5e6e8699334cde04573f5ff60c6dfaca955e6555e02a0c",
+  "ready_recheck_reinstalled": false,
+  "offline_import_downloaded": false,
+  "offline_import_installed_packages": false,
+  "health": {
+    "schema_version": 1,
+    "release_id": "64765fbcba7f3e2b0fb1fff2fb3115d122a92bd41d8f1365cf2fa5096a5bcdbb",
+    "runtime_digest": "4027177d6e3596b8da5e6e8699334cde04573f5ff60c6dfaca955e6555e02a0c",
+    "distribution_version": "26.04",
+    "runtime_version": "s2-v1",
+    "python": "Python 3.14.4",
+    "pytest": "pytest 9.1.1",
+    "bwrap": "bubblewrap 0.11.1",
+    "kernel": "6.18.40.1-microsoft-standard-WSL2",
+    "checks": {
+      "unprivileged_namespaces": true,
+      "network_namespace": true,
+      "tmpfs_limit": true,
+      "clean_environment": true,
+      "control_paths_hidden": true,
+      "fuse_device": true
+    }
+  },
+  "image_sha256": "86c4f7dcb2477bc629c3d3fd97ca31b17b676ddfadb0486159c111bb85cf4285",
+  "install_path": "C:\\Users\\haoyu\\AppData\\Local\\FixLoop\\sandbox\\environments\\64765fbcba7f3e2b0fb1fff2fb3115d122a92bd41d8f1365cf2fa5096a5bcdbb\\distro-b397662661d74dc99c9635d4db650176"
+}

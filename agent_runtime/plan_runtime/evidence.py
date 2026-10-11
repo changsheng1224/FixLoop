@@ -11,11 +11,22 @@ from .workspace import snapshot
 
 
 class EvidenceLedger:
-    def __init__(self, store, workspace: str, observation_state: dict, state_root: str = ""):
+    def __init__(
+        self,
+        store,
+        workspace: str,
+        observation_state: dict,
+        state_root: str = "",
+        *,
+        snapshot_provider=None,
+        environment_provider=None,
+    ):
         self.store = store
         self.workspace = workspace
         self.observation_state = observation_state
         self.state_root = state_root
+        self.snapshot_provider = snapshot_provider
+        self.environment_provider = environment_provider
 
     def add(self, kind: str, *, attempt_id: str, **fields) -> str:
         record = {
@@ -75,13 +86,26 @@ class EvidenceLedger:
             if not isinstance(versions, dict):
                 return finish("unknown", "file_versions_missing")
             try:
-                current = snapshot(self.workspace)
+                current = (
+                    self.snapshot_provider()
+                    if self.snapshot_provider is not None
+                    else snapshot(self.workspace)
+                )
             except (OSError, ValueError):
                 return finish("unknown", "workspace_unverifiable")
             if (record.get("whole_workspace") and versions != current) or any(
                 current.get(p) != h for p, h in versions.items()
             ):
                 return finish("stale", "source_changed")
+            if record["kind"] == "tests_passed" and self.environment_provider is not None:
+                expected = record.get("receipt", {}).get("verification_binding")
+                if not expected:
+                    return finish("unknown", "verification_environment_binding_missing")
+                try:
+                    if self.environment_provider() != expected:
+                        return finish("stale", "verification_environment_changed")
+                except (OSError, ValueError):
+                    return finish("unknown", "verification_environment_unverifiable")
         kind = record["kind"]
         if kind == "observation_present":
             result["observation_id"] = record.get("observation_id", "")

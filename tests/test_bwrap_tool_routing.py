@@ -1,10 +1,13 @@
 """P2 routing contracts; no host project process is launched."""
 
+from dataclasses import replace
+
 import pytest
 
 from agent_runtime.linux_sandbox.models import SandboxResult
 from agent_runtime.linux_sandbox.tool_policy import SandboxToolAccess, sandbox_tool_access
 from agent_runtime.tool_context import ToolContext
+from agent_runtime.tool_result import ToolResult
 from agent_runtime.tools import build_tool_registry, tool_quick_test, tool_run_shell
 from src.middleware import build_repair_gateway
 from src.tools.composite import build_repair_canonical_tools
@@ -25,6 +28,16 @@ class RecordingBackend:
 
     def execute(self, request):
         self.requests.append(request)
+        if request.operation == "workspace":
+            from agent_runtime.linux_sandbox.workspace_contract import tool_result_to_wire
+
+            content = "needle" if request.tool_name == "grep" else "sandbox evidence"
+            typed = ToolResult(
+                content,
+                data={"content": content},
+                metadata={"workspace_versions": {}, "source_dependencies": {}},
+            )
+            return replace(self.result, tool_result=tool_result_to_wire(typed))
         return self.result
 
 
@@ -128,7 +141,7 @@ def test_uncertain_blocks_followup_command_and_write_at_executor(tmp_path, monke
     assert second.status == "uncertain"
     assert second.metadata["execution_tier"] == "none"
     assert "rollback_attempted" not in second.metadata
-    assert len(captures) == 1  # Never inspect a workspace with unconfirmed cleanup.
+    assert len(captures) == 0  # Sandbox commands never inspect the host workspace.
     assert second.metadata["workspace_diff_status"] == "pending_cleanup"
     blocked = executor.execute_gated("write_file", {"path": "new.py", "content": "x=1"})
     assert blocked.error_code == "execution_uncertain"
@@ -179,7 +192,7 @@ def test_sandbox_tool_policy_denies_unknown_tools_and_audits_commands():
     assert sandbox_tool_access("unknown_plugin") is SandboxToolAccess.DENIED
     assert sandbox_tool_access("git_diff") is SandboxToolAccess.DENIED
     assert sandbox_tool_access("run_shell") is SandboxToolAccess.SANDBOX_COMMAND
-    assert sandbox_tool_access("write_file") is SandboxToolAccess.TRUSTED_WRITE
+    assert sandbox_tool_access("write_file") is SandboxToolAccess.SANDBOX_WRITE
 
 
 def test_executor_rejects_command_with_unverified_execution_tier(tmp_path):
@@ -203,5 +216,6 @@ def test_executor_rejects_command_with_unverified_execution_tier(tmp_path):
     result = ToolExecutor(agent, approval_policy="auto").execute_gated(
         "run_shell", {"command": "python -c 'print(1)'"}
     )
-    assert result.error_code == "policy_denied"
-    assert backend.requests == []
+    assert result.ok
+    assert result.metadata["execution_tier"] == "linux_sandbox"
+    assert len(backend.requests) == 1

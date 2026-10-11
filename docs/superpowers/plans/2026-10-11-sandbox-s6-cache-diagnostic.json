@@ -1,0 +1,26 @@
+{
+  "source_manifest_unchanged": true,
+  "before_digest": "78d50a4a015e4061e3fa7d682ba17924bda1f16ced6d3591da1e3770f43cdcb2",
+  "removed_test_caches": [
+    {
+      "path": "/opt/fixloop/runtime/agent_runtime/__pycache__/__init__.cpython-314.pyc",
+      "sha256": "ed3830a0751a7a778425ab639db3fdd8424e70dc9f9faf11fb911392d1f7063b"
+    },
+    {
+      "path": "/opt/fixloop/runtime/agent_runtime/__pycache__/config.cpython-314.pyc",
+      "sha256": "34f7adf1bcc45f59c09b53cfac35da0ec14118f695782f04d637c831f8c9c7d0"
+    }
+  ],
+  "after": {
+    "schema_version": 1,
+    "release_id": "4d2775e7ab399edd2f5b206c7559db749fa684e48c4acdf923610cb8673f5b2c",
+    "runtime_digest": "b2a3826a1ea7a1bd101dc13ada742c7b390ab2a3ffa896ed494e1baf8c2c14dd",
+    "distribution_version": "26.04",
+    "runtime_version": "s6-v1",
+    "python": "Python 3.14.4",
+    "pytest": "pytest 9.1.1",
+    "bwrap": "bubblewrap 0.11.1",
+    "kernel": "6.18.40.1-microsoft-standard-WSL2"
+  },
+  "baseline_restored": true
+}

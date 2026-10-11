@@ -105,4 +105,6 @@ def build_repair_tools(context) -> dict:
         "run": lambda args: java_stack_parse(context, args),
     }
 
-    return registry
+    from agent_runtime.linux_sandbox.workspace_routing import bind_workspace_tools
+
+    return bind_workspace_tools(context, registry)

@@ -22,6 +22,7 @@ class StopReason(StrEnum):
     RATE_LIMITED = "rate_limited"
     API_ERROR = "api_error"
     USER_CANCEL = "user_cancel"
+    APPROVAL_REQUIRED = "approval_required"
     STALL = "stall"
     GOAL_DRIFT = "goal_drift"
     CONTEXT_OVERFLOW = "context_overflow"

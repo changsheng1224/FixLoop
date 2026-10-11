@@ -112,7 +112,7 @@ def main() -> int:
         "--execution-backend",
         choices=["legacy", "wsl_bwrap"],
         default="legacy",
-        help="wsl_bwrap remains gated until external control state isolation (P3)",
+        help="使用开箱即用的 WSL2/bwrap 工具沙箱",
     )
     p_repair.add_argument(
         "--fast-retrieve",
@@ -255,7 +255,7 @@ def _repair(args) -> int:
 
     return run_repair_cli(
         args,
-        lambda repo, token: _execute_repair(args, repo, token),
+        lambda repo, token, ready: _execute_repair(args, repo, token, ready),
         on_result=lambda state: _print_repair_result(
             state,
             verbose=args.verbose,
@@ -264,7 +264,7 @@ def _repair(args) -> int:
     )
 
 
-def _execute_repair(args, repo: str, cancel_token):
+def _execute_repair(args, repo: str, cancel_token, workspace_ready=None):
     from src.repair_workspace import RepairInputError
 
     try:
@@ -300,7 +300,9 @@ def _execute_repair(args, repo: str, cancel_token):
     if args.dry_run:
         print("⚠ DRY-RUN MODE", file=sys.stderr)
     if args.verbose:
-        if orch.verifier:
+        if getattr(args, "execution_backend", "legacy") == "wsl_bwrap" and not args.skip_verify:
+            print("[Orchestrator] Verifier 使用任务绑定的 WSL2/bwrap 沙箱", file=sys.stderr)
+        elif orch.verifier:
             print("[Orchestrator] Verifier 已接入 (Docker)", file=sys.stderr)
         elif args.execution_tier == "host" and not args.skip_verify:
             print("[Orchestrator] Verifier 使用本地 pytest（无 sandbox 隔离）", file=sys.stderr)
@@ -314,6 +316,7 @@ def _execute_repair(args, repo: str, cancel_token):
         args.issue,
         cancel_token=cancel_token,
         resume_run_id=getattr(args, "resume_repair", None) or "",
+        workspace_ready=workspace_ready,
     )
 
     return state

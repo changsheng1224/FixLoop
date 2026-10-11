@@ -6,7 +6,6 @@ from dataclasses import replace
 
 from .reducer import refresh
 from .validate import MAX_REPLANS, validate_plan
-from .workspace import snapshot
 
 
 def check_replan(session):
@@ -32,7 +31,7 @@ def check_replan(session):
             if not (
                 latest.get("completed") is True
                 and latest.get("workspace_after") == latest.get("expected_after")
-                and latest.get("workspace_after") == snapshot(session.workspace)
+                and latest.get("workspace_after") == session.snapshot_workspace()
             ):
                 raise ValueError("replan_rollback_unconfirmed")
 
@@ -77,7 +76,7 @@ def replan(session, candidate, *, reason: str, evidence_refs: list[str]):
                 and e["payload"].get("completed") is True
                 and e["payload"].get("plan_version") == old.plan_version
                 and e["payload"].get("workspace_after") == e["payload"].get("expected_after")
-                and e["payload"].get("workspace_after") == snapshot(session.workspace)
+                and e["payload"].get("workspace_after") == session.snapshot_workspace()
                 for e in session.store.events()
             )
             if rolled_back and previous.node_id not in new_nodes:

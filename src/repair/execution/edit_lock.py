@@ -39,8 +39,10 @@ class EditLockState:
         allowed_edit: set[str] | frozenset[str] | list[str] | None = None,
         max_expand: int = 2,
         max_auto_allow: int = 5,
+        sandbox_only: bool = False,
     ) -> None:
         self.repo_root = Path(repo_root)
+        self.sandbox_only = sandbox_only
         self.allowed_edit: set[str] = {
             normalize_repo_rel(p, self.repo_root) for p in (allowed_edit or []) if p
         }
@@ -77,7 +79,8 @@ class EditLockState:
                 continue
             self.allowed_edit.add(rel)
             seeded.append(rel)
-            self.mark_read(rel)
+            if not self.sandbox_only:
+                self.mark_read(rel)
         return seeded
 
     def grounded_paths(self) -> list[str]:
@@ -90,6 +93,8 @@ class EditLockState:
         ]
 
     def mark_read(self, path: str, *, auto_allow_impl: bool = False) -> bool:
+        if self.sandbox_only:
+            return False
         rel = normalize_repo_rel(path, self.repo_root)
         if not rel:
             return False
@@ -99,6 +104,9 @@ class EditLockState:
                 return False
         except OSError:
             return False
+        return self._accept_read(rel, auto_allow_impl=auto_allow_impl)
+
+    def _accept_read(self, rel, *, auto_allow_impl=False):
         self.read_set.add(rel)
         self._read_generation[rel] = self._required_read_generation.get(rel, 0)
         if auto_allow_impl and rel.endswith(".py") and not _is_test_path(rel):
@@ -108,8 +116,36 @@ class EditLockState:
                 self.allowed_edit.add(rel)
         return True
 
+    def _evidence_path(self, path, result):
+        from agent_runtime.linux_sandbox.workspace_contract import relative_path
+
+        try:
+            rel = relative_path(path)
+        except ValueError:
+            return ""
+        meta = result.metadata
+        version = meta.get("workspace_versions", {}).get(rel)
+        if (not result.ok or meta.get("actual_backend") != "linux_sandbox"
+                or meta.get("sandbox_cleanup") != "confirmed"
+                or not meta.get("sandbox_receipt_id")
+                or not isinstance(version, str) or len(version) != 64):
+            return ""
+        return rel
+
+    def mark_read_evidence(self, path, result, *, auto_allow_impl=False):
+        rel = self._evidence_path(path, result)
+        return bool(rel) and self._accept_read(rel, auto_allow_impl=auto_allow_impl)
+
+    def expand_lock_evidence(self, path, result):
+        rel = self._evidence_path(path, result)
+        if not rel:
+            return False, "sandbox_read_evidence_required"
+        return self._expand_checked(rel)
+
     def expand_lock(self, path: str) -> tuple[bool, str]:
         """显式扩锁（默认最多 2 次）；扩后须再 read 才可写。"""
+        if self.sandbox_only:
+            return False, "sandbox_read_evidence_required"
         rel = normalize_repo_rel(path, self.repo_root)
         if not rel:
             return False, "path_escape_or_invalid"
@@ -123,6 +159,13 @@ class EditLockState:
                 return False, f"not_a_file:{rel}"
         except OSError as e:
             return False, f"stat_failed:{e}"
+        return self._expand_checked(rel)
+
+    def _expand_checked(self, rel):
+        if rel in self.allowed_edit:
+            return True, "already_allowed"
+        if self.expand_count >= self.max_expand:
+            return False, f"expand_lock_max:{self.max_expand}"
         self.allowed_edit.add(rel)
         self.expand_count += 1
         self._generation += 1

@@ -1,0 +1,1784 @@
+{
+  "release_id": "dea853c023a65fb6ad0e9095b0795b915a2d40ddc38bc7f5ae8eca60a2dfb790",
+  "distribution": "FixLoop-Sandbox-s3-v1-dea853c023a6",
+  "runtime_digest": "81f954bcbf1eec6c86a9dc9f3616360d0c3068a013be3ff9bae2acbf39143f98",
+  "fixture": "C:\\Users\\haoyu\\Documents\\FixLoop\\.tmp\\s3-live-b564fe23cb334cc3b34d98061dc77f35",
+  "checks": {
+    "worker_host_drives_hidden": true,
+    "worker_host_home_hidden": true,
+    "worker_interop_environment_absent": true,
+    "worker_network_routes_absent": true,
+    "worker_host_network_unreachable": true,
+    "worker_workspace_view_readonly": true,
+    "worker_runtime_readonly": true,
+    "worker_nested_user_namespace_denied": true,
+    "worker_broker_fds_absent": true,
+    "actual_repository_read": true,
+    "repository_read": true,
+    "repository_list_files": true,
+    "repository_list_files_no_secret": true,
+    "repository_grep": true,
+    "repository_grep_no_secret": true,
+    "repository_ast_parse": true,
+    "repository_ast_parse_no_secret": true,
+    "repository_inspect_file": true,
+    "repository_inspect_file_no_secret": true,
+    "repository_find_test": true,
+    "repository_find_test_no_secret": true,
+    "repository_denied_.env": true,
+    "repository_denied_.git": true,
+    "repository_denied_../repository-outside.txt": true,
+    "repository_denied_alias.txt": true,
+    "repository_denied_.aws/credentials": true,
+    "repository_denied_junction/secret.txt": true,
+    "repository_patch_committed": true,
+    "repository_reread": true,
+    "repository_stale_write_preserves_user": true,
+    "repository_conditional_create": true,
+    "repository_apply_patch_committed": true,
+    "repository_durable_commit_receipt": true,
+    "repository_unmigrated_rejected": true,
+    "repository_outside_unchanged": true,
+    "repository_receipts_confirmed": true,
+    "worktree_read": true,
+    "worktree_list_files": true,
+    "worktree_list_files_no_secret": true,
+    "worktree_grep": true,
+    "worktree_grep_no_secret": true,
+    "worktree_ast_parse": true,
+    "worktree_ast_parse_no_secret": true,
+    "worktree_inspect_file": true,
+    "worktree_inspect_file_no_secret": true,
+    "worktree_find_test": true,
+    "worktree_find_test_no_secret": true,
+    "worktree_denied_.env": true,
+    "worktree_denied_.git": true,
+    "worktree_denied_../worktree-outside.txt": true,
+    "worktree_denied_alias.txt": true,
+    "worktree_denied_.aws/credentials": true,
+    "worktree_denied_junction/secret.txt": true,
+    "worktree_patch_committed": true,
+    "worktree_reread": true,
+    "worktree_stale_write_preserves_user": true,
+    "worktree_conditional_create": true,
+    "worktree_apply_patch_committed": true,
+    "worktree_durable_commit_receipt": true,
+    "worktree_unmigrated_rejected": true,
+    "worktree_outside_unchanged": true,
+    "worktree_receipts_confirmed": true,
+    "cancel_worker_entered_fuse": true,
+    "cancel_requested": true,
+    "cancel_bounded": true,
+    "cancel_confirmed": true,
+    "no_controller_or_fuse_leak": true
+  },
+  "calls": [
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "CLAUDE.md"
+      },
+      "status": "success",
+      "error_code": "",
+      "receipt": {
+        "id": "call-56a6fbae432a4500a32ad2b1165326ca",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "retrieval_result": {
+          "query_type": "range_read",
+          "execution": "ok",
+          "completeness": "complete_in_scope",
+          "hits": [
+            {
+              "hit_id": "dfdad5aa64fd4561af749f434ba11413:1",
+              "path": "CLAUDE.md",
+              "range": {
+                "start_line": 1,
+                "start_column": null,
+                "end_line": 105,
+                "end_column": null,
+                "exact": false
+              },
+              "kind": "source_excerpt",
+              "summary": "lines 1-104",
+              "source": "filesystem",
+              "resolution": "syntactic",
+              "content_hash": "0499df39252cff5a4d7c0f8bffe9b59b50c4d93a122d136b3c5c32431539d21c",
+              "excerpt_hash": "44e1a4d62c73d30dd4177d2d33c4d08588cb3ee15c748f2ef9eaa9c0c997813f",
+              "server_id": null,
+              "observed_at": "2026-10-10T17:02:50.628667+00:00"
+            }
+          ],
+          "scanned_scope": {
+            "paths": [
+              "CLAUDE.md"
+            ],
+            "lines_seen": 104
+          },
+          "truncation_reasons": [],
+          "degradation_reason": null,
+          "dependency_versions": {
+            "CLAUDE.md": "0499df39252cff5a4d7c0f8bffe9b59b50c4d93a122d136b3c5c32431539d21c"
+          },
+          "budget_used": {
+            "bytes_read": 5719,
+            "files_scanned": 1,
+            "output_bytes": 6371
+          },
+          "duration_ms": 27,
+          "query_id": "dfdad5aa64fd4561af749f434ba11413",
+          "observed_at": "2026-10-10T17:02:50.601573+00:00",
+          "schema_version": "1"
+        },
+        "source_dependencies": {
+          "CLAUDE.md": "0499df39252cff5a4d7c0f8bffe9b59b50c4d93a122d136b3c5c32431539d21c"
+        },
+        "workspace_versions": {
+          "CLAUDE.md": "0499df39252cff5a4d7c0f8bffe9b59b50c4d93a122d136b3c5c32431539d21c"
+        },
+        "read_version": {
+          "path": "CLAUDE.md",
+          "version": [
+            72,
+            2,
+            5719,
+            1790824309439907800,
+            1782980496469654900
+          ],
+          "authority": "sandbox_workspace"
+        },
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-56a6fbae432a4500a32ad2b1165326ca",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1322
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "src/add.py"
+      },
+      "status": "success",
+      "error_code": "",
+      "receipt": {
+        "id": "call-50078f54fbe24ae0a5284092c4221dae",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "retrieval_result": {
+          "query_type": "range_read",
+          "execution": "ok",
+          "completeness": "complete_in_scope",
+          "hits": [
+            {
+              "hit_id": "aaabb4d2fea6464c89c25ffab75fa69a:1",
+              "path": "src/add.py",
+              "range": {
+                "start_line": 1,
+                "start_column": null,
+                "end_line": 3,
+                "end_column": null,
+                "exact": false
+              },
+              "kind": "source_excerpt",
+              "summary": "lines 1-2",
+              "source": "filesystem",
+              "resolution": "syntactic",
+              "content_hash": "680df8de3e5c095d92660cec6dbc7bc25af0ccd1151d6666441cca6f1d19a725",
+              "excerpt_hash": "ba1a531f581d2e6094e978ed6f7aca7a8d92eeb62c6e7ad73ee692f7f18bc772",
+              "server_id": null,
+              "observed_at": "2026-10-10T17:02:52.221502+00:00"
+            }
+          ],
+          "scanned_scope": {
+            "paths": [
+              "src/add.py"
+            ],
+            "lines_seen": 2
+          },
+          "truncation_reasons": [],
+          "degradation_reason": null,
+          "dependency_versions": {
+            "src/add.py": "680df8de3e5c095d92660cec6dbc7bc25af0ccd1151d6666441cca6f1d19a725"
+          },
+          "budget_used": {
+            "bytes_read": 34,
+            "files_scanned": 1,
+            "output_bytes": 71
+          },
+          "duration_ms": 43,
+          "query_id": "aaabb4d2fea6464c89c25ffab75fa69a",
+          "observed_at": "2026-10-10T17:02:52.178110+00:00",
+          "schema_version": "1"
+        },
+        "source_dependencies": {
+          "src/add.py": "680df8de3e5c095d92660cec6dbc7bc25af0ccd1151d6666441cca6f1d19a725"
+        },
+        "workspace_versions": {
+          "src/add.py": "680df8de3e5c095d92660cec6dbc7bc25af0ccd1151d6666441cca6f1d19a725"
+        },
+        "read_version": {
+          "path": "src/add.py",
+          "version": [
+            72,
+            3,
+            34,
+            1791651768258925300,
+            1791651768258925300
+          ],
+          "authority": "sandbox_workspace"
+        },
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-50078f54fbe24ae0a5284092c4221dae",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1339
+    },
+    {
+      "tool": "list_files",
+      "arguments": {
+        "path": "."
+      },
+      "status": "success",
+      "error_code": "",
+      "receipt": {
+        "id": "call-b253a4b100404dca80c9211e30e96348",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "retrieval_result": {
+          "query_type": "file_listing",
+          "execution": "ok",
+          "completeness": "complete_in_scope",
+          "hits": [
+            {
+              "hit_id": "13a0eae66d924d8ba49e0f549abeb7c0:1",
+              "path": "src",
+              "range": null,
+              "kind": "directory",
+              "summary": "src",
+              "source": "filesystem",
+              "resolution": "syntactic",
+              "content_hash": null,
+              "excerpt_hash": null,
+              "server_id": null,
+              "observed_at": "2026-10-10T17:02:53.554957+00:00"
+            },
+            {
+              "hit_id": "13a0eae66d924d8ba49e0f549abeb7c0:2",
+              "path": "tests",
+              "range": null,
+              "kind": "directory",
+              "summary": "tests",
+              "source": "filesystem",
+              "resolution": "syntactic",
+              "content_hash": null,
+              "excerpt_hash": null,
+              "server_id": null,
+              "observed_at": "2026-10-10T17:02:53.566777+00:00"
+            },
+            {
+              "hit_id": "13a0eae66d924d8ba49e0f549abeb7c0:3",
+              "path": "README.md",
+              "range": null,
+              "kind": "file",
+              "summary": "README.md",
+              "source": "filesystem",
+              "resolution": "syntactic",
+              "content_hash": null,
+              "excerpt_hash": null,
+              "server_id": null,
+              "observed_at": "2026-10-10T17:02:53.578099+00:00"
+            },
+            {
+              "hit_id": "13a0eae66d924d8ba49e0f549abeb7c0:4",
+              "path": "sitecustomize.py",
+              "range": null,
+              "kind": "file",
+              "summary": "sitecustomize.py",
+              "source": "filesystem",
+              "resolution": "syntactic",
+              "content_hash": null,
+              "excerpt_hash": null,
+              "server_id": null,
+              "observed_at": "2026-10-10T17:02:53.588158+00:00"
+            }
+          ],
+          "scanned_scope": {
+            "root": ".",
+            "candidates_checked": 4
+          },
+          "truncation_reasons": [],
+          "degradation_reason": null,
+          "dependency_versions": {},
+          "budget_used": {
+            "bytes_read": 0,
+            "files_scanned": 4,
+            "output_bytes": 52
+          },
+          "duration_ms": 96,
+          "query_id": "13a0eae66d924d8ba49e0f549abeb7c0",
+          "observed_at": "2026-10-10T17:02:53.492462+00:00",
+          "schema_version": "1"
+        },
+        "source_dependencies": {},
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-b253a4b100404dca80c9211e30e96348",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1318
+    },
+    {
+      "tool": "grep",
+      "arguments": {
+        "path": ".",
+        "pattern": "return"
+      },
+      "status": "success",
+      "error_code": "",
+      "receipt": {
+        "id": "call-e372ca311a334c8ebef0a12f223d4951",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "retrieval_result": {
+          "query_type": "text_search",
+          "execution": "ok",
+          "completeness": "complete_in_scope",
+          "hits": [
+            {
+              "hit_id": "3fa20440fbf643bf98b71376c2009449:1",
+              "path": "src/add.py",
+              "range": {
+                "start_line": 2,
+                "start_column": null,
+                "end_line": 3,
+                "end_column": null,
+                "exact": false
+              },
+              "kind": "text_match",
+              "summary": "    return a + b",
+              "source": "text",
+              "resolution": "syntactic",
+              "content_hash": "680df8de3e5c095d92660cec6dbc7bc25af0ccd1151d6666441cca6f1d19a725",
+              "excerpt_hash": "363a0d01b1d8e0cc70213b44a5e86def7dda6dbc602b7ca78da06dc4aef2e1c9",
+              "server_id": null,
+              "observed_at": "2026-10-10T17:02:54.966056+00:00"
+            }
+          ],
+          "scanned_scope": {
+            "root": ".",
+            "files_scanned": 4,
+            "paths": [
+              "README.md",
+              "sitecustomize.py",
+              "src/add.py",
+              "tests/test_add.py"
+            ]
+          },
+          "truncation_reasons": [],
+          "degradation_reason": "rg_unavailable",
+          "dependency_versions": {
+            "README.md": "8cbd4f66e4f0b3d81124c5462cae29b4bd1449d88476f78bbc85205278acc374",
+            "sitecustomize.py": "fd532bd6569f181b51ae04010c5cebbefc77f1f4e4e9cf21f16683769573da8a",
+            "src/add.py": "680df8de3e5c095d92660cec6dbc7bc25af0ccd1151d6666441cca6f1d19a725",
+            "tests/test_add.py": "d8161674c6792047b80b747d1b6dda3b2b194b2e2c19e67090b47940222d18e2"
+          },
+          "budget_used": {
+            "bytes_read": 140,
+            "files_scanned": 4,
+            "output_bytes": 26
+          },
+          "duration_ms": 244,
+          "query_id": "3fa20440fbf643bf98b71376c2009449",
+          "observed_at": "2026-10-10T17:02:54.798180+00:00",
+          "schema_version": "1"
+        },
+        "source_dependencies": {
+          "README.md": "8cbd4f66e4f0b3d81124c5462cae29b4bd1449d88476f78bbc85205278acc374",
+          "sitecustomize.py": "fd532bd6569f181b51ae04010c5cebbefc77f1f4e4e9cf21f16683769573da8a",
+          "src/add.py": "680df8de3e5c095d92660cec6dbc7bc25af0ccd1151d6666441cca6f1d19a725",
+          "tests/test_add.py": "d8161674c6792047b80b747d1b6dda3b2b194b2e2c19e67090b47940222d18e2"
+        },
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-e372ca311a334c8ebef0a12f223d4951",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1455
+    },
+    {
+      "tool": "ast_parse",
+      "arguments": {
+        "path": "src/add.py"
+      },
+      "status": "success",
+      "error_code": "",
+      "receipt": {
+        "id": "call-1e207bb539374e17b8399c1f3d68d8ca",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "workspace_versions": {
+          "src/add.py": "680df8de3e5c095d92660cec6dbc7bc25af0ccd1151d6666441cca6f1d19a725"
+        },
+        "source_dependencies": {
+          "src/add.py": "680df8de3e5c095d92660cec6dbc7bc25af0ccd1151d6666441cca6f1d19a725"
+        },
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-1e207bb539374e17b8399c1f3d68d8ca",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1248
+    },
+    {
+      "tool": "inspect_file",
+      "arguments": {
+        "path": "src/add.py"
+      },
+      "status": "success",
+      "error_code": "",
+      "receipt": {
+        "id": "call-7e89983ff2474785a1fe9bb3cd7c3e5f",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "retrieval_result": {
+          "query_type": "range_read",
+          "execution": "ok",
+          "completeness": "complete_in_scope",
+          "hits": [
+            {
+              "hit_id": "2ed488e8fbd349dc9198f5c863c5a2cb:1",
+              "path": "src/add.py",
+              "range": {
+                "start_line": 1,
+                "start_column": null,
+                "end_line": 3,
+                "end_column": null,
+                "exact": false
+              },
+              "kind": "source_excerpt",
+              "summary": "lines 1-2",
+              "source": "filesystem",
+              "resolution": "syntactic",
+              "content_hash": "680df8de3e5c095d92660cec6dbc7bc25af0ccd1151d6666441cca6f1d19a725",
+              "excerpt_hash": "ba1a531f581d2e6094e978ed6f7aca7a8d92eeb62c6e7ad73ee692f7f18bc772",
+              "server_id": null,
+              "observed_at": "2026-10-10T17:02:57.581890+00:00"
+            }
+          ],
+          "scanned_scope": {
+            "paths": [
+              "src/add.py"
+            ],
+            "lines_seen": 2
+          },
+          "truncation_reasons": [],
+          "degradation_reason": null,
+          "dependency_versions": {
+            "src/add.py": "680df8de3e5c095d92660cec6dbc7bc25af0ccd1151d6666441cca6f1d19a725"
+          },
+          "budget_used": {
+            "bytes_read": 34,
+            "files_scanned": 1,
+            "output_bytes": 71
+          },
+          "duration_ms": 47,
+          "query_id": "2ed488e8fbd349dc9198f5c863c5a2cb",
+          "observed_at": "2026-10-10T17:02:57.535041+00:00",
+          "schema_version": "1"
+        },
+        "source_dependencies": {
+          "src/add.py": "680df8de3e5c095d92660cec6dbc7bc25af0ccd1151d6666441cca6f1d19a725"
+        },
+        "workspace_versions": {
+          "src/add.py": "680df8de3e5c095d92660cec6dbc7bc25af0ccd1151d6666441cca6f1d19a725"
+        },
+        "read_version": {
+          "path": "src/add.py",
+          "version": [
+            72,
+            3,
+            34,
+            1791651768258925300,
+            1791651768258925300
+          ],
+          "authority": "sandbox_workspace"
+        },
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-7e89983ff2474785a1fe9bb3cd7c3e5f",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1377
+    },
+    {
+      "tool": "find_test",
+      "arguments": {
+        "file_path": "src/add.py",
+        "function_name": "add"
+      },
+      "status": "success",
+      "error_code": "",
+      "receipt": {
+        "id": "call-a2681db520cc4556a62aa8f5dd19b5c4",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "source_dependencies": {
+          "tests/test_add.py": "d8161674c6792047b80b747d1b6dda3b2b194b2e2c19e67090b47940222d18e2"
+        },
+        "search_complete": true,
+        "files_scanned": 1,
+        "bytes_read": 34,
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-a2681db520cc4556a62aa8f5dd19b5c4",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1376
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": ".env"
+      },
+      "status": "error",
+      "error_code": "policy_denied",
+      "receipt": {
+        "id": "call-37a5cdea9fe64cc98d2bbc0057ed961b",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-37a5cdea9fe64cc98d2bbc0057ed961b",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1209
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": ".git"
+      },
+      "status": "error",
+      "error_code": "policy_denied",
+      "receipt": {
+        "id": "call-7cbbd3d1f21842c1bdc9095222de450c",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-7cbbd3d1f21842c1bdc9095222de450c",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1189
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "../repository-outside.txt"
+      },
+      "status": "error",
+      "error_code": "invalid_arguments",
+      "receipt": {
+        "id": "call-6af00e99acc948368c6fcb6a5106484c",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-6af00e99acc948368c6fcb6a5106484c",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1159
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "alias.txt"
+      },
+      "status": "error",
+      "error_code": "invalid_arguments",
+      "receipt": {
+        "id": "call-f2fbcd8d8c2b406d9e368e40adfdfa0a",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-f2fbcd8d8c2b406d9e368e40adfdfa0a",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1216
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": ".aws/credentials"
+      },
+      "status": "error",
+      "error_code": "policy_denied",
+      "receipt": {
+        "id": "call-6ea3c6acfd724f6899bbcd2bd11efe91",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-6ea3c6acfd724f6899bbcd2bd11efe91",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1203
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "junction/secret.txt"
+      },
+      "status": "error",
+      "error_code": "invalid_arguments",
+      "receipt": {
+        "id": "call-27d7868bfa024bb7a03d5871710e4cdb",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-27d7868bfa024bb7a03d5871710e4cdb",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1212
+    },
+    {
+      "tool": "patch_file",
+      "arguments": {
+        "path": "src/add.py",
+        "old_text": "a + b",
+        "new_text": "a - b"
+      },
+      "status": "success",
+      "error_code": "",
+      "receipt": {
+        "id": "call-7f85612eb6f14ac9a266c4e94522a83d",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [
+        "src/add.py"
+      ],
+      "metadata": {
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-7f85612eb6f14ac9a266c4e94522a83d",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "committed",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1299
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "src/add.py"
+      },
+      "status": "success",
+      "error_code": "",
+      "receipt": {
+        "id": "call-e5fa49aefe2d4791ada74772306df5e4",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "retrieval_result": {
+          "query_type": "range_read",
+          "execution": "ok",
+          "completeness": "complete_in_scope",
+          "hits": [
+            {
+              "hit_id": "cfaddfa3034d4d7fac433c700e8892c1:1",
+              "path": "src/add.py",
+              "range": {
+                "start_line": 1,
+                "start_column": null,
+                "end_line": 3,
+                "end_column": null,
+                "exact": false
+              },
+              "kind": "source_excerpt",
+              "summary": "lines 1-2",
+              "source": "filesystem",
+              "resolution": "syntactic",
+              "content_hash": "828092436119a2bb1f39a167f274196a96fd68a3f31b75e3a54feb776c4a266d",
+              "excerpt_hash": "e1a894022d1a082987b87adecb623438c9e386d86b2b621cff4a5fe7fdf7edc8",
+              "server_id": null,
+              "observed_at": "2026-10-10T17:03:08.829401+00:00"
+            }
+          ],
+          "scanned_scope": {
+            "paths": [
+              "src/add.py"
+            ],
+            "lines_seen": 2
+          },
+          "truncation_reasons": [],
+          "degradation_reason": null,
+          "dependency_versions": {
+            "src/add.py": "828092436119a2bb1f39a167f274196a96fd68a3f31b75e3a54feb776c4a266d"
+          },
+          "budget_used": {
+            "bytes_read": 34,
+            "files_scanned": 1,
+            "output_bytes": 71
+          },
+          "duration_ms": 49,
+          "query_id": "cfaddfa3034d4d7fac433c700e8892c1",
+          "observed_at": "2026-10-10T17:03:08.780551+00:00",
+          "schema_version": "1"
+        },
+        "source_dependencies": {
+          "src/add.py": "828092436119a2bb1f39a167f274196a96fd68a3f31b75e3a54feb776c4a266d"
+        },
+        "workspace_versions": {
+          "src/add.py": "828092436119a2bb1f39a167f274196a96fd68a3f31b75e3a54feb776c4a266d"
+        },
+        "read_version": {
+          "path": "src/add.py",
+          "version": [
+            72,
+            3,
+            34,
+            1791651787576886000,
+            1791651768258925300
+          ],
+          "authority": "sandbox_workspace"
+        },
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-e5fa49aefe2d4791ada74772306df5e4",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1328
+    },
+    {
+      "tool": "write_file",
+      "arguments": {
+        "path": "src/add.py",
+        "content": "pass\n"
+      },
+      "status": "error",
+      "error_code": "stale_preimage",
+      "receipt": {
+        "id": "call-bc08efed4b4446e595d89820a51dd933",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-bc08efed4b4446e595d89820a51dd933",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1274
+    },
+    {
+      "tool": "write_file",
+      "arguments": {
+        "path": "new.txt",
+        "content": "new"
+      },
+      "status": "success",
+      "error_code": "",
+      "receipt": {
+        "id": "call-050245e3bd51441ea41e2db4b51a5398",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [
+        "new.txt"
+      ],
+      "metadata": {
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-050245e3bd51441ea41e2db4b51a5398",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "committed",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1263
+    },
+    {
+      "tool": "apply_patch",
+      "arguments": {
+        "patch": "*** Begin Patch\n*** Add File: added.txt\n+added\n*** End Patch"
+      },
+      "status": "success",
+      "error_code": "",
+      "receipt": {
+        "id": "call-17197bf100244194aec6aca4e5c3c458",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [
+        "added.txt"
+      ],
+      "metadata": {
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-17197bf100244194aec6aca4e5c3c458",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "committed",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1234
+    },
+    {
+      "tool": "run_shell",
+      "arguments": {
+        "command": "echo should-not-run"
+      },
+      "status": "error",
+      "error_code": "policy_denied",
+      "receipt": {},
+      "changed_files": [],
+      "metadata": {},
+      "wall_ms": 1
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "src/add.py"
+      },
+      "status": "success",
+      "error_code": "",
+      "receipt": {
+        "id": "call-49d9a778cf5b4308bf9d4b94db319fdc",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "retrieval_result": {
+          "query_type": "range_read",
+          "execution": "ok",
+          "completeness": "complete_in_scope",
+          "hits": [
+            {
+              "hit_id": "43bcbbf29a9f4b1fb1c55b64203a85ca:1",
+              "path": "src/add.py",
+              "range": {
+                "start_line": 1,
+                "start_column": null,
+                "end_line": 3,
+                "end_column": null,
+                "exact": false
+              },
+              "kind": "source_excerpt",
+              "summary": "lines 1-2",
+              "source": "filesystem",
+              "resolution": "syntactic",
+              "content_hash": "680df8de3e5c095d92660cec6dbc7bc25af0ccd1151d6666441cca6f1d19a725",
+              "excerpt_hash": "ba1a531f581d2e6094e978ed6f7aca7a8d92eeb62c6e7ad73ee692f7f18bc772",
+              "server_id": null,
+              "observed_at": "2026-10-10T17:03:14.262468+00:00"
+            }
+          ],
+          "scanned_scope": {
+            "paths": [
+              "src/add.py"
+            ],
+            "lines_seen": 2
+          },
+          "truncation_reasons": [],
+          "degradation_reason": null,
+          "dependency_versions": {
+            "src/add.py": "680df8de3e5c095d92660cec6dbc7bc25af0ccd1151d6666441cca6f1d19a725"
+          },
+          "budget_used": {
+            "bytes_read": 34,
+            "files_scanned": 1,
+            "output_bytes": 71
+          },
+          "duration_ms": 50,
+          "query_id": "43bcbbf29a9f4b1fb1c55b64203a85ca",
+          "observed_at": "2026-10-10T17:03:14.213035+00:00",
+          "schema_version": "1"
+        },
+        "source_dependencies": {
+          "src/add.py": "680df8de3e5c095d92660cec6dbc7bc25af0ccd1151d6666441cca6f1d19a725"
+        },
+        "workspace_versions": {
+          "src/add.py": "680df8de3e5c095d92660cec6dbc7bc25af0ccd1151d6666441cca6f1d19a725"
+        },
+        "read_version": {
+          "path": "src/add.py",
+          "version": [
+            72,
+            3,
+            34,
+            1791651768556267100,
+            1791651768556267100
+          ],
+          "authority": "sandbox_workspace"
+        },
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-49d9a778cf5b4308bf9d4b94db319fdc",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1360
+    },
+    {
+      "tool": "list_files",
+      "arguments": {
+        "path": "."
+      },
+      "status": "success",
+      "error_code": "",
+      "receipt": {
+        "id": "call-385f1a95eea44d3c9975bc0651c6ff49",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "retrieval_result": {
+          "query_type": "file_listing",
+          "execution": "ok",
+          "completeness": "complete_in_scope",
+          "hits": [
+            {
+              "hit_id": "b414df4af5e84ac38b49a85320988daf:1",
+              "path": "src",
+              "range": null,
+              "kind": "directory",
+              "summary": "src",
+              "source": "filesystem",
+              "resolution": "syntactic",
+              "content_hash": null,
+              "excerpt_hash": null,
+              "server_id": null,
+              "observed_at": "2026-10-10T17:03:15.618862+00:00"
+            },
+            {
+              "hit_id": "b414df4af5e84ac38b49a85320988daf:2",
+              "path": "tests",
+              "range": null,
+              "kind": "directory",
+              "summary": "tests",
+              "source": "filesystem",
+              "resolution": "syntactic",
+              "content_hash": null,
+              "excerpt_hash": null,
+              "server_id": null,
+              "observed_at": "2026-10-10T17:03:15.631910+00:00"
+            },
+            {
+              "hit_id": "b414df4af5e84ac38b49a85320988daf:3",
+              "path": "README.md",
+              "range": null,
+              "kind": "file",
+              "summary": "README.md",
+              "source": "filesystem",
+              "resolution": "syntactic",
+              "content_hash": null,
+              "excerpt_hash": null,
+              "server_id": null,
+              "observed_at": "2026-10-10T17:03:15.643983+00:00"
+            },
+            {
+              "hit_id": "b414df4af5e84ac38b49a85320988daf:4",
+              "path": "sitecustomize.py",
+              "range": null,
+              "kind": "file",
+              "summary": "sitecustomize.py",
+              "source": "filesystem",
+              "resolution": "syntactic",
+              "content_hash": null,
+              "excerpt_hash": null,
+              "server_id": null,
+              "observed_at": "2026-10-10T17:03:15.656795+00:00"
+            }
+          ],
+          "scanned_scope": {
+            "root": ".",
+            "candidates_checked": 4
+          },
+          "truncation_reasons": [],
+          "degradation_reason": null,
+          "dependency_versions": {},
+          "budget_used": {
+            "bytes_read": 0,
+            "files_scanned": 4,
+            "output_bytes": 52
+          },
+          "duration_ms": 107,
+          "query_id": "b414df4af5e84ac38b49a85320988daf",
+          "observed_at": "2026-10-10T17:03:15.550177+00:00",
+          "schema_version": "1"
+        },
+        "source_dependencies": {},
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-385f1a95eea44d3c9975bc0651c6ff49",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1341
+    },
+    {
+      "tool": "grep",
+      "arguments": {
+        "path": ".",
+        "pattern": "return"
+      },
+      "status": "success",
+      "error_code": "",
+      "receipt": {
+        "id": "call-2abeb489a8b64314a3b5a5b85d0ae1dc",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "retrieval_result": {
+          "query_type": "text_search",
+          "execution": "ok",
+          "completeness": "complete_in_scope",
+          "hits": [
+            {
+              "hit_id": "94e07ee31ae949deaef8800fc599390d:1",
+              "path": "src/add.py",
+              "range": {
+                "start_line": 2,
+                "start_column": null,
+                "end_line": 3,
+                "end_column": null,
+                "exact": false
+              },
+              "kind": "text_match",
+              "summary": "    return a + b",
+              "source": "text",
+              "resolution": "syntactic",
+              "content_hash": "680df8de3e5c095d92660cec6dbc7bc25af0ccd1151d6666441cca6f1d19a725",
+              "excerpt_hash": "363a0d01b1d8e0cc70213b44a5e86def7dda6dbc602b7ca78da06dc4aef2e1c9",
+              "server_id": null,
+              "observed_at": "2026-10-10T17:03:17.071121+00:00"
+            }
+          ],
+          "scanned_scope": {
+            "root": ".",
+            "files_scanned": 4,
+            "paths": [
+              "README.md",
+              "sitecustomize.py",
+              "src/add.py",
+              "tests/test_add.py"
+            ]
+          },
+          "truncation_reasons": [],
+          "degradation_reason": "rg_unavailable",
+          "dependency_versions": {
+            "README.md": "8cbd4f66e4f0b3d81124c5462cae29b4bd1449d88476f78bbc85205278acc374",
+            "sitecustomize.py": "fd532bd6569f181b51ae04010c5cebbefc77f1f4e4e9cf21f16683769573da8a",
+            "src/add.py": "680df8de3e5c095d92660cec6dbc7bc25af0ccd1151d6666441cca6f1d19a725",
+            "tests/test_add.py": "d8161674c6792047b80b747d1b6dda3b2b194b2e2c19e67090b47940222d18e2"
+          },
+          "budget_used": {
+            "bytes_read": 140,
+            "files_scanned": 4,
+            "output_bytes": 26
+          },
+          "duration_ms": 253,
+          "query_id": "94e07ee31ae949deaef8800fc599390d",
+          "observed_at": "2026-10-10T17:03:16.895943+00:00",
+          "schema_version": "1"
+        },
+        "source_dependencies": {
+          "README.md": "8cbd4f66e4f0b3d81124c5462cae29b4bd1449d88476f78bbc85205278acc374",
+          "sitecustomize.py": "fd532bd6569f181b51ae04010c5cebbefc77f1f4e4e9cf21f16683769573da8a",
+          "src/add.py": "680df8de3e5c095d92660cec6dbc7bc25af0ccd1151d6666441cca6f1d19a725",
+          "tests/test_add.py": "d8161674c6792047b80b747d1b6dda3b2b194b2e2c19e67090b47940222d18e2"
+        },
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-2abeb489a8b64314a3b5a5b85d0ae1dc",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1490
+    },
+    {
+      "tool": "ast_parse",
+      "arguments": {
+        "path": "src/add.py"
+      },
+      "status": "success",
+      "error_code": "",
+      "receipt": {
+        "id": "call-72d7c0b8c29b41208eadb6ed8575281a",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "workspace_versions": {
+          "src/add.py": "680df8de3e5c095d92660cec6dbc7bc25af0ccd1151d6666441cca6f1d19a725"
+        },
+        "source_dependencies": {
+          "src/add.py": "680df8de3e5c095d92660cec6dbc7bc25af0ccd1151d6666441cca6f1d19a725"
+        },
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-72d7c0b8c29b41208eadb6ed8575281a",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1285
+    },
+    {
+      "tool": "inspect_file",
+      "arguments": {
+        "path": "src/add.py"
+      },
+      "status": "success",
+      "error_code": "",
+      "receipt": {
+        "id": "call-fe08bc45b2244a9a9322b9507d60cd0c",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "retrieval_result": {
+          "query_type": "range_read",
+          "execution": "ok",
+          "completeness": "complete_in_scope",
+          "hits": [
+            {
+              "hit_id": "85c10b575ec34f589df9b9448a85d264:1",
+              "path": "src/add.py",
+              "range": {
+                "start_line": 1,
+                "start_column": null,
+                "end_line": 3,
+                "end_column": null,
+                "exact": false
+              },
+              "kind": "source_excerpt",
+              "summary": "lines 1-2",
+              "source": "filesystem",
+              "resolution": "syntactic",
+              "content_hash": "680df8de3e5c095d92660cec6dbc7bc25af0ccd1151d6666441cca6f1d19a725",
+              "excerpt_hash": "ba1a531f581d2e6094e978ed6f7aca7a8d92eeb62c6e7ad73ee692f7f18bc772",
+              "server_id": null,
+              "observed_at": "2026-10-10T17:03:19.776536+00:00"
+            }
+          ],
+          "scanned_scope": {
+            "paths": [
+              "src/add.py"
+            ],
+            "lines_seen": 2
+          },
+          "truncation_reasons": [],
+          "degradation_reason": null,
+          "dependency_versions": {
+            "src/add.py": "680df8de3e5c095d92660cec6dbc7bc25af0ccd1151d6666441cca6f1d19a725"
+          },
+          "budget_used": {
+            "bytes_read": 34,
+            "files_scanned": 1,
+            "output_bytes": 71
+          },
+          "duration_ms": 50,
+          "query_id": "85c10b575ec34f589df9b9448a85d264",
+          "observed_at": "2026-10-10T17:03:19.726221+00:00",
+          "schema_version": "1"
+        },
+        "source_dependencies": {
+          "src/add.py": "680df8de3e5c095d92660cec6dbc7bc25af0ccd1151d6666441cca6f1d19a725"
+        },
+        "workspace_versions": {
+          "src/add.py": "680df8de3e5c095d92660cec6dbc7bc25af0ccd1151d6666441cca6f1d19a725"
+        },
+        "read_version": {
+          "path": "src/add.py",
+          "version": [
+            72,
+            3,
+            34,
+            1791651768556267100,
+            1791651768556267100
+          ],
+          "authority": "sandbox_workspace"
+        },
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-fe08bc45b2244a9a9322b9507d60cd0c",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1432
+    },
+    {
+      "tool": "find_test",
+      "arguments": {
+        "file_path": "src/add.py",
+        "function_name": "add"
+      },
+      "status": "success",
+      "error_code": "",
+      "receipt": {
+        "id": "call-8a47881f666841349d41ec52d6ae52b2",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "source_dependencies": {
+          "tests/test_add.py": "d8161674c6792047b80b747d1b6dda3b2b194b2e2c19e67090b47940222d18e2"
+        },
+        "search_complete": true,
+        "files_scanned": 1,
+        "bytes_read": 34,
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-8a47881f666841349d41ec52d6ae52b2",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1393
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": ".env"
+      },
+      "status": "error",
+      "error_code": "policy_denied",
+      "receipt": {
+        "id": "call-aeea4c2af3b2400dae418d6afc65f549",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-aeea4c2af3b2400dae418d6afc65f549",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1233
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": ".git"
+      },
+      "status": "error",
+      "error_code": "policy_denied",
+      "receipt": {
+        "id": "call-90af5a8ea71f48d38ec76eaca5e54886",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-90af5a8ea71f48d38ec76eaca5e54886",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1215
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "../worktree-outside.txt"
+      },
+      "status": "error",
+      "error_code": "invalid_arguments",
+      "receipt": {
+        "id": "call-e07cc81ee6dc477a82ae9de993e821fb",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-e07cc81ee6dc477a82ae9de993e821fb",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1241
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "alias.txt"
+      },
+      "status": "error",
+      "error_code": "invalid_arguments",
+      "receipt": {
+        "id": "call-7f975a542b2342a6af38626da5071e4b",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-7f975a542b2342a6af38626da5071e4b",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1247
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": ".aws/credentials"
+      },
+      "status": "error",
+      "error_code": "policy_denied",
+      "receipt": {
+        "id": "call-ada807dedbf34e43b1dde018e0d8b98d",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-ada807dedbf34e43b1dde018e0d8b98d",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1213
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "junction/secret.txt"
+      },
+      "status": "error",
+      "error_code": "invalid_arguments",
+      "receipt": {
+        "id": "call-83885a21c1d1471da0dd5bf9113368fb",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-83885a21c1d1471da0dd5bf9113368fb",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1224
+    },
+    {
+      "tool": "patch_file",
+      "arguments": {
+        "path": "src/add.py",
+        "old_text": "a + b",
+        "new_text": "a - b"
+      },
+      "status": "success",
+      "error_code": "",
+      "receipt": {
+        "id": "call-59002d8c644f446a9772045ec2c6a375",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [
+        "src/add.py"
+      ],
+      "metadata": {
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-59002d8c644f446a9772045ec2c6a375",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "committed",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1340
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "src/add.py"
+      },
+      "status": "success",
+      "error_code": "",
+      "receipt": {
+        "id": "call-c7b7099384ab4863b082de639cf528d0",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "retrieval_result": {
+          "query_type": "range_read",
+          "execution": "ok",
+          "completeness": "complete_in_scope",
+          "hits": [
+            {
+              "hit_id": "a3e5578c7ebc482185cd77d132257ab0:1",
+              "path": "src/add.py",
+              "range": {
+                "start_line": 1,
+                "start_column": null,
+                "end_line": 3,
+                "end_column": null,
+                "exact": false
+              },
+              "kind": "source_excerpt",
+              "summary": "lines 1-2",
+              "source": "filesystem",
+              "resolution": "syntactic",
+              "content_hash": "828092436119a2bb1f39a167f274196a96fd68a3f31b75e3a54feb776c4a266d",
+              "excerpt_hash": "e1a894022d1a082987b87adecb623438c9e386d86b2b621cff4a5fe7fdf7edc8",
+              "server_id": null,
+              "observed_at": "2026-10-10T17:03:31.288889+00:00"
+            }
+          ],
+          "scanned_scope": {
+            "paths": [
+              "src/add.py"
+            ],
+            "lines_seen": 2
+          },
+          "truncation_reasons": [],
+          "degradation_reason": null,
+          "dependency_versions": {
+            "src/add.py": "828092436119a2bb1f39a167f274196a96fd68a3f31b75e3a54feb776c4a266d"
+          },
+          "budget_used": {
+            "bytes_read": 34,
+            "files_scanned": 1,
+            "output_bytes": 71
+          },
+          "duration_ms": 44,
+          "query_id": "a3e5578c7ebc482185cd77d132257ab0",
+          "observed_at": "2026-10-10T17:03:31.244770+00:00",
+          "schema_version": "1"
+        },
+        "source_dependencies": {
+          "src/add.py": "828092436119a2bb1f39a167f274196a96fd68a3f31b75e3a54feb776c4a266d"
+        },
+        "workspace_versions": {
+          "src/add.py": "828092436119a2bb1f39a167f274196a96fd68a3f31b75e3a54feb776c4a266d"
+        },
+        "read_version": {
+          "path": "src/add.py",
+          "version": [
+            72,
+            3,
+            34,
+            1791651810022212300,
+            1791651768556267100
+          ],
+          "authority": "sandbox_workspace"
+        },
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-c7b7099384ab4863b082de639cf528d0",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1342
+    },
+    {
+      "tool": "write_file",
+      "arguments": {
+        "path": "src/add.py",
+        "content": "pass\n"
+      },
+      "status": "error",
+      "error_code": "stale_preimage",
+      "receipt": {
+        "id": "call-b66061e094a748b5a88624e28ee6ed92",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-b66061e094a748b5a88624e28ee6ed92",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1306
+    },
+    {
+      "tool": "write_file",
+      "arguments": {
+        "path": "new.txt",
+        "content": "new"
+      },
+      "status": "success",
+      "error_code": "",
+      "receipt": {
+        "id": "call-b8bae906268e4d1680c8f3fd0d346057",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [
+        "new.txt"
+      ],
+      "metadata": {
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-b8bae906268e4d1680c8f3fd0d346057",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "committed",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1246
+    },
+    {
+      "tool": "apply_patch",
+      "arguments": {
+        "patch": "*** Begin Patch\n*** Add File: added.txt\n+added\n*** End Patch"
+      },
+      "status": "success",
+      "error_code": "",
+      "receipt": {
+        "id": "call-04564983a4a7454bba1fea3e86db19c0",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [
+        "added.txt"
+      ],
+      "metadata": {
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "completed",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-04564983a4a7454bba1fea3e86db19c0",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "committed",
+        "sandbox_exit_code": 0,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 1236
+    },
+    {
+      "tool": "run_shell",
+      "arguments": {
+        "command": "echo should-not-run"
+      },
+      "status": "error",
+      "error_code": "policy_denied",
+      "receipt": {},
+      "changed_files": [],
+      "metadata": {},
+      "wall_ms": 1
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "README.md"
+      },
+      "status": "cancelled",
+      "error_code": "cancelled",
+      "receipt": {
+        "id": "call-25520ca834414f9fb20b76bc0bfc0760",
+        "policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38"
+      },
+      "changed_files": [],
+      "metadata": {
+        "execution_tier": "linux_sandbox",
+        "sandbox_status": "cancelled",
+        "sandbox_cleanup": "confirmed",
+        "sandbox_receipt_id": "call-25520ca834414f9fb20b76bc0bfc0760",
+        "sandbox_policy_digest": "f14cb16c7807d5595b0a47551316b0da91c2a682476d747a4fc54a80cf5f3e38",
+        "sandbox_mutation_status": "not_started",
+        "sandbox_exit_code": null,
+        "requested_backend": "wsl_bwrap",
+        "actual_backend": "linux_sandbox"
+      },
+      "wall_ms": 994
+    }
+  ],
+  "worker_isolation": {
+    "checks": {
+      "host_drives_hidden": true,
+      "host_home_hidden": true,
+      "interop_environment_absent": true,
+      "network_routes_absent": true,
+      "host_network_unreachable": true,
+      "workspace_view_readonly": true,
+      "runtime_readonly": true,
+      "nested_user_namespace_denied": true,
+      "broker_fds_absent": true
+    },
+    "descriptors": {
+      "0": "pipe:[14531]",
+      "1": "pipe:[10264]",
+      "2": "pipe:[10265]",
+      "3": "/usr/lib/x86_64-linux-gnu/libffi.so.8"
+    }
+  },
+  "cleanup": {
+    "temporary_mounts": [],
+    "controllers": []
+  },
+  "status": "passed"
+}

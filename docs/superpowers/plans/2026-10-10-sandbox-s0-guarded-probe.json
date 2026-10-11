@@ -1,0 +1,398 @@
+{
+  "schema": "fixloop-sandbox-s0-v1",
+  "profile": "guarded",
+  "diagnostic_only": true,
+  "product_enabled": false,
+  "environment": {
+    "windows": "10.0.19045",
+    "distribution": "Ubuntu",
+    "wsl_inventory": "NAME              STATE           VERSION\r\n* docker-desktop    Stopped         2\r\n  Ubuntu            Stopped         2",
+    "kernel": "6.18.40.1-microsoft-standard-WSL2",
+    "architecture": "x86_64",
+    "workspace_filesystem": "v9fs",
+    "bwrap": "bubblewrap 0.11.1",
+    "python": "Python 3.14.4",
+    "interop_registered_outside": true,
+    "workspace_view_filesystem": "fuseblk"
+  },
+  "checks": {
+    "wsl_inventory": {
+      "passed": true
+    },
+    "selected_wsl2": {
+      "passed": true
+    },
+    "repo.secret-alias_setup": {
+      "passed": true
+    },
+    "repo.outside-alias_setup": {
+      "passed": true
+    },
+    "repo.junction_setup": {
+      "passed": true
+    },
+    "worktree.secret-alias_setup": {
+      "passed": true
+    },
+    "worktree.outside-alias_setup": {
+      "passed": true
+    },
+    "worktree.junction_setup": {
+      "passed": true
+    },
+    "supported_environment": {
+      "passed": true
+    },
+    "interop_control": {
+      "passed": true,
+      "exit_code": 0,
+      "stderr": ""
+    },
+    "windows_mount_verified": {
+      "passed": true
+    },
+    "bwrap_features": {
+      "passed": true
+    },
+    "private_binfmt_disabled": {
+      "passed": true
+    },
+    "repo.symlink_setup": {
+      "passed": true
+    },
+    "repo.listener_control": {
+      "passed": true
+    },
+    "repo.guarded_view": {
+      "passed": true
+    },
+    "repo.view_is_fuse": {
+      "passed": true
+    },
+    "repo.sandbox_started": {
+      "passed": true
+    },
+    "repo.workspace_read": {
+      "passed": true
+    },
+    "repo.workspace_write": {
+      "passed": true
+    },
+    "repo.unicode_and_spaces": {
+      "passed": true
+    },
+    "repo.env_mask": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "repo.git_mask": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "repo.git_entry_mask": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "repo.control_mask": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "repo.env_case_alias": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "repo.git_case_alias": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "repo.control_case_alias": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "repo.secret_hardlink": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "repo.external_hardlink": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "repo.junction_escape": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "repo.external_symlink": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "repo.relative_escape": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "repo.proc_root_escape": {
+      "passed": true
+    },
+    "repo.host_paths_hidden": {
+      "passed": true
+    },
+    "repo.private_pid": {
+      "passed": true,
+      "pid": 2
+    },
+    "repo.environment_clean": {
+      "passed": true
+    },
+    "repo.no_inherited_fds": {
+      "passed": true
+    },
+    "repo.network_isolated": {
+      "passed": true
+    },
+    "repo.windows_execution_blocked": {
+      "passed": true,
+      "errno": 8
+    },
+    "repo.toolchain_read_only": {
+      "passed": true,
+      "errno": 30
+    },
+    "repo.tmpfs_capacity": {
+      "passed": true
+    },
+    "repo.workspace_listing": {
+      "passed": true
+    },
+    "repo.workspace_rename": {
+      "passed": true
+    },
+    "repo.link_creation_denied": {
+      "passed": true,
+      "errno": 1
+    },
+    "repo.symlink_creation_denied": {
+      "passed": true,
+      "errno": 1
+    },
+    "repo.protected_rename_denied": {
+      "passed": true,
+      "errno": 13
+    },
+    "repo.ads_denied": {
+      "passed": true,
+      "errno": 13
+    },
+    "repo.chmod_denied": {
+      "passed": true,
+      "errno": 1
+    },
+    "repo.workspace_delete": {
+      "passed": true
+    },
+    "repo.workspace_mkdir": {
+      "passed": true
+    },
+    "repo.userns_creation_blocked": {
+      "passed": true,
+      "errno": 28
+    },
+    "repo.write_persisted": {
+      "passed": true
+    },
+    "repo.source_unchanged": {
+      "passed": true
+    },
+    "repo.protected_state_unchanged": {
+      "passed": true
+    },
+    "repo.pytest": {
+      "passed": true,
+      "exit_code": 0,
+      "stderr": ""
+    },
+    "worktree.symlink_setup": {
+      "passed": true
+    },
+    "worktree.listener_control": {
+      "passed": true
+    },
+    "worktree.guarded_view": {
+      "passed": true
+    },
+    "worktree.view_is_fuse": {
+      "passed": true
+    },
+    "worktree.sandbox_started": {
+      "passed": true
+    },
+    "worktree.workspace_read": {
+      "passed": true
+    },
+    "worktree.workspace_write": {
+      "passed": true
+    },
+    "worktree.unicode_and_spaces": {
+      "passed": true
+    },
+    "worktree.env_mask": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "worktree.git_mask": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "worktree.git_entry_mask": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "worktree.control_mask": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "worktree.env_case_alias": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "worktree.git_case_alias": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "worktree.control_case_alias": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "worktree.secret_hardlink": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "worktree.external_hardlink": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "worktree.junction_escape": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "worktree.external_symlink": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "worktree.relative_escape": {
+      "passed": true,
+      "readable": false,
+      "writable": false
+    },
+    "worktree.proc_root_escape": {
+      "passed": true
+    },
+    "worktree.host_paths_hidden": {
+      "passed": true
+    },
+    "worktree.private_pid": {
+      "passed": true,
+      "pid": 2
+    },
+    "worktree.environment_clean": {
+      "passed": true
+    },
+    "worktree.no_inherited_fds": {
+      "passed": true
+    },
+    "worktree.network_isolated": {
+      "passed": true
+    },
+    "worktree.windows_execution_blocked": {
+      "passed": true,
+      "errno": 8
+    },
+    "worktree.toolchain_read_only": {
+      "passed": true,
+      "errno": 30
+    },
+    "worktree.tmpfs_capacity": {
+      "passed": true
+    },
+    "worktree.workspace_listing": {
+      "passed": true
+    },
+    "worktree.workspace_rename": {
+      "passed": true
+    },
+    "worktree.link_creation_denied": {
+      "passed": true,
+      "errno": 1
+    },
+    "worktree.symlink_creation_denied": {
+      "passed": true,
+      "errno": 1
+    },
+    "worktree.protected_rename_denied": {
+      "passed": true,
+      "errno": 13
+    },
+    "worktree.ads_denied": {
+      "passed": true,
+      "errno": 13
+    },
+    "worktree.chmod_denied": {
+      "passed": true,
+      "errno": 1
+    },
+    "worktree.workspace_delete": {
+      "passed": true
+    },
+    "worktree.workspace_mkdir": {
+      "passed": true
+    },
+    "worktree.userns_creation_blocked": {
+      "passed": true,
+      "errno": 28
+    },
+    "worktree.write_persisted": {
+      "passed": true
+    },
+    "worktree.source_unchanged": {
+      "passed": true
+    },
+    "worktree.protected_state_unchanged": {
+      "passed": true
+    },
+    "worktree.pytest": {
+      "passed": true,
+      "exit_code": 0,
+      "stderr": ""
+    },
+    "guarded_view_cleanup": {
+      "passed": true
+    },
+    "fixture_cleanup": {
+      "passed": true
+    }
+  },
+  "blockers": [],
+  "probe_passed": true,
+  "decision": "go_for_next_stage"
+}

@@ -1,0 +1,48 @@
+{
+  "status": "passed",
+  "audited_at": "2026-10-11T04:40:02.076483+00:00",
+  "release_id": "83ecffc0a46c7644ce9c7b8255a2a9282743c8bcdd97d2e2eaf705b3014cc31c",
+  "runtime_digest": "ffa81db422d58c3d21fa0674ff9c3465dd54bdf66bd03ff6ad4237d8529304af",
+  "distribution": "FixLoop-Sandbox-s6-v1-83ecffc0a46c",
+  "current_source_matches_release": true,
+  "environment_health_checks": 6,
+  "acceptance_checks": 50,
+  "cleanup": {
+    "cgroups": [],
+    "scratch": []
+  },
+  "worktree_and_user_edits_preserved": true,
+  "native_budget_and_environment_gc": {
+    "checks": 17,
+    "release_id": "2816c1bd97ab113368fa5fa07b03c363f5b9ffbf0329512afe753ae1f7eab773",
+    "runtime_digest": "5a86f67852f7373fb4f376071acfde3c27a8cc469bbebee0dd855f4a43668cc8",
+    "distribution": "FixLoop-Sandbox-s6-gc-v1-2816c1bd97ab",
+    "disposable_environment_unregistered": true,
+    "scope": "Separate disposable release; predates Windows-only atomic receipt rename retry. Native Linux budget and GC paths unchanged afterward."
+  },
+  "validation": {
+    "related_tests": "Passed in scoped batches; see implementation record for counts and failed-case reruns.",
+    "ruff": "passed",
+    "tracked_diff_check": "passed",
+    "full_suite_run": false
+  },
+  "boundaries": {
+    "dependency_storage": "Sampled budget: 256 MiB and 8192 entries; not a hard filesystem quota.",
+    "production_default_gate": "closed; CLI activation belongs to S7",
+    "root_supervisors": "Outside tool aggregate cgroup"
+  },
+  "evidence": {
+    "environment": {
+      "path": "docs/superpowers/plans/2026-10-11-sandbox-s6-environment-accepted.json",
+      "sha256": "248facc457fb5056f2214894ce8fe98e52ba907e0e2392800c3faf4288a5218a"
+    },
+    "acceptance": {
+      "path": "docs/superpowers/plans/2026-10-11-sandbox-s6-probe-accepted.json",
+      "sha256": "e71d64d0ff8d96bb65ec059fe4169b63bc6f2afc39fbdb0750df96f1aa979861"
+    },
+    "gc": {
+      "path": "docs/superpowers/plans/2026-10-11-sandbox-s6-gc-probe.json",
+      "sha256": "61626d1526ce9a58eefeee04526630f8d5604d7f9a93964e2b873ba472f83b52"
+    }
+  }
+}

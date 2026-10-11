@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 
 import pytest
@@ -71,6 +72,112 @@ def test_collaboration_store_rejects_stale_lease_update(tmp_path):
             AgentResult(task.task_id),
             worker="worker-a",
         )
+
+
+def test_repair_runtime_renews_long_running_phase_lease(tmp_path):
+    from src.collaboration.repair_runtime import RepairCollaborationRuntime
+    from src.state import RepairState
+
+    state = RepairState(issue_input="fix")
+    state.repair_run_id = "repair-long-phase"
+    runtime = RepairCollaborationRuntime(
+        str(tmp_path),
+        state.repair_run_id,
+        state,
+        task_lease_seconds=0.2,
+    )
+    try:
+        runtime.advance("context", state)
+        time.sleep(0.35)
+        runtime.advance("patch", state)
+        tasks = {task.task_id: task for task in runtime.store.list_tasks(state.repair_run_id)}
+        assert tasks["repair-long-phase:context"].status.value == "completed"
+        assert tasks["repair-long-phase:patch"].status.value == "running"
+    finally:
+        runtime.close()
+        runtime.close()
+    assert runtime._heartbeat_worker.is_alive() is False
+
+
+def test_repair_phase_completion_waits_for_inflight_heartbeat(tmp_path, monkeypatch):
+    from src.collaboration.repair_runtime import RepairCollaborationRuntime
+    from src.state import RepairState
+
+    state = RepairState(issue_input="fix", repair_run_id="serial")
+    runtime = RepairCollaborationRuntime(str(tmp_path), "serial", state, task_lease_seconds=3)
+    entered, release, completed = threading.Event(), threading.Event(), threading.Event()
+    original = runtime.store.heartbeat
+    errors = []
+
+    def blocked_heartbeat(*args, **kwargs):
+        entered.set()
+        assert release.wait(2)
+        return original(*args, **kwargs)
+
+    def advance():
+        try:
+            runtime.advance("patch", state)
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            completed.set()
+
+    monkeypatch.setattr(runtime.store, "heartbeat", blocked_heartbeat)
+    worker = threading.Thread(target=advance)
+    try:
+        runtime.advance("context", state)
+        assert entered.wait(2)
+        worker.start()
+        assert not completed.wait(0.05)
+        release.set()
+        assert completed.wait(2)
+        assert not errors
+        assert runtime.store.get_task("serial:context").status.value == "completed"
+    finally:
+        release.set()
+        if worker.ident is not None:
+            worker.join(timeout=2)
+        runtime.close()
+
+
+def test_repair_runtime_does_not_renew_before_recovery_or_external_tasks(tmp_path):
+    from src.collaboration.contracts import AgentTask
+    from src.collaboration.repair_runtime import RepairCollaborationRuntime
+    from src.state import RepairState
+
+    state = RepairState(issue_input="fix", repair_run_id="scoped")
+    runtime = RepairCollaborationRuntime(str(tmp_path), "scoped", state, task_lease_seconds=0.2)
+    try:
+        assert runtime._heartbeat_worker.ident is None
+        runtime.store.create_task(AgentTask(task_id="external", run_id="scoped", role="x", kind="x"))
+        external = runtime.store.claim_task("external", runtime.worker, lease_seconds=0.2)
+        runtime.advance("context", state)
+        time.sleep(0.35)
+        assert runtime.store.get_task("external").lease_expires_at == external.lease_expires_at
+        runtime.advance("patch", state)
+    finally:
+        runtime.close()
+
+
+def test_repair_runtime_stops_renewing_after_run_owner_released(tmp_path):
+    from agent_runtime.run_coordination import RunCoordinator
+    from src.collaboration.repair_runtime import RepairCollaborationRuntime
+    from src.state import RepairState
+
+    state = RepairState(issue_input="fix", repair_run_id="fenced")
+    runtime = RepairCollaborationRuntime(str(tmp_path), "fenced", state, task_lease_seconds=0.2)
+    owner = RunCoordinator(str(tmp_path), "fenced", "fenced")
+    owner.acquire()
+    owner.reconcile()
+    runtime.attach_coordinator(owner)
+    try:
+        runtime.advance("context", state)
+        owner.finish("recovery_required")
+        runtime._heartbeat_worker.join(timeout=2)
+        assert not runtime._heartbeat_worker.is_alive()
+        assert runtime.store.get_task("fenced:context").status.value == "running"
+    finally:
+        runtime.close()
 
 
 def test_budget_backpressure_and_idempotent_reservation():

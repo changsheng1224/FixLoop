@@ -67,6 +67,9 @@ class Agent:
         self.tool_context.exploration_mode = config.code_exploration.mode
         self.tool_context.lsp_argv = config.code_exploration.server_argv
         self.tools = tools if tools is not None else build_tool_registry(self.tool_context)
+        from agent_runtime.linux_sandbox.workspace_routing import bind_workspace_tools
+
+        self.tools = bind_workspace_tools(self.tool_context, self.tools)
         self._tool_names = tuple(sorted(self.tools.keys()))
 
         # 会话状态 + 记忆
@@ -116,6 +119,103 @@ class Agent:
 
     # ---- 公开方法 ----
 
+    def close(self) -> None:
+        """End this task's tool admission; retain approvals, user files and journals."""
+        backend = self.tool_context.sandbox_backend
+        if backend is not None and hasattr(backend, "close"):
+            backend.close()
+
+    def bind_sandbox_task(self, binding, backend) -> None:
+        """Bind a fresh Agent to the final task workspace without host rescanning."""
+        from dataclasses import replace
+
+        from agent_runtime.prompt_prefix import join_stable_parts
+        from agent_runtime.workspace import WorkspaceContext
+
+        if self.tool_context.sandbox_task_binding is not None:
+            raise ValueError("sandbox_task_already_bound")
+        if getattr(backend, "task_binding", None) != binding:
+            raise ValueError("sandbox_backend_binding_mismatch")
+        if self.session.get("history") or self.session.get("tool_observations"):
+            raise ValueError("sandbox_task_requires_fresh_agent")
+        old_service = self.tool_context.exploration_service
+        if old_service is not None:
+            old_service.close()
+        self.tool_context.exploration_service = None
+        self._cwd = binding.mapping.host_root
+        self.tool_context.root = self._cwd
+        binding.attach(self.tool_context)
+        self.tool_context.sandbox_backend = backend
+        self.state_root = binding.state_root
+        # Source-repository snapshots and warm evidence cannot describe another checkout.
+        from agent_runtime.linux_sandbox.workspace_routing import (
+            bind_workspace_tools,
+            execute_workspace_tool,
+        )
+
+        self.tool_context.sandbox_workspace_versions.clear()
+        self.tool_context.sandbox_owned_versions.clear()
+        if self.tool_context.edit_lock is not None:
+            self.tool_context.edit_lock.sandbox_only = True
+            self.tool_context.edit_lock.read_set.clear()
+        self.tools = bind_workspace_tools(self.tool_context, self.tools)
+        metadata = execute_workspace_tool(
+            self.tool_context, "workspace_metadata", {}, mark_read=False
+        )
+        if not metadata.ok or not isinstance(metadata.data, dict):
+            raise ValueError("sandbox_workspace_metadata_unavailable: " + metadata.error_code)
+        self.workspace = WorkspaceContext(
+            cwd=self._cwd,
+            repo_root=self._cwd,
+            branch=binding.worktree_branch,
+            doc_contents=metadata.data["doc_contents"],
+            dirty_file_hashes={},
+        )
+        self._warm_context = None
+        self._semantic_memory = None
+        snapshot = self.session.get("config_snapshot")
+        self.session = self._new_session()
+        for key in ("session_scope", "session_identity"):
+            self.session[key]["workspace_id"] = binding.mapping.workspace_id
+            self.session[key]["task_id"] = binding.task_id
+        if snapshot is not None:
+            self.session["config_snapshot"] = snapshot
+        self.tool_context.observation_state = self.session
+        workspace_text = self.workspace.text()
+        fingerprint = self.workspace.fingerprint()
+        self._prefix = replace(
+            self._prefix,
+            workspace_text=workspace_text,
+            workspace_fingerprint=fingerprint,
+            text=join_stable_parts(
+                self._prefix.stable_text, self._prefix.role_text, workspace_text
+            ),
+        )
+        if self._l1_prefix is not None:
+            self._l1_prefix = replace(
+                self._l1_prefix,
+                workspace_text=workspace_text,
+                workspace_fingerprint=fingerprint,
+            )
+
+    def pending_sandbox_approval(self) -> dict | None:
+        """Return a detached proposal for the trusted UI; model tools cannot resolve it."""
+        from agent_runtime.linux_sandbox.permissions import permission_service
+
+        return permission_service(self.tool_context).snapshot()["pending"]
+
+    def resolve_sandbox_approval(self, approval_id: str, *, allow: bool) -> None:
+        """Save an exact scope decision. The next ask resumes the sealed tool call."""
+        from agent_runtime.linux_sandbox.permissions import permission_service
+
+        permission_service(self.tool_context).resolve(approval_id, allow=allow)
+
+    def cancel_sandbox_approval(self, approval_id: str) -> None:
+        """Invalidate a paused proposal without running its tool."""
+        from agent_runtime.linux_sandbox.permissions import permission_service
+
+        permission_service(self.tool_context).cancel_pending(approval_id)
+
     def ask(
         self, user_message: str, callback=None, *, skip_plan: bool = False, stream: bool = False
     ) -> str:
@@ -154,6 +254,16 @@ class Agent:
         与上次记录的 _last_root_hash，变更时 invalidate prefix hash 并清空 recent_files。
         """
         import os
+
+        binding = self.tool_context.sandbox_task_binding
+        if binding is not None:
+            binding.assert_context(self.tool_context)
+            if (
+                self._cwd != binding.mapping.host_root
+                or self.workspace.repo_root != binding.mapping.host_root
+            ):
+                raise ValueError("sandbox_task_identity_mismatch: agent workspace")
+            return
 
         current = os.getcwd()
         current_hash = (
@@ -295,7 +405,6 @@ class Agent:
         Args:
             item: 包含 role 和 content 的字典；user 消息会递增 turn_id。
         """
-        from pathlib import Path
 
         from agent_runtime.turn_tracking import stamp_turn_id
 
@@ -306,7 +415,11 @@ class Agent:
         self.session["history"].append(stamped)
         # JSONL 追加
         try:
-            path = Path(self._cwd) / ".agent" / "history.jsonl"
+            from agent_runtime.state_root import state_root_for
+
+            path = (
+                state_root_for(self._cwd, self.tool_context.state_root) / ".agent" / "history.jsonl"
+            )
             path.parent.mkdir(parents=True, exist_ok=True)
             with open(path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(stamped, ensure_ascii=False, default=str) + "\n")
@@ -315,9 +428,10 @@ class Agent:
 
     def read_history(self) -> list[dict]:
         """从 history.jsonl 读取历史投影（回退 session 内存）。"""
-        from pathlib import Path
 
-        path = Path(self._cwd) / ".agent" / "history.jsonl"
+        from agent_runtime.state_root import state_root_for
+
+        path = state_root_for(self._cwd, self.tool_context.state_root) / ".agent" / "history.jsonl"
         if path.is_file():
             try:
                 return [

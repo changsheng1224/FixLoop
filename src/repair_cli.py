@@ -79,6 +79,10 @@ class TextSnapshot:
     def close(self) -> None:
         pass
 
+    def bind_workspace(self, workspace: Path) -> None:
+        if workspace.resolve() != self.repo.resolve():
+            raise RepairInputError("export_failed", "non-Git workspace cannot change checkout")
+
 
 def read_issue(args) -> str:
     try:
@@ -96,7 +100,7 @@ def read_issue(args) -> str:
 
 def run_repair_cli(
     args,
-    execute: Callable[[str, CancellationToken], RepairState],
+    execute: Callable[[str, CancellationToken, Callable[[str], None]], RepairState],
     on_result: Callable[[RepairState], None] | None = None,
 ) -> int:
     report = None
@@ -104,6 +108,7 @@ def run_repair_cli(
     token = CancellationToken()
     state = None
     exit_code = REPAIR_EXIT_FAIL
+    sandbox = getattr(args, "execution_backend", "legacy") == "wsl_bwrap"
     try:
         if getattr(args, "execution_backend", "legacy") == "wsl_bwrap":
             if args.execution_tier != "auto" or args.require_sandbox:
@@ -111,12 +116,8 @@ def run_repair_cli(
                     "configuration_failed",
                     "wsl_bwrap conflicts with legacy tier/require-sandbox",
                 )
-            if args.code_exploration_mode != "text" or args.pylsp_path:
+            if args.code_exploration_mode != "text" or getattr(args, "pylsp_path", None):
                 raise RepairInputError("configuration_failed", "wsl_bwrap does not support LSP")
-            raise RepairInputError(
-                "configuration_failed",
-                "wsl_bwrap repair requires P3 external state_root isolation",
-            )
         load_dotenv()
         # Validate addresses before persisting them, so credentials never enter reports.
         source = parse_repo_source(args.repo)
@@ -160,24 +161,41 @@ def run_repair_cli(
                 report.data["base_commit"] = clone_repository(source, repo, ref=ref, token=token)
                 report.save()
                 language, _ = detect_repair_language(args.issue, repo_root=repo)
-                files = git_run(repo, "ls-files", "-z", token=token).stdout.decode().split("\0")
+                files = git_run(
+                    repo, "ls-files", "-z", token=token, sandbox=sandbox
+                ).stdout.decode().split("\0")
                 if language != "python" or not any(
                     name.endswith((".py", ".pyw")) for name in files
                 ):
                     raise RepairInputError(
                         "unsupported_project", "GitHub 入口首期支持 Python/pytest 仓库"
                     )
-                if args.execution_tier == "auto" and not args.skip_verify:
+                if (
+                    getattr(args, "execution_backend", "legacy") != "wsl_bwrap"
+                    and args.execution_tier == "auto"
+                    and not args.skip_verify
+                ):
                     args.execution_tier = "container"
                 if args.execution_tier == "container" and not args.skip_verify:
                     args.require_sandbox = True
             progress("snapshot", "记录修复前工作树；补丁导出使用独立 Git index")
-            top = git_run(repo, "rev-parse", "--show-toplevel", check=False, token=token)
+            top = git_run(
+                repo, "rev-parse", "--show-toplevel", check=False, token=token, sandbox=sandbox
+            )
             is_git_root = (
                 top.returncode == 0
                 and Path(top.stdout.decode().strip()).resolve() == repo.resolve()
             )
-            snapshot = GitSnapshot(repo, output, token=token) if is_git_root else TextSnapshot(repo)
+            snapshot = (
+                GitSnapshot(repo, output, token=token, sandbox=sandbox)
+                if is_git_root else TextSnapshot(repo)
+            )
+
+            def workspace_ready(workspace: str) -> None:
+                snapshot.bind_workspace(Path(workspace))
+                report.data["source_repo_path"] = str(repo)
+                report.data["repo_path"] = str(snapshot.repo)
+                report.save()
             report.data["base_commit"] = snapshot.base_commit
             report.data["baseline_tree"] = getattr(snapshot, "baseline", "")
             report.data["verification_tier"] = (
@@ -187,7 +205,7 @@ def run_repair_cli(
             if token.is_cancelled:
                 raise CancelledError("user")
             progress("repair", "初始化运行时与验证环境，执行修复")
-            state = execute(str(repo), token)
+            state = execute(str(repo), token, workspace_ready)
             tier = "skipped" if args.skip_verify else args.execution_tier
             report.record_state(state, tier)
             exit_code = repair_exit_code(state)

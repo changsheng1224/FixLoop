@@ -30,6 +30,10 @@ def git_blame(context, args: dict) -> ToolResult:
         context: ToolContext 实例。
         args: 包含 'file' 和 'line' 的字典。
     """
+    from agent_runtime.tools import _sandbox_workspace_result
+
+    if (routed := _sandbox_workspace_result(context, "git_blame", args)) is not None:
+        return routed
     file_path = args.get("file", "")
     line = args.get("line", 0)
     if not file_path:
@@ -78,6 +82,10 @@ def git_diff(context, args: dict) -> ToolResult:
         context: ToolContext 实例。
         args: 包含 'commit_a'/'commit_b'/'path' 的字典。
     """
+    from agent_runtime.tools import _sandbox_workspace_result
+
+    if (routed := _sandbox_workspace_result(context, "git_diff", args)) is not None:
+        return routed
     commit_a = args.get("commit_a", "HEAD~1")
     commit_b = args.get("commit_b", "HEAD")
     file_path = args.get("path", "")

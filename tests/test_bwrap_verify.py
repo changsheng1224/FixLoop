@@ -90,11 +90,20 @@ def test_missing_actual_backend_or_receipt_fails_closed(tmp_path):
         assert run.internal["category"] == "environment"
 
 
-def test_factory_rejects_profile_before_workspace_or_model_setup(tmp_path):
+def test_factory_requires_prepared_environment_before_model_setup(tmp_path):
     from src.repair_factory import RequiredVerifierError, wire_orchestrator
 
-    with pytest.raises(RequiredVerifierError, match="P3"):
-        wire_orchestrator(None, str(tmp_path), execution_backend="wsl_bwrap")
+    class FailingEnvironment:
+        def ensure(self, **kwargs):
+            raise RuntimeError("environment unavailable")
+
+    with pytest.raises(RequiredVerifierError, match="sandbox unavailable"):
+        wire_orchestrator(
+            None,
+            str(tmp_path),
+            execution_backend="wsl_bwrap",
+            sandbox_environment_manager=FailingEnvironment(),
+        )
 
 
 def test_factory_rejects_conflicting_tier(tmp_path):
@@ -104,19 +113,28 @@ def test_factory_rejects_conflicting_tier(tmp_path):
         wire_orchestrator(None, str(tmp_path), execution_backend="wsl_bwrap", execution_tier="host")
 
 
-def test_cli_profile_gate_precedes_model_setup(monkeypatch, capsys):
+def test_cli_sandbox_backend_does_not_use_removed_p3_gate(monkeypatch, capsys, temp_workspace):
     import sys
 
     from src.cli import main
     from src.cli_exit_codes import REPAIR_EXIT_CONFIG
+    from src.repair_factory import RequiredVerifierError
 
-    monkeypatch.setattr("src.cli.load_dotenv", lambda: pytest.fail("model setup reached"))
+    monkeypatch.setattr("src.cli.load_dotenv", lambda: None)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "fake-key")
+
+    def unavailable(*args, **kwargs):
+        raise RequiredVerifierError("wsl_bwrap sandbox unavailable: test environment")
+
+    monkeypatch.setattr("src.cli._execute_repair", unavailable)
     monkeypatch.setattr(
         sys,
         "argv",
         [
             "src.cli",
             "repair",
+            "--repo",
+            str(temp_workspace),
             "--issue",
             "broken",
             "--execution-backend",
@@ -124,7 +142,9 @@ def test_cli_profile_gate_precedes_model_setup(monkeypatch, capsys):
         ],
     )
     assert main() == REPAIR_EXIT_CONFIG
-    assert "P3 external state_root" in capsys.readouterr().err
+    stderr = capsys.readouterr().err
+    assert "P3 external state_root" not in stderr
+    assert "test environment" in stderr
 
 
 def test_orchestrator_final_route_has_no_host_fallback(tmp_path, monkeypatch):

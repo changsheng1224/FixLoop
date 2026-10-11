@@ -35,6 +35,11 @@ def ast_parse(context, args: dict) -> ToolResult:
     """
     import json
 
+    from agent_runtime.tools import _sandbox_workspace_result
+
+    if (routed := _sandbox_workspace_result(context, "ast_parse", args)) is not None:
+        return routed
+
     raw_path = args.get("path", "")
     if not raw_path:
         return ToolResult.error("Error: 缺少必填参数 path", code="tool_execution_failed")

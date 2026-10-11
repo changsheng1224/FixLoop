@@ -59,7 +59,7 @@ def test_github_default_container_end_to_end(temp_workspace, tmp_path, monkeypat
     output = tmp_path / "result"
     args = arguments("owner/project", output)
 
-    def execute(repo, token):
+    def execute(repo, token, workspace_ready):
         assert args.execution_tier == "container" and args.require_sandbox
         assert not token.is_cancelled
         (Path(repo) / "README.md").write_text("# repaired\n")
@@ -102,7 +102,7 @@ def test_issue_file_and_existing_local_contract(temp_workspace, tmp_path, monkey
         temp_workspace, output, issue=None, issue_file=str(issue_file), skip_verify=True
     )
 
-    def execute(repo, token):
+    def execute(repo, token, workspace_ready):
         assert Path(repo) == temp_workspace
         assert args.issue.startswith("复现步骤")
         (Path(repo) / "README.md").write_text("fixed\n")
@@ -120,7 +120,7 @@ def test_initialization_environment_failure_preserves_report(temp_workspace, tmp
     redirect_clone(monkeypatch, temp_workspace)
     output = tmp_path / "result"
 
-    def execute(repo, token):
+    def execute(repo, token, workspace_ready):
         raise RequiredVerifierError("Docker 镜像缺失")
 
     assert run_repair_cli(arguments("owner/project", output), execute) == 2
@@ -147,7 +147,7 @@ def test_cancel_after_edit_exports_partial_patch(temp_workspace, tmp_path, monke
     monkeypatch.setenv("DEEPSEEK_API_KEY", "fake-key")
     output = tmp_path / "result"
 
-    def execute(repo, token):
+    def execute(repo, token, workspace_ready):
         (Path(repo) / "README.md").write_text("partial\n")
         token.cancel("user")
         raise CancelledError("user")
@@ -161,7 +161,7 @@ def test_runtime_failure_keeps_patch(temp_workspace, tmp_path, monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "fake-key")
     output = tmp_path / "result"
 
-    def execute(repo, token):
+    def execute(repo, token, workspace_ready):
         (Path(repo) / "README.md").write_text("partial\n")
         raise RuntimeError("provider failed")
 
@@ -259,18 +259,21 @@ def test_empty_issue_and_missing_issue_file_are_rejected(temp_workspace, tmp_pat
         assert not output.exists()
 
 
-def test_gated_backend_does_not_clone_or_load_credentials(tmp_path, monkeypatch):
-    monkeypatch.setattr("src.repair_cli.load_dotenv", lambda: pytest.fail("dotenv reached"))
+def test_sandbox_backend_reaches_normal_preflight(tmp_path, monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr("src.repair_cli.load_dotenv", lambda: None)
+    repo = tmp_path / "repo"
+    repo.mkdir()
     output = tmp_path / "result"
     args = arguments(
-        "owner/project",
+        repo,
         output,
         execution_backend="wsl_bwrap",
         code_exploration_mode="text",
         pylsp_path=None,
     )
     assert run_repair_cli(args, lambda *a: pytest.fail("executed")) == 2
-    assert not output.exists()
+    assert result(output)["category"] == "configuration_failed"
 
 
 def test_existing_output_is_not_overwritten(temp_workspace, tmp_path, monkeypatch):

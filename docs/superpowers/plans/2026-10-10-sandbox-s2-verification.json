@@ -1,0 +1,12 @@
+{
+  "status": "ready",
+  "release_id": "64765fbcba7f3e2b0fb1fff2fb3115d122a92bd41d8f1365cf2fa5096a5bcdbb",
+  "runtime_digest": "4027177d6e3596b8da5e6e8699334cde04573f5ff60c6dfaca955e6555e02a0c",
+  "integrity_drift_rejected": true,
+  "drift_triggered_reinstall": false,
+  "restored_digest_matches": true,
+  "ordinary_recheck_after_offline_ready": true,
+  "ubuntu_package_status_sha256": "4422b8999c3eb54f710a5af02c1ec92c70dc9721d804e8e11b43526bce7800bf",
+  "ubuntu_wsl_config_sha256": "9d982706fcd3dbbd486f9ef806180196fa5cda29b06d980ccd7b38d7cdf514c8",
+  "ubuntu_configuration_unchanged": true
+}

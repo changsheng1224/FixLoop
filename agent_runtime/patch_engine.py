@@ -237,3 +237,110 @@ def _apply_hunks(original: list[str], hunks: list[PatchHunk]) -> list[str] | Non
                 new_segment.append(chunk)
         lines[old_start:old_idx] = new_segment
     return lines
+
+
+def normalize_hunk_headers(diff: str, file_text: str) -> str:
+    """Lenient：补全裸 ``@@`` / 无 @@ 的 +/- 块为可应用 unified hunk。"""
+    import re
+
+    d = (diff or "").strip()
+    if not d:
+        return d
+
+    def _locate(body: str, *, minimum_line: int = 1) -> tuple[int, int, int]:
+        lines = body.splitlines()
+        first_preimage = next(
+            (
+                index
+                for index, line in enumerate(lines)
+                if line.startswith(" ") or (line.startswith("-") and not line.startswith("---"))
+            ),
+            0,
+        )
+        first_removed = next(
+            (
+                index
+                for index, line in enumerate(lines)
+                if line.startswith("-") and not line.startswith("---")
+            ),
+            None,
+        )
+        anchor_index = first_removed if first_removed is not None else first_preimage
+        needle = next(
+            (x[1:] for x in lines if x.startswith("-") and not x.startswith("---")),
+            lines[first_preimage][1:] if lines and lines[first_preimage].startswith(" ") else "",
+        )
+        start = max(1, minimum_line)
+        if needle:
+            for i, fl in enumerate(file_text.splitlines(), 1):
+                if i < start:
+                    continue
+                if fl == needle or needle in fl:
+                    prefix = sum(
+                        1
+                        for line in lines[:anchor_index]
+                        if line.startswith(" ")
+                        or (line.startswith("-") and not line.startswith("---"))
+                    )
+                    start = max(1, i - prefix)
+                    break
+        old_n = (
+            sum(
+                1
+                for x in lines
+                if x.startswith(" ") or (x.startswith("-") and not x.startswith("---"))
+            )
+            or 1
+        )
+        new_n = (
+            sum(
+                1
+                for x in lines
+                if x.startswith(" ") or (x.startswith("+") and not x.startswith("+++"))
+            )
+            or 1
+        )
+        return start, old_n, new_n
+
+    if "@@" not in d:
+        start, old_n, new_n = _locate(d)
+        return f"@@ -{start},{old_n} +{start},{new_n} @@\n{d}"
+
+    hunk_re = re.compile(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@")
+    out_lines: list[str] = []
+    current_header = ""
+    current_body: list[str] = []
+    search_from = 1
+
+    def _flush_hunk() -> None:
+        nonlocal search_from
+        if not current_header:
+            return
+        header = current_header.strip()
+        if not hunk_re.match(header):
+            start, old_n, new_n = _locate("\n".join(current_body), minimum_line=search_from)
+            header = f"@@ -{start},{old_n} +{start},{new_n} @@"
+            consumed = sum(
+                1
+                for line in current_body
+                if line.startswith((" ", "-")) and not line.startswith("---")
+            )
+            search_from = start + max(1, consumed)
+        else:
+            match = re.match(r"^@@ -(\d+)(?:,(\d+))? \+", header)
+            if match:
+                search_from = int(match.group(1)) + int(match.group(2) or 1)
+        out_lines.append(header)
+        out_lines.extend(current_body)
+
+    for ln in d.splitlines():
+        if ln.strip().startswith("@@"):
+            _flush_hunk()
+            current_header = ln
+            current_body = []
+        elif current_header:
+            current_body.append(ln)
+        else:
+            out_lines.append(ln)
+    _flush_hunk()
+    return "\n".join(out_lines)

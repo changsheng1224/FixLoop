@@ -16,7 +16,17 @@ class RecordedObservation:
 
 
 class ToolObservationRecorder:
-    def __init__(self, *, session, root, state_root, emit, on_changed_paths, on_retrieval):
+    def __init__(
+        self,
+        *,
+        session,
+        root,
+        state_root,
+        emit,
+        on_changed_paths,
+        on_retrieval,
+        sandbox_bound=False,
+    ):
         self.session = session
         self.root = root
         self.state_root = state_root
@@ -24,6 +34,7 @@ class ToolObservationRecorder:
         self.on_changed_paths = on_changed_paths
         self.on_retrieval = on_retrieval
         self.owner_thread = threading.get_ident()
+        self.sandbox_bound = sandbox_bound
 
     def record(
         self,
@@ -90,7 +101,7 @@ class ToolObservationRecorder:
                 evidence_refs=list(observation.evidence_ids),
                 source_dependencies=(
                     dict(metadata.get("source_dependencies") or {})
-                    if "source_dependencies" in metadata
+                    if "source_dependencies" in metadata or self.sandbox_bound
                     else None
                 ),
                 retrieval_query_id=str(

@@ -202,24 +202,28 @@ class PlanStore:
             return self._put_blob(text)
 
     def _put_blob(self, text: str) -> str:
+        from agent_runtime.state_root import native_io_path
+
         raw = text.encode("utf-8")
         key = hashlib.sha256(raw).hexdigest()
         directory = self.root / "blobs"
         directory.mkdir(exist_ok=True)
-        target = directory / key
+        target = native_io_path(directory / key)
         if not target.exists():
             temporary = directory / ("." + uuid.uuid4().hex)
             with temporary.open("wb") as stream:
                 stream.write(raw)
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temporary, target)
+            os.replace(native_io_path(temporary), target)
         return key
 
     def get_blob(self, key: str) -> str:
+        from agent_runtime.state_root import native_io_path
+
         if len(key) != 64 or any(c not in "0123456789abcdef" for c in key):
             raise ValueError("blob_reference_invalid")
-        raw = (self.root / "blobs" / key).read_bytes()
+        raw = native_io_path(self.root / "blobs" / key).read_bytes()
         if hashlib.sha256(raw).hexdigest() != key:
             raise ValueError("blob_checksum_invalid")
         return raw.decode("utf-8")

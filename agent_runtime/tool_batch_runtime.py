@@ -123,7 +123,7 @@ class ToolBatchRunner:
             self._assert_owner()
             if result.status == "uncertain":
                 self.hooks.uncertain()
-            result = recheck_read(result)
+            result = recheck_read(result, self.context)
             operation = operations.pop(call.call_id, None)
             if operation is not None:
                 try:
@@ -138,7 +138,7 @@ class ToolBatchRunner:
         def settle(call, result):
             self._assert_owner()
             old_status = result.status
-            result = recheck_read(result)
+            result = recheck_read(result, self.context)
             if result.status != old_status:
                 scheduler.finish(call, result)
             flow = flows.pop(call.call_id, None)
@@ -165,7 +165,13 @@ class ToolBatchRunner:
                 batch, prepare, settle, cancel_token=self.cancel_token, expired=self.expired
             )
             batch.status = (
-                "uncertain"
+                "waiting_approval"
+                if any(
+                    c.result is not None
+                    and c.result.error_code in {"approval_required", "approval_pending"}
+                    for c in batch.calls
+                )
+                else "uncertain"
                 if any(c.status == "uncertain" for c in batch.calls)
                 else "cancelled"
                 if any(c.status == "cancelled" for c in batch.calls)

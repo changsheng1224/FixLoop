@@ -6,8 +6,6 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from .workspace import snapshot
-
 
 class ReadBudget:
     def __init__(self, limit: int = 4, deadline: float | None = None):
@@ -39,7 +37,7 @@ class PlanScheduler:
         if not ready:
             return []
         self.budget.reserve(len(ready))
-        before = snapshot(session.workspace)
+        before = session.snapshot_workspace()
         attempts = [(n, session.prepare(n.node_id)) for n in ready]
         session.emit("parallel_reads_started", nodes=[n.node_id for n in ready])
         from agent_runtime.read_permits import read_permits
@@ -66,7 +64,7 @@ class PlanScheduler:
                             },
                         )
                     )
-        if before != snapshot(session.workspace):
+        if before != session.snapshot_workspace():
             recorded = [
                 session.record_result(
                     a, {"status": "uncertain", "reason": "external_workspace_change"}

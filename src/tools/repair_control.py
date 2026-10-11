@@ -33,12 +33,39 @@ def tool_expand_lock(context, args: dict) -> ToolResult:
             "Error: expand_lock 需要 active edit_lock（patcher_primary）",
             code="tool_execution_failed",
         )
-    ok, reason = lock.expand_lock(raw_path)
+    from agent_runtime.linux_sandbox.workspace_routing import (
+        execute_workspace_tool,
+        sandbox_enabled,
+    )
+
+    if sandbox_enabled(context):
+        from agent_runtime.linux_sandbox.permissions import authorize_trusted, permission_service
+
+        rejection, permission = authorize_trusted(context, "expand_lock", args)
+        if rejection is not None:
+            return rejection
+        probe = execute_workspace_tool(context, "read_file", {"path": raw_path, "end": 1},
+                                       mark_read=False, record_versions=False)
+        if not probe.ok:
+            permission_service(context).outcome(permission, str(probe.status))
+            return probe
+        ok, reason = lock.expand_lock_evidence(raw_path, probe)
+        permission_service(context).outcome(permission, "success" if ok else "error")
+        probe.metadata["sandbox_permission"] = permission
+        probe.receipt["permission"] = permission
+        if ok:
+            with context.sandbox_versions_lock:
+                context.sandbox_workspace_versions.pop(raw_path, None)
+    else:
+        probe = None
+        ok, reason = lock.expand_lock(raw_path)
     if not ok:
         return ToolResult.error(
             f"Error: expand_lock failed ({reason})", code="tool_execution_failed"
         )
     return ToolResult(
+        metadata=dict(probe.metadata) if probe is not None else {},
+        receipt=dict(probe.receipt) if probe is not None else {},
         content=f"expand_lock ok: {reason}. "
         f"allowed_edit={sorted(lock.allowed_edit)[:12]}. "
         "下一步: read_file 该路径后再 apply_patch/patch_file。"

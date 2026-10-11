@@ -74,6 +74,7 @@ def git_run(
     env_extra: dict[str, str] | None = None,
     stdin: bytes | None = None,
     check: bool = True,
+    sandbox: bool = False,
 ) -> subprocess.CompletedProcess:
     """No shell; drain pipes while polling cancellation and a bounded deadline."""
     executable = shutil.which("git")
@@ -84,8 +85,13 @@ def git_run(
         env.pop(name, None)
     env.update(GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="never", GIT_ASKPASS="")
     env.setdefault("GIT_SSH_COMMAND", "ssh -o BatchMode=yes -o ConnectTimeout=15")
+    options = []
+    if sandbox:
+        from agent_runtime.worktree import git_administration_options
+
+        env, options = git_administration_options(repo)
     env.update(env_extra or {})
-    command = [executable, *args]
+    command = [executable, *options, *args]
     if token and token.is_cancelled:
         raise CancelledError("user")
     process = subprocess.Popen(
@@ -229,19 +235,21 @@ def deliverable_path(name: str) -> bool:
 class GitSnapshot:
     """Use a separate index to export final files, without staging user changes."""
 
-    def __init__(self, repo: Path, output: Path, *, token: CancellationToken | None = None):
+    def __init__(self, repo: Path, output: Path, *, token: CancellationToken | None = None,
+                 sandbox: bool = False):
         self.repo = repo
+        self.sandbox = sandbox
         self.token = token
         self.index = output / "snapshot.index"
         self.env = {"GIT_INDEX_FILE": str(self.index)}
         self.tracked = self._files("--cached")
         self.preexisting = set(self._files("--others", "--exclude-standard"))
-        head = git_run(repo, "rev-parse", "--verify", "HEAD", check=False, token=self.token)
+        head = self._git(repo, "rev-parse", "--verify", "HEAD", check=False, token=self.token)
         self.base_commit = head.stdout.decode().strip() if head.returncode == 0 else ""
         self.head_paths = set()
         if self.base_commit:
             self.head_paths = set(
-                git_run(
+                self._git(
                     repo, "ls-tree", "-r", "--name-only", "-z", self.base_commit, token=self.token
                 )
                 .stdout.decode()
@@ -257,16 +265,39 @@ class GitSnapshot:
             # Delivery must still inspect the remaining worktree after cancellation.
             self.token = None
 
+    def _git(self, repo, *args, **kwargs):
+        return git_run(repo, *args, sandbox=self.sandbox, **kwargs)
+
+    def bind_workspace(self, workspace: Path) -> None:
+        """Keep the original baseline while exporting the actual task checkout."""
+        workspace = workspace.resolve(strict=True)
+        if workspace == self.repo.resolve():
+            return
+        original = self._git(self.repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        actual = self._git(workspace, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        head = self._git(workspace, "rev-parse", "HEAD").stdout.decode().strip()
+        if (
+            Path(original.stdout.decode().strip()).resolve()
+            != Path(actual.stdout.decode().strip()).resolve()
+            or head != self.base_commit
+        ):
+            raise RepairInputError(
+                "export_failed", "task workspace does not match delivery baseline"
+            )
+        self.repo = workspace
+
     def _files(self, *args: str) -> list[str]:
-        data = git_run(self.repo, "ls-files", "-z", *args, token=self.token).stdout
+        data = self._git(self.repo, "ls-files", "-z", *args, token=self.token).stdout
         return [name for name in data.decode("utf-8").split("\0") if name]
 
     def _tree(self, names: list[str]) -> str:
         self.index.unlink(missing_ok=True)
-        git_run(self.repo, "read-tree", "--empty", env_extra=self.env, token=self.token)
+        self._git(self.repo, "read-tree", "--empty", env_extra=self.env, token=self.token)
         # Seed tracked blobs so deleted files remain valid Git pathspecs.
         if self.base_commit:
-            git_run(self.repo, "read-tree", self.base_commit, env_extra=self.env, token=self.token)
+            self._git(
+                self.repo, "read-tree", self.base_commit, env_extra=self.env, token=self.token
+            )
         allowed = sorted(
             {
                 name
@@ -281,7 +312,7 @@ class GitSnapshot:
         )
         if allowed:
             paths = b"\0".join(f":(literal){name}".encode() for name in allowed) + b"\0"
-            git_run(
+            self._git(
                 self.repo,
                 "add",
                 "-A",
@@ -292,7 +323,7 @@ class GitSnapshot:
                 token=self.token,
             )
         return (
-            git_run(self.repo, "write-tree", env_extra=self.env, token=self.token)
+            self._git(self.repo, "write-tree", env_extra=self.env, token=self.token)
             .stdout.decode()
             .strip()
         )
@@ -301,7 +332,7 @@ class GitSnapshot:
         additions = set(self._files("--others", "--exclude-standard")) - self.preexisting
         names = set(self.tracked) | (set(self._files("--cached")) - self.preexisting) | additions
         final = self._tree(list(names))
-        patch = git_run(
+        patch = self._git(
             self.repo,
             "diff",
             "--binary",
@@ -311,7 +342,7 @@ class GitSnapshot:
             final,
         ).stdout
         changed = (
-            git_run(
+            self._git(
                 self.repo,
                 "diff",
                 "--name-only",
