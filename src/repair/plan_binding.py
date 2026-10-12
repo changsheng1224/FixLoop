@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from agent_runtime.cancellation import CancellationToken, CancelledError
+from agent_runtime.errors import ContextBuildBlockedError
 from agent_runtime.plan_runtime.models import digest
 from agent_runtime.plan_runtime.planner import grounded_plan, retry_plan
 from agent_runtime.plan_runtime.recovery import recover
@@ -272,6 +273,25 @@ class RepairPlanBinding:
             )
         elif self.session.long_task_state.original_request != state.issue_input:
             raise ValueError("resume_task_objective_mismatch")
+        self.extraction = None
+        extraction_blocked = False
+        if self.agent.config.auto_context_extraction:
+            from agent_runtime.task_extraction import TaskExtraction
+
+            self.extraction = TaskExtraction(self.agent, self.session)
+            self.session.context_extraction = self.extraction
+            try:
+                self.extraction.resume_pending()
+                self.extraction.process_registered("original-request")
+                self.extraction.resume_pending()
+            except ContextBuildBlockedError as exc:
+                # Keep the owner intake available for a new clarification source.
+                # All model/tool consumers remain fenced by the durable record.
+                extraction_blocked = True
+                state.node_timings["context_extraction_blocked"] = {
+                    "reason": exc.reason,
+                    "metadata": exc.metadata,
+                }
         if not any(e["kind"] == "baseline" for e in self.session.store.events()):
             before = orchestrator._snapshot_repo()
             self.session.store.append(
@@ -290,9 +310,15 @@ class RepairPlanBinding:
             and e["payload"]["plan_version"] == self.session.plan.plan_version
         ]
         self.conclusion = planning[-1]["conclusion"] if planning else ""
-        if not defer_plan:
-            self._initialize_plan()
-            self.sync()
+        if not defer_plan and not extraction_blocked:
+            try:
+                self._initialize_plan()
+                self.sync()
+            except ContextBuildBlockedError as exc:
+                state.node_timings["context_extraction_blocked"] = {
+                    "reason": exc.reason,
+                    "metadata": exc.metadata,
+                }
         self.publish_recovery(stage="context")
 
     def _event(self, event, payload):
@@ -500,6 +526,8 @@ class RepairPlanBinding:
             max_new_tokens=self.agent.config.max_new_tokens,
         )
         session.create(plan)
+        if self.extraction is not None:
+            self.extraction.resume_pending()
         # Persist before entering any modifying tool loop.
         self.state.control.plan_checkpoint = session.checkpoint()
         self.orchestrator._checkpoint_progress(self.state)
@@ -520,6 +548,18 @@ class RepairPlanBinding:
             )
 
         return SimpleNamespace(complete=complete)
+
+    def accept_user_message(self, message_id, body, *, resolves=()):
+        """Trusted host intake at an owner safe boundary; prompts never use it."""
+        if self.extraction is None:
+            raise ValueError("automatic_context_extraction_disabled")
+        self.exploration.drain(cancel=True)
+        result = self.extraction.process_user_message(message_id, body, resolves=resolves)
+        if self.session.plan is not None:
+            self.extraction.resume_pending()
+            self.sync()
+        self.state.node_timings.pop("context_extraction_blocked", None)
+        return result
 
     def _kind(self, kind):
         return next(n for n in self.session.plan.nodes if n.kind == kind)
@@ -815,9 +855,20 @@ class RepairPlanBinding:
                 if session.evidence.valid(r)
             ]
             session.run_node(analysis.node_id, lambda a: session.analysis(a, self.conclusion, refs))
+        if self.extraction is not None and self.conclusion:
+            analysis = self._kind("analyze")
+            if analysis.status == "succeeded":
+                self.extraction.process_model_message(
+                    "planning-choice-" + digest([session.plan.plan_id, session.plan.plan_version]),
+                    self.conclusion,
+                    node_id=self._kind("edit").node_id,
+                    evidence_refs=analysis.output_evidence_refs,
+                )
 
     def run_patcher(self, prompt, metadata, callback):
         session = self.session
+        if self.extraction is not None:
+            self.extraction.resume_pending()
         if session.plan is None:
             self.operations = self._seed_operations(self.state)
             self._initialize_plan()

@@ -72,6 +72,20 @@ class ContextUpdates:
         if getattr(self, "_context_commit_pending", False):
             raise ValueError("context_commit_recovery_required")
 
+    def require_extraction_resolved(self):
+        """Pending requirements cannot be bypassed by direct tool/model entry."""
+        from agent_runtime.errors import ContextBuildBlockedError
+
+        for record in self.store.latest("task_extraction", "extraction_id").values():
+            if record["phase"] not in {"committed", "resolved"}:
+                raise ContextBuildBlockedError(
+                    record.get("reason", "extraction_pending"),
+                    metadata={
+                        "extraction_id": record["extraction_id"],
+                        **record.get("details", {}),
+                    },
+                )
+
     def _context_quiescent(self):
         if (
             self.plan

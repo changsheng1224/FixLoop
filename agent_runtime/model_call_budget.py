@@ -43,6 +43,7 @@ def invoke_model_call(
     deadline=None,
     timeout_s=None,
     input_limit=None,
+    on_reserved=None,
 ):
     """One runtime dispatch, including provider-internal retries, is one call.
 
@@ -68,6 +69,8 @@ def invoke_model_call(
     reserved = _costs(input_tokens, output_tokens)
     if not budget.reserve_model_call(key, purpose, reserved):
         raise ModelBudgetExceededError("model_call_budget_exhausted")
+    if on_reserved is not None:
+        on_reserved(budget.snapshot())
 
     def dispatch():
         with _client_lock(client):
@@ -104,7 +107,14 @@ def invoke_model_call(
 
 
 def complete_text(
-    agent, client, prompt: str, *, max_output_tokens: int, purpose: str, timeout_s=None
+    agent,
+    client,
+    prompt: str,
+    *,
+    max_output_tokens: int,
+    purpose: str,
+    timeout_s=None,
+    on_reserved=None,
 ):
     """Auxiliary calls share the current run ledger, cancellation and deadline."""
     from agent_runtime.context_manager import TokenBudget
@@ -133,6 +143,7 @@ def complete_text(
             deadline=deadline,
             timeout_s=timeout_s,
             input_limit=agent.config.input_window(max_output_tokens),
+            on_reserved=on_reserved,
         )
     finally:
         agent.session["runtime_budget"] = budget.snapshot()

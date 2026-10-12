@@ -25,6 +25,18 @@ MAX_EMPTY_RETRIES = 3
 MAX_JSON_RETRIES = 2
 
 
+def _extraction_before_model(agent):
+    service = getattr(getattr(agent, "_plan_session", None), "context_extraction", None)
+    if service is not None:
+        service.before_model()
+
+
+def _extraction_before_tools(agent, text):
+    service = getattr(getattr(agent, "_plan_session", None), "context_extraction", None)
+    if service is not None:
+        service.before_tools(text)
+
+
 @dataclass
 class ProtocolState:
     last_token_meta: dict = field(default_factory=dict)
@@ -193,6 +205,7 @@ def last_successful_tool_call(agent) -> dict | None:
 
 
 def xml_build_context(runtime, ts, user_message: str, *, step: int, callback) -> str:
+    _extraction_before_model(runtime.agent)
     t0 = _time.time()
     # XML continuations (including old checkpoints) carry raw tool output.
     # Reference code observations instead, so the current history projection
@@ -528,6 +541,7 @@ def native_model_turn(
     callback=None,
 ):
     """Build native messages, call once and normalize the response for the shared loop."""
+    _extraction_before_model(runtime.agent)
     from agent_runtime.context_manager import ContextManager
     from agent_runtime.message_projection import (
         attach_projection_metadata,
@@ -653,6 +667,12 @@ def native_model_turn(
     )
 
     if finish.kind == FinishKind.TOOL_CALLS and result.tool_calls:
+        visible = result.text or "\n".join(
+            block.get("text", "")
+            for block in (result.content or [])
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+        _extraction_before_tools(runtime.agent, visible)
         assistant_content = result.content or [
             {"type": "tool_use", "id": call.call_id, "name": call.name, "input": call.arguments}
             for call in result.tool_calls
@@ -701,6 +721,9 @@ def xml_model_turn(runtime, ts, user_message: str, *, step: int, step_clock, cal
     )
     raw, t1 = xml_call_model(runtime, ts, prompt_text, step=step, callback=callback)
     # CoT 提取：剥离思考内容后再进 history
+    import re
+
+    visible = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
     raw = strip_cot(raw)
 
     if (msg := runtime.hooks.abort_if_cancelled(ts, phase="post_model")) is not None:
@@ -722,5 +745,7 @@ def xml_model_turn(runtime, ts, user_message: str, *, step: int, step_clock, cal
     from agent_runtime.canonical_protocol import parse_model_response
 
     response = parse_model_response(raw, expected_tools=set(runtime.agent.tools))
+    if response.response_kind == "tool_call":
+        _extraction_before_tools(runtime.agent, visible.split("<tool>", 1)[0].strip())
     response.payload["raw"] = raw
     return response

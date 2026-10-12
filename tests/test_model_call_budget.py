@@ -37,6 +37,47 @@ def test_incurred_usage_is_recorded_even_above_limit():
     assert not budget.check("total_tokens").allowed
 
 
+def test_durable_reservation_callback_runs_before_provider_dispatch():
+    budget, events = BudgetManager(), []
+
+    def reserved(snapshot):
+        assert snapshot["used"]["llm_calls"] == 1
+        assert next(iter(snapshot["model_calls"].values()))["usage_status"] == "unknown"
+        events.append("saved")
+
+    call(budget, fn=lambda: events.append("dispatched"), on_reserved=reserved)
+    assert events == ["saved", "dispatched"]
+
+
+def test_failed_reservation_persistence_prevents_dispatch_and_keeps_debt():
+    budget, dispatched = BudgetManager(), []
+
+    def fail(snapshot):
+        raise ValueError("owner_lost")
+
+    with pytest.raises(ValueError, match="owner_lost"):
+        call(budget, fn=lambda: dispatched.append(True), on_reserved=fail)
+    assert not dispatched and budget.summary()["llm_calls"]["used"] == 1
+    assert next(iter(budget.snapshot()["model_calls"].values()))["usage_status"] == "unknown"
+
+
+def test_auxiliary_recovery_merges_only_missing_calls_without_refunding_limits():
+    source = BudgetManager()
+    call(source, purpose="extraction")
+    call(source, purpose="planning")
+    budget = BudgetManager({"llm_calls": 1})
+    call(budget, purpose="repair")
+    budget.restore_missing_model_calls(source.snapshot(), purpose="extraction")
+    budget.restore_missing_model_calls(source.snapshot(), purpose="extraction")
+    assert budget.summary()["llm_calls"]["used"] == 2
+    assert budget.summary()["llm_calls"]["limit"] == 1
+    assert budget.summary()["total_tokens"]["used"] == 60
+    assert {c["purpose"] for c in budget.snapshot()["model_calls"].values()} == {
+        "repair",
+        "extraction",
+    }
+
+
 def test_reservation_is_atomic_and_never_dispatches_over_budget():
     budget = BudgetManager({"llm_calls": 1, "total_tokens": 29})
     dispatched = []

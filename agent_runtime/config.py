@@ -22,6 +22,9 @@ class AgentConfig(RuntimePolicy):
     """
 
     code_exploration: CodeExplorationConfig = Field(default_factory=CodeExplorationConfig)
+    auto_context_extraction: bool = Field(
+        default=True, description="Plan repair 路径自动提取可信来源中的明确约束和节点决策"
+    )
 
     provider: str = Field(
         default="deepseek", description="模型 Provider: deepseek / openai / ollama"

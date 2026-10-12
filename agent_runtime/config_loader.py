@@ -50,6 +50,7 @@ _ENV_FIELDS = {
     "approval": str,
     "temperature": float,
     "json_mode": parse_bool,
+    "auto_context_extraction": parse_bool,
     "max_json_retries": int,
     "loop_detect_threshold": int,
     "budget.prompt_tokens": int,

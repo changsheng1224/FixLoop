@@ -242,6 +242,22 @@ class BudgetManager:
                 }
             return result
 
+    def restore_missing_model_calls(self, snapshot: dict, *, purpose: str) -> None:
+        """Merge durable auxiliary reservations without refunding newer usage.
+
+        A run checkpoint may precede an auxiliary call recorded in its journal.
+        Only absent call IDs are charged; limits and existing calls stay intact.
+        """
+        with self._lock:
+            for key, record in snapshot.get("model_calls", {}).items():
+                if record.get("purpose") != purpose or key in self._model_calls:
+                    continue
+                costs = snapshot.get("scopes", {}).get(key)
+                if not costs:
+                    raise ValueError("model_call_scope_missing")
+                self.reconcile_scope(key, costs)
+                self._model_calls[key] = dict(record)
+
     def decision_payload(self) -> dict[str, Any]:
         return {"resources": self.summary()}
 

@@ -264,6 +264,7 @@ class PlanSession(ContextUpdates):
         )
 
     def build_long_task_context(self, node_id: str = "") -> dict:
+        self.require_extraction_resolved()
         if getattr(self, "_context_commit_pending", False):
             raise ValueError("context_commit_recovery_required")
         self._validate_context_provenance()
@@ -321,6 +322,7 @@ class PlanSession(ContextUpdates):
             self._fence()
             if self.plan is None or not self.plan.verify():
                 raise ContextBuildBlockedError("state_mismatch")
+            self.require_extraction_resolved()
             raw = self.long_task_state.to_dict()
             raw["state_id"] = self.identity["session_id"]
             latest = self.store.latest("long_task_state", "state_id").get(raw["state_id"])
@@ -549,6 +551,8 @@ class PlanSession(ContextUpdates):
             self._require_context_commit_resolved()
             self.refresh()
             node = self.plan.node(node_id)
+            if node.kind in {"edit", "verify"}:
+                self.require_extraction_resolved()
             if node.status != "ready" or any(n.status == "uncertain" for n in self.plan.nodes):
                 raise ValueError("node_not_ready_or_workspace_uncertain")
             running = [n for n in self.plan.nodes if n.status == "running"]
@@ -667,6 +671,8 @@ class PlanSession(ContextUpdates):
                 error_code="policy_denied",
             )
         effect = tool_effect(name, self.registry)
+        if effect != "read":
+            self.require_extraction_resolved()
         if attempt["kind"] == "explore" and effect != "read":
             raise ValueError("readonly_tool_violation")
         operation_id = new_id("op")

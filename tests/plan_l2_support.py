@@ -47,6 +47,9 @@ def repair_fixture(root, *, resume=False, full=False):
     client = FakeModelClient(responses)
     agent = create_repair_agent("patcher", client, WorkspaceContext.build(str(root)), cwd=str(root))
     agent.config.approval = "auto"
+    # Existing fixtures isolate Plan execution. S3 integration tests enable
+    # extraction and supply dedicated bounded candidate responses explicitly.
+    agent.config.auto_context_extraction = False
     orch = Orchestrator(agent, use_pytest_verify=True, sandbox_policy="disabled")
     state = RepairState(
         issue_input="Fix value.py: answer() returns 1 but should return 2.",

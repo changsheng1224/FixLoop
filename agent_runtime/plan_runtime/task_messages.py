@@ -32,7 +32,8 @@ class TaskMessages:
             result[key] = record
         return result
 
-    def register(self, message_id, body, *, source_kind):
+    def prepare(self, message_id, body, *, source_kind):
+        """Validate an immutable message before its caller's journal transaction."""
         if not isinstance(message_id, str) or not message_id or not isinstance(body, str):
             raise ValueError("task_message_invalid")
         if source_kind not in {"user", "model", "runtime"}:
@@ -49,9 +50,13 @@ class TaskMessages:
         if previous is not None:
             if previous != record:
                 raise ValueError("task_message_identity_conflict")
-        else:
-            self.store.append("task_message", record)
         return deepcopy(record)
+
+    def register(self, message_id, body, *, source_kind):
+        record = self.prepare(message_id, body, source_kind=source_kind)
+        if message_id not in self.records():
+            self.store.append("task_message", record)
+        return record
 
     def reference(self, message_id, start=0, end=None):
         record = self.records().get(message_id)
