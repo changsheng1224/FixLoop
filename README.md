@@ -149,6 +149,7 @@ CLI 默认 `--workspace-policy worktree`：从干净 Git 根目录创建独立�
 详见 [S2 隔离设计](docs/ISOLATION_S2.md)。
 embedding 缓存按源项目归属，编码配置变化自动失效；详见 [S3 缓存设计](docs/ISOLATION_S3.md)。
 记忆在检索和修改前检查项目/运行归属，共享项目知识需显式确认发布；详见 [S4 记忆边界](docs/ISOLATION_S4.md)。
+隔离维度、可信身份、跨阶段边界回归与面试 MVP 的能力范围，见 [S5 隔离设计说明](docs/ISOLATION_S5.md)。
 
 长问题和指定版本：
 
