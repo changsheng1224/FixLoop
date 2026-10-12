@@ -610,6 +610,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
             store = RepairPrecedentStore(
                 self._repo_root,
+                access_context=getattr(self.patcher, "memory_access", None),
                 state_root=str(
                     getattr(getattr(self.patcher, "tool_context", None), "state_root", "") or ""
                 ),
@@ -1005,6 +1006,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
                 store = RepairPrecedentStore(
                     self._repo_root,
+                    access_context=getattr(self.patcher, "memory_access", None),
                     state_root=str(
                         getattr(getattr(self.patcher, "tool_context", None), "state_root", "") or ""
                     ),

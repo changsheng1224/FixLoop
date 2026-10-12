@@ -22,7 +22,7 @@ PROMOTE_SUGGEST_HIT_MIN = _PROMOTE_THRESHOLD  # kind=decision 且 retrieve_count
 class MemoryDreamer:
     """记忆维护器：去重、过期、裁剪、durable GC、晋升建议、路由重建。"""
 
-    def __init__(self, memory_state: dict[str, Any], durable_root: str = ""):
+    def __init__(self, memory_state: dict[str, Any], durable_root: str = "", *, governance=None):
         self._state = memory_state
         self._durable_root = durable_root
         self.stats: dict[str, int] = {
@@ -38,7 +38,7 @@ class MemoryDreamer:
         self.promotion_hints: list[dict] = []
         from agent_runtime.features.memory.governance import MemoryGovernanceService
 
-        self.governance = MemoryGovernanceService(
+        self.governance = governance or MemoryGovernanceService(
             memory_state,
             repo_root=durable_root,
         )
@@ -278,12 +278,13 @@ def run_memory_dream(
     *,
     ttl_days: int = _DEFAULT_TTL_DAYS,
     durable_root: str = "",
+    governance=None,
 ) -> tuple[dict, MemoryDreamer]:
     """便捷函数：对 memory_state 执行 dream 并返回 (统计信息, dreamer)。
 
     dreamer 含 promotion_hints 列表供调用方写入 trace。
     """
-    dreamer = MemoryDreamer(memory_state, durable_root=durable_root)
+    dreamer = MemoryDreamer(memory_state, durable_root=durable_root, governance=governance)
     return dreamer.run(ttl_days=ttl_days), dreamer
 
 

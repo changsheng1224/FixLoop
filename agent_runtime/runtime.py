@@ -9,7 +9,6 @@ from typing import Literal
 
 from agent_runtime.config import AgentConfig
 from agent_runtime.prompt_prefix import build_prompt_prefix
-from agent_runtime.state_root import agent_state_root
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.tools import build_tool_registry
 
@@ -84,6 +83,8 @@ class Agent:
 
         # 会话状态 + 记忆
         self.session: dict = self._new_session()
+        self._memory_session_id = self.session["id"]
+        self._memory_task_id = ""
         self.tool_context.observation_state = self.session
         if hasattr(self.config, "snapshot"):
             self.session["config_snapshot"] = self.config.snapshot()
@@ -117,6 +118,12 @@ class Agent:
             provider=str(getattr(self.config, "provider", "unknown") or "unknown"),
             model=str(getattr(self.config, "model", "") or ""),
         )
+
+    @property
+    def memory_access(self):
+        from agent_runtime.features.memory.access import agent_access_context
+
+        return agent_access_context(self)
 
     @property
     def semantic_memory(self):
@@ -167,6 +174,7 @@ class Agent:
         self.tool_context.sandbox_backend = backend
         self.state_root = binding.state_root
         self.tool_context.project_root = binding.project_root
+        self._memory_task_id = binding.task_id
         # Source-repository snapshots and warm evidence cannot describe another checkout.
         from agent_runtime.linux_sandbox.workspace_routing import (
             bind_workspace_tools,
@@ -241,6 +249,7 @@ class Agent:
         self._cwd = self.tool_context.root = root
         self.state_root = self.tool_context.state_root = state_root
         self.tool_context.project_root = project
+        self._memory_task_id = run_id
         self._workspace_pinned = True
         self.workspace = WorkspaceContext.build(root)
         self._warm_context = self._semantic_memory = None
@@ -370,6 +379,13 @@ class Agent:
         self.tool_context.root = current
         self.tool_context.project_root = current
         self._semantic_memory = None
+        if current != last_cwd:
+            from agent_runtime.features.memory import default_memory_state
+
+            self.session["memory"] = default_memory_state()
+            self.session.pop("_memory_candidates", None)
+            self._memory_task_id = ""
+            self._memory_session_id = self._new_session_id()
         self.tool_context.exploration_service = None
         self.tool_context.exploration_mode = self.config.code_exploration.mode
         self.tool_context.lsp_argv = self.config.code_exploration.server_argv
@@ -589,6 +605,14 @@ class Agent:
             config = AgentConfig()
 
         cwd = kwargs.pop("cwd", None) or workspace.repo_root
+        if Path(session_store.root).resolve() != Path(cwd).resolve():
+            raise ValueError("memory_session_workspace_mismatch")
+        from agent_runtime.state_root import project_id
+
+        source = getattr(kwargs.get("tool_context"), "project_root", "") or cwd
+        claimed_project = (session.get("session_scope") or {}).get("project_id")
+        if claimed_project and claimed_project != project_id(source):
+            raise ValueError("memory_session_project_mismatch")
 
         # 创建 Agent（先不注入 session）
         agent = cls(
@@ -601,6 +625,8 @@ class Agent:
 
         # 恢复 session 数据
         agent.session = session
+        agent._memory_session_id = session["id"]
+        agent.tool_context.observation_state = session
         # 恢复 memory 状态
         from agent_runtime.features.memory import default_memory_state
 
@@ -655,6 +681,7 @@ class Agent:
         import hashlib
 
         from agent_runtime.features.memory import default_memory_state
+        from agent_runtime.state_root import project_id
 
         session_id = self._new_session_id()
         workspace_id = hashlib.sha256(str(Path(self._cwd).resolve()).encode()).hexdigest()[:16]
@@ -664,6 +691,7 @@ class Agent:
             "revision": 0,
             "session_scope": {
                 "session_id": session_id,
+                "project_id": project_id(self.tool_context.project_root),
                 "user_id": "",
                 "workspace_id": workspace_id,
             },
@@ -697,15 +725,10 @@ class Agent:
         mem = self.session["memory"]
         recalled_ids = list(mem.get("recalled_memory_ids") or [])
         if recalled_ids:
-            from agent_runtime.features.memory.governance import MemoryGovernanceService
+            from agent_runtime.features.memory.access import agent_governance
 
+            governance = agent_governance(self)
             identity = mem.get("memory_identity") or {}
-            governance = MemoryGovernanceService(
-                mem,
-                repo_root=str(agent_state_root(self)),
-                user_id=str(identity.get("user_id", "") or ""),
-                task_id=str(identity.get("task_id", "") or ""),
-            )
             stage = "patch" if name in {"write_file", "patch_file", "apply_patch"} else "tool"
             attribution = mem.get("memory_context_attribution") or {}
             for memory_id in recalled_ids:

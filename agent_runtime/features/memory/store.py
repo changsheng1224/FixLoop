@@ -33,7 +33,7 @@ class CanonicalMemoryStore:
 
     def __init__(self, root: str):
         base = Path(root) / ".agent" / "memory"
-        base.mkdir(parents=True, exist_ok=True)
+        native_io_path(base).mkdir(parents=True, exist_ok=True)
         self.path = base / "memory.db"
         self._initialize()
 

@@ -1,5 +1,10 @@
 """记忆系统：Working + Episodic + Durable + Semantic + Candidate。"""
 
+from agent_runtime.features.memory.access import (  # noqa: F401
+    MemoryAccessContext,
+    agent_governance,
+    publish_project_memory,
+)
 from agent_runtime.features.memory.candidate import (  # noqa: F401
     MemoryPathError,
     resolve_memory_path,

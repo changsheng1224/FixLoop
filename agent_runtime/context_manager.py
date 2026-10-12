@@ -1252,7 +1252,6 @@ class ContextManager:
         if not query:
             return ""
         from agent_runtime.features.memory import (
-            DurableMemoryStore,
             retrieval_candidates_semantic,
         )
 
@@ -1268,15 +1267,10 @@ class ContextManager:
 
         # Layer 1: Episodic 检索
         mem = self.agent.session.get("memory", {})
-        identity = mem.get("memory_identity") or {}
-        from agent_runtime.features.memory.governance import MemoryGovernanceService
+        from agent_runtime.features.memory.access import agent_governance
 
-        governed = MemoryGovernanceService(
-            mem,
-            repo_root=str(agent_state_root(self.agent)),
-            user_id=str(identity.get("user_id", "") or ""),
-            task_id=str(identity.get("task_id", "") or ""),
-        )
+        governed = agent_governance(self.agent)
+        identity = mem.get("memory_identity") or {}
         governed_results = governed.recall(
             query,
             user_id=str(identity.get("user_id", "") or ""),
@@ -1349,22 +1343,20 @@ class ContextManager:
                 )
             parts.append("\n".join(lines))
 
-        # Layer 2: Durable 检索
+        # Project knowledge is read-only and filtered before ranking/projection.
         try:
-            store = DurableMemoryStore(root=str(agent_state_root(self.agent)))
-            durable_results = store.retrieval(query, limit=2)
-            if durable_results:
-                recalled_ids.extend(str(item.get("memory_id", "")) for item in durable_results)
-                lines = ["持久知识候选（仅项目/用户事实；冲突时不得采用）:"]
-                for r in durable_results:
-                    lines.append(f"  - {str(r.get('text', ''))[:150]}")
+            shared = agent_governance(self.agent, shared_read=True)
+            shared_results = shared.recall(query, limit=2, record_event=False)
+            if shared_results:
+                lines = ["经确认的项目知识（仍需核对当前代码）:"]
+                for item in shared_results:
+                    lines.append(f"  - {str(item.get('value', ''))[:150]}")
                 parts.append("\n".join(lines))
-        except Exception:
+        except (OSError, ValueError):
             pass
 
-        # Keep one stable recall projection for feedback attribution.  Durable
-        # markdown entries have no governed ID yet, so only governed IDs are
-        # eligible for automatic usage feedback.
+        # Feedback stays run-local. Shared project facts never become writable
+        # merely because a run retrieved them.
         recalled_ids = list(dict.fromkeys(item for item in recalled_ids if item))
         mem["recalled_memory_ids"] = recalled_ids
         mem["memory_context_attribution"] = {
