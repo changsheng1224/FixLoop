@@ -14,6 +14,7 @@ from agent_runtime.run_coordination.store import RunCoordinationStore
 from agent_runtime.state_root import state_root_for
 from agent_runtime.tool_result import ToolResult, attach_tool_receipt, require_tool_result
 
+from .context_updates import ContextUpdates
 from .evidence import EvidenceLedger
 from .journal import PlanStore
 from .long_task import LongTaskContext, LongTaskState
@@ -24,7 +25,7 @@ from .validate import tool_effect, validate_plan
 from .workspace import changes, snapshot, workspace_id, workspace_lease
 
 
-class PlanSession:
+class PlanSession(ContextUpdates):
     def __init__(
         self,
         workspace: str,
@@ -78,6 +79,7 @@ class PlanSession:
                 else LongTaskState(task_id=task_id, run_id=run_id)
             )
             self.long_task = LongTaskContext(self.long_task_state, self.plan, self.evidence)
+            self._validate_context_provenance()
         except BaseException:
             if hasattr(self, "store"):
                 self.store.close()
@@ -136,6 +138,7 @@ class PlanSession:
             self.event_sink(event, body)
 
     def commit(self, plan: Plan):
+        self._require_context_commit_resolved()
         self._fence(allow_cancelling=True)
         validate_plan(plan, self.registry, identity=self.identity)
         self.store.save_plan(plan)
@@ -166,6 +169,8 @@ class PlanSession:
         return seal
 
     def _persist_long_task_state(self) -> None:
+        if getattr(self, "_context_commit_pending", False):
+            raise ValueError("context_commit_recovery_required")
         # ``state_id`` is part of the durable identity and must be included in
         # the checksum.  Appending it after ``seal()`` makes every restored
         # state fail verification even though the journal bytes are intact.
@@ -173,12 +178,6 @@ class PlanSession:
         raw["state_id"] = self.identity["session_id"]
         raw["state_checksum"] = digest(raw)
         self.store.append("long_task_state", raw)
-
-    def configure_long_task(self, original_request: str, *, hard_constraints=None) -> None:
-        self.long_task_state.original_request = str(original_request)
-        self.long_task_state.hard_constraints = [str(v) for v in (hard_constraints or [])]
-        self.long_task._touch()
-        self._persist_long_task_state()
 
     def record_decision(
         self,
@@ -191,6 +190,8 @@ class PlanSession:
         source: str = "",
         decision_id=None,
         expected_revision=None,
+        source_kind="technical",
+        source_refs=(),
     ) -> dict:
         """Owner-only explicit append, with a compare-and-set revision for replacement."""
         from copy import deepcopy
@@ -199,6 +200,7 @@ class PlanSession:
 
         with self._mutex:
             self._fence()
+            self._require_context_commit_resolved()
             if threading.get_ident() != self.owner_thread:
                 raise ValueError("owner_thread_required")
             if (
@@ -227,6 +229,11 @@ class PlanSession:
             durable = self.store.latest("long_task_state", "state_id").get(raw["state_id"])
             if not durable or durable.get("state_checksum") != digest(raw):
                 raise ValueError("decision_state_mismatch")
+            self._validate_context_provenance()
+            if source_kind == "user" or source_refs:
+                self.task_messages.validate(
+                    list(source_refs), allowed={"user"} if source_kind == "user" else {"model"}
+                )
             record = new_decision(
                 self.long_task_state.key_decisions,
                 self.plan,
@@ -238,10 +245,13 @@ class PlanSession:
                 node_id=node_id,
                 decision_id=decision_id,
                 expected_revision=expected_revision,
+                source_kind=source_kind,
+                source_refs=source_refs,
             )
             self._fence()
             self.long_task_state.key_decisions.append(record)
             self.long_task._touch()
+            self.long_task_state.context_revision += 1
             self._persist_long_task_state()
             self.cut("decision_recorded")
             return deepcopy(record)
@@ -254,6 +264,9 @@ class PlanSession:
         )
 
     def build_long_task_context(self, node_id: str = "") -> dict:
+        if getattr(self, "_context_commit_pending", False):
+            raise ValueError("context_commit_recovery_required")
+        self._validate_context_provenance()
         self.long_task.plan = self.plan
         attempt = getattr(self.local, "attempt", None)
         if attempt and attempt["plan_version"] > 0:
@@ -320,6 +333,7 @@ class PlanSession:
                 raise ContextBuildBlockedError("state_mismatch")
             if not raw["original_request"]:
                 raise ContextBuildBlockedError("task_request_missing")
+            self._validate_context_provenance()
             if any(node.status == "uncertain" for node in self.plan.nodes):
                 raise ContextBuildBlockedError("action_uncertain")
             attempt = getattr(self.local, "attempt", None)
@@ -425,6 +439,7 @@ class PlanSession:
                 "current_node": selected,
                 "plan_view": view,
                 "state_revision": raw["state_revision"],
+                "context_revision": raw["context_revision"],
                 "state_checksum": latest["state_checksum"],
                 "evidence_refs": required,
                 "evidence_checks": checks,
@@ -531,6 +546,7 @@ class PlanSession:
     def prepare(self, node_id: str) -> dict:
         with self._mutex:
             self._fence()
+            self._require_context_commit_resolved()
             self.refresh()
             node = self.plan.node(node_id)
             if node.status != "ready" or any(n.status == "uncertain" for n in self.plan.nodes):
@@ -639,6 +655,7 @@ class PlanSession:
     def tool_operation(self, agent, name: str, arguments: dict, *, call_context=None):
         """Owner-thread journal preparation and settlement around isolated execution."""
         self._fence()
+        self._require_context_commit_resolved()
         attempt = getattr(self.local, "attempt", None)
         if attempt is None:
             raise ValueError("plan_tool_outside_active_attempt")
@@ -1009,10 +1026,14 @@ class PlanSession:
         if operations and operations[-1].get("approval_id"):
             pending = operations[-1]
             if pending.get("not_started") and not pending.get("changed_paths"):
-                return {"status": "waiting_approval", "approval_id": pending["approval_id"],
-                        "evidence_refs": []}
-        refs = [r for op in operations if not op.get("approval_id")
-                for r in op.get("evidence_refs", ())]
+                return {
+                    "status": "waiting_approval",
+                    "approval_id": pending["approval_id"],
+                    "evidence_refs": [],
+                }
+        refs = [
+            r for op in operations if not op.get("approval_id") for r in op.get("evidence_refs", ())
+        ]
         if attempt["kind"] == "edit":
             # Preimage reads stay in the operation history; edit outputs refer
             # only to current, receipt-backed patches.

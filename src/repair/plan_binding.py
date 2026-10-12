@@ -264,6 +264,14 @@ class RepairPlanBinding:
                 raise ResumeRecoveryRequiredError("resume_untracked_execution_uncertain")
             context.execution_uncertain = False
             context.sandbox_uncertain = False
+        # Register the raw Issue once, before planning; generated repair prompts
+        # and repository/tool text never pass through the user-message API.
+        if not self.session.long_task_state.configuration_checksum:
+            self.session.configure_long_task(
+                state.issue_input, hard_constraints=state.hard_constraints
+            )
+        elif self.session.long_task_state.original_request != state.issue_input:
+            raise ValueError("resume_task_objective_mismatch")
         if not any(e["kind"] == "baseline" for e in self.session.store.events()):
             before = orchestrator._snapshot_repo()
             self.session.store.append(
@@ -492,9 +500,6 @@ class RepairPlanBinding:
             max_new_tokens=self.agent.config.max_new_tokens,
         )
         session.create(plan)
-        session.configure_long_task(
-            self.state.issue_input, hard_constraints=self.state.hard_constraints
-        )
         # Persist before entering any modifying tool loop.
         self.state.control.plan_checkpoint = session.checkpoint()
         self.orchestrator._checkpoint_progress(self.state)

@@ -57,7 +57,7 @@ def test_plan_checkpoint_seals_and_verifies_long_task_state(tmp_path):
             )
 
 
-def test_context_manager_projects_long_task_state_into_protected_section(tmp_path):
+def test_context_manager_projects_long_task_state_into_protected_section(tmp_path, monkeypatch):
     (tmp_path / "value.py").write_text("value = 1\n")
     with session_for(tmp_path) as session:
         session.create(simple_plan(session))
@@ -82,6 +82,8 @@ def test_context_manager_projects_long_task_state_into_protected_section(tmp_pat
             read_history=lambda: [],
         )
         manager = ContextManager(agent, total_budget=6000)
+        # This fixture covers task projection, without a memory access context.
+        monkeypatch.setattr(manager, "_get_knowledge", lambda query: "")
         text, metadata = manager.build("request")
         assert "长任务状态" in text
         assert metadata["long_task_context"]["original_request"] == "request"

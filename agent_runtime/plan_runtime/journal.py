@@ -47,22 +47,32 @@ class PlanStore:
         self.db.close()
 
     def append(self, kind: str, payload: dict) -> int:
+        return self.append_many([(kind, payload)])[0]
+
+    def append_many(self, entries: list[tuple[str, dict]]) -> list[int]:
+        """Publish related facts in one SQLite transaction and checksum chain."""
         with self._lock, self.db:
             last = self.db.execute("SELECT seq, checksum FROM events ORDER BY seq DESC LIMIT 1")
             row = last.fetchone()
             seq, previous = (row[0] + 1, row[1]) if row else (1, "")
-            checksum = digest({"seq": seq, "kind": kind, "payload": payload, "previous": previous})
-            self.db.execute(
-                "INSERT INTO events VALUES (?, ?, ?, ?, ?)",
-                (
-                    seq,
-                    kind,
-                    json.dumps(payload, sort_keys=True, ensure_ascii=False),
-                    previous,
-                    checksum,
-                ),
-            )
-        return seq
+            sequences = []
+            for kind, payload in entries:
+                checksum = digest(
+                    {"seq": seq, "kind": kind, "payload": payload, "previous": previous}
+                )
+                self.db.execute(
+                    "INSERT INTO events VALUES (?, ?, ?, ?, ?)",
+                    (
+                        seq,
+                        kind,
+                        json.dumps(payload, sort_keys=True, ensure_ascii=False),
+                        previous,
+                        checksum,
+                    ),
+                )
+                sequences.append(seq)
+                seq, previous = seq + 1, checksum
+        return sequences
 
     def events(self) -> list[dict]:
         with self._lock:

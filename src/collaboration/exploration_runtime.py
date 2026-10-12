@@ -468,6 +468,7 @@ class ExplorationRuntime:
             if (
                 context["goal"] != state.original_request
                 or context["hard_constraints"] != state.hard_constraints
+                or context.get("task_context_revision") != state.context_revision
             ):
                 return "task_context_changed"
         observations = self._observations(data)

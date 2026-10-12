@@ -75,15 +75,27 @@ def test_required_context_failure_prevents_actual_model_call(tmp_path, native, f
     (tmp_path / "value.py").write_text("value = 1\n")
     with session_for(tmp_path) as session:
         session.create(simple_plan(session))
-        session.configure_long_task("task", hard_constraints=["must preserve"])
+        if failure != "request":
+            session.configure_long_task("task", hard_constraints=["must preserve"])
         if failure == "budget":
-            session.configure_long_task("task", hard_constraints=["unalterable " * 20000])
+            session.register_user_message("new-rule", "unalterable " * 20000)
+            session.submit_context_updates(
+                "new-rule",
+                expected_state_revision=session.long_task_state.state_revision,
+                expected_plan_version=1,
+                updates=[
+                    {
+                        "kind": "constraint",
+                        "action": "add",
+                        "statement": "unalterable " * 20000,
+                        "source_refs": [session.source_reference("new-rule")],
+                    }
+                ],
+            )
         elif failure == "state":
             session.long_task_state.original_request = "tampered without journal"
         elif failure == "plan":
             session.plan = replace(session.plan, state_revision=99)
-        elif failure == "request":
-            session.configure_long_task("")
         agent, client = _agent(tmp_path, session, native=native)
         if failure == "role":
             agent._prefix = replace(agent._prefix, role_text="unalterable role rule " * 20000)
