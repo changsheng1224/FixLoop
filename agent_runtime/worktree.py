@@ -10,7 +10,12 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from agent_runtime.state_root import managed_state_base
+from agent_runtime.state_root import (
+    managed_state_base,
+    managed_storage_root,
+    project_id,
+    workspace_id,
+)
 
 
 class WorktreeError(RuntimeError):
@@ -23,13 +28,13 @@ class WorktreeHandle:
     repo_root: Path
     path: Path
     branch: str
-    state_base: Path | None = None
+    state_base: Path | None = None  # Shared storage root, before project partitioning.
     ownership: str = "task"
     retention: str = "preserve"
     directory_identity: tuple[int, int] = ()
 
     def as_dict(self) -> dict:
-        return {
+        values = {
             key: str(value)
             if isinstance(value, Path)
             else list(value)
@@ -37,6 +42,15 @@ class WorktreeHandle:
             else value
             for key, value in asdict(self).items()
         }
+        return {**values, "project_id": self.project_id, "workspace_id": self.workspace_id}
+
+    @property
+    def project_id(self) -> str:
+        return project_id(self.repo_root)
+
+    @property
+    def workspace_id(self) -> str:
+        return workspace_id(self.path)
 
 
 def git_administration_options(cwd: Path) -> tuple[dict[str, str], list[str]]:
@@ -171,7 +185,7 @@ def create_worktree(
             raise WorktreeError("worktree path or branch already exists")
         lease = _lease_path(root, run_id, state_base)
         lease.parent.mkdir(parents=True, exist_ok=True)
-        handle = WorktreeHandle(run_id, root, wt, branch, managed_state_base(root, state_base))
+        handle = WorktreeHandle(run_id, root, wt, branch, managed_storage_root(root, state_base))
         with lease.open("x", encoding="utf-8") as stream:
             json.dump({**handle.as_dict(), "status": "creating", "heartbeat": time.time()}, stream)
         add = _git(root, "worktree", "add", "-b", branch, str(wt), base_ref, check=False)
@@ -194,7 +208,10 @@ def _owned_record(handle: WorktreeHandle) -> tuple[Path, dict]:
         raw = json.loads(lease.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raise WorktreeError("worktree ownership unavailable")
-        for key in ("run_id", "repo_root", "path", "branch", "state_base", "ownership"):
+        for key in (
+            "project_id", "workspace_id", "run_id", "repo_root", "path", "branch",
+            "state_base", "ownership",
+        ):
             if raw.get(key) != handle.as_dict()[key]:
                 raise WorktreeError("worktree ownership mismatch")
         stat = handle.path.stat()
@@ -255,7 +272,8 @@ def adopt_worktree(
         if branch and actual != branch:
             raise WorktreeError("worktree branch changed")
         handle = WorktreeHandle(
-            _safe_run_id(run_id), root, wt, actual, managed_state_base(root, state_base), ownership
+            _safe_run_id(run_id), root, wt, actual,
+            managed_storage_root(root, state_base), ownership,
         )
         stat = wt.stat()
         handle.directory_identity = (stat.st_dev, stat.st_ino)

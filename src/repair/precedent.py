@@ -26,10 +26,15 @@ def _precedent_topic_path(repo_root: str) -> Path:
 class RepairPrecedentStore:
     """Repair 先例存储：读相似修复 + 写成功先例。"""
 
-    def __init__(self, repo_root: str, *, state_root: str = ""):
-        from agent_runtime.state_root import state_root_for
+    def __init__(self, repo_root: str, *, state_root: str = "", access_context=None):
+        from agent_runtime.features.memory.access import MemoryAccessContext
+        from agent_runtime.state_root import project_id, state_root_for, workspace_id
 
-        self._path = _precedent_topic_path(state_root_for(repo_root, state_root))
+        root = state_root_for(repo_root, state_root)
+        self.access = access_context or MemoryAccessContext(
+            project_id(repo_root), workspace_id(root),
+        )
+        self._path = _precedent_topic_path(root)
 
     # ---- 读 ----
 
@@ -114,7 +119,23 @@ class RepairPrecedentStore:
             "case_id": case_id or "",
             "summary": summary[:200],
             "ts": int(time.time()),
+            "project_id": self.access.project_id,
+            "user_id": self.access.user_id,
+            "task_id": self.access.task_id,
+            "scope": "run",
         }
+        if not self.access.allows(entry, write=True):
+            raise PermissionError("repair precedent requires a run owner")
+        if self._path.is_file():
+            for line in self._path.read_text(encoding="utf-8").splitlines():
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(record, dict) and "issue_type" in record and not self.access.allows(
+                    record, write=True,
+                ):
+                    raise PermissionError("cannot overwrite precedents outside caller boundary")
         entries = self._read_all()
         # 去重：同 issue_type + case_id 覆盖旧条目
         if case_id:
@@ -138,7 +159,10 @@ class RepairPrecedentStore:
                 continue
             try:
                 data = json.loads(line)
-                if isinstance(data, dict) and "issue_type" in data:
+                if (
+                    isinstance(data, dict) and "issue_type" in data
+                    and self.access.allows(data)
+                ):
                     entries.append(data)
             except (json.JSONDecodeError, ValueError):
                 pass

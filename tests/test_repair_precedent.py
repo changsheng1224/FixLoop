@@ -23,7 +23,20 @@ def test_external_precedents_do_not_recall_project_or_other_run(tmp_path):
 
 def _write_raw(path: Path, lines: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    access = RepairPrecedentStore(str(path.parents[3])).access
+    owned = []
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except ValueError:
+            owned.append(line)
+            continue
+        record.update(
+            project_id=access.project_id, user_id=access.user_id,
+            task_id=access.task_id, scope="run",
+        )
+        owned.append(json.dumps(record))
+    path.write_text("\n".join(owned) + "\n", encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

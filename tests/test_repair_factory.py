@@ -33,6 +33,25 @@ class FakeSandboxEnvironmentManager:
 
 
 class TestRuntimeWiring:
+    def test_sandbox_factory_keeps_shared_root_and_source_project(self, tmp_path):
+        from agent_runtime.linux_sandbox.task_context import SandboxTaskBinding
+        from agent_runtime.providers.clients import FakeModelClient
+        from agent_runtime.state_root import project_id
+
+        source, copy, storage = (tmp_path / name for name in ("source", "copy", "storage"))
+        source.mkdir()
+        copy.mkdir()
+        orch = wire_orchestrator(
+            FakeModelClient([]), str(copy), project_root=str(source), state_root=str(storage),
+            execution_backend="wsl_bwrap", sandbox_environment_manager=FakeSandboxEnvironmentManager(),
+            workspace_policy="provided", skip_verify=True, dry_run=True,
+        )
+        spec = orch._sandbox_task_spec
+        assert spec.state_base == str(storage)
+        binding = SandboxTaskBinding.create(copy, copy, "run", spec)
+        assert binding.project_id == project_id(source)
+        assert Path(binding.state_root) == storage / "projects" / project_id(source) / "tasks" / "run"
+
     def test_external_state_and_exact_workspace_reach_patcher_and_verifier(
         self, tmp_path, monkeypatch
     ):

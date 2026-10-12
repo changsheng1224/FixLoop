@@ -122,6 +122,7 @@ def test_cli_sandbox_backend_does_not_use_removed_p3_gate(monkeypatch, capsys, t
 
     monkeypatch.setattr("src.cli.load_dotenv", lambda: None)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "fake-key")
+    monkeypatch.setenv("FIXLOOP_STATE_ROOT", str(temp_workspace.parent / "state"))
 
     def unavailable(*args, **kwargs):
         raise RequiredVerifierError("wsl_bwrap sandbox unavailable: test environment")

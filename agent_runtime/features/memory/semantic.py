@@ -6,60 +6,39 @@
 3. ``HF_ENDPOINT=https://hf-mirror.com`` — 首次下载走国内镜像
 """
 
-import hashlib
 import os
 import threading
 from pathlib import Path
 
-_SEMANTIC_MODEL = None
+from agent_runtime.features.memory.embedding_cache import (
+    SEMANTIC_MODEL_ID,
+    EmbeddingCache,
+    EmbeddingConfig,
+)
+
+_SEMANTIC_MODELS = {}
 _SEMANTIC_LOCK = threading.Lock()
 _SEMANTIC_INIT_LOGGED = False
-_SEMANTIC_MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
+_SEMANTIC_MODEL_ID = SEMANTIC_MODEL_ID
 EMBED_MAX_CHARS = 800  # ~256 tokens for English（all-MiniLM-L6-v2 max_seq_length）
-_EMBED_CACHE_DIR = Path(".agent/embed_cache")
 
 # 模块级 embed_cache 统计（跨 SemanticMemory 实例共享）
 _embed_cache_hits = 0
 _embed_cache_misses = 0
+_EMBED_STATS_LOCK = threading.Lock()
 
 
 def get_embed_cache_stats() -> tuple[int, int]:
     """返回 (hits, misses)，无需实例化模型。"""
-    return _embed_cache_hits, _embed_cache_misses
+    with _EMBED_STATS_LOCK:
+        return _embed_cache_hits, _embed_cache_misses
 
 
 def get_embed_cache_hit_rate() -> float:
     """embed_cache 命中率，无需实例化模型。"""
-    total = _embed_cache_hits + _embed_cache_misses
-    return round(_embed_cache_hits / total, 3) if total > 0 else 0.0
-
-
-def _embed_cache_path(content_hash: str) -> Path:
-    return _EMBED_CACHE_DIR / f"{content_hash}.npy"
-
-
-def _load_embed_cache(content_hash: str):
-    """从磁盘加载缓存的 embedding；不存在返回 None。"""
-    path = _embed_cache_path(content_hash)
-    if not path.is_file():
-        return None
-    try:
-        import numpy as np
-
-        return np.load(path)
-    except Exception:
-        return None
-
-
-def _save_embed_cache(content_hash: str, embedding):
-    """将 embedding 缓存到磁盘。"""
-    try:
-        _EMBED_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        import numpy as np
-
-        np.save(str(_embed_cache_path(content_hash)), embedding)
-    except Exception:
-        pass
+    hits, misses = get_embed_cache_stats()
+    total = hits + misses
+    return round(hits / total, 3) if total > 0 else 0.0
 
 
 def _hf_cache_dir() -> Path:
@@ -105,13 +84,14 @@ def _configure_hf_hub(model_id: str) -> None:
         os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 
-def _get_semantic_model():
-    global _SEMANTIC_MODEL, _SEMANTIC_INIT_LOGGED
-    if _SEMANTIC_MODEL is not None:
-        return _SEMANTIC_MODEL
+def _get_semantic_model(config: EmbeddingConfig):
+    global _SEMANTIC_INIT_LOGGED
+    key = (config.model_id, config.revision, config.max_seq_length)
+    if key in _SEMANTIC_MODELS:
+        return _SEMANTIC_MODELS[key]
     with _SEMANTIC_LOCK:
-        if _SEMANTIC_MODEL is not None:
-            return _SEMANTIC_MODEL
+        if key in _SEMANTIC_MODELS:
+            return _SEMANTIC_MODELS[key]
         try:
             import sys as _sys
 
@@ -121,15 +101,19 @@ def _get_semantic_model():
                     "[agent_runtime] 加载语义模型 (~90MB)...", file=_sys.stderr, end="", flush=True
                 )
 
-            _configure_hf_hub(_SEMANTIC_MODEL_ID)
+            _configure_hf_hub(config.model_id)
 
             from sentence_transformers import SentenceTransformer
 
-            _SEMANTIC_MODEL = SentenceTransformer(_SEMANTIC_MODEL_ID)
+            model = SentenceTransformer(
+                config.model_id, revision=config.revision, device="cpu", trust_remote_code=False,
+            )
+            model.max_seq_length = config.max_seq_length
+            _SEMANTIC_MODELS[key] = model
 
             if _SEMANTIC_INIT_LOGGED:
                 print(" ✅", file=_sys.stderr)
-            return _SEMANTIC_MODEL
+            return model
         except Exception:
             if _SEMANTIC_INIT_LOGGED:
                 import sys as _sys
@@ -145,12 +129,15 @@ class ChunkedMemoryNote:
     search 时 query 与所有 chunk 的 cosine 取 max（max-pool）。
     """
 
-    def __init__(self, text: str, note: dict, model, max_chars: int = EMBED_MAX_CHARS):
+    def __init__(
+        self, text: str, note: dict, model, max_chars: int = EMBED_MAX_CHARS, *, encoder=None,
+    ):
         self._text = text
         self._note = note
         self._chunks: list[dict] = []
         self._model = model
         self._max_chars = max_chars
+        self._encoder = encoder or (model.encode if model is not None else None)
         self._embed_chunks()
 
     @property
@@ -169,14 +156,7 @@ class ChunkedMemoryNote:
         segments = _chunk_text(text, self._max_chars)
         for seg in segments:
             try:
-                emb = None
-                content_hash = hashlib.sha256(seg.encode("utf-8")).hexdigest()[:32]
-                cached = _load_embed_cache(content_hash)
-                if cached is not None:
-                    emb = cached
-                else:
-                    emb = self._model.encode(seg)
-                    _save_embed_cache(content_hash, emb)
+                emb = self._encoder(seg)
                 self._chunks.append({"text": seg[:200], "embedding": emb})
             except Exception:
                 pass
@@ -202,9 +182,43 @@ class ChunkedMemoryNote:
 class SemanticMemory:
     """基于 SentenceTransformer embedding 的 episodic 语义检索。"""
 
-    def __init__(self):
-        self.model = _get_semantic_model()
+    def __init__(self, *, cache_root=None, config: EmbeddingConfig | None = None):
+        self.config = config or EmbeddingConfig()
+        self.cache = EmbeddingCache(cache_root, self.config) if cache_root is not None else None
+        self.model = _get_semantic_model(self.config)
         self._notes: list[dict] = []
+
+    def empty_copy(self):
+        """Share model and cache, never the current retrieval corpus."""
+        other = object.__new__(type(self))
+        other.config, other.cache, other.model = self.config, self.cache, self.model
+        other._notes = []
+        return other
+
+    def embed(self, text: str):
+        """Encode exactly this text with a versioned profile; no implicit cwd cache."""
+        global _embed_cache_hits, _embed_cache_misses
+
+        import numpy as np
+
+        if self.model is None:
+            raise ValueError("semantic model unavailable")
+        if self.cache is not None:
+            vector = self.cache.load(text)
+            with _EMBED_STATS_LOCK:
+                if vector is not None:
+                    _embed_cache_hits += 1
+                else:
+                    _embed_cache_misses += 1
+            if vector is not None:
+                return vector
+        vector = np.asarray(self.model.encode(
+            text, convert_to_numpy=True, precision="float32",
+            normalize_embeddings=self.config.normalize_embeddings,
+        ), dtype=np.float32)
+        if self.cache is not None:
+            self.cache.save(text, vector)
+        return vector
 
     @property
     def embed_cache_hit_rate(self) -> float:
@@ -218,34 +232,16 @@ class SemanticMemory:
 
     def add(self, note: dict):
         """为 note 计算 embedding 并缓存（短文本单 embed，长文本 chunk+max-pool）。"""
-        global _embed_cache_hits, _embed_cache_misses
-
         if not self.available:
             return
         text = note.get("text", "")
         if not text:
             return
         try:
-            if len(text) <= EMBED_MAX_CHARS:
+            if len(text) <= self.config.max_chars:
                 # 短文本：单 embedding
-                truncated = _truncate_head_tail(text)
-                content_hash = hashlib.sha256(truncated.encode("utf-8")).hexdigest()[:32]
-                embedding = _load_embed_cache(content_hash)
-                if embedding is not None:
-                    _embed_cache_hits += 1
-                    self._notes.append(
-                        {
-                            **note,
-                            "memory_id": note.get(
-                                "memory_id", f"EP-{note.get('note_index', len(self._notes))}"
-                            ),
-                            "embedding": embedding,
-                        }
-                    )
-                    return
-                _embed_cache_misses += 1
-                embedding = self.model.encode(truncated)
-                _save_embed_cache(content_hash, embedding)
+                truncated = _truncate_head_tail(text, self.config.max_chars)
+                embedding = self.embed(truncated)
                 self._notes.append(
                     {
                         **note,
@@ -257,7 +253,9 @@ class SemanticMemory:
                 )
             else:
                 # 长文本：chunk + max-pool
-                cmn = ChunkedMemoryNote(text, note, self.model)
+                cmn = ChunkedMemoryNote(
+                    text, note, self.model, self.config.max_chars, encoder=self.embed,
+                )
                 self._notes.append(cmn)
         except Exception:
             pass
@@ -270,7 +268,7 @@ class SemanticMemory:
             import numpy as np
 
             short_query = derive_embed_query(query)
-            query_emb = self.model.encode(short_query)
+            query_emb = self.embed(short_query)
             scores = []
             for note in self._notes:
                 if isinstance(note, ChunkedMemoryNote):
@@ -294,6 +292,8 @@ class SemanticMemory:
 
 def _chunk_text(text: str, max_chars: int = EMBED_MAX_CHARS) -> list[str]:
     """将长文本按 max_chars 分段（在空白边界切分，避免截断单词）。"""
+    if max_chars <= 0:
+        raise ValueError("max_chars must be positive")
     text = text.strip()
     if len(text) <= max_chars:
         return [text]
@@ -367,6 +367,7 @@ def recall_with_hyde(
     light_client=None,
     *,
     limit: int = 3,
+    semantic_memory: SemanticMemory | None = None,
 ) -> list[dict]:
     """HyDE 查询改写：LLM 生成假设性答案 → embed → 检索。
 
@@ -376,7 +377,9 @@ def recall_with_hyde(
     if not HYDE_ENABLED or light_client is None:
         # 降级：规则版 derive_embed_query
         rewritten = derive_embed_query(query)
-        return retrieval_candidates_semantic(state, rewritten, limit=limit)
+        return retrieval_candidates_semantic(
+            state, rewritten, limit=limit, semantic_memory=semantic_memory,
+        )
 
     try:
         prompt = HYDE_PROMPT.format(query=query[:300])
@@ -384,15 +387,19 @@ def recall_with_hyde(
         if hypothetical and hypothetical.strip():
             # 嵌入假设性答案并检索
             rewritten = hypothetical.strip()[:200]
-            return retrieval_candidates_semantic(state, rewritten, limit=limit)
+            return retrieval_candidates_semantic(
+                state, rewritten, limit=limit, semantic_memory=semantic_memory,
+            )
     except Exception:
         pass
 
     # 失败降级
-    return retrieval_candidates_semantic(state, query, limit=limit)
+    return retrieval_candidates_semantic(state, query, limit=limit, semantic_memory=semantic_memory)
 
 
-def retrieval_candidates_semantic(state: dict, query: str, limit: int = 3) -> list[dict]:
+def retrieval_candidates_semantic(
+    state: dict, query: str, limit: int = 3, *, semantic_memory: SemanticMemory | None = None,
+) -> list[dict]:
     """合并 keyword 与 semantic 检索结果，按 kind 权重排序后去重。
 
     kind 权重顺序: error(2.0) > decision(1.5) > observation(1.0)。
@@ -401,7 +408,7 @@ def retrieval_candidates_semantic(state: dict, query: str, limit: int = 3) -> li
     from agent_runtime.features.memory.episodic import KIND_WEIGHTS, retrieval_candidates
 
     kw_results = retrieval_candidates(state, query, limit)
-    sem = SemanticMemory()
+    sem = semantic_memory.empty_copy() if semantic_memory is not None else SemanticMemory()
     for note in state.get("episodic_notes", [])[-20:]:
         sem.add(note)
     sem_results = sem.search(query, limit)

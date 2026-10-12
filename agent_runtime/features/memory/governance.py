@@ -112,6 +112,9 @@ class PolicyRecord:
     source: str = ""
     path_prefix: str = ""
     created_at: float = field(default_factory=time.time)
+    project_id: str = ""
+    user_id: str = ""
+    task_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return self.__dict__.copy()
@@ -157,6 +160,7 @@ class GovernedMemory:
     conflict_status: str = "none"
     conflict_ids: list[str] = field(default_factory=list)
     user_id: str = ""
+    project_id: str = ""
     task_id: str = ""
     usage_successes: int = 0
     usage_failures: int = 0
@@ -324,15 +328,33 @@ class MemoryGovernanceService:
         repo_root: str = "",
         user_id: str = "",
         task_id: str = "",
+        access_context=None,
+        repo_fingerprint: str = "",
+        version_provider=None,
         probe: Callable[[ConflictRecord, list[dict[str, Any]]], dict[str, Any] | None]
         | None = None,
     ):
         self.state = state
         self.repo_root = repo_root
-        self.user_id = str(user_id or "")
-        self.task_id = str(task_id or "")
+        from uuid import uuid4
+
+        from agent_runtime.features.memory.access import MemoryAccessContext
+        from agent_runtime.state_root import project_id
+
+        namespace = state.setdefault("_memory_namespace", uuid4().hex)
+        self._trusted_access = access_context is not None
+        self.access = access_context or MemoryAccessContext(
+            project_id(repo_root) if repo_root else "state-" + namespace,
+            str(task_id or namespace), str(user_id or "local"),
+        )
+        self.user_id, self.task_id = self.access.user_id, self.access.task_id
         self.probe = probe
-        self.current_repo_fingerprint = repository_fingerprint(repo_root) if repo_root else ""
+        self._version_provider = version_provider
+        self._current_repo_fingerprint = repo_fingerprint or (
+            repository_fingerprint(repo_root) if repo_root else ""
+        )
+        if version_provider is not None:
+            self._current_repo_fingerprint = None
         self.audit_log = state.setdefault("memory_governance_audit", [])
         self.registry = state.setdefault("governed_memories", {})
         self.policies = state.setdefault("memory_policies", {})
@@ -346,6 +368,7 @@ class MemoryGovernanceService:
                 self._hydrate_from_store()
             except (OSError, sqlite3.Error):
                 self.store = None
+        state["memory_persistence"] = "enabled" if self.store else "memory_only"
         self.stats = {
             "normalized": 0,
             "supported": 0,
@@ -367,23 +390,47 @@ class MemoryGovernanceService:
             "revalidation_queued": 0,
         }
 
+    @property
+    def current_repo_fingerprint(self) -> str:
+        if self._current_repo_fingerprint is None:
+            self._current_repo_fingerprint = self._version_provider()
+        return self._current_repo_fingerprint
+
+    def _readable(self, raw: dict) -> bool:
+        if not self.access.allows(raw, check_version=False):
+            return False
+        return self.access.allows(
+            raw, version=self.current_repo_fingerprint
+            if raw.get("scope") == "repository_version" else "",
+        )
+
+    def _owned(self, memory_id: str, *, write: bool = True) -> dict | None:
+        raw = self.registry.get(memory_id)
+        allowed = raw and (self.access.allows(raw, write=True) if write else self._readable(raw))
+        return raw if allowed else None
+
+    def _writable_records(self):
+        return [raw for raw in self.registry.values() if self.access.allows(raw, write=True)]
+
     def _hydrate_from_store(self) -> None:
         if not self.store or self.registry:
             return
         for memory in self.store.list_memories():
             memory_id = str(memory.get("memory_id", ""))
-            if memory_id:
+            if memory_id and self.access.allows(memory, write=True):
+                self.registry[memory_id] = memory
+            elif memory_id and self._readable(memory):
                 self.registry[memory_id] = memory
 
     def _persist_memory(self, memory_id: str) -> None:
-        if self.store and memory_id in self.registry:
+        if self.store and self._owned(memory_id):
             raw = self.registry[memory_id]
             expected = int(raw.get("version", 0) or 0) or None
             version = self.store.upsert_memory(dict(raw), expected_version=expected)
             raw["version"] = version
 
     def _persist_audit(self, action: str, object_id: str, payload: dict[str, Any]) -> None:
-        if self.store:
+        if self.store and not self.access.shared_read:
             self.store.append_audit(action, object_id, payload)
 
     def record_recall(
@@ -398,9 +445,13 @@ class MemoryGovernanceService:
         prompt_id: str = "",
     ) -> list[dict[str, Any]]:
         """Record recall without treating retrieval as verification."""
+        if task_id and task_id != self.task_id:
+            return []
         events = self.state.setdefault("memory_usage_events", [])
         created: list[dict[str, Any]] = []
-        normalized_ids = list(dict.fromkeys(str(item) for item in memory_ids if item))
+        normalized_ids = list(dict.fromkeys(
+            str(item) for item in memory_ids if item and self._owned(str(item), write=False)
+        ))
         self.state["recalled_memory_ids"] = normalized_ids
         for memory_id in normalized_ids:
             event = MemoryUsageEvent(
@@ -425,7 +476,7 @@ class MemoryGovernanceService:
                     )
             events.append(event)
             created.append(event)
-            if self.store:
+            if self.store and not self.access.shared_read:
                 self.store.append_usage_event(event)
         del events[:-200]
         return created
@@ -446,6 +497,10 @@ class MemoryGovernanceService:
         decision_reason: str = "",
     ) -> dict[str, Any]:
         """Record projected/cited/applied without changing trust scores."""
+        if task_id and task_id != self.task_id:
+            return {}
+        if not self._owned(memory_id, write=False):
+            return {}
         event = MemoryUsageEvent(
             memory_id=str(memory_id),
             task_id=str(task_id or self.task_id),
@@ -464,7 +519,7 @@ class MemoryGovernanceService:
         events.append(event)
         del events[:-200]
         self.stats["usage_events"] += 1
-        if self.store:
+        if self.store and not self.access.shared_read:
             self.store.append_usage_event(event)
         return event
 
@@ -512,6 +567,8 @@ class MemoryGovernanceService:
         path_prefix: str = "",
     ) -> PolicyRecord:
         """Register explicit guidance separately from generated memory."""
+        if self.access.shared_read:
+            raise PermissionError("shared project memory is read-only")
         normalized_key = str(key).strip().lower()
         policy_id = (
             "P-"
@@ -527,6 +584,9 @@ class MemoryGovernanceService:
             scope=str(scope),
             source=str(source),
             path_prefix=str(path_prefix),
+            project_id=self.access.project_id,
+            user_id=self.user_id,
+            task_id=self.task_id if scope in {"run", "task"} else "",
         )
         self.policies[policy_id] = policy.to_dict()
         self._audit_control("policy_add", policy_id, metadata={"key": normalized_key})
@@ -537,6 +597,8 @@ class MemoryGovernanceService:
         normalized_key = str(key).strip().lower()
         matches = []
         for raw in self.policies.values():
+            if not self.access.allows(raw, write=True):
+                continue
             if str(raw.get("key", "")).strip().lower() != normalized_key:
                 continue
             prefix = str(raw.get("path_prefix", "") or "")
@@ -555,12 +617,18 @@ class MemoryGovernanceService:
         )
 
     def ingest(self, candidate, *, scope: str = "", repo_fingerprint: str = "") -> GovernedMemory:
+        if self.access.shared_read:
+            raise PermissionError("shared project memory is read-only")
         memory = normalize_candidate(
             candidate,
             scope=scope,
-            repo_fingerprint=repo_fingerprint or self.current_repo_fingerprint,
+            repo_fingerprint=repo_fingerprint or (
+                self.current_repo_fingerprint
+                if scope == "repository_version" or self._version_provider is None else ""
+            ),
         )
-        memory.user_id = self.user_id if memory.scope == MemoryScope.USER.value else ""
+        memory.user_id = self.user_id
+        memory.project_id = self.access.project_id
         memory.task_id = (
             self.task_id
             if memory.scope
@@ -570,6 +638,19 @@ class MemoryGovernanceService:
             }
             else ""
         )
+        if memory.scope not in {item.value for item in MemoryScope}:
+            raise ValueError("unknown memory scope")
+        if (
+            not self.access.project_id or not self.user_id
+            or (memory.scope in {"run", "task"} and not self.task_id)
+        ):
+            raise PermissionError("memory requires a complete caller identity")
+        memory.memory_id = self.access.memory_id(memory.memory_id, memory.scope)
+        memory.source_run_id = (
+            self.task_id if self._trusted_access else memory.source_run_id or self.task_id
+        )
+        if memory.memory_id in self.registry and not self._owned(memory.memory_id):
+            raise PermissionError("cannot replace memory outside caller boundary")
         memory.key = _redact_value(memory.key)
         memory.value = _redact_value(memory.value)
         memory.source = _redact_value(memory.source)
@@ -583,7 +664,7 @@ class MemoryGovernanceService:
         return memory
 
     def bind_evidence(self, memory_id: str, refs: list[str]) -> bool:
-        raw = self.registry.get(memory_id)
+        raw = self._owned(memory_id)
         if not raw:
             return False
         raw["evidence_refs"] = list(dict.fromkeys([*raw.get("evidence_refs", []), *refs]))
@@ -601,7 +682,7 @@ class MemoryGovernanceService:
     def validate(
         self, memory_id: str, *, passed: bool, evidence_refs: list[str] | None = None
     ) -> bool:
-        raw = self.registry.get(memory_id)
+        raw = self._owned(memory_id)
         if not raw:
             return False
         memory = GovernedMemory(**raw)
@@ -668,7 +749,11 @@ class MemoryGovernanceService:
     def consolidate(self) -> None:
         by_key: dict[tuple[str, str], GovernedMemory] = {}
         inactive: dict[str, GovernedMemory] = {}
-        for raw in list(self.registry.values()):
+        foreign = {
+            key: raw for key, raw in self.registry.items()
+            if not self.access.allows(raw, write=True)
+        }
+        for raw in self._writable_records():
             memory = GovernedMemory(**raw)
             if memory.status in {
                 MemoryStatus.STALE.value,
@@ -702,6 +787,7 @@ class MemoryGovernanceService:
             by_key[(memory.scope, memory.memory_id)] = memory
             self._audit("conflict", existing, conflict.conflict_id)
         self.registry = {
+            **foreign,
             **{memory_id: memory.to_dict() for memory_id, memory in inactive.items()},
             **{memory.memory_id: memory.to_dict() for memory in by_key.values()},
         }
@@ -709,9 +795,11 @@ class MemoryGovernanceService:
         self.state["memory_conflicts"] = self.conflicts
 
     def refresh_versions(self) -> None:
+        if not any(raw.get("scope") == "repository_version" for raw in self._writable_records()):
+            return
         if not self.current_repo_fingerprint:
             return
-        for raw in self.registry.values():
+        for raw in self._writable_records():
             if raw.get("scope") == MemoryScope.REPOSITORY_VERSION.value and raw.get(
                 "repo_fingerprint"
             ) not in ("", self.current_repo_fingerprint):
@@ -746,6 +834,8 @@ class MemoryGovernanceService:
         if not raw_conflict:
             return False
         candidates = set(raw_conflict.get("candidate_ids", []))
+        if not candidates or any(not self._owned(item) for item in candidates):
+            return False
         winners = list(dict.fromkeys(winner_ids))
         if not winners or any(winner not in candidates for winner in winners):
             return False
@@ -888,6 +978,10 @@ class MemoryGovernanceService:
         required = {key.strip().lower() for key in (required_keys or set())}
         resolved = 0
         for raw in list(self.conflicts.values()):
+            if not raw.get("candidate_ids") or any(
+                not self._owned(item) for item in raw["candidate_ids"]
+            ):
+                continue
             if raw.get("status") == ConflictStatus.RESOLVED.value:
                 continue
             conflict = ConflictRecord(**raw)
@@ -914,6 +1008,8 @@ class MemoryGovernanceService:
             dict(raw)
             for raw in self.conflicts.values()
             if raw.get("status") != ConflictStatus.RESOLVED.value
+            and raw.get("candidate_ids")
+            and all(self._owned(item, write=False) for item in raw.get("candidate_ids", []))
             and any(token in str(raw.get("key", "")).lower() for token in tokens)
         ]
 
@@ -927,7 +1023,7 @@ class MemoryGovernanceService:
 
     def promote_eligible(self, *, user_confirmed: bool = False) -> int:
         count = 0
-        for raw in self.registry.values():
+        for raw in self._writable_records():
             memory = GovernedMemory(**raw)
             allowed, reason = can_promote(memory, user_confirmed=user_confirmed)
             if not allowed:
@@ -936,13 +1032,14 @@ class MemoryGovernanceService:
                 continue
             memory.status = MemoryStatus.DURABLE.value
             self.registry[memory.memory_id] = memory.to_dict()
+            self._persist_memory(memory.memory_id)
             count += 1
             self.stats["promoted"] += 1
             self._audit("promote", memory)
         return count
 
     def inspect(self, memory_id: str) -> dict[str, Any] | None:
-        raw = self.registry.get(memory_id)
+        raw = self._owned(memory_id, write=False)
         return dict(raw) if raw else None
 
     def list_memories(
@@ -951,7 +1048,8 @@ class MemoryGovernanceService:
         rows = [
             dict(raw)
             for raw in self.registry.values()
-            if (not status or raw.get("status") == status)
+            if self._readable(raw)
+            and (not status or raw.get("status") == status)
             and (not scope or raw.get("scope") == scope)
         ]
         rows.sort(key=lambda raw: float(raw.get("last_seen_at", 0.0)), reverse=True)
@@ -961,13 +1059,15 @@ class MemoryGovernanceService:
         rows = [
             dict(raw)
             for raw in self.conflicts.values()
-            if not status or raw.get("status") == status
+            if raw.get("candidate_ids")
+            and all(self._owned(item, write=False) for item in raw["candidate_ids"])
+            and (not status or raw.get("status") == status)
         ]
         rows.sort(key=lambda raw: float(raw.get("created_at", 0.0)), reverse=True)
         return rows[: max(0, int(limit))]
 
     def confirm(self, memory_id: str, *, evidence_ref: str = "user:confirmed") -> bool:
-        raw = self.registry.get(memory_id)
+        raw = self._owned(memory_id)
         if not raw:
             return False
         raw["authority"] = MemoryAuthority.USER_CONFIRMED.value
@@ -983,7 +1083,7 @@ class MemoryGovernanceService:
         return True
 
     def reject(self, memory_id: str, *, reason: str = "user_rejected") -> bool:
-        raw = self.registry.get(memory_id)
+        raw = self._owned(memory_id)
         if not raw:
             return False
         raw["status"] = MemoryStatus.REJECTED.value
@@ -993,9 +1093,10 @@ class MemoryGovernanceService:
         return True
 
     def forget(self, memory_id: str) -> bool:
-        raw = self.registry.pop(memory_id, None)
+        raw = self._owned(memory_id)
         if not raw:
             return False
+        self.registry.pop(memory_id)
         for conflict_id in list(raw.get("conflict_ids", [])):
             conflict = self.conflicts.get(conflict_id)
             if not conflict:
@@ -1033,7 +1134,7 @@ class MemoryGovernanceService:
         return True
 
     def pin(self, memory_id: str, *, pinned: bool = True) -> bool:
-        raw = self.registry.get(memory_id)
+        raw = self._owned(memory_id)
         if not raw:
             return False
         raw["pinned"] = bool(pinned)
@@ -1042,6 +1143,11 @@ class MemoryGovernanceService:
         return True
 
     def user_resolve(self, conflict_id: str, winner_ids: list[str]) -> bool:
+        conflict = self.conflicts.get(conflict_id)
+        if not conflict or not conflict.get("candidate_ids") or any(
+            not self._owned(item) for item in conflict["candidate_ids"]
+        ) or any(item not in conflict["candidate_ids"] for item in winner_ids):
+            return False
         for memory_id in winner_ids:
             if not self.confirm(memory_id, evidence_ref="user:conflict_resolution"):
                 return False
@@ -1056,7 +1162,7 @@ class MemoryGovernanceService:
 
     def demote_invalid(self) -> int:
         count = 0
-        for raw in self.registry.values():
+        for raw in self._writable_records():
             if raw.get("status") not in {
                 MemoryStatus.ACTIVE.value,
                 MemoryStatus.DURABLE.value,
@@ -1079,7 +1185,8 @@ class MemoryGovernanceService:
         expired = [
             memory_id
             for memory_id, raw in self.registry.items()
-            if float(raw.get("expires_at", 0.0) or 0.0) > 0
+            if self.access.allows(raw, write=True)
+            and float(raw.get("expires_at", 0.0) or 0.0) > 0
             and float(raw.get("expires_at", 0.0)) <= current
         ]
         for memory_id in expired:
@@ -1101,9 +1208,8 @@ class MemoryGovernanceService:
     ) -> list[dict]:
         """Recall memories within the caller's identity boundary.
 
-        User memories require the same user id; run/task memories require the
-        same task id. Repository memories remain workspace-scoped and are
-        additionally checked against the current repository fingerprint.
+        Ownership is checked before ranking. Caller filters can narrow access;
+        version-scoped facts additionally require an exact current version.
         """
         tokens = _query_tokens(query)
         caller_user = self.user_id if user_id is None else str(user_id or "")
@@ -1117,12 +1223,14 @@ class MemoryGovernanceService:
             "run": 0.2,
         }
         for raw in self.registry.values():
+            if not self._readable(raw):
+                continue
             if raw.get("status") in {"rejected", "conflicted", "stale", "demoted"}:
                 continue
             if raw.get("scope") == MemoryScope.USER.value and raw.get("user_id") != caller_user:
                 continue
             if raw.get("scope") in {MemoryScope.RUN.value, MemoryScope.TASK.value}:
-                if caller_task and raw.get("task_id") != caller_task:
+                if not caller_task or raw.get("task_id") != caller_task:
                     continue
             if scope and raw.get("scope") not in {scope, "repository"}:
                 continue
@@ -1139,7 +1247,7 @@ class MemoryGovernanceService:
             if not overlap:
                 continue
             version_match = (
-                not raw.get("repo_fingerprint")
+                raw.get("scope") != "repository_version"
                 or raw.get("repo_fingerprint") == self.current_repo_fingerprint
             )
             lexical = overlap / max(len(tokens), 1)
@@ -1190,7 +1298,7 @@ class MemoryGovernanceService:
         for item in scored[:limit]:
             item["retrieve_count"] = int(item.get("retrieve_count", 0)) + 1
             raw = self.registry.get(item["memory_id"])
-            if raw:
+            if raw and not self.access.shared_read:
                 raw["retrieve_count"] = item["retrieve_count"]
         recalled_ids = [item["memory_id"] for item in scored[:limit]]
         self.state["recalled_memory_ids"] = recalled_ids
@@ -1224,10 +1332,12 @@ class MemoryGovernanceService:
         decision_reason: str = "",
     ) -> bool:
         """Feed post-recall repair outcome back into memory quality."""
-        raw = self.registry.get(memory_id)
+        raw = self._owned(memory_id)
         if not raw:
             return False
         effective_task = self.task_id if task_id is None else str(task_id or "")
+        if not effective_task or effective_task != self.task_id:
+            return False
         if raw.get("scope") == MemoryScope.USER.value and raw.get("user_id") != self.user_id:
             return False
         if raw.get("scope") in {MemoryScope.RUN.value, MemoryScope.TASK.value} and (

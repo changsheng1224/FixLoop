@@ -1762,9 +1762,10 @@ class AgentLoop:
         mem = self.agent.session.get("memory")
         if not mem:
             return
+        from agent_runtime.features.memory.access import agent_governance
         from agent_runtime.features.memory.dream import dream_summary_to_trace, run_memory_dream
 
-        stats, dreamer = run_memory_dream(mem, durable_root=str(agent_state_root(self.agent)))
+        stats, dreamer = run_memory_dream(mem, governance=agent_governance(self.agent))
         if any(
             stats.get(k, 0)
             for k in (

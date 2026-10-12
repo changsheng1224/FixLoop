@@ -9,7 +9,6 @@ from typing import Literal
 
 from agent_runtime.config import AgentConfig
 from agent_runtime.prompt_prefix import build_prompt_prefix
-from agent_runtime.state_root import agent_state_root
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.tools import build_tool_registry
 
@@ -65,6 +64,15 @@ class Agent:
         # 构建工具上下文和注册表（允许外部注入）
         self.tool_context = tool_context or ToolContext(root=self._cwd)
         self.state_root = str(getattr(self.tool_context, "state_root", "") or "")
+        from agent_runtime.state_root import managed_storage_root
+
+        self.tool_context.project_root = str(Path(
+            self.tool_context.project_root or self._cwd
+        ).resolve())
+        self.tool_context.embedding_state_base = str(managed_storage_root(
+            self.tool_context.project_root, self.tool_context.embedding_state_base or None,
+            create=False,
+        ))
         self.tool_context.exploration_mode = config.code_exploration.mode
         self.tool_context.lsp_argv = config.code_exploration.server_argv
         self.tools = tools if tools is not None else build_tool_registry(self.tool_context)
@@ -75,6 +83,8 @@ class Agent:
 
         # 会话状态 + 记忆
         self.session: dict = self._new_session()
+        self._memory_session_id = self.session["id"]
+        self._memory_task_id = ""
         self.tool_context.observation_state = self.session
         if hasattr(self.config, "snapshot"):
             self.session["config_snapshot"] = self.config.snapshot()
@@ -110,12 +120,27 @@ class Agent:
         )
 
     @property
+    def memory_access(self):
+        from agent_runtime.features.memory.access import agent_access_context
+
+        return agent_access_context(self)
+
+    @property
     def semantic_memory(self):
         """首次访问时加载语义模型（全局单例，线程安全）。"""
         if self._semantic_memory is None:
             from agent_runtime.features.memory import SemanticMemory
+            from agent_runtime.features.memory.embedding_cache import project_embedding_cache_root
 
-            self._semantic_memory = SemanticMemory()
+            cache_root = None
+            try:
+                cache_root = project_embedding_cache_root(
+                    self.tool_context.project_root or self._cwd,
+                    self.tool_context.embedding_state_base or None,
+                )
+            except OSError:
+                pass  # Optional derived cache; an unwritable storage root disables persistence.
+            self._semantic_memory = SemanticMemory(cache_root=cache_root)
         return self._semantic_memory
 
     # ---- 公开方法 ----
@@ -148,6 +173,8 @@ class Agent:
         binding.attach(self.tool_context)
         self.tool_context.sandbox_backend = backend
         self.state_root = binding.state_root
+        self.tool_context.project_root = binding.project_root
+        self._memory_task_id = binding.task_id
         # Source-repository snapshots and warm evidence cannot describe another checkout.
         from agent_runtime.linux_sandbox.workspace_routing import (
             bind_workspace_tools,
@@ -177,8 +204,10 @@ class Agent:
         snapshot = self.session.get("config_snapshot")
         self.session = self._new_session()
         for key in ("session_scope", "session_identity"):
+            self.session[key]["project_id"] = binding.project_id
             self.session[key]["workspace_id"] = binding.mapping.workspace_id
             self.session[key]["task_id"] = binding.task_id
+            self.session[key]["run_id"] = binding.run_id
         if snapshot is not None:
             self.session["config_snapshot"] = snapshot
         self.tool_context.observation_state = self.session
@@ -197,6 +226,56 @@ class Agent:
                 self._l1_prefix,
                 workspace_text=workspace_text,
                 workspace_fingerprint=fingerprint,
+            )
+
+    def bind_repair_workspace(self, root: str, state_root: str, project: str, run_id: str) -> None:
+        """Bind a fresh host Agent to a controller-owned repair checkout."""
+        from dataclasses import replace
+
+        from agent_runtime.prompt_prefix import join_stable_parts
+        from agent_runtime.state_root import project_id, workspace_id
+        from agent_runtime.workspace import WorkspaceContext
+
+        if (
+            self.tool_context.sandbox_mode
+            or self.session.get("history")
+            or self.session.get("tool_observations")
+        ):
+            raise ValueError("repair_workspace_requires_fresh_host_agent")
+        service = self.tool_context.exploration_service
+        if service is not None:
+            service.close()
+        self.tool_context.exploration_service = None
+        self._cwd = self.tool_context.root = root
+        self.state_root = self.tool_context.state_root = state_root
+        self.tool_context.project_root = project
+        self._memory_task_id = run_id
+        self._workspace_pinned = True
+        self.workspace = WorkspaceContext.build(root)
+        self._warm_context = self._semantic_memory = None
+        snapshot = self.session.get("config_snapshot")
+        self.session = self._new_session()
+        for key in ("session_scope", "session_identity"):
+            self.session[key].update(
+                project_id=project_id(project), workspace_id=workspace_id(root),
+                task_id=run_id, run_id=run_id,
+            )
+        if snapshot is not None:
+            self.session["config_snapshot"] = snapshot
+        self.tool_context.observation_state = self.session
+        if self.tool_context.edit_lock is not None:
+            self.tool_context.edit_lock.read_set.clear()
+        workspace_text = self.workspace.text()
+        fingerprint = self.workspace.fingerprint()
+        self._prefix = replace(
+            self._prefix, workspace_text=workspace_text, workspace_fingerprint=fingerprint,
+            text=join_stable_parts(
+                self._prefix.stable_text, self._prefix.role_text, workspace_text
+            ),
+        )
+        if self._l1_prefix is not None:
+            self._l1_prefix = replace(
+                self._l1_prefix, workspace_text=workspace_text, workspace_fingerprint=fingerprint,
             )
 
     def pending_sandbox_approval(self) -> dict | None:
@@ -298,6 +377,15 @@ class Agent:
             old_service.close()
         # Registered tool closures already hold this context; preserve its identity.
         self.tool_context.root = current
+        self.tool_context.project_root = current
+        self._semantic_memory = None
+        if current != last_cwd:
+            from agent_runtime.features.memory import default_memory_state
+
+            self.session["memory"] = default_memory_state()
+            self.session.pop("_memory_candidates", None)
+            self._memory_task_id = ""
+            self._memory_session_id = self._new_session_id()
         self.tool_context.exploration_service = None
         self.tool_context.exploration_mode = self.config.code_exploration.mode
         self.tool_context.lsp_argv = self.config.code_exploration.server_argv
@@ -517,6 +605,14 @@ class Agent:
             config = AgentConfig()
 
         cwd = kwargs.pop("cwd", None) or workspace.repo_root
+        if Path(session_store.root).resolve() != Path(cwd).resolve():
+            raise ValueError("memory_session_workspace_mismatch")
+        from agent_runtime.state_root import project_id
+
+        source = getattr(kwargs.get("tool_context"), "project_root", "") or cwd
+        claimed_project = (session.get("session_scope") or {}).get("project_id")
+        if claimed_project and claimed_project != project_id(source):
+            raise ValueError("memory_session_project_mismatch")
 
         # 创建 Agent（先不注入 session）
         agent = cls(
@@ -529,6 +625,8 @@ class Agent:
 
         # 恢复 session 数据
         agent.session = session
+        agent._memory_session_id = session["id"]
+        agent.tool_context.observation_state = session
         # 恢复 memory 状态
         from agent_runtime.features.memory import default_memory_state
 
@@ -583,6 +681,7 @@ class Agent:
         import hashlib
 
         from agent_runtime.features.memory import default_memory_state
+        from agent_runtime.state_root import project_id
 
         session_id = self._new_session_id()
         workspace_id = hashlib.sha256(str(Path(self._cwd).resolve()).encode()).hexdigest()[:16]
@@ -592,6 +691,7 @@ class Agent:
             "revision": 0,
             "session_scope": {
                 "session_id": session_id,
+                "project_id": project_id(self.tool_context.project_root),
                 "user_id": "",
                 "workspace_id": workspace_id,
             },
@@ -625,15 +725,10 @@ class Agent:
         mem = self.session["memory"]
         recalled_ids = list(mem.get("recalled_memory_ids") or [])
         if recalled_ids:
-            from agent_runtime.features.memory.governance import MemoryGovernanceService
+            from agent_runtime.features.memory.access import agent_governance
 
+            governance = agent_governance(self)
             identity = mem.get("memory_identity") or {}
-            governance = MemoryGovernanceService(
-                mem,
-                repo_root=str(agent_state_root(self)),
-                user_id=str(identity.get("user_id", "") or ""),
-                task_id=str(identity.get("task_id", "") or ""),
-            )
             stage = "patch" if name in {"write_file", "patch_file", "apply_patch"} else "tool"
             attribution = mem.get("memory_context_attribution") or {}
             for memory_id in recalled_ids:

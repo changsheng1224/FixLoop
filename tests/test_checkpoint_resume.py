@@ -127,7 +127,7 @@ class TestSessionResume:
         config = AgentConfig(provider="fake")
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            store = SessionStore(root=tmpdir)
+            store = SessionStore(root=str(temp_workspace), state_root=tmpdir)
             # 保存 session
             store.save(
                 {

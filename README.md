@@ -109,6 +109,7 @@ docker build -t repair-agent/python-repair:latest -f sandbox/Dockerfile.python s
 python -m src.cli repair \
   --issue "TypeError: can only concatenate str (not 'int') to str at calculator.py:6 in add()" \
   --repo demo/calculator \
+  --workspace-policy provided \
   --verbose
 ```
 
@@ -117,7 +118,7 @@ python -m src.cli repair \
 无 Docker 时仍可用本地 **pytest verify**（默认开启）；跳过验证：
 
 ```bash
-python -m src.cli repair --issue "..." --repo demo/calculator --skip-verify
+python -m src.cli repair --issue "..." --repo demo/calculator --workspace-policy provided --skip-verify
 ```
 
 **一键演示脚本（含修复前/后 pytest）：**
@@ -140,6 +141,16 @@ fixloop repair --repo https://github.com/owner/project --issue "复现步骤…�
 已有本地目录优先按路径解释；GitHub 输入会克隆到独立目录并固定基线 commit。
 Git 复用本机已有认证和代理配置，不在 URL 中填写 token。私有仓库可使用已配置的 SSH 身份。
 
+CLI 默认 `--workspace-policy worktree`：从干净 Git 根目录创建独立运行副本，
+不直接修改源项目。脏仓库、非 Git 目录或调用方已有副本，需要显式选择 `provided`，
+这会允许修改指定目录。修复入口不再依赖 `FIXLOOP_USE_WORKTREE`。
+工作区策略与执行后端独立：默认 `legacy` 保留宿主工具；推荐隔离组合为
+`worktree` + `--execution-backend wsl_bwrap`。创建副本或沙箱失败时停止，不自动降级。
+详见 [S2 隔离设计](docs/ISOLATION_S2.md)。
+embedding 缓存按源项目归属，编码配置变化自动失效；详见 [S3 缓存设计](docs/ISOLATION_S3.md)。
+记忆在检索和修改前检查项目/运行归属，共享项目知识需显式确认发布；详见 [S4 记忆边界](docs/ISOLATION_S4.md)。
+隔离维度、可信身份、跨阶段边界回归与面试 MVP 的能力范围，见 [S5 隔离设计说明](docs/ISOLATION_S5.md)。
+
 长问题和指定版本：
 
 ```bash
@@ -149,7 +160,9 @@ fixloop repair --repo owner/project --issue "……" --output ../repair-result
 
 `issue.md` 使用 UTF-8，可包含堆栈、复现步骤、预期结果和修改约束。
 `--issue` 与 `--issue-file` 二选一；`--ref` 支持分支、tag 或 commit SHA。
-`--output` 必须是新的目录，默认 `.fixloop/runs/<id>/`。结果目录包括：
+`--output` 必须是新的目录；本地 `worktree` 默认使用外部项目状态区的
+`projects/<project_id>/deliveries/<id>/`，显式输出也必须位于源仓库外。
+GitHub 输入和 `provided` 默认使用 `.fixloop/runs/<id>/`。结果目录包括：
 
 ```text
 result.json   # 状态、基线 SHA、验证结果、错误分类和进度记录

@@ -12,6 +12,7 @@ from pathlib import Path
 from agent_runtime.bootstrap import load_dotenv
 from agent_runtime.cancellation import CancellationToken, CancelledError
 from agent_runtime.signal_cancel import sigint_cancel_scope
+from agent_runtime.state_root import managed_state_base
 from src.cli_exit_codes import REPAIR_EXIT_CONFIG, REPAIR_EXIT_FAIL, repair_exit_code
 from src.repair.language_detect import detect_repair_language
 from src.repair_report import RepairReport
@@ -110,6 +111,8 @@ def run_repair_cli(
     exit_code = REPAIR_EXIT_FAIL
     sandbox = getattr(args, "execution_backend", "legacy") == "wsl_bwrap"
     try:
+        if getattr(args, "workspace_policy", "worktree") not in {"worktree", "provided"}:
+            raise RepairInputError("configuration_failed", "unknown workspace policy")
         if getattr(args, "execution_backend", "legacy") == "wsl_bwrap":
             if args.execution_tier != "auto" or args.require_sandbox:
                 raise RepairInputError(
@@ -132,9 +135,15 @@ def run_repair_cli(
         output = (
             Path(output_arg).expanduser().resolve()
             if output_arg
-            else Path.cwd() / ".fixloop" / "runs" / uuid.uuid4().hex
+            else (
+                managed_state_base(source.location) / "deliveries" / uuid.uuid4().hex
+                if not source.remote and getattr(args, "workspace_policy", "worktree") == "worktree"
+                else Path.cwd() / ".fixloop" / "runs" / uuid.uuid4().hex
+            )
         )
         if not source.remote and output.is_relative_to(Path(source.location)):
+            if getattr(args, "workspace_policy", "worktree") == "worktree":
+                raise RepairInputError("input_invalid", "worktree 模式的 --output 必须位于源仓库外")
             # Artifact paths must not enter repair context or text snapshots.
             if ".fixloop" not in output.relative_to(Path(source.location)).parts:
                 raise RepairInputError("input_invalid", "本地 --output 请放在仓库外或 .fixloop 内")
@@ -144,6 +153,8 @@ def run_repair_cli(
         report = RepairReport(output, source.location)
         report.data["requested_ref"] = ref or ""
         report.data["dry_run"] = bool(getattr(args, "dry_run", False))
+        report.data["workspace_policy"] = getattr(args, "workspace_policy", "worktree")
+        report.data["execution_backend"] = getattr(args, "execution_backend", "legacy")
 
         def progress(phase: str, message: str) -> None:
             report.progress(phase, message)

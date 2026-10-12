@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from agent_runtime.state_root import (
     managed_state_base,
     native_io_path,
+    project_id,
     trusted_state_root,
     workspace_id,
 )
@@ -154,13 +155,16 @@ class SandboxTaskSpec:
     environment: SandboxEnvironmentIdentity
     policy_version: str
     policy_digest: str
-    state_base: str = ""
+    state_base: str = ""  # Shared storage root, before project partitioning.
+    # Trusted source registration, never inferred from a temporary execution copy.
+    project_root: str = ""
 
     def __post_init__(self):
         checked_id(self.policy_version)
         if (
             not isinstance(self.environment, SandboxEnvironmentIdentity)
             or not isinstance(self.state_base, str)
+            or not isinstance(self.project_root, str)
             or not isinstance(self.policy_digest, str)
             or not re.fullmatch(r"[a-f0-9]{64}", self.policy_digest)
         ):
@@ -177,9 +181,12 @@ class SandboxTaskBinding:
     policy_version: str
     policy_digest: str
     state_root: str
+    project_root: str
+    project_id: str
+    project_directory_identity: tuple[int, int]
     workspace_ownership: str = "user"
     worktree_branch: str = ""
-    schema_version: int = 1
+    schema_version: int = 2
 
     def __post_init__(self):
         checked_id(self.task_id)
@@ -187,12 +194,17 @@ class SandboxTaskBinding:
         if (
             self.run_id != self.task_id
             or type(self.schema_version) is not int
-            or self.schema_version != 1
+            or self.schema_version != 2
             or not isinstance(self.mapping, WorkspaceMapping)
             or not all(
                 isinstance(value, str) and value
-                for value in (self.repository_root, self.state_root)
+                for value in (
+                    self.repository_root, self.state_root, self.project_root, self.project_id,
+                )
             )
+            or not isinstance(self.project_directory_identity, tuple)
+            or len(self.project_directory_identity) != 2
+            or not all(type(value) is int for value in self.project_directory_identity)
             or not isinstance(self.worktree_branch, str)
             or self.workspace_ownership not in {"user", "task"}
             or (self.workspace_ownership == "task" and not self.worktree_branch)
@@ -212,7 +224,8 @@ class SandboxTaskBinding:
     ):
         checked_id(task_id)
         mapping = WorkspaceMapping.create(workspace)
-        base = managed_state_base(repository, spec.state_base or None)
+        source = WorkspaceMapping.create(spec.project_root or repository)
+        base = managed_state_base(source.host_root, spec.state_base or None)
         state = trusted_state_root(mapping.host_root, base / "tasks" / task_id)
         binding = cls(
             task_id,
@@ -223,6 +236,9 @@ class SandboxTaskBinding:
             spec.policy_version,
             spec.policy_digest,
             str(state),
+            source.host_root,
+            project_id(source.host_root),
+            source.filesystem_identity,
             ownership,
             branch,
         )
@@ -237,6 +253,8 @@ class SandboxTaskBinding:
             "policy_version": self.policy_version,
             "distribution_id": self.environment.identity_id,
             "mapping_id": self.mapping.mapping_id,
+            "project_id": self.project_id,
+            "workspace_id": self.mapping.workspace_id,
             "task_id": self.task_id,
             "run_id": self.run_id,
             "state_root": self.state_root,
@@ -249,16 +267,25 @@ class SandboxTaskBinding:
     def validate(self) -> None:
         checked_id(self.task_id)
         checked_id(self.run_id)
-        if self.schema_version != 1 or self.workspace_ownership not in {"user", "task"}:
+        if self.schema_version != 2 or self.workspace_ownership not in {"user", "task"}:
             raise ValueError("sandbox_task_invalid: binding")
         SandboxTaskSpec(self.environment, self.policy_version, self.policy_digest)
         self.mapping.validate()
+        source = WorkspaceMapping.create(self.project_root)
+        if (
+            source.host_root != self.project_root
+            or self.project_id != project_id(source.host_root)
+            or source.filesystem_identity != self.project_directory_identity
+        ):
+            raise ValueError("sandbox_task_identity_mismatch: project identity changed")
         trusted_state_root(self.mapping.host_root, self.state_root)
         trusted_state_root(self.repository_root, self.state_root)
+        trusted_state_root(self.project_root, self.state_root)
 
     def to_wire(self) -> dict:
         raw = asdict(self)
         raw["mapping"]["filesystem_identity"] = list(self.mapping.filesystem_identity)
+        raw["project_directory_identity"] = list(self.project_directory_identity)
         return raw
 
     def save(self) -> Path:
@@ -282,7 +309,7 @@ class SandboxTaskBinding:
         mapping = raw.pop("mapping")
         environment = SandboxEnvironmentIdentity(**raw.pop("environment"))
         binding = cls(
-            **raw,
+            **{**raw, "project_directory_identity": tuple(raw["project_directory_identity"])},
             mapping=WorkspaceMapping(
                 **{**mapping, "filesystem_identity": tuple(mapping["filesystem_identity"])}
             ),
@@ -296,7 +323,8 @@ class SandboxTaskBinding:
     @classmethod
     def load(cls, repository: str | Path, task_id: str, spec: SandboxTaskSpec):
         checked_id(task_id)
-        base = managed_state_base(repository, spec.state_base or None)
+        source = WorkspaceMapping.create(spec.project_root or repository)
+        base = managed_state_base(source.host_root, spec.state_base or None)
         state = trusted_state_root(repository, base / "tasks" / task_id)
         try:
             raw = json.loads(
@@ -312,13 +340,19 @@ class SandboxTaskBinding:
             raise ValueError("sandbox_task_unavailable") from exc
         try:
             environment = SandboxEnvironmentIdentity(**raw.pop("environment"))
-            binding = cls(**raw, mapping=mapping, environment=environment)
+            binding = cls(
+                **{**raw, "project_directory_identity": tuple(raw["project_directory_identity"])},
+                mapping=mapping, environment=environment,
+            )
         except (KeyError, TypeError, ValueError, OSError) as exc:
             raise ValueError("sandbox_task_invalid") from exc
         if (
             binding.task_id != task_id
             or binding.run_id != task_id
             or binding.repository_root != str(Path(repository).resolve(strict=True))
+            or binding.project_root != source.host_root
+            or binding.project_id != project_id(source.host_root)
+            or binding.project_directory_identity != source.filesystem_identity
             or binding.state_root != str(state)
             or binding.environment != spec.environment
             or binding.policy_version != spec.policy_version
@@ -334,6 +368,7 @@ class SandboxTaskBinding:
             raise ValueError("workspace_mapping_rejected: context root")
         context.sandbox_task_binding = self
         context.state_root = self.state_root
+        context.sandbox_project_id = self.project_id
         context.sandbox_workspace_id = self.mapping.workspace_id
         context.sandbox_task_id = self.task_id
         context.sandbox_run_id = self.run_id
@@ -344,6 +379,7 @@ class SandboxTaskBinding:
         if (
             Path(context.root).resolve() != Path(self.mapping.host_root)
             or context.state_root != self.state_root
+            or context.sandbox_project_id != self.project_id
             or context.sandbox_workspace_id != self.mapping.workspace_id
             or context.sandbox_task_id != self.task_id
             or context.sandbox_run_id != self.run_id

@@ -149,6 +149,7 @@ def _make_factory(args):
         model=args.model or None,
     )
     return make_orchestrator_factory(
+        workspace_policy="provided",  # The harness already owns a per-instance checkout.
         model_client=client,
         skip_verify=bool(args.skip_verify),
         execution_tier="container" if args.require_verifier_sandbox else "auto",

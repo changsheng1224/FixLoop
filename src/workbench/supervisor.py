@@ -14,7 +14,7 @@ from pathlib import Path
 import src
 from agent_runtime.cancellation import CancelledError
 from agent_runtime.plan_runtime.processes import process_identity
-from agent_runtime.state_root import native_io_path
+from agent_runtime.state_root import native_io_path, project_id, workspace_id
 from src.workbench.process_scope import CleanupUnconfirmedError, new_scope, reconcile_scope
 from src.workbench.project import ProjectResult
 
@@ -28,7 +28,23 @@ class WorkerFailedError(RuntimeError):
 def reconcile_sandbox(resource):
     if not resource.get("workspace"):
         return True
-    path = Path(resource["state_root"]) / "tasks" / resource["run_id"] / "sandbox-task.json"
+    try:
+        from agent_runtime.linux_sandbox.task_context import checked_id
+
+        source = resource["project_path"]
+        pid = project_id(source)
+        run_id = checked_id(resource["run_id"])
+        if (
+            resource["project_id"] != pid
+            or resource["workspace_id"] != workspace_id(resource["workspace"])
+        ):
+            return False
+        path = (
+            Path(resource["state_root"]) / "projects" / pid / "tasks"
+            / run_id / "sandbox-task.json"
+        )
+    except (KeyError, TypeError, ValueError, OSError):
+        return False
     try:
         native_io_path(path).lstat()
     except FileNotFoundError:
@@ -44,7 +60,11 @@ def reconcile_sandbox(resource):
         binding = SandboxTaskBinding.load_record(path)
         if (
             binding.run_id != resource["run_id"]
+            or binding.project_id != resource["project_id"]
+            or binding.project_root != str(Path(source).resolve())
+            or list(binding.project_directory_identity) != resource["root_identity"]
             or binding.mapping.host_root != resource["workspace"]
+            or binding.mapping.workspace_id != resource["workspace_id"]
         ):
             return False
         backend = GuardedWindowsWorkspaceBackend(binding, retirement_only=True)
@@ -105,6 +125,7 @@ class ProcessWorkerRunner:
             "run_id": run_id,
             "state_root": str(state_root),
             "workspace": str(files.root) if files else None,
+            "project_root": resource.get("project_path"),
         }
         request["context"] = {
             "database": str(store.database),

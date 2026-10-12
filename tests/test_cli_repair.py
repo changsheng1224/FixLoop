@@ -10,6 +10,10 @@ from src.state import RepairState
 
 
 class TestCliRepair:
+    @pytest.fixture(autouse=True)
+    def external_state(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("FIXLOOP_STATE_ROOT", str(tmp_path / "state"))
+
     def test_removed_plan_dag_flag_is_rejected(self, monkeypatch):
         monkeypatch.setattr(
             sys,

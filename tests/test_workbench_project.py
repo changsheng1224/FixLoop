@@ -399,7 +399,7 @@ def test_external_runtime_does_not_recall_project_memory(tmp_path):
         for state in ("", str(tmp_path / "new-run"))
     ]
     try:
-        assert "OLD_FUTURE_SENTINEL" in ContextManager(agents[0])._get_knowledge("explain v.py")
+        assert "OLD_FUTURE_SENTINEL" not in ContextManager(agents[0])._get_knowledge("explain v.py")
         assert "OLD_FUTURE_SENTINEL" not in ContextManager(agents[1])._get_knowledge("explain v.py")
     finally:
         for agent in agents:

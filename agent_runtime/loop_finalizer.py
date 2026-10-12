@@ -1,14 +1,12 @@
 """AgentLoop run finalization and artifact persistence."""
 
 from agent_runtime.model_timing import build_report_latency_fields
-from agent_runtime.state_root import agent_state_root
 from agent_runtime.stop_reasons import StopReason
 
 
 def finalize_agent_run(loop, ts) -> None:
     """Persist final run artifacts for an AgentLoop instance."""
     from agent_runtime.checkpoint import create_checkpoint
-    from agent_runtime.features.memory import promote_durable_memory
     from agent_runtime.session_store import SessionStore
 
     try:
@@ -136,11 +134,6 @@ def finalize_agent_run(loop, ts) -> None:
                 report_body["trace_compressed"] = True
                 report_body["trace_compression"] = compress_stats
             store.write_report(ts, report_body)
-        promote_durable_memory(
-            ts.user_request,
-            ts.final_answer,
-            root=str(agent_state_root(agent)),
-        )
         _promote_memory_candidates(agent, ts)
         SessionStore(
             root=agent._cwd,
@@ -154,20 +147,13 @@ def finalize_agent_run(loop, ts) -> None:
 def _promote_memory_candidates(agent, ts) -> None:
     """Promote candidate memories after ask() finalization."""
     try:
+        from agent_runtime.features.memory.access import agent_governance
         from agent_runtime.features.memory.candidate import candidates_from_answer
-        from agent_runtime.features.memory.governance import MemoryGovernanceService
 
         candidates = list(agent.session.get("_memory_candidates", []))
         candidates.extend(candidates_from_answer(ts.final_answer, ts.user_request))
         if candidates:
-            memory_state = agent.session.setdefault("memory", {})
-            identity = memory_state.get("memory_identity") or {}
-            governance = MemoryGovernanceService(
-                memory_state,
-                repo_root=str(agent_state_root(agent)),
-                user_id=str(identity.get("user_id", "") or ""),
-                task_id=str(identity.get("task_id", "") or ""),
-            )
+            governance = agent_governance(agent)
             for candidate in candidates:
                 governed = governance.ingest(
                     candidate,
@@ -191,19 +177,14 @@ def _feedback_recalled_memories(agent, ts) -> None:
     only when the run reached a successful terminal state.
     """
     try:
-        from agent_runtime.features.memory.governance import MemoryGovernanceService
+        from agent_runtime.features.memory.access import agent_governance
 
         memory_state = agent.session.get("memory") or {}
-        identity = memory_state.get("memory_identity") or {}
         ids = list(dict.fromkeys(memory_state.get("recalled_memory_ids") or []))
         if not ids:
             return
-        governance = MemoryGovernanceService(
-            memory_state,
-            repo_root=str(agent_state_root(agent)),
-            user_id=str(identity.get("user_id", "") or ""),
-            task_id=str(identity.get("task_id", "") or ""),
-        )
+        governance = agent_governance(agent)
+        identity = memory_state.get("memory_identity") or {}
         status = str(getattr(ts, "status", "") or "").lower()
         succeeded = status in {"success", "completed", "fixed", "passed"}
         attribution = memory_state.get("memory_context_attribution") or {}

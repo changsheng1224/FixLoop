@@ -157,7 +157,9 @@ def main():
         contexts = []
 
         def bind(root, name):
-            path = fixture / "state" / "tasks" / name / "sandbox-task.json"
+            from agent_runtime.state_root import managed_state_base
+
+            path = managed_state_base(repository, spec.state_base) / "tasks" / name / "sandbox-task.json"
             if path.exists():
                 binding = SandboxTaskBinding.load(repository, name, spec)
             else:

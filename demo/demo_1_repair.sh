@@ -39,6 +39,7 @@ echo "③ 运行 Multi-Agent repair --verbose"
 read -r -a extra <<< "$(demo_repair_extra_args)"
 log="$(mktemp)"
 if ! python -m src.cli repair \
+    --workspace-policy provided \
   --issue "$(cat "$ISSUE_FILE")" \
   --repo "$REPO" \
   --verbose \

@@ -1244,7 +1244,7 @@ class ContextManager:
 
         Layer 1 (投影层): episodic notes → semantic/keyword → knowledge section
         Layer 2 (流水线): RepairPrecedentStore → similar_fixes (by Orchestrator)
-        Layer 3 (缓存层): .agent/embed_cache → content_hash → embedding reuse
+        Layer 3 (缓存层): explicit project cache → encoding/text key → embedding reuse
 
         三层共用 derive_embed_query() 作为查询提取入口。
         """
@@ -1252,7 +1252,6 @@ class ContextManager:
         if not query:
             return ""
         from agent_runtime.features.memory import (
-            DurableMemoryStore,
             retrieval_candidates_semantic,
         )
 
@@ -1268,15 +1267,10 @@ class ContextManager:
 
         # Layer 1: Episodic 检索
         mem = self.agent.session.get("memory", {})
-        identity = mem.get("memory_identity") or {}
-        from agent_runtime.features.memory.governance import MemoryGovernanceService
+        from agent_runtime.features.memory.access import agent_governance
 
-        governed = MemoryGovernanceService(
-            mem,
-            repo_root=str(agent_state_root(self.agent)),
-            user_id=str(identity.get("user_id", "") or ""),
-            task_id=str(identity.get("task_id", "") or ""),
-        )
+        governed = agent_governance(self.agent)
+        identity = mem.get("memory_identity") or {}
         governed_results = governed.recall(
             query,
             user_id=str(identity.get("user_id", "") or ""),
@@ -1334,7 +1328,9 @@ class ContextManager:
                     f"[utility={item.utility(request):.4f} confidence={item.confidence:.2f}]"
                 )
             parts.append("\n".join(lines))
-        results = retrieval_candidates_semantic(mem, query, limit=2)
+        results = retrieval_candidates_semantic(
+            mem, query, limit=2, semantic_memory=getattr(self.agent, "semantic_memory", None),
+        )
         results = filter_relevant_results(results, self.tier_policy)
         recalled_ids.extend(str(item.get("memory_id", "")) for item in results)
         if results:
@@ -1347,22 +1343,20 @@ class ContextManager:
                 )
             parts.append("\n".join(lines))
 
-        # Layer 2: Durable 检索
+        # Project knowledge is read-only and filtered before ranking/projection.
         try:
-            store = DurableMemoryStore(root=str(agent_state_root(self.agent)))
-            durable_results = store.retrieval(query, limit=2)
-            if durable_results:
-                recalled_ids.extend(str(item.get("memory_id", "")) for item in durable_results)
-                lines = ["持久知识候选（仅项目/用户事实；冲突时不得采用）:"]
-                for r in durable_results:
-                    lines.append(f"  - {str(r.get('text', ''))[:150]}")
+            shared = agent_governance(self.agent, shared_read=True)
+            shared_results = shared.recall(query, limit=2, record_event=False)
+            if shared_results:
+                lines = ["经确认的项目知识（仍需核对当前代码）:"]
+                for item in shared_results:
+                    lines.append(f"  - {str(item.get('value', ''))[:150]}")
                 parts.append("\n".join(lines))
-        except Exception:
+        except (OSError, ValueError):
             pass
 
-        # Keep one stable recall projection for feedback attribution.  Durable
-        # markdown entries have no governed ID yet, so only governed IDs are
-        # eligible for automatic usage feedback.
+        # Feedback stays run-local. Shared project facts never become writable
+        # merely because a run retrieved them.
         recalled_ids = list(dict.fromkeys(item for item in recalled_ids if item))
         mem["recalled_memory_ids"] = recalled_ids
         mem["memory_context_attribution"] = {
