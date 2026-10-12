@@ -2,6 +2,7 @@
 
 import threading
 from contextlib import closing, contextmanager
+from pathlib import Path
 
 import pytest
 
@@ -12,12 +13,13 @@ from agent_runtime.cancellation import (
     run_blocking,
 )
 from agent_runtime.providers.clients import FakeModelClient
+from src.repair_factory import wire_orchestrator
 from src.state import RepairState, VerificationResult
 from src.workbench.files import ProjectFiles
 from src.workbench.models import ConflictError
 from src.workbench.project import ProjectExecutor, ProjectResult, readonly_tools
-from src.workbench.service import WorkbenchService
 from tests.test_workbench_service import Echo
+from tests.workbench_unit_service import WorkbenchService
 
 
 @contextmanager
@@ -219,7 +221,7 @@ def test_repair_adapter_requires_l2_fixed_and_verification(tmp_path, verified):
 
             def repair(self, issue, **options):
                 calls.append((issue, options, kw))
-                (tmp_path / "repo" / "v.py").write_text("changed", encoding="utf-8")
+                (Path(root) / "v.py").write_text("changed", encoding="utf-8")
                 return RepairState(
                     issue_input=issue,
                     status="fixed",
@@ -256,7 +258,8 @@ def test_restart_captures_actual_interrupted_project_without_replay(tmp_path):
         tmp_path / "state", project_lock_dir=tmp_path / "locks", project_executor=forbidden
     ) as service:
         run = service.store.get_run(chat.id, turn.run.id)
-        assert run.status == "interrupted" and run.output_snapshot_id
+        assert run.status == "interrupted" and not run.output_snapshot_id
+        assert run.error == "execution_cleanup_unconfirmed"
         assert (repo / "v.py").read_text(encoding="utf-8") == "partial"
 
 
@@ -270,7 +273,15 @@ def test_real_l2_repair_edits_disk_and_runs_local_verification(tmp_path, monkeyp
             "<final>Updated value in v.py.</final>",
         ]
     )
-    executor = ProjectExecutor(lambda: client, provider="fake", timeout_s=60)
+    # Explicit trusted unit adapter exercises L2 host verification; the production
+    # service rejects host workers and uses the guarded sandbox acceptance path.
+    executor = ProjectExecutor(
+        lambda: client,
+        provider="fake",
+        timeout_s=60,
+        execution_tier="host",
+        repair_factory=wire_orchestrator,
+    )
     with workspace(tmp_path, executor) as (service, chat, repo):
         (repo / "test_value.py").write_text(
             "from v import value\ndef test_value():\n    assert value == 2\n", encoding="utf-8"
@@ -281,6 +292,9 @@ def test_real_l2_repair_edits_disk_and_runs_local_verification(tmp_path, monkeyp
         assert run.artifacts["verified"] is True
         assert run.artifacts["verification"]["passed"] >= 1
         assert run.artifacts["changed_files"] == ["v.py"]
+        assert (repo / "v.py").read_text(encoding="utf-8") == "value = 1\n"
+        plan = service.preview_candidate(chat.id, run.id)
+        service.apply_restore(chat.id, plan["id"])
         assert (repo / "v.py").read_text(encoding="utf-8") == "value = 2\n"
         assert not (repo / ".agent").exists()
 
@@ -322,12 +336,12 @@ def test_output_capture_failure_blocks_history_until_restart(tmp_path, monkeypat
         save = service.restoration.repository.save
         calls = 0
 
-        def flaky(files):
+        def flaky(files, **kwargs):
             nonlocal calls
             calls += 1
             if calls == 2:
                 raise OSError("disk unavailable")
-            return save(files)
+            return save(files, **kwargs)
 
         monkeypatch.setattr(service.restoration.repository, "save", flaky)
         turn = service.send(chat.id, "partial", mode="repair")
@@ -341,7 +355,7 @@ def test_output_capture_failure_blocks_history_until_restart(tmp_path, monkeypat
     with WorkbenchService(tmp_path / "state", project_lock_dir=tmp_path / "locks") as service:
         run = service.store.get_run(chat.id, turn.run.id)
         assert run.status == "interrupted" and run.output_snapshot_id
-        assert (repo / "v.py").read_text(encoding="utf-8") == "partial"
+        assert (repo / "v.py").read_text(encoding="utf-8") == "value = 1\n"
 
 
 def test_project_dispatch_failure_commits_actual_output_snapshot(tmp_path, monkeypatch):

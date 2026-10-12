@@ -45,6 +45,8 @@
 [Workbench S3 指南](docs/WORKBENCH_S3.md) 提供项目快照、手动修改保存、恢复预览与中断恢复；
 [Workbench S4 指南](docs/WORKBENCH_S4.md) 提供只读项目问答、Layer 2 修复及历史编辑后的文件恢复与重新执行；
 [Workbench S5 指南](docs/WORKBENCH_S5.md) 提供本地浏览器界面、会话树、恢复预览和运行详情。
+[Workbench S6 指南](docs/WORKBENCH_S6.md) 提供生产执行链路的端到端验收、故障恢复验证与分场景报告入口。
+[Workbench 加固记录](docs/WORKBENCH_HARDENING.md) 说明隔离执行、候选应用、统一存储、增量摘要与项目多会话的当前契约和验证边界。
 
 **Layer 2** 当前主路径是 Patcher 工具环、轻量 Critic 和独立 Verifier；定位与检索通过规则种子、只读探索和上下文数据模型提供，不再装配为两个独立 LLM Agent。
 

@@ -13,9 +13,12 @@ import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
+from agent_runtime.state_root import native_io_path
 from src.workbench.models import (
     Branch,
     ConflictError,
@@ -30,7 +33,13 @@ from src.workbench.models import (
     Turn,
     TurnMode,
 )
-from src.workbench.schema import APPLICATION_ID, IMMUTABLE_TABLES, SCHEMA_VERSION, TABLES
+from src.workbench.schema import (
+    APPLICATION_ID,
+    IMMUTABLE_TABLES,
+    METADATA_TABLES,
+    SCHEMA_VERSION,
+    TABLES,
+)
 
 _TERMINAL = frozenset({"succeeded", "failed", "cancelled", "interrupted"})
 _MODES = frozenset({"chat", "project_chat", "repair"})
@@ -75,7 +84,7 @@ class WorkbenchStore:
             if version == 0 and application == 0:
                 if db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table'").fetchone():
                     raise SchemaError("refusing to initialize a non-workbench database")
-                for statement in TABLES:
+                for statement in TABLES + METADATA_TABLES:
                     db.execute(statement)
                 for table in IMMUTABLE_TABLES:
                     for operation in ("UPDATE", "DELETE"):
@@ -86,14 +95,121 @@ class WorkbenchStore:
                         )
                 db.execute(f"PRAGMA application_id = {APPLICATION_ID}")
                 db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            elif version == 1 and application == APPLICATION_ID:
+                self._upgrade_v1(db)
             elif version != SCHEMA_VERSION or application != APPLICATION_ID:
                 raise SchemaError(f"unsupported workbench schema: {application}/{version}")
             db.commit()
             db.execute("PRAGMA journal_mode = WAL")
 
+    def _upgrade_v1(self, db):
+        """Import the previously published durable layout in one destination commit.
+
+        The service owns service.lock before opening this store. Source journals
+        remain untouched; a failed import leaves schema v1 intact for retry.
+        """
+        if not all(
+            db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+            ).fetchone()
+            for name in ("conversations", "runs", "snapshots", "nodes", "branches")
+        ):
+            raise SchemaError("incomplete workbench v1 database")
+        for statement in METADATA_TABLES:
+            db.execute(statement)
+        for filename, table in (("events.sqlite3", "events"), ("restores.sqlite3", "operations")):
+            source_path = self.database.parent / filename
+            if not native_io_path(source_path).exists():
+                continue
+            # mode=ro avoids creating or modifying a legacy journal on failure.
+            # Encode the native filename rather than a file:// authority: an
+            # extended Windows prefix contains a literal '?' and backslashes.
+            uri = "file:" + quote(str(native_io_path(source_path)), safe="/:") + "?mode=ro"
+            with sqlite3.connect(uri, uri=True) as source:
+                if (
+                    table == "events"
+                    and source.execute("PRAGMA application_id").fetchone()[0] != 1179403606
+                ):
+                    raise SchemaError("unrelated legacy event database")
+                rows = source.execute(f"SELECT * FROM {table}").fetchall()
+                placeholders = ",".join("?" for _ in range(5 if table == "events" else 3))
+                db.executemany(f"INSERT INTO {table} VALUES ({placeholders})", rows)
+        for row in db.execute(
+            "SELECT * FROM conversations WHERE project_path IS NOT NULL"
+        ).fetchall():
+            snapshot = db.execute(
+                "SELECT manifest FROM snapshots WHERE id=?", (row["base_snapshot_id"],)
+            ).fetchone()
+            manifest = json.loads(snapshot[0]) if snapshot else {}
+            self._bind_project(
+                db, row["id"], row["project_path"], manifest.get("root_identity", [])
+            )
+        for row in db.execute("SELECT * FROM operations").fetchall():
+            plan = json.loads(row["payload"])
+            if "project_revision" not in plan:
+                # v1 serialized every project operation within one service; the
+                # initial shared project revision is zero after this import.
+                plan["project_revision"] = 0
+                self._operation(db, plan)
+        for row in db.execute("SELECT * FROM runs").fetchall():
+            last = db.execute(
+                "SELECT kind FROM events WHERE run_id=? ORDER BY sequence DESC LIMIT 1",
+                (row["id"],),
+            ).fetchone()
+            if row["status"] in _TERMINAL and (last is None or last[0] != "run.finished"):
+                self._event(db, row["id"], "run.finished", asdict(_record(Run, row)))
+        db.execute(
+            "CREATE TRIGGER events_update_immutable BEFORE UPDATE ON events "
+            "BEGIN SELECT RAISE(ABORT, 'history is immutable'); END"
+        )
+        db.execute(
+            "CREATE TRIGGER events_delete_immutable BEFORE DELETE ON events "
+            "BEGIN SELECT RAISE(ABORT, 'history is immutable'); END"
+        )
+        db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+    @staticmethod
+    def _bind_project(db, cid, path, root_identity):
+        row = db.execute("SELECT id FROM projects WHERE path=?", (path,)).fetchone()
+        pid = row[0] if row else _id("project")
+        if row is None:
+            db.execute(
+                "INSERT INTO projects VALUES (?, ?, 0, ?)", (pid, path, json.dumps(root_identity))
+            )
+        db.execute("INSERT INTO project_conversations VALUES (?, ?)", (cid, pid))
+
+    def project_record(self, cid):
+        with self._transaction(write=False) as db:
+            self._conversation(db, cid)
+            row = db.execute(
+                "SELECT p.* FROM projects p JOIN project_conversations pc "
+                "ON pc.project_id=p.id WHERE pc.conversation_id=?",
+                (cid,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    @staticmethod
+    def _event(db, run_id, kind, payload):
+        sequence = db.execute(
+            "SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE run_id=?", (run_id,)
+        ).fetchone()[0]
+        db.execute(
+            "INSERT INTO events VALUES (?, ?, ?, ?, ?)",
+            (run_id, sequence, kind, _json(payload), time.time()),
+        )
+        return {"sequence": sequence, "run_id": run_id, "kind": kind, "data": payload}
+
+    @staticmethod
+    def _operation(db, plan):
+        db.execute(
+            "INSERT INTO operations VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE "
+            "SET payload=excluded.payload",
+            (plan["id"], plan["root"], _json(plan)),
+        )
+
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
-        db = sqlite3.connect(self.database, timeout=10, isolation_level=None)
+        db = sqlite3.connect(native_io_path(self.database), timeout=10, isolation_level=None)
         try:
             db.row_factory = sqlite3.Row
             db.execute("PRAGMA foreign_keys = ON")
@@ -172,6 +288,13 @@ class WorkbenchStore:
                 db.execute(
                     "UPDATE conversations SET base_snapshot_id = ? WHERE id = ?",
                     (snapshot, identity),
+                )
+            if project_path is not None:
+                self._bind_project(
+                    db,
+                    identity,
+                    project_path,
+                    baseline[1].get("root_identity", []) if baseline else [],
                 )
             return _record(Conversation, self._conversation(db, identity))
 
@@ -253,12 +376,36 @@ class WorkbenchStore:
                     messages.append({"role": "assistant", "content": run["answer"]})
             return tuple(messages)
 
+    def context_turns(self, conversation_id, node_id):
+        with self._transaction(write=False) as db:
+            self._conversation(db, conversation_id)
+            result = []
+            for node in self._path(db, conversation_id, node_id):
+                if node.kind != "turn":
+                    continue
+                run = db.execute(
+                    "SELECT status,answer FROM runs WHERE node_id=?", (node.id,)
+                ).fetchone()
+                result.append(
+                    {
+                        "node_id": node.id,
+                        "user_text": node.user_text,
+                        "answer": run["answer"] if run["status"] in _TERMINAL else "",
+                        "status": run["status"],
+                    }
+                )
+            return result
+
     def _effective_snapshot(self, db, conversation_id: str, node_id: str | None) -> str | None:
         for node in reversed(self._path(db, conversation_id, node_id)):
             if node.kind == "local_checkpoint":
                 return node.checkpoint_snapshot_id
-            run = db.execute("SELECT output_snapshot_id FROM runs WHERE node_id = ?", (node.id,))
-            output = run.fetchone()[0]
+            run = db.execute(
+                "SELECT output_snapshot_id,artifacts FROM runs WHERE node_id = ?", (node.id,)
+            ).fetchone()
+            output = (
+                None if json.loads(run["artifacts"]).get("isolated") else run["output_snapshot_id"]
+            )
             if output is not None:
                 return output
             if node.input_snapshot_id is not None:
@@ -368,10 +515,12 @@ class WorkbenchStore:
         )
         db.execute("UPDATE branches SET head_node_id = ? WHERE id = ?", (node_id, branch["id"]))
         self._select(db, conversation["id"], branch["id"], node_id)
-        return Turn(
+        turn = Turn(
             _record(Node, self._get(db, "nodes", node_id)),
             _record(Run, self._get(db, "runs", run_id)),
         )
+        self._event(db, run_id, "run.queued", asdict(turn.run))
+        return turn
 
     def append_turn(
         self,
@@ -470,7 +619,9 @@ class WorkbenchStore:
                 (time.time(), run_id),
             )
             self._touch(db, conversation_id)
-            return _record(Run, self._get(db, "runs", run_id, conversation_id))
+            run = _record(Run, self._get(db, "runs", run_id, conversation_id))
+            self._event(db, run_id, "run.started", asdict(run))
+            return run
 
     def finish_run(
         self,
@@ -483,6 +634,7 @@ class WorkbenchStore:
         artifacts: dict[str, Any] | None = None,
         output_snapshot_id: str | None = None,
         output_snapshot: tuple | None = None,
+        candidate: dict | None = None,
     ) -> Run:
         if status not in _TERMINAL:
             raise ValueError(f"invalid terminal status: {status}")
@@ -505,7 +657,100 @@ class WorkbenchStore:
                 (status, answer, error, encoded, output_snapshot_id, time.time(), run_id),
             )
             self._touch(db, conversation_id)
-            return _record(Run, self._get(db, "runs", run_id, conversation_id))
+            if candidate is not None:
+                if status != "succeeded" or output_snapshot is None:
+                    raise ValueError("only a successful captured run can produce a candidate")
+                project = db.execute(
+                    "SELECT project_id FROM project_conversations WHERE conversation_id=?",
+                    (conversation_id,),
+                ).fetchone()
+                db.execute(
+                    "INSERT INTO candidates VALUES (?, ?, ?, ?, ?, 'ready', NULL, ?)",
+                    (
+                        run_id,
+                        project[0],
+                        candidate["project_revision"],
+                        candidate["input_key"],
+                        output_snapshot[0],
+                        time.time(),
+                    ),
+                )
+            result = _record(Run, self._get(db, "runs", run_id, conversation_id))
+            self._event(db, run_id, "run.finished", asdict(result))
+            return result
+
+    def candidates(self, cid):
+        with self._transaction(write=False) as db:
+            self._conversation(db, cid)
+            return [
+                dict(row)
+                for row in db.execute(
+                    "SELECT c.* FROM candidates c JOIN runs r ON c.run_id=r.id "
+                    "WHERE r.conversation_id=? ORDER BY c.created_at",
+                    (cid,),
+                )
+            ]
+
+    def candidate(self, cid, run_id):
+        self.get_run(cid, run_id)
+        result = next((c for c in self.candidates(cid) if c["run_id"] == run_id), None)
+        if result is None:
+            raise NotFoundError("candidate")
+        return result
+
+    def discard_candidate(self, cid, run_id):
+        with self._transaction() as db:
+            self._get(db, "runs", run_id, cid)
+            self._idle(db, cid)
+            if (
+                db.execute(
+                    "UPDATE candidates SET status='discarded' WHERE run_id=? AND status='ready'",
+                    (run_id,),
+                ).rowcount
+                != 1
+            ):
+                raise ConflictError("candidate is not ready")
+            self._touch(db, cid)
+            self._event(db, run_id, "candidate.discarded", {"run_id": run_id})
+
+    def resource(self, run_id):
+        with self._transaction(write=False) as db:
+            row = db.execute(
+                "SELECT payload FROM execution_resources WHERE run_id=?", (run_id,)
+            ).fetchone()
+            return json.loads(row[0]) if row else None
+
+    def save_resource(self, run_id, payload):
+        with self._transaction() as db:
+            db.execute(
+                "INSERT INTO execution_resources VALUES (?, ?) ON CONFLICT(run_id) "
+                "DO UPDATE SET payload=excluded.payload",
+                (run_id, _json(payload)),
+            )
+
+    def resource_blockers(self, cid):
+        conversation = self.get_conversation(cid)
+        with self._transaction(write=False) as db:
+            return [
+                {
+                    **json.loads(row["payload"]),
+                    "conversation_id": row["conversation_id"],
+                    "run_id": row["run_id"],
+                }
+                for row in db.execute(
+                    "SELECT er.payload,r.conversation_id,r.id AS run_id,c.project_path "
+                    "FROM execution_resources er "
+                    "JOIN runs r ON er.run_id=r.id JOIN conversations c ON r.conversation_id=c.id"
+                )
+                if json.loads(row["payload"]).get("state") == "unknown"
+                and (
+                    row["conversation_id"] == cid
+                    or (
+                        conversation.project_path is not None
+                        and row["project_path"] == conversation.project_path
+                    )
+                )
+            ]
 
     def interrupt_pending_runs(self, conversation_id: str) -> tuple[Run, ...]:
         """Explicit crash recovery after the caller establishes exclusive ownership.
@@ -529,6 +774,8 @@ class WorkbenchStore:
                         row["id"],
                     ),
                 )
+                result = _record(Run, self._get(db, "runs", row["id"]))
+                self._event(db, result.id, "run.finished", asdict(result))
             if rows:
                 self._touch(db, conversation_id)
             return tuple(_record(Run, self._get(db, "runs", row["id"])) for row in rows)
@@ -643,9 +890,15 @@ class WorkbenchStore:
             if conversation["base_snapshot_id"] is None:
                 raise ValueError("checkpoint requires a project baseline")
             snapshot = self._insert_snapshot(db, conversation_id, key, manifest)
-            return self._checkpoint(
+            checkpoint = self._checkpoint(
                 db, conversation_id, conversation["active_branch_id"], snapshot, label
             )
+            db.execute(
+                "UPDATE projects SET revision=revision+1 WHERE id="
+                "(SELECT project_id FROM project_conversations WHERE conversation_id=?)",
+                (conversation_id,),
+            )
+            return checkpoint
 
     def commit_restore(self, plan):
         """Save manual changes on the source, then move the destination cursor.
@@ -657,12 +910,38 @@ class WorkbenchStore:
         with self._transaction() as db:
             conversation = self._conversation(db, cid, plan["revision"])
             self._idle(db, cid)
+            project = db.execute(
+                "SELECT p.* FROM projects p JOIN project_conversations pc "
+                "ON pc.project_id=p.id WHERE pc.conversation_id=?",
+                (cid,),
+            ).fetchone()
+            if project["revision"] != plan["project_revision"]:
+                raise ConflictError("project version changed during application")
             source_branch = conversation["active_branch_id"]
             if plan["manual"]:
                 snapshot = self._insert_snapshot(db, cid, plan["before_key"], plan["before"])
                 self._checkpoint(db, cid, source_branch, snapshot, "本地修改")
             action = plan["action"]
-            if action == "switch" and not (plan["manual"] and plan["branch_id"] == source_branch):
+            if action == "candidate":
+                project = db.execute(
+                    "SELECT p.* FROM projects p JOIN project_conversations pc "
+                    "ON pc.project_id=p.id WHERE pc.conversation_id=?",
+                    (cid,),
+                ).fetchone()
+                if project["revision"] != plan["project_revision"]:
+                    raise ConflictError("project changed since candidate was produced")
+                if (
+                    db.execute(
+                        "UPDATE candidates SET status='applied',operation_id=? "
+                        "WHERE run_id=? AND status='ready'",
+                        (plan["id"], plan["run_id"]),
+                    ).rowcount
+                    != 1
+                ):
+                    raise ConflictError("candidate is not ready")
+                branch_id = source_branch
+                self._event(db, plan["run_id"], "candidate.applied", {"operation_id": plan["id"]})
+            elif action == "switch" and not (plan["manual"] and plan["branch_id"] == source_branch):
                 branch_id = plan["branch_id"]
                 branch = self._get(db, "branches", branch_id, cid)
                 self._select(db, cid, branch_id, branch["head_node_id"])
@@ -673,4 +952,10 @@ class WorkbenchStore:
             manifest = {**plan["target"], "restore_operation": plan["id"]}
             snapshot = self._insert_snapshot(db, cid, plan["target_key"], manifest)
             self._checkpoint(db, cid, branch_id, snapshot, "恢复检查点")
+            self._operation(db, {**plan, "status": "history_committed"})
+            db.execute(
+                "UPDATE projects SET revision=revision+1 WHERE id="
+                "(SELECT project_id FROM project_conversations WHERE conversation_id=?)",
+                (cid,),
+            )
             return _record(Branch, self._get(db, "branches", branch_id, cid))

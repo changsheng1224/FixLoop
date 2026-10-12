@@ -14,7 +14,8 @@ from agent_runtime.model_turn import FinishKind, ModelTurnResult, ProviderFinish
 from src.workbench import ConflictError, NotFoundError, WorkbenchStore
 from src.workbench.chat import ChatExecutor
 from src.workbench.events import EventJournal
-from src.workbench.service import UnsupportedModeError, WorkbenchService
+from src.workbench.service import UnsupportedModeError
+from tests.workbench_unit_service import WorkbenchService
 
 
 def result(text):
@@ -107,7 +108,7 @@ def test_stream_journal_reopens_and_replay_cursor_is_scoped(service):
         "".join(e["data"]["text"] for e in events if e["kind"] == "answer.delta")
         == "回答：你好\n世界"
     )
-    assert EventJournal(service.journal.path).read(turn.run.id, 2) == events[2:]
+    assert EventJournal(WorkbenchStore(service.journal.path)).read(turn.run.id, 2) == events[2:]
     assert service.events(chat.id, turn.run.id, after=5) == ()
     with pytest.raises(ValueError):
         service.events(chat.id, turn.run.id, after=99)
@@ -207,7 +208,7 @@ def test_service_ownership_does_not_interrupt_live_worker(tmp_path):
                 sys.executable,
                 "-c",
                 (
-                    "from src.workbench.service import WorkbenchService; "
+                    "from tests.workbench_unit_service import WorkbenchService; "
                     "from src.workbench import ConflictError; "
                     "import sys; "
                     "\ntry: WorkbenchService(sys.argv[1])\nexcept ConflictError: sys.exit(23)"
@@ -231,9 +232,8 @@ def test_restart_recovers_queued_and_running_with_partial_without_replay(tmp_pat
     running_chat = store.create_conversation("running")
     running = store.append_turn(running_chat.id, "running")
     store.start_run(running_chat.id, running.run.id)
-    EventJournal(tmp_path / "events.sqlite3").publish(
-        running.run.id, "answer.delta", {"text": "partial"}
-    )
+    EventJournal(store).publish(running.run.id, "answer.delta", {"text": "partial"})
+    store.save_resource(running.run.id, {"state": "stopped", "backend": "unit_test"})
     executor = Echo()
     with WorkbenchService(tmp_path, executor=executor) as service:
         assert executor.messages == []
@@ -247,7 +247,7 @@ def test_restart_recovers_queued_and_running_with_partial_without_replay(tmp_pat
 def test_actual_process_crash_recovery(tmp_path):
     code = """
 import os, sys, time
-from src.workbench.service import WorkbenchService
+from tests.workbench_unit_service import WorkbenchService
 def executor(messages, token, chunk):
     chunk('durable partial')
     os._exit(17)
@@ -432,3 +432,53 @@ def test_restart_repairs_missing_terminal_journal_without_reexecution(tmp_path):
         assert service.store.get_run(chat.id, turn.run.id) == finished
         assert service.events(chat.id, turn.run.id)[-1]["data"]["answer"] == "answer"
         assert executor.messages == []
+
+
+@pytest.mark.parametrize("action", ["stop", "close"])
+def test_cancellation_callback_can_publish_progress_without_deadlock(tmp_path, action):
+    entered = threading.Event()
+    callback_completed = threading.Event()
+    service = None
+
+    def execute(messages, token, chunk):
+        execution = next(iter(service._active.values()))
+
+        def callback():
+            service._progress(execution, "project.progress", {"stage": "cancel"})
+            callback_completed.set()
+
+        token.add_callback(callback)
+        entered.set()
+        while not token.is_cancelled:
+            time.sleep(0.01)
+        token.check()
+
+    service = WorkbenchService(tmp_path / "state", executor=execute)
+    chat = service.create_conversation()
+    turn = service.send(chat.id, "cancel with synchronous callback")
+    assert entered.wait(3)
+    # A daemon caller bounds the regression failure instead of hanging pytest.
+    finished = threading.Event()
+    errors = []
+
+    def cancel():
+        try:
+            if action == "stop":
+                service.stop(chat.id, turn.run.id)
+                service.wait(chat.id, turn.run.id)
+                service.close()
+            else:
+                service.close()
+        except Exception as error:
+            errors.append(error)
+        finally:
+            finished.set()
+
+    thread = threading.Thread(target=cancel, daemon=True)
+    thread.start()
+    assert finished.wait(5), "cancellation callback deadlocked the progress gate"
+    thread.join(1)
+    assert callback_completed.is_set() and not errors
+    assert service.store.get_run(chat.id, turn.run.id).status == (
+        "cancelled" if action == "stop" else "interrupted"
+    )

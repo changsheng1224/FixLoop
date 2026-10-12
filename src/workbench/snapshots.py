@@ -9,6 +9,7 @@ import stat
 import uuid
 from pathlib import Path
 
+from agent_runtime.state_root import native_io_path
 from src.workbench.files import MAX_ENTRIES, MAX_FILE, MAX_TREE, POLICY, digest, managed
 from src.workbench.models import ConflictError
 
@@ -28,6 +29,20 @@ def sync_directory(path):
             os.fsync(fd)
         finally:
             os.close(fd)
+
+
+def replace_durable(source, target):
+    if os.name == "nt":
+        import ctypes
+
+        api = ctypes.WinDLL("kernel32", use_last_error=True)
+        api.MoveFileExW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32]
+        api.MoveFileExW.restype = ctypes.c_int
+        if not api.MoveFileExW(str(native_io_path(source)), str(native_io_path(target)), 0x1 | 0x8):
+            raise ctypes.WinError(ctypes.get_last_error())
+    else:
+        os.replace(source, target)
+        sync_directory(target.parent)
 
 
 class SnapshotRepository:
@@ -66,8 +81,7 @@ class SnapshotRepository:
                 stream.write(data)
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temporary, path)
-            sync_directory(path.parent)
+            replace_durable(temporary, path)
         finally:
             temporary.unlink(missing_ok=True)
 
@@ -137,10 +151,12 @@ class SnapshotRepository:
                     raise ValueError("snapshot parent directory missing")
         return manifest
 
-    def save(self, files):
+    def save(self, files, *, root_identity=None):
         manifest = files.scan(self.blob)
         if files.scan() != manifest:
             raise ConflictError("project changed during snapshot; retry")
+        if root_identity is not None:
+            manifest = {**manifest, "root_identity": root_identity}
         self.validate(manifest)
         key = "tree-" + digest(canonical(manifest))
         self._put(self.root / "trees" / key, canonical(manifest))

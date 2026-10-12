@@ -13,6 +13,8 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+from agent_runtime.state_root import native_io_path
+
 
 class MemoryVersionConflictError(RuntimeError):
     """Raised when a stale writer tries to overwrite a memory."""
@@ -36,7 +38,7 @@ class CanonicalMemoryStore:
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.path), timeout=5)
+        conn = sqlite3.connect(native_io_path(self.path), timeout=5)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("PRAGMA journal_mode=WAL")

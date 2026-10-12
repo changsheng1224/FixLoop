@@ -10,16 +10,21 @@ import threading
 import uuid
 from pathlib import Path
 
+from agent_runtime.state_root import native_io_path
+
 from .models import Plan, digest
 
 
 class PlanStore:
     def __init__(self, root: Path, identity: dict):
-        root.mkdir(parents=True, exist_ok=True)
+        root = Path(root)
+        native_io_path(root).mkdir(parents=True, exist_ok=True)
         self.root = root
         self.identity = dict(identity)
         self._lock = threading.RLock()
-        self.db = sqlite3.connect(root / "journal.sqlite3", timeout=5, check_same_thread=False)
+        self.db = sqlite3.connect(
+            native_io_path(root / "journal.sqlite3"), timeout=5, check_same_thread=False
+        )
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
         self.db.execute(
@@ -207,11 +212,11 @@ class PlanStore:
         raw = text.encode("utf-8")
         key = hashlib.sha256(raw).hexdigest()
         directory = self.root / "blobs"
-        directory.mkdir(exist_ok=True)
+        native_io_path(directory).mkdir(exist_ok=True)
         target = native_io_path(directory / key)
         if not target.exists():
             temporary = directory / ("." + uuid.uuid4().hex)
-            with temporary.open("wb") as stream:
+            with native_io_path(temporary).open("wb") as stream:
                 stream.write(raw)
                 stream.flush()
                 os.fsync(stream.fileno())

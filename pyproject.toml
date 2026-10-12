@@ -46,8 +46,8 @@ include = ["agent_runtime*", "src*"]
 
 [tool.setuptools.package-data]
 agent_runtime = ["data/tokenizers/**/*", "data/tiktoken/**/*", "linux_sandbox/*.json"]
+"src.workbench" = ["web/*.html", "web/*.css", "web/*.js"]
 src = [
-    "workbench/web/*.html", "workbench/web/*.css", "workbench/web/*.js",
     "prompts/*.txt", "prompts/**/*.txt", "prompts/tasks/*.md",
     "skills/*.yaml", "skills/executable/*.yaml", "skills/eval_cases/*.yaml",
     "eval/*.json", "eval/cases/**/*.txt", "eval/cases/**/*.yaml",

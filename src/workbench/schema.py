@@ -1,6 +1,6 @@
 """S1 schema. No migration of legacy linear runtime sessions is implied."""
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 APPLICATION_ID = 0x464C5742  # FLWB
 
 TABLES = (
@@ -87,4 +87,29 @@ TABLES = (
         BEGIN SELECT RAISE(ABORT, 'execution history is immutable'); END""",
 )
 
-IMMUTABLE_TABLES = ("nodes", "snapshots")
+METADATA_TABLES = (
+    """CREATE TABLE events (
+        run_id TEXT NOT NULL REFERENCES runs(id), sequence INTEGER NOT NULL,
+        kind TEXT NOT NULL, payload TEXT NOT NULL, created_at REAL NOT NULL,
+        PRIMARY KEY (run_id, sequence))""",
+    """CREATE TABLE operations (
+        id TEXT PRIMARY KEY, root TEXT NOT NULL, payload TEXT NOT NULL)""",
+    """CREATE TABLE projects (
+        id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, revision INTEGER NOT NULL DEFAULT 0,
+        root_identity TEXT NOT NULL)""",
+    """CREATE TABLE project_conversations (
+        conversation_id TEXT PRIMARY KEY REFERENCES conversations(id),
+        project_id TEXT NOT NULL REFERENCES projects(id))""",
+    """CREATE TABLE execution_resources (
+        run_id TEXT PRIMARY KEY REFERENCES runs(id), payload TEXT NOT NULL)""",
+    """CREATE TABLE candidates (
+        run_id TEXT PRIMARY KEY REFERENCES runs(id),
+        project_id TEXT NOT NULL REFERENCES projects(id),
+        project_revision INTEGER NOT NULL, input_key TEXT NOT NULL, output_key TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('ready','applied','discarded')),
+        operation_id TEXT, created_at REAL NOT NULL)""",
+    """CREATE TABLE context_summaries (
+        cache_key TEXT PRIMARY KEY, payload TEXT NOT NULL)""",
+)
+
+IMMUTABLE_TABLES = ("nodes", "snapshots", "events")

@@ -12,8 +12,8 @@ from contextlib import contextmanager
 import pytest
 
 from src.workbench.http import WorkbenchHTTPServer
-from src.workbench.service import WorkbenchService
 from tests.test_workbench_service import Echo, result
+from tests.workbench_unit_service import WorkbenchService
 
 TOKEN = "test-workbench-token-for-http-only"
 
@@ -149,6 +149,16 @@ def test_http_project_reexecution_requires_exact_reviewed_input_plan(tmp_path):
         )
         assert status == 202
         server.service.wait(cid, edited["run"]["id"])
+        assert (repo / "v.py").read_text(encoding="utf-8") == "base"
+        run_id = edited["run"]["id"]
+        status, candidate = request(
+            server, "POST", base + "/runs/" + run_id + "/candidate-preview", {}
+        )
+        assert status == 201 and "+new" in candidate["diff"]
+        assert (
+            request(server, "POST", base + "/restores/apply", {"plan_id": candidate["id"]})[0]
+            == 200
+        )
         assert (repo / "v.py").read_text(encoding="utf-8") == "new"
         events = server.service.events(cid, edited["run"]["id"])
         assert {"project.progress", "project.report"} <= {e["kind"] for e in events}

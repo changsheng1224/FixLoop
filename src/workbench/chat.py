@@ -48,10 +48,28 @@ class ChatExecutor:
         self._factory = client_factory or (
             lambda: create_model_client(provider=provider, model=model, base_url=base_url)
         )
+        self._worker_config = (
+            None
+            if client_factory
+            else {
+                "provider": provider,
+                "model": model,
+                "base_url": base_url,
+                "max_output_tokens": max_output_tokens,
+                "timeout_s": timeout_s,
+                "max_context_bytes": max_context_bytes,
+                "max_transports": max_transports,
+            }
+        )
         self._slots = threading.BoundedSemaphore(max_transports)
         self.max_output_tokens = max_output_tokens
         self.timeout_s = timeout_s
         self.max_context_bytes = max_context_bytes
+
+    def worker_spec(self):
+        if self._worker_config is None:
+            raise ValueError("injected chat clients require an explicit worker adapter")
+        return {"kind": "chat", "config": self._worker_config}
 
     def __call__(self, messages, token: CancellationToken, on_chunk) -> ModelTurnResult:
         messages = [dict(message) for message in messages]

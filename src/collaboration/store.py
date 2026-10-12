@@ -8,6 +8,7 @@ import time
 from contextlib import closing
 from typing import Any
 
+from agent_runtime.state_root import native_io_path
 from src.collaboration.contracts import AgentResult, AgentTask, Handoff, TaskStatus
 
 
@@ -27,7 +28,7 @@ class CollaborationStore:
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.path), timeout=5)
+        conn = sqlite3.connect(native_io_path(self.path), timeout=5)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("PRAGMA journal_mode=WAL")

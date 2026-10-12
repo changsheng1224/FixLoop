@@ -12,9 +12,9 @@ import time
 from dataclasses import asdict, is_dataclass
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from importlib.resources import files
 from urllib.parse import parse_qs, urlsplit
 
+from src.workbench.assets import ASSETS, read_asset, validate_assets
 from src.workbench.models import ConflictError, NotFoundError
 from src.workbench.service import UnsupportedModeError, WorkbenchService
 
@@ -41,6 +41,7 @@ class WorkbenchHTTPServer(ThreadingHTTPServer):
             raise ValueError("workbench HTTP must bind to loopback")
         if not isinstance(token, str) or len(token) < 24 or not token.isascii():
             raise ValueError("provide an ASCII bearer token of at least 24 characters")
+        validate_assets()
         self.service = service
         self.token = token
         self.stream_slots = threading.BoundedSemaphore(16)
@@ -157,17 +158,9 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         )
 
     def _static(self, path):
-        assets = {
-            "/": ("index.html", "text/html; charset=utf-8"),
-            "/assets/app.js": ("app.js", "text/javascript; charset=utf-8"),
-            "/assets/api.js": ("api.js", "text/javascript; charset=utf-8"),
-            "/assets/render.js": ("render.js", "text/javascript; charset=utf-8"),
-            "/assets/style.css": ("style.css", "text/css; charset=utf-8"),
-        }
-        if path not in assets:
+        if path not in ASSETS:
             raise NotFoundError("asset")
-        name, mime = assets[path]
-        body = files("src.workbench").joinpath("web", name).read_bytes()
+        body, mime = read_asset(path)
         self.send_response(200)
         self.send_header("Content-Type", mime)
         self.send_header("Content-Length", str(len(body)))
@@ -341,6 +334,34 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 body, allowed={"operation_id", "decision"}, required={"operation_id", "decision"}
             )
             self._json(200, service.recover_restore(cid, **body))
+        elif (
+            method == "POST"
+            and len(tail) == 3
+            and tail[0] == "runs"
+            and _ID.fullmatch(tail[1])
+            and tail[2] == "candidate-preview"
+        ):
+            self._fields(body, allowed=set())
+            self._json(201, service.preview_candidate(cid, tail[1]))
+        elif (
+            method == "POST"
+            and len(tail) == 3
+            and tail[0] == "runs"
+            and _ID.fullmatch(tail[1])
+            and tail[2] == "candidate-discard"
+        ):
+            self._fields(body, allowed=set())
+            service.discard_candidate(cid, tail[1])
+            self._json(200, {"run_id": tail[1], "status": "discarded"})
+        elif (
+            method == "POST"
+            and len(tail) == 3
+            and tail[0] == "runs"
+            and _ID.fullmatch(tail[1])
+            and tail[2] == "reconcile"
+        ):
+            self._fields(body, allowed=set())
+            self._json(200, service.reconcile_resources(cid, tail[1]))
         elif method == "GET" and tail == ["messages"]:
             if set(query) - {"node_id"}:
                 raise ValueError("unknown message query")

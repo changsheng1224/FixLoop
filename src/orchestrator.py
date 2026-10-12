@@ -181,6 +181,7 @@ class Orchestrator(RepairPipelineMixin):
         sandbox_context=None,
         sandbox_task_spec=None,
         sandbox_backend_factory=None,
+        sandbox_worktree: bool = True,
         repair_config=None,
     ):
         self.patcher = patcher
@@ -211,6 +212,7 @@ class Orchestrator(RepairPipelineMixin):
         ):
             raise ValueError("wsl_bwrap patcher and verifier must share ToolContext")
         self._sandbox_context = sandbox_context
+        self._sandbox_worktree = sandbox_worktree
         self._sandbox_task_spec = sandbox_task_spec
         self._sandbox_backend_factory = sandbox_backend_factory
         self._sandbox_worktree_handle = None
@@ -973,7 +975,7 @@ class Orchestrator(RepairPipelineMixin):
         else:
             workspace = repository
             ownership, branch = "user", ""
-            if worktree_enabled():
+            if self._sandbox_worktree and worktree_enabled():
                 handle = create_worktree(
                     repository, state.repair_run_id, state_base=spec.state_base or None
                 )

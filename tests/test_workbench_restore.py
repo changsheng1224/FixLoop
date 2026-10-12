@@ -315,9 +315,10 @@ def test_failed_restore_reopen_and_explicit_recovery(tmp_path, point, decision):
         with pytest.raises(ConflictError):
             service.save_checkpoint(chat.id)
     with service_at(tmp_path) as reopened:
-        if point == "after_commit" and decision == "rollback":
-            with pytest.raises(ConflictError, match="already committed"):
-                reopened.recover_restore(chat.id, plan["id"], decision=decision)
+        if point in {"before_commit", "after_commit"}:
+            # Coherent target plus durable apply intent proves completion. Startup
+            # finishes the metadata/backup transaction without another user choice.
+            assert not reopened.project_status(chat.id)["pending"]
             decision = "complete"
         restored = reopened.recover_restore(chat.id, plan["id"], decision=decision)
         assert restored["status"] == ("committed" if decision == "complete" else "rolled_back")
@@ -509,7 +510,7 @@ def test_restore_crash_subprocess_releases_lock_without_startup_writes(tmp_path)
     script = """
 import os, sys
 from pathlib import Path
-from src.workbench.service import WorkbenchService
+from tests.workbench_unit_service import WorkbenchService
 p=Path(sys.argv[1])
 def fault(where,index):
     if where=='after_step': os._exit(73)
@@ -527,9 +528,8 @@ s.apply_restore(c.id,plan['id'])
     with service_at(tmp_path) as service:
         chat = service.store.list_conversations()[0]
         assert (repo / "a").read_bytes() == before
-        pending = service.project_status(chat.id)["pending"]
-        service.recover_restore(chat.id, pending[0]["id"], decision="rollback")
-        assert (repo / "a").read_bytes() == b"manual"
+        assert not service.project_status(chat.id)["pending"]
+        assert (repo / "a").read_bytes() == b"base"
 
 
 def test_project_lock_across_states_nested_roots_and_duplicate_conversations(tmp_path):
@@ -539,8 +539,7 @@ def test_project_lock_across_states_nested_roots_and_duplicate_conversations(tmp
     nested.mkdir()
     with service_at(tmp_path) as first:
         first.create_conversation(project_path=str(repo))
-        with pytest.raises(ConflictError, match="one conversation"):
-            first.create_conversation(project_path=str(repo))
+        assert first.create_conversation(project_path=str(repo)).base_snapshot_id
         with WorkbenchService(tmp_path / "state2", project_lock_dir=tmp_path / "locks") as second:
             for target in (repo, nested, tmp_path):
                 with pytest.raises((ConflictError, ValueError)):

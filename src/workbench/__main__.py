@@ -25,7 +25,7 @@ def add_workbench_arguments(parser):
     parser.add_argument("--base-url")
     parser.add_argument("--timeout", type=float, default=120)
     parser.add_argument("--max-output-tokens", type=int, default=4096)
-    parser.add_argument("--repair-tier", choices=["host", "container"], default="host")
+    parser.add_argument("--repair-tier", choices=["sandbox"], default="sandbox")
     parser.add_argument("--open-browser", action="store_true", help="Open the local workbench UI")
     return parser
 

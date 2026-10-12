@@ -162,3 +162,5 @@ dialog::backdrop { background: #1c2b4055; backdrop-filter: blur(3px); }
 .depth-4 { margin-left: 48px; }
 .depth-5 { margin-left: 60px; }
 .depth-6 { margin-left: 72px; }
+
+.candidate-diff { overflow: auto; max-height: 24rem; padding: 1rem; white-space: pre-wrap; overflow-wrap: anywhere; }

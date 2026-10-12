@@ -99,6 +99,7 @@ def wire_orchestrator(
     code_exploration_server_argv: tuple[str, ...] | None = None,
     sandbox_environment_manager=None,
     sandbox_package_proxy: str = "",
+    sandbox_worktree: bool = True,
     workspace_context=None,
     state_root: str = "",
     runtime_overrides: dict | None = None,
@@ -117,7 +118,7 @@ def wire_orchestrator(
         try:
             manager = sandbox_environment_manager or SandboxEnvironmentManager(repo_path)
             prepared = manager.ensure(package_proxy=sandbox_package_proxy)
-            state_base = managed_state_base(repo_path)
+            state_base = managed_state_base(repo_path, state_root or None)
             sandbox_task_spec = SandboxTaskSpec(
                 prepared.identity,
                 SANDBOX_POLICY_VERSION,
@@ -228,6 +229,7 @@ def wire_orchestrator(
         sandbox_context=sandbox_context,
         sandbox_task_spec=sandbox_task_spec,
         sandbox_backend_factory=sandbox_backend_factory,
+        sandbox_worktree=sandbox_worktree,
     )
     orch._budget_ctx = budget_ctx
     if should_try_verifier:

@@ -20,6 +20,7 @@ from agent_runtime.workspace import DOC_NAMES, WorkspaceContext
 from src.orchestrator import Orchestrator
 from src.repair.progress import ProgressEmitter
 from src.repair_factory import wire_orchestrator
+from src.state import RepairStatus
 from src.workbench.files import managed
 
 
@@ -143,14 +144,14 @@ class ProjectExecutor:
         base_url=None,
         timeout_s=120,
         max_output_tokens=4096,
-        execution_tier="host",
+        execution_tier="sandbox",
         repair_factory=None,
         max_context_bytes=400_000,
     ):
         if timeout_s <= 0 or not 1 <= max_output_tokens <= 8192:
             raise ValueError("invalid project execution limits")
-        if execution_tier not in {"host", "container"}:
-            raise ValueError("project repair tier must be host or container")
+        if execution_tier not in {"sandbox", "host", "container"}:
+            raise ValueError("unknown project repair tier")
         self.client_factory = client_factory or (
             lambda: create_model_client(provider=provider, model=model, base_url=base_url)
         )
@@ -158,8 +159,33 @@ class ProjectExecutor:
         self.timeout_s, self.max_output_tokens = timeout_s, max_output_tokens
         self.execution_tier, self.repair_factory = execution_tier, repair_factory
         self.max_context_bytes = max_context_bytes
+        self._worker_config = (
+            None
+            if client_factory or repair_factory
+            else {
+                "provider": provider,
+                "model": model,
+                "base_url": base_url,
+                "timeout_s": timeout_s,
+                "max_output_tokens": max_output_tokens,
+                "execution_tier": execution_tier,
+                "max_context_bytes": max_context_bytes,
+            }
+        )
+
+    def worker_spec(self):
+        if self._worker_config is None:
+            raise ValueError("injected project clients require an explicit worker adapter")
+        return {"kind": "project", "config": self._worker_config}
+
+    def check_mode(self, mode):
+        if mode == "repair" and self.execution_tier != "sandbox" and self.repair_factory is None:
+            raise ValueError(
+                "workbench repair requires a filesystem sandbox; host/container tier unsupported"
+            )
 
     def __call__(self, *, mode, files, messages, token, on_chunk, publish, run_id, state_root):
+        self.check_mode(mode)
         if sum(len(m["content"].encode("utf-8")) for m in messages) > self.max_context_bytes:
             raise ValueError("project context limit exceeded")
         token.check()
@@ -224,7 +250,11 @@ class ProjectExecutor:
                     orch_class=_PinnedOrchestrator,
                     workspace_context=workspace,
                     state_root=str(state_root),
-                    execution_tier=self.execution_tier,
+                    execution_tier="auto"
+                    if self.execution_tier == "sandbox"
+                    else self.execution_tier,
+                    execution_backend="wsl_bwrap" if self.execution_tier == "sandbox" else "legacy",
+                    sandbox_worktree=False,
                     runtime_overrides={
                         "provider": self.provider,
                         "max_new_tokens": self.max_output_tokens,
@@ -244,10 +274,11 @@ class ProjectExecutor:
                 )
                 token.check()
                 state = orch.repair(request, repair_timeout_s=0, cancel_token=token, run_id=run_id)
+                status = RepairStatus(state.status)
                 verification = state.verification_result
                 report = {
                     "mode": mode,
-                    "repair_status": str(state.status),
+                    "repair_status": status.value,
                     "verified": bool(verification and verification.all_passed),
                     "verification": (
                         {
@@ -259,18 +290,18 @@ class ProjectExecutor:
                     ),
                 }
                 token.check()
-                success = str(state.status) == "fixed" and report["verified"]
+                success = status is RepairStatus.FIXED and report["verified"]
                 answer = (
-                    "修复完成，验证通过。"
+                    "修复验证通过，候选结果已生成。"
                     if success
-                    else f"修复未完成：{state.status}；验证结果已保存。"
+                    else f"修复未完成：{status.value}；验证结果已保存。"
                 )
                 on_chunk(answer)
                 publish("project.report", report)
                 return ProjectResult(
                     answer,
                     "succeeded" if success else "failed",
-                    None if success else str(state.status),
+                    None if success else status.value,
                     report,
                 )
         finally:

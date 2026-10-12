@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+import difflib
 import json
 import os
-import sqlite3
 import time
 import uuid
-from contextlib import contextmanager
 from pathlib import Path
 
 from src.workbench.files import ProjectFiles, digest
@@ -68,41 +67,27 @@ class ProjectOwnership:
 
 
 class RestoreJournal:
-    def __init__(self, path):
-        self.path = path
-        with self.connect() as db:
-            db.execute(
-                "CREATE TABLE IF NOT EXISTS operations "
-                "(id TEXT PRIMARY KEY, root TEXT NOT NULL, payload TEXT NOT NULL)"
-            )
-
-    @contextmanager
-    def connect(self):
-        db = sqlite3.connect(self.path)
-        try:
-            db.execute("PRAGMA synchronous=FULL")
-            with db:
-                yield db
-        finally:
-            db.close()
+    def __init__(self, store):
+        self.store = store
+        self.path = store.database
 
     def write(self, plan):
-        with self.connect() as db:
-            db.execute(
-                "INSERT INTO operations VALUES (?, ?, ?) "
-                "ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
-                (plan["id"], plan["root"], canonical(plan).decode()),
-            )
+        self.write_many([plan])
+
+    def write_many(self, plans):
+        with self.store._transaction() as db:
+            for plan in plans:
+                self.store._operation(db, plan)
 
     def read(self, identity):
-        with self.connect() as db:
+        with self.store._transaction(write=False) as db:
             row = db.execute("SELECT payload FROM operations WHERE id=?", (identity,)).fetchone()
         if row is None:
             raise NotFoundError("restore operation")
         return json.loads(row[0])
 
     def all(self):
-        with self.connect() as db:
+        with self.store._transaction(write=False) as db:
             return [
                 json.loads(row[0])
                 for row in db.execute("SELECT payload FROM operations ORDER BY rowid")
@@ -156,7 +141,7 @@ class RestoreCoordinator:
         self.store = store
         self.state_dir = state_dir
         self.repository = SnapshotRepository(state_dir / "snapshots")
-        self.journal = RestoreJournal(state_dir / "restores.sqlite3")
+        self.journal = RestoreJournal(store)
         self.lock_dir = Path(lock_dir) if lock_dir else Path.home() / ".fixloop" / "project-locks"
         self.fault = fault or (lambda *_: None)
         self.projects = {}
@@ -203,12 +188,12 @@ class RestoreCoordinator:
         files = self._files(conversation.project_path)
         if not recovery and self.pending(cid):
             raise ConflictError("project has an unfinished restore; choose complete or rollback")
+        if not recovery and self.store.resource_blockers(cid):
+            raise ConflictError("execution cleanup is unconfirmed")
         return conversation, files
 
     def create(self, title, project_path):
         files = self._files(project_path)
-        if any(c.project_path == str(files.root) for c in self.store.list_conversations()):
-            raise ConflictError("S3 supports one conversation per project; reuse its conversation")
         if any(
             p["root"] == str(files.root) and p["status"] not in {"committed", "rolled_back"}
             for p in self.journal.all()
@@ -220,9 +205,10 @@ class RestoreCoordinator:
                 title, project_path=str(files.root), baseline=(key, manifest)
             )
         except BaseException:
-            files, owner = self.projects.pop(files.root)
-            files.close()
-            owner.close()
+            if not any(c.project_path == str(files.root) for c in self.store.list_conversations()):
+                files, owner = self.projects.pop(files.root)
+                files.close()
+                owner.close()
             raise
 
     def _snapshot(self, tree, sid, files):
@@ -241,20 +227,37 @@ class RestoreCoordinator:
     def pending(self, cid):
         # Read only: even a receipt-confirmed operation needs explicit recovery
         # for backup cleanup. Startup never mutates project files.
+        root = self.store.get_conversation(cid).project_path
+        operations = self.journal.all()
         return [
-            self.public(p)
-            for p in self.journal.all()
-            if p["conversation_id"] == cid
+            {
+                **self.public(p),
+                "recovery_decision": next(
+                    (
+                        child["decision"]
+                        for child in reversed(operations)
+                        if child.get("parent") == p["id"]
+                        and child["status"] not in {"committed", "rolled_back"}
+                    ),
+                    None,
+                ),
+            }
+            for p in operations
+            if p["root"] == root
             and "parent" not in p
             and p["status"] not in {"committed", "rolled_back"}
         ]
 
     @staticmethod
     def public(plan):
-        return {
+        result = {
             k: plan[k]
             for k in ("id", "conversation_id", "action", "revision", "manual", "changes", "status")
         }
+        for key in ("diff", "run_id", "project_revision"):
+            if key in plan:
+                result[key] = plan[key]
+        return result
 
     def status(self, cid):
         conversation, files = self.project(cid, recovery=True)
@@ -268,7 +271,111 @@ class RestoreCoordinator:
             "manual_changes": live["entries"] != expected["entries"],
             "pending": self.pending(cid),
             "policy": live["policy"],
+            "candidates": self.store.candidates(cid),
+            "project": self.store.project_record(cid),
+            "execution_blockers": self.store.resource_blockers(cid),
         }
+
+    def reconcile_committed(self):
+        """Finish proven metadata/backup cleanup; never replay incomplete file writes."""
+        operations = self.journal.all()
+        for plan in operations:
+            if "parent" in plan or plan["status"] in {"committed", "rolled_back"}:
+                continue
+            cid = plan["conversation_id"]
+            if self.store.resource_blockers(cid):
+                continue
+            if any(
+                child.get("parent") == plan["id"]
+                and child["status"] not in {"committed", "rolled_back"}
+                for child in operations
+            ):
+                # A persisted recovery decision takes precedence over the
+                # original target, even before its first file write. Continue
+                # that decision explicitly through its own preimage journal.
+                continue
+            try:
+                _, files = self.project(cid, recovery=True)
+                self._validate(plan, files)
+                if files.scan() != plan["target"]:
+                    continue
+                if not self._receipt(plan):
+                    self.store.commit_restore(plan)
+                self.recover(cid, plan["id"], decision="complete")
+            except (ConflictError, ValueError, OSError):
+                continue
+
+    def preview_candidate(self, cid, run_id):
+        conversation, files = self.project(cid)
+        self._idle(cid)
+        candidate = self.store.candidate(cid, run_id)
+        if candidate["status"] != "ready":
+            raise ConflictError("candidate is not ready")
+        project = self.store.project_record(cid)
+        if candidate["project_revision"] != project["revision"]:
+            raise ConflictError("project changed since candidate was produced")
+        before_key, before = self.repository.save(files)
+        expected = self.repository.load(candidate["input_key"])
+        if before != expected:
+            raise ConflictError(
+                "external edits conflict with candidate; files and candidate preserved"
+            )
+        target = self.repository.load(candidate["output_key"])
+        if target["root_identity"] != files.identity:
+            raise ConflictError("candidate root identity changed")
+        files.preflight(before["entries"], target["entries"])
+        changes, diff = [], []
+        size = 0
+        for path in sorted(set(before["entries"]) | set(target["entries"])):
+            old, new = before["entries"].get(path), target["entries"].get(path)
+            if old == new:
+                continue
+            changes.append({"path": path, "before": old, "after": new})
+            try:
+                texts = [
+                    [
+                        line + "\n"
+                        for line in self.repository.blob(entry["digest"])
+                        .decode("utf-8")
+                        .splitlines()
+                    ]
+                    if entry and entry["kind"] == "file"
+                    else []
+                    for entry in (old, new)
+                ]
+                patch = "".join(
+                    difflib.unified_diff(*texts, fromfile="a/" + path, tofile="b/" + path)
+                )
+            except UnicodeError:
+                patch = f"Binary file changed: {path}\n"
+            if size + len(patch.encode("utf-8")) <= 200_000:
+                diff.append(patch)
+                size += len(patch.encode("utf-8"))
+            else:
+                diff.append(f"Diff omitted (display limit): {path}\n")
+        plan = {
+            "id": "restore-" + uuid.uuid4().hex,
+            "conversation_id": cid,
+            "root": str(files.root),
+            "revision": conversation.revision,
+            "action": "candidate",
+            "run_id": run_id,
+            "project_revision": candidate["project_revision"],
+            "manual": False,
+            "before_key": before_key,
+            "before": before,
+            "target_key": candidate["output_key"],
+            "target": target,
+            "changes": changes,
+            "diff": "".join(diff),
+            "status": "preview",
+            "created_at": time.time(),
+            "steps": steps(before["entries"], target["entries"]),
+            "started": -1,
+            "done": -1,
+        }
+        self._remember(plan)
+        return self.public(plan)
 
     def checkpoint(self, cid, *, label="本地修改", expected_revision=None):
         conversation, files = self.project(cid)
@@ -338,6 +445,7 @@ class RestoreCoordinator:
             "root": str(files.root),
             "revision": conversation.revision,
             "action": action,
+            "project_revision": self.store.project_record(cid)["revision"],
             "input_node": node_id if action == "input" else None,
             "branch_id": branch_id,
             "destination_node": destination,
@@ -354,11 +462,14 @@ class RestoreCoordinator:
             "started": -1,
             "done": -1,
         }
+        self._remember(plan)
+        return self.public(plan)
+
+    def _remember(self, plan):
         self.plans = {k: v for k, v in self.plans.items() if time.time() - v["created_at"] < 600}
         if len(self.plans) >= 32:
             raise ConflictError("restore preview capacity reached")
         self.plans[plan["id"]] = plan
-        return self.public(plan)
 
     def apply(self, cid, plan_id):
         conversation, files = self.project(cid)
@@ -369,6 +480,8 @@ class RestoreCoordinator:
             raise ConflictError("restore preview expired")
         if conversation.revision != plan["revision"]:
             raise ConflictError("restore preview revision is stale")
+        if self.store.project_record(cid)["revision"] != plan["project_revision"]:
+            raise ConflictError("project changed since candidate preview")
         self._idle(cid)
         self._validate(plan, files)
         if files.scan() != plan["before"]:
@@ -443,7 +556,7 @@ class RestoreCoordinator:
     def recover(self, cid, operation_id, *, decision):
         _, files = self.project(cid, recovery=True)
         plan = self.journal.read(operation_id)
-        if plan["conversation_id"] != cid:
+        if plan["root"] != str(files.root):
             raise NotFoundError("restore operation")
         if "parent" in plan:
             raise ValueError("recover using the original operation ID")
@@ -468,7 +581,7 @@ class RestoreCoordinator:
             plan["status"] = "committed"
             self.journal.write(plan)
             return self.public(plan)
-        if self.store.get_conversation(cid).revision != plan["revision"]:
+        if self.store.get_conversation(plan["conversation_id"]).revision != plan["revision"]:
             raise ConflictError("history changed during interrupted restore")
         # Persist a recovery child before any further writes. Interrupted
         # recoveries use this child's step journal for exact preimage checks.
@@ -545,8 +658,7 @@ class RestoreCoordinator:
             original["status"] = "committed" if child["decision"] == "complete" else "rolled_back"
             # Resolve both records durably; original receipt reconciles complete.
             child["status"] = original["status"]
-            self.journal.write(child)
-            self.journal.write(original)
+            self.journal.write_many([child, original])
             return self.public(original)
         except BaseException:
             child["status"] = "needs_recovery"

@@ -81,7 +81,7 @@ async function refresh() {
   if (cid !== state.cid || epoch !== state.epoch) return;
   state.tree = tree; state.view = tree.conversation.view_node_id;
   state.workspace = null;
-  if (tree.conversation.project_path && !tree.runs.some(run => !terminal(run))) {
+  if (!tree.runs.some(run => !terminal(run))) {
     try {
       const workspace = await api(`/conversations/${cid}/workspace`);
       if (cid !== state.cid || epoch !== state.epoch) return;
@@ -103,7 +103,7 @@ function renderAll() {
   renderMessages(); renderTree(); renderDetails(); renderRecovery(); renderControls();
 }
 function renderControls() {
-  const busy = Boolean(activeRun()), blocked = Boolean(state.workspace?.pending.length);
+  const busy = Boolean(activeRun()), blocked = Boolean(state.workspace?.pending?.length || state.workspace?.execution_blockers?.length);
   const settling = Boolean(state.stream && !busy);
   const locked = state.pending || busy || settling || blocked;
   $("send").disabled = locked || !$("prompt").value.trim();
@@ -232,14 +232,50 @@ function renderDetails() {
     for (const path of files) list.append(el("li", "", path));
     root.append(list);
   }
+  if (run.artifacts?.context?.summary_turns) detail("历史上下文", `已摘要 ${run.artifacts.context.summary_turns} 轮，完整记录保留`);
+  const candidate = state.workspace?.candidates?.find(item => item.run_id === run.id);
+  if (candidate) {
+    detail("修复结果", {ready: "候选结果，尚未写入项目", applied: "已应用到项目", discarded: "已放弃候选"}[candidate.status]);
+    if (candidate.status === "ready") {
+      const preview = button("查看差异并应用", action(() => previewCandidate(run.id)), "secondary"); preview.dataset.mutation = "true";
+      const discard = button("放弃候选", action(() => discardCandidate(run.id))); discard.dataset.mutation = "true";
+      root.append(preview, discard);
+    }
+  }
 }
 function renderRecovery() {
   const root = $("recovery"); root.replaceChildren();
-  const pending = state.workspace?.pending || []; root.hidden = !pending.length;
-  for (const operation of pending) {
-    root.append(el("p", "", "上次文件恢复尚未结束。完成恢复或回到恢复前状态后，才能继续执行。"));
-    root.append(button("完成恢复", () => recoveryDialog(operation, "complete"), "secondary"), button("回到恢复前", () => recoveryDialog(operation, "rollback"), "secondary"));
+  const pending = state.workspace?.pending || [], blockers = state.workspace?.execution_blockers || [];
+  root.hidden = !pending.length && !blockers.length;
+  for (const resource of blockers) {
+    root.append(el("p", "error", "尚未确认上次执行及其外部工具已停止。项目操作暂时锁定，文件不会自动恢复或覆盖。"));
+    root.append(button("重新检查并停止遗留执行", action(async () => {
+      const cid = resource.conversation_id || state.cid;
+      await api(`/conversations/${cid}/runs/${resource.run_id}/reconcile`, {method: "POST", body: {}});
+      await afterMutation();
+    }), "secondary"));
   }
+  for (const operation of pending) {
+    root.append(el("p", "", "上次文件应用或恢复尚未结束，目录可能包含部分新文件和部分旧文件。完成恢复或回到恢复前状态后，才能继续执行。"));
+    root.append(el("small", "", `状态：${operation.status} · 涉及 ${operation.changes.length} 个路径`));
+    if (operation.recovery_decision) root.append(el("p", "", operation.recovery_decision === "rollback" ? "上次已选择回到恢复前，请继续完成该选择。" : "上次已选择完成恢复，请继续完成该选择。"));
+    const complete = button("完成恢复", () => recoveryDialog(operation, "complete"), "secondary");
+    const rollback = button("回到恢复前", () => recoveryDialog(operation, "rollback"), "secondary");
+    complete.disabled = blockers.length > 0 || operation.recovery_decision === "rollback";
+    rollback.disabled = blockers.length > 0 || operation.recovery_decision === "complete";
+    root.append(complete, rollback);
+  }
+}
+
+async function previewCandidate(runId) {
+  const plan = await api(`${base()}/runs/${runId}/candidate-preview`, {method: "POST", body: {}});
+  showPreview(plan, {kind: "candidate"});
+}
+function discardCandidate(runId) {
+  formDialog("放弃候选结果", [], "确认放弃", async () => {
+    await api(`${base()}/runs/${runId}/candidate-discard`, {method: "POST", body: {}});
+    await afterMutation(); toast("候选已放弃，执行记录保留");
+  });
 }
 
 async function viewNode(id) {
@@ -303,8 +339,11 @@ async function switchTo(id) {
 }
 async function preview(body, intent) {
   const plan = await api(`${base()}/restores/preview`, {method: "POST", body: {...body, expected_revision: revision()}});
+  showPreview(plan, intent);
+}
+function showPreview(plan, intent) {
   state.restore = {cid: state.cid, plan, intent};
-  $("restore-title").textContent = ["edit", "regenerate"].includes(intent.kind) ? "恢复输入状态并重新执行" : intent.kind === "switch" ? "切换分支：文件恢复预览" : "从历史继续：文件恢复预览";
+  $("restore-title").textContent = intent.kind === "candidate" ? "候选修复：差异与应用预览" : ["edit", "regenerate"].includes(intent.kind) ? "恢复输入状态并重新执行" : intent.kind === "switch" ? "切换分支：文件恢复预览" : "从历史继续：文件恢复预览";
   $("restore-summary").textContent = `${plan.changes.length} 个路径将发生变化。请核对后确认。`;
   $("restore-manual").hidden = !plan.manual;
   const root = $("restore-changes"); root.replaceChildren();
@@ -317,8 +356,9 @@ async function preview(body, intent) {
   for (const change of plan.changes) {
     const item = el("div", "change"); item.append(el("strong", "", change.path), el("small", "", `${describe(change.before)} → ${describe(change.after)}`)); root.append(item);
   }
+  if (plan.diff) root.append(el("pre", "candidate-diff", plan.diff));
   $("restore-error").textContent = "";
-  $("restore-confirm").textContent = ["edit", "regenerate"].includes(intent.kind) ? "恢复并重新执行" : intent.kind === "switch" ? "恢复并切换" : "恢复并创建分支";
+  $("restore-confirm").textContent = intent.kind === "candidate" ? "应用到项目" : ["edit", "regenerate"].includes(intent.kind) ? "恢复并重新执行" : intent.kind === "switch" ? "恢复并切换" : "恢复并创建分支";
   $("restore-dialog").showModal();
 }
 function recoveryDialog(operation, decision) {
@@ -370,7 +410,7 @@ async function followRun(cid, rid, controller, live) {
           const index = state.tree.runs.findIndex(run => run.id === rid);
           if (index >= 0) state.tree.runs[index] = event.data;
           live.progress = "正在执行";
-        } else if (frame.event === "run.stop_requested") live.progress = "正在停止，等待工作线程退出并保存文件…";
+        } else if (["run.stop_requested", "run.cancelling"].includes(frame.event)) live.progress = "正在停止执行并确认外部工具退出，项目文件保持不变…";
         renderMessages(); renderDetails(); renderControls();
       });
       if (finished) break;
@@ -470,7 +510,7 @@ $("restore-confirm").addEventListener("click", async () => {
       await api(`${base()}/nodes/${intent.node}/${intent.kind}`, {method: "POST", body});
     } else await api(`${base()}/restores/apply`, {method: "POST", body: {plan_id: plan.id}});
     $("restore-dialog").close(); state.restore = null;
-    await afterMutation(); toast("恢复已完成，原分支已保留");
+    await afterMutation(); toast(intent.kind === "candidate" ? "候选修复已应用到项目" : "恢复已完成，原分支已保留");
   } catch (error) {
     // Never reuse an uncertain/expired plan automatically.
     $("restore-dialog").close(); state.restore = null;
