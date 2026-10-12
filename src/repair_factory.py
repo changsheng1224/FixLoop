@@ -38,10 +38,11 @@ __all__ = [
 SANDBOX_POLICY_VERSION = "wsl-bwrap-v1"
 
 
-def _sandbox_policy_digest(environment) -> str:
+def _sandbox_policy_digest(environment, workspace_policy: str) -> str:
     """Freeze the controller profile into the task binding identity."""
     profile = {
         "backend": "wsl_bwrap",
+        "workspace_policy": workspace_policy,
         "policy_version": SANDBOX_POLICY_VERSION,
         "environment": {
             "distribution": environment.distribution,
@@ -99,7 +100,7 @@ def wire_orchestrator(
     code_exploration_server_argv: tuple[str, ...] | None = None,
     sandbox_environment_manager=None,
     sandbox_package_proxy: str = "",
-    sandbox_worktree: bool = True,
+    workspace_policy: str = "worktree",
     workspace_context=None,
     state_root: str = "",
     project_root: str = "",
@@ -108,6 +109,14 @@ def wire_orchestrator(
     """装配唯一的 Patcher-primary runtime 与可选 Verifier。"""
     if execution_backend not in {"legacy", "wsl_bwrap"}:
         raise ValueError("unknown execution backend")
+    if execution_tier not in {"auto", "container", "host", "static"}:
+        raise ValueError("unknown execution tier")
+    if workspace_policy not in {"worktree", "provided"}:
+        raise ValueError("unknown workspace policy")
+    if workspace_policy == "worktree" and project_root and (
+        Path(project_root).resolve() != Path(repo_path).resolve()
+    ):
+        raise ValueError("worktree source must be the registered project root")
     sandbox_context = None
     sandbox_task_spec = None
     sandbox_backend_factory = None
@@ -123,7 +132,7 @@ def wire_orchestrator(
             sandbox_task_spec = SandboxTaskSpec(
                 prepared.identity,
                 SANDBOX_POLICY_VERSION,
-                _sandbox_policy_digest(prepared.identity),
+                _sandbox_policy_digest(prepared.identity, workspace_policy),
                 str(state_base),
                 project_root,
             )
@@ -209,9 +218,7 @@ def wire_orchestrator(
         if state_root:
             patcher_kw["sandbox_context"] = ctx
         patcher = create_patcher(client, ws, cwd=repo, **patcher_kw)
-    normalized_tier = (
-        execution_tier if execution_tier in {"auto", "container", "host", "static"} else "auto"
-    )
+    normalized_tier = execution_tier
     use_pytest_verify = (not skip_verify) and normalized_tier in {"auto", "host"}
     allow_static_verify_fallback = (not skip_verify) and normalized_tier == "static"
     # The WSL profile verifies through the task-bound BwrapVerifyStrategy. A
@@ -231,7 +238,13 @@ def wire_orchestrator(
         sandbox_context=sandbox_context,
         sandbox_task_spec=sandbox_task_spec,
         sandbox_backend_factory=sandbox_backend_factory,
-        sandbox_worktree=sandbox_worktree,
+        workspace_policy=workspace_policy,
+        execution_profile=(
+            f"{execution_backend}:{execution_tier}:{bool(require_sandbox)}:"
+            f"skip_verify={bool(skip_verify)}:dry_run={bool(dry_run)}"
+        ),
+        workspace_state_base=state_root,
+        project_root=project_root,
     )
     orch._budget_ctx = budget_ctx
     if should_try_verifier:
@@ -248,6 +261,11 @@ def wire_orchestrator(
         if verifier:
             orch.verifier = verifier
             orch._repair_gateways = orch._collect_repair_gateways(patcher, verifier)
+    if execution_backend == "legacy":
+        for agent in orch._active_agents:
+            # Host edits must not trigger process-cwd switching. Sandbox Agents
+            # already validate their immutable binding on every workspace check.
+            agent._workspace_pinned = True
     return orch
 
 
@@ -262,6 +280,9 @@ def make_orchestrator_factory(
     code_exploration_server_argv: tuple[str, ...] | None = None,
     sandbox_environment_manager=None,
     sandbox_package_proxy: str = "",
+    workspace_policy: str = "worktree",
+    state_root: str = "",
+    project_root: str = "",
     model_client=None,
 ) -> Callable[[str], Orchestrator]:
     """返回 `(repo_path) -> Orchestrator` 工厂。"""
@@ -279,6 +300,9 @@ def make_orchestrator_factory(
             code_exploration_server_argv=code_exploration_server_argv,
             sandbox_environment_manager=sandbox_environment_manager,
             sandbox_package_proxy=sandbox_package_proxy,
+            workspace_policy=workspace_policy,
+            state_root=state_root,
+            project_root=project_root,
         )
 
     return factory

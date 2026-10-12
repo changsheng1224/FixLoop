@@ -24,6 +24,4 @@ class RepairRunContext:
     harness_control: Any = field(default=None, repr=False)
     log_run_id_token: Any = field(default=None, repr=False)
     worktree_handle: Any = field(default=None, repr=False)
-    worktree_original_roots: dict = field(default_factory=dict, repr=False)
-    original_repo_root: str = ""
     worktree_initial_snapshot: dict = field(default_factory=dict, repr=False)

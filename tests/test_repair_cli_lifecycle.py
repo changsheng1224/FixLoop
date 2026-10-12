@@ -25,6 +25,7 @@ def arguments(repo, output, **kwargs):
         skip_verify=False,
         execution_tier="auto",
         require_sandbox=False,
+        workspace_policy="provided",
     )
     return SimpleNamespace(**(values | kwargs))
 
@@ -285,6 +286,23 @@ def test_existing_output_is_not_overwritten(temp_workspace, tmp_path, monkeypatc
         run_repair_cli(arguments(temp_workspace, output), lambda *a: pytest.fail("executed")) == 2
     )
     assert (output / "result.json").read_text() == "keep"
+
+
+def test_worktree_output_inside_source_rejected_without_creating_files(temp_workspace):
+    output = temp_workspace / ".fixloop" / "delivery"
+    args = arguments(temp_workspace, output, workspace_policy="worktree")
+    assert run_repair_cli(args, lambda *a: pytest.fail("executed")) == 2
+    assert not output.exists()
+
+
+def test_worktree_default_output_is_external(temp_workspace, tmp_path, monkeypatch):
+    monkeypatch.setenv("FIXLOOP_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "fake-key")
+    args = arguments(temp_workspace, None, workspace_policy="worktree", dry_run=True)
+    args.output = None
+    assert run_repair_cli(args, lambda *a: patch_state("fix")) == 0
+    reports = list((tmp_path / "state").rglob("result.json"))
+    assert len(reports) == 1 and not reports[0].is_relative_to(temp_workspace)
 
 
 def test_text_directory_export_applies(tmp_path):

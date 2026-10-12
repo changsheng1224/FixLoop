@@ -44,7 +44,7 @@ class TestRuntimeWiring:
         orch = wire_orchestrator(
             FakeModelClient([]), str(copy), project_root=str(source), state_root=str(storage),
             execution_backend="wsl_bwrap", sandbox_environment_manager=FakeSandboxEnvironmentManager(),
-            sandbox_worktree=False, skip_verify=True, dry_run=True,
+            workspace_policy="provided", skip_verify=True, dry_run=True,
         )
         spec = orch._sandbox_task_spec
         assert spec.state_base == str(storage)

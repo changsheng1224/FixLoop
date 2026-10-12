@@ -181,7 +181,10 @@ class Orchestrator(RepairPipelineMixin):
         sandbox_context=None,
         sandbox_task_spec=None,
         sandbox_backend_factory=None,
-        sandbox_worktree: bool = True,
+        workspace_policy: str = "provided",
+        execution_profile: str = "",
+        workspace_state_base: str = "",
+        project_root: str = "",
         repair_config=None,
     ):
         self.patcher = patcher
@@ -212,7 +215,15 @@ class Orchestrator(RepairPipelineMixin):
         ):
             raise ValueError("wsl_bwrap patcher and verifier must share ToolContext")
         self._sandbox_context = sandbox_context
-        self._sandbox_worktree = sandbox_worktree
+        if workspace_policy not in {"worktree", "provided"}:
+            raise ValueError("unknown workspace policy")
+        self._workspace_policy = workspace_policy
+        self._execution_profile = execution_profile or (
+            f"{'wsl_bwrap' if sandbox_context is not None else 'legacy'}:"
+            f"pytest={bool(use_pytest_verify)}:static={bool(allow_static_verify_fallback)}"
+        )
+        self._workspace_state_base = workspace_state_base
+        self._project_root = project_root or getattr(sandbox_task_spec, "project_root", "")
         self._sandbox_task_spec = sandbox_task_spec
         self._sandbox_backend_factory = sandbox_backend_factory
         self._sandbox_worktree_handle = None
@@ -363,6 +374,10 @@ class Orchestrator(RepairPipelineMixin):
         from src.repair.recovery_outcome import publish_recovery_outcome
 
         try:
+            if self._sandbox_task_spec is None and self._workspace_policy == "worktree":
+                self._prepare_host_worktree(state, resume=bool(resume_run_id))
+            entry = self._workspace_entry()
+            state.node_timings["run_entry"] = entry
             checkpoint = None
             if workspace_ready is not None:
                 workspace_ready(self._repo_root)
@@ -384,6 +399,8 @@ class Orchestrator(RepairPipelineMixin):
                         != binding.to_wire()
                     ):
                         raise RepairCheckpointError("sandbox_task_identity_mismatch")
+                    if checkpoint.get("node_timings", {}).get("run_entry") != entry:
+                        raise RepairCheckpointError("resume_workspace_policy_mismatch")
                 except RepairCheckpointError as exc:
                     state.set_status("recovery_required", exc.code)
                     state.agent_errors["checkpoint"] = exc.code
@@ -450,6 +467,73 @@ class Orchestrator(RepairPipelineMixin):
             self._repair_ctx = None
             if sandbox_prepared and not sandbox_pipeline_started:
                 self._cleanup_sandbox_startup_failure(state)
+            elif (
+                self._sandbox_task_spec is None
+                and self._sandbox_worktree_handle is not None
+                and not sandbox_pipeline_started
+            ):
+                from agent_runtime.worktree import WorktreeError, retain_worktree
+
+                try:
+                    retain_worktree(self._sandbox_worktree_handle, reason="startup_stopped")
+                except (WorktreeError, OSError) as exc:
+                    state.agent_errors.setdefault("worktree_retention", str(exc)[:500])
+
+    def _workspace_entry(self) -> dict:
+        """Trusted entry decisions; checkpoint recovery must reproduce them exactly."""
+
+        def directory(root):
+            path = Path(root).resolve(strict=True)
+            stat = path.stat()
+            return {"root": str(path), "identity": [stat.st_dev, stat.st_ino]}
+
+        return {
+            "workspace_policy": self._workspace_policy,
+            "execution_profile": self._execution_profile,
+            "sandbox_policy": self.sandbox_policy,
+            "project": directory(self._project_root or self._sandbox_repository_root),
+            "workspace": directory(self._repo_root),
+        }
+
+    def _prepare_host_worktree(self, state: RepairState, *, resume: bool) -> None:
+        """Pin the final host checkout before snapshots, checkpoints and coordination."""
+        import uuid
+
+        from agent_runtime.state_root import managed_state_base, trusted_state_root
+        from agent_runtime.worktree import adopt_worktree, create_worktree, default_worktree_path
+
+        repository = self._sandbox_repository_root
+        if self._project_root and Path(self._project_root).resolve() != Path(repository).resolve():
+            raise ValueError("worktree source must be the registered project root")
+        if self._sandbox_context is not None:
+            raise ValueError("prebound sandbox cannot change workspace; use sandbox_task_spec")
+        if self._sandbox_worktree_handle is not None:
+            raise ValueError("workspace_already_bound: use a fresh orchestrator")
+        state.repair_run_id = state.repair_run_id or "repair-" + uuid.uuid4().hex
+        base = self._workspace_state_base or None
+        if resume:
+            handle = adopt_worktree(
+                repository, default_worktree_path(repository, state.repair_run_id, state_base=base),
+                state.repair_run_id, state_base=base, ownership="task",
+                branch=f"fixloop/wt-{state.repair_run_id}",
+            )
+        else:
+            handle = create_worktree(repository, state.repair_run_id, state_base=base)
+        self._sandbox_worktree_handle = handle
+        self._repo_root = str(handle.path)
+        state_root = str(trusted_state_root(
+            handle.path, managed_state_base(repository, base) / "tasks" / state.repair_run_id
+        ))
+        for agent in self._active_agents:
+            binder = getattr(agent, "bind_repair_workspace", None)
+            if callable(binder):
+                binder(self._repo_root, state_root, repository, state.repair_run_id)
+            else:
+                tc = getattr(agent, "tool_context", None)
+                if tc is not None:
+                    tc.root, tc.state_root = self._repo_root, state_root
+                agent._cwd, agent.state_root = self._repo_root, state_root
+        self.l1_prompt_cache_key = self._resolve_l1_prompt_cache_key()
 
     def _set_collaboration_context(self, state: RepairState) -> None:
         """Pass current mode/phase to gateways when the runtime owns the state."""
@@ -957,12 +1041,15 @@ class Orchestrator(RepairPipelineMixin):
 
     def _bind_sandbox_task(self, state: RepairState, *, resume: bool) -> None:
         from agent_runtime.linux_sandbox.task_context import SandboxTaskBinding
-        from agent_runtime.worktree import adopt_worktree, create_worktree, worktree_enabled
+        from agent_runtime.worktree import adopt_worktree, create_worktree
 
         spec = self._sandbox_task_spec
         repository = self._sandbox_repository_root
         if resume:
             binding = SandboxTaskBinding.load(repository, state.repair_run_id, spec)
+            expected = "task" if self._workspace_policy == "worktree" else "user"
+            if binding.workspace_ownership != expected:
+                raise ValueError("resume_workspace_policy_mismatch")
             if binding.workspace_ownership == "task":
                 self._sandbox_worktree_handle = adopt_worktree(
                     repository,
@@ -975,7 +1062,7 @@ class Orchestrator(RepairPipelineMixin):
         else:
             workspace = repository
             ownership, branch = "user", ""
-            if self._sandbox_worktree and worktree_enabled():
+            if self._workspace_policy == "worktree":
                 handle = create_worktree(
                     repository, state.repair_run_id, state_base=spec.state_base or None
                 )
@@ -1022,6 +1109,7 @@ class Orchestrator(RepairPipelineMixin):
                 exc.add_note(f"sandbox startup cleanup unconfirmed: {cleanup_error}")
             raise
         state.node_timings["sandbox_task_binding"] = binding.to_wire()
+        state.node_timings["run_entry"] = self._workspace_entry()
 
     def _close_sandbox_backend_before_binding_close(self, state: RepairState) -> None:
         """Close sandbox admission before an exceptional plan-binding teardown."""
@@ -1182,63 +1270,11 @@ class Orchestrator(RepairPipelineMixin):
         if tokenizer_by_agent:
             state.node_timings["tokenizer_by_agent"] = tokenizer_by_agent
 
-        self._maybe_enter_worktree(state, tracer)
         if self._repair_ctx is not None and self._repair_ctx.worktree_handle is not None:
             self._repair_ctx.worktree_initial_snapshot = self._snapshot_repo()
         from src.repair.plan_binding import RepairPlanBinding
 
         self._plan_binding = RepairPlanBinding(self, state, defer_plan=True)
-
-    def _maybe_enter_worktree(self, state: RepairState, tracer) -> None:
-        """可选：FIXLOOP_USE_WORKTREE=1 时创建独立 worktree 并重定向 Agent 工具根。"""
-        from agent_runtime.worktree import WorktreeError, create_worktree, worktree_enabled
-
-        if self._sandbox_task_spec is not None:
-            return  # Final workspace and backend were bound before checkpoint/trace creation.
-        if not worktree_enabled():
-            return
-        if self._sandbox_context is not None:
-            raise WorktreeError("prebound sandbox cannot change workspace; use sandbox_task_spec")
-        ctx = self._repair_ctx
-        if ctx is None:
-            return
-        run_id = state.repair_run_id or "run"
-        try:
-            handle = create_worktree(self._repo_root, run_id)
-        except WorktreeError as e:
-            if tracer is not None:
-                tracer.emit(
-                    "orchestrator",
-                    "sandbox_violation",
-                    {"reason": "worktree_create_failed", "error": str(e)},
-                    status="error",
-                )
-            raise
-
-        originals: dict[str, str] = {}
-        ctx.original_repo_root = self._repo_root
-        for name, agent in (
-            ("patcher", self.patcher),
-            ("verifier", self.verifier),
-        ):
-            if agent is None:
-                continue
-            tc = getattr(agent, "tool_context", None)
-            if tc is not None:
-                originals[name] = str(tc.root)
-                tc.root = str(handle.path)
-            if hasattr(agent, "_cwd"):
-                agent._cwd = str(handle.path)
-        ctx.worktree_handle = handle
-        ctx.worktree_original_roots = originals
-        self._repo_root = str(handle.path)
-        if tracer is not None:
-            tracer.emit(
-                "orchestrator",
-                "worktree_created",
-                handle.as_dict(),
-                status="ok",
-            )
 
     def _maybe_leave_worktree(self, *, cancelled: bool = False) -> None:
         """保留任务 checkout；固定绑定的工作区不随任务结束而切换。"""
@@ -1257,28 +1293,6 @@ class Orchestrator(RepairPipelineMixin):
                     {**handle.as_dict(), "cancelled": cancelled},
                     status="ok",
                 )
-        if self._sandbox_task_spec is not None:
-            return  # Never retarget a live immutable task binding to the source repo.
-        originals = getattr(ctx, "worktree_original_roots", None) or {}
-        for name, agent in (
-            ("patcher", self.patcher),
-            ("verifier", self.verifier),
-        ):
-            if agent is None:
-                continue
-            root = originals.get(name)
-            if root is None:
-                continue
-            tc = getattr(agent, "tool_context", None)
-            if tc is not None:
-                tc.root = root
-            if hasattr(agent, "_cwd"):
-                agent._cwd = root
-        ctx.worktree_handle = None
-        ctx.worktree_original_roots = {}
-        if ctx.original_repo_root:
-            self._repo_root = ctx.original_repo_root
-            ctx.original_repo_root = ""
 
     def _cancel_run_resources(
         self, state: RepairState, *, phase_returned: bool = True, finalize: bool = False

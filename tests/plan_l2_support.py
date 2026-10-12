@@ -55,6 +55,7 @@ def repair_fixture(root, *, resume=False, full=False):
         suspect_locations=[SuspectLocation(file_path="value.py", start_line=1, end_line=2)],
     )
     agent.shared_run_id = state.repair_run_id
+    state.node_timings["run_entry"] = orch._workspace_entry()
     if not full:
         from src.repair.run_context import RepairRunContext
 

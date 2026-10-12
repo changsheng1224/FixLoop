@@ -83,7 +83,7 @@ def main() -> int:
     issue_input.add_argument("--issue-file", help="UTF-8 问题描述文件")
     p_repair.add_argument("--repo", default=".", help="本地目录、GitHub URL 或 owner/repo")
     p_repair.add_argument("--ref", help="GitHub 仓库的分支、tag 或 commit SHA")
-    p_repair.add_argument("--output", help="新的结果目录（默认 .fixloop/runs/<id>）")
+    p_repair.add_argument("--output", help="新的结果目录（本地 worktree 默认使用外部项目状态区）")
     p_repair.add_argument("--verbose", action="store_true", help="详细输出")
     p_repair.add_argument("--dry-run", action="store_true", help="演习模式")
     p_repair.add_argument("--skip-verify", action="store_true", help="跳过独立验证，交付待验证补丁")
@@ -113,10 +113,16 @@ def main() -> int:
         help="要求 Docker sandbox；不可用时不降级到 host/static",
     )
     p_repair.add_argument(
+        "--workspace-policy",
+        choices=["worktree", "provided"],
+        default="worktree",
+        help="worktree=从干净 Git 根目录创建独立副本；provided=直接修改指定目录",
+    )
+    p_repair.add_argument(
         "--execution-backend",
         choices=["legacy", "wsl_bwrap"],
         default="legacy",
-        help="使用开箱即用的 WSL2/bwrap 工具沙箱",
+        help="legacy=宿主工具（验证层单独配置）；wsl_bwrap=WSL2/bwrap 工具沙箱",
     )
     p_repair.add_argument(
         "--fast-retrieve",
@@ -282,6 +288,7 @@ def _execute_repair(args, repo: str, cancel_token, workspace_ready=None):
             execution_tier=args.execution_tier,
             require_sandbox=args.require_sandbox,
             execution_backend=getattr(args, "execution_backend", "legacy"),
+            workspace_policy=args.workspace_policy,
             code_exploration_mode=args.code_exploration_mode,
             code_exploration_server_argv=(args.pylsp_path,) if args.pylsp_path else None,
         )

@@ -127,13 +127,6 @@ class _Progress(AgentCallback):
         )
 
 
-class _PinnedOrchestrator(Orchestrator):
-    def _maybe_enter_worktree(self, state, tracer):
-        # The workbench owns the registered tree and its immutable snapshots.
-        # Never change a process-global environment flag to enforce this.
-        return
-
-
 class ProjectExecutor:
     def __init__(
         self,
@@ -250,7 +243,7 @@ class ProjectExecutor:
                 if mode != "repair":
                     raise ValueError("unknown project mode")
                 kwargs = dict(
-                    orch_class=_PinnedOrchestrator,
+                    orch_class=Orchestrator,
                     workspace_context=workspace,
                     state_root=str(state_root),
                     project_root=str(project_root or files.root),
@@ -258,7 +251,7 @@ class ProjectExecutor:
                     if self.execution_tier == "sandbox"
                     else self.execution_tier,
                     execution_backend="wsl_bwrap" if self.execution_tier == "sandbox" else "legacy",
-                    sandbox_worktree=False,
+                    workspace_policy="provided",
                     runtime_overrides={
                         "provider": self.provider,
                         "max_new_tokens": self.max_output_tokens,

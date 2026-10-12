@@ -201,6 +201,54 @@ class Agent:
                 workspace_fingerprint=fingerprint,
             )
 
+    def bind_repair_workspace(self, root: str, state_root: str, project: str, run_id: str) -> None:
+        """Bind a fresh host Agent to a controller-owned repair checkout."""
+        from dataclasses import replace
+
+        from agent_runtime.prompt_prefix import join_stable_parts
+        from agent_runtime.state_root import project_id, workspace_id
+        from agent_runtime.workspace import WorkspaceContext
+
+        if (
+            self.tool_context.sandbox_mode
+            or self.session.get("history")
+            or self.session.get("tool_observations")
+        ):
+            raise ValueError("repair_workspace_requires_fresh_host_agent")
+        service = self.tool_context.exploration_service
+        if service is not None:
+            service.close()
+        self.tool_context.exploration_service = None
+        self._cwd = self.tool_context.root = root
+        self.state_root = self.tool_context.state_root = state_root
+        self._workspace_pinned = True
+        self.workspace = WorkspaceContext.build(root)
+        self._warm_context = self._semantic_memory = None
+        snapshot = self.session.get("config_snapshot")
+        self.session = self._new_session()
+        for key in ("session_scope", "session_identity"):
+            self.session[key].update(
+                project_id=project_id(project), workspace_id=workspace_id(root),
+                task_id=run_id, run_id=run_id,
+            )
+        if snapshot is not None:
+            self.session["config_snapshot"] = snapshot
+        self.tool_context.observation_state = self.session
+        if self.tool_context.edit_lock is not None:
+            self.tool_context.edit_lock.read_set.clear()
+        workspace_text = self.workspace.text()
+        fingerprint = self.workspace.fingerprint()
+        self._prefix = replace(
+            self._prefix, workspace_text=workspace_text, workspace_fingerprint=fingerprint,
+            text=join_stable_parts(
+                self._prefix.stable_text, self._prefix.role_text, workspace_text
+            ),
+        )
+        if self._l1_prefix is not None:
+            self._l1_prefix = replace(
+                self._l1_prefix, workspace_text=workspace_text, workspace_fingerprint=fingerprint,
+            )
+
     def pending_sandbox_approval(self) -> dict | None:
         """Return a detached proposal for the trusted UI; model tools cannot resolve it."""
         from agent_runtime.linux_sandbox.permissions import permission_service

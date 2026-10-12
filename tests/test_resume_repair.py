@@ -79,6 +79,7 @@ class TestResumeSkipsParse:
         orch = CaptureResumeOrchestrator(None)
         orch._repo_root = str(tmp_path)
         seed = RepairState(issue_input="test issue", repair_run_id="resume-001")
+        seed.node_timings["run_entry"] = orch._workspace_entry()
         save_repair_checkpoint(seed, str(tmp_path))
 
         result = orch.repair(
@@ -175,6 +176,8 @@ class TestResumeSkipsParse:
                 }
 
         orch = ResumeOrchestrator()
+        state.node_timings["run_entry"] = orch._workspace_entry()
+        save_repair_checkpoint(state, repo)
         # This unit double has no Agent or execution registry. Real owner/Plan
         # initialization is covered by the public L2 process tests.
         monkeypatch.setattr(orch, "_begin_repair_trace", lambda _: None)
@@ -224,6 +227,8 @@ class TestResumeSkipsParse:
                 ], timing
 
         orch = ResumeOrchestrator()
+        state.node_timings["run_entry"] = orch._workspace_entry()
+        save_repair_checkpoint(state, repo)
         monkeypatch.setattr(orch, "_begin_repair_trace", lambda _: None)
         result = orch.repair("test issue", repair_timeout_s=0, resume_run_id="resume-empty")
 
@@ -273,6 +278,8 @@ class TestResumeSkipsParse:
                 ], {"total_ms": 1, "model_call_ms": 1, "parse_apply_ms": 0}
 
         orch = ResumeOrchestrator()
+        state.node_timings["run_entry"] = orch._workspace_entry()
+        save_repair_checkpoint(state, repo)
         monkeypatch.setattr(orch, "_begin_repair_trace", lambda _: None)
         result = orch.repair("test issue", repair_timeout_s=0, resume_run_id="resume-critic")
 

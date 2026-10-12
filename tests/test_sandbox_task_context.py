@@ -41,11 +41,12 @@ def spec(tmp_path):
     )
 
 
-def orchestrator(repo, spec, factory=None):
+def orchestrator(repo, spec, factory=None, *, workspace_policy="provided"):
     context = ToolContext(str(repo))
     agent = SimpleNamespace(tool_context=context, _cwd=str(repo), state_root="")
     return Orchestrator(
         agent,
+        workspace_policy=workspace_policy,
         sandbox_context=context,
         sandbox_task_spec=spec,
         sandbox_backend_factory=factory or (lambda binding: SimpleNamespace(task_binding=binding)),
@@ -245,7 +246,7 @@ def test_dispatch_rejects_context_drift_before_backend(temp_workspace, spec, fie
 
 
 def test_worktree_binding_precedes_snapshot_and_trace(temp_workspace, spec, monkeypatch):
-    monkeypatch.setenv("FIXLOOP_USE_WORKTREE", "1")
+    monkeypatch.setenv("FIXLOOP_USE_WORKTREE", "0")
     roots = []
     orch = orchestrator(
         temp_workspace,
@@ -253,13 +254,13 @@ def test_worktree_binding_precedes_snapshot_and_trace(temp_workspace, spec, monk
         lambda binding: (
             roots.append(binding.mapping.host_root) or SimpleNamespace(task_binding=binding)
         ),
+        workspace_policy="worktree",
     )
     monkeypatch.setattr(orch, "_snapshot_repo", lambda: roots.append(orch._repo_root) or {})
 
     def impl(state, initial_snapshot):
         assert state.node_timings["sandbox_task_binding"]["workspace_ownership"] == "task"
         assert orch.patcher.state_root == orch.patcher.tool_context.state_root
-        orch._maybe_enter_worktree(state, None)  # no second worktree or backend rebind
         orch._maybe_leave_worktree()
         return state
 
@@ -276,7 +277,7 @@ def test_worktree_creation_failure_never_runs_original_repo(temp_workspace, spec
     monkeypatch.setenv("FIXLOOP_USE_WORKTREE", "1")
     (temp_workspace / "README.md").write_text("user edit")
     called = []
-    orch = orchestrator(temp_workspace, spec, lambda binding: called.append(binding))
+    orch = orchestrator(temp_workspace, spec, lambda binding: called.append(binding), workspace_policy="worktree")
     monkeypatch.setattr(
         orch, "_snapshot_repo", lambda: pytest.fail("snapshot after failed creation")
     )
@@ -287,14 +288,14 @@ def test_worktree_creation_failure_never_runs_original_repo(temp_workspace, spec
 
 def test_resume_reuses_retained_worktree_and_checks_checkpoint(temp_workspace, spec, monkeypatch):
     monkeypatch.setenv("FIXLOOP_USE_WORKTREE", "1")
-    first = orchestrator(temp_workspace, spec)
+    first = orchestrator(temp_workspace, spec, workspace_policy="worktree")
     state = RepairState(issue_input="fix", repair_run_id="task-1")
     first._prepare_sandbox_task(state, resume=False)
     root = Path(first._repo_root)
     (root / "README.md").write_text("retained result")
     retain_worktree(first._sandbox_worktree_handle)
     save_repair_checkpoint(state, str(root), state_root=first._sandbox_context.state_root)
-    second = orchestrator(temp_workspace, spec)
+    second = orchestrator(temp_workspace, spec, workspace_policy="worktree")
     monkeypatch.setattr(second, "_snapshot_repo", lambda: {})
     monkeypatch.setattr(second, "_repair_impl", lambda state, initial_snapshot: state)
     restored = second.repair("fix", resume_run_id="task-1", repair_timeout_s=0)
@@ -303,7 +304,7 @@ def test_resume_reuses_retained_worktree_and_checks_checkpoint(temp_workspace, s
     # A valid checkpoint for this run with the wrong task binding must still fail closed.
     state.node_timings["sandbox_task_binding"]["policy_version"] = "other"
     save_repair_checkpoint(state, str(root), state_root=first._sandbox_context.state_root)
-    third = orchestrator(temp_workspace, spec)
+    third = orchestrator(temp_workspace, spec, workspace_policy="worktree")
     monkeypatch.setattr(
         third, "_snapshot_repo", lambda: pytest.fail("snapshot after mismatched checkpoint")
     )
@@ -339,10 +340,10 @@ def test_legacy_creation_failure_also_stops(temp_workspace, spec, monkeypatch):
     monkeypatch.setenv("FIXLOOP_STATE_ROOT", spec.state_base)
     (temp_workspace / "README.md").write_text("user edit")
     agent = SimpleNamespace(tool_context=ToolContext(str(temp_workspace)), _cwd=str(temp_workspace))
-    orch = Orchestrator(agent)
+    orch = Orchestrator(agent, workspace_policy="worktree", workspace_state_base=spec.state_base)
     orch._repair_ctx = RepairRunContext()
     with pytest.raises(WorktreeError, match="user changes"):
-        orch._maybe_enter_worktree(RepairState(issue_input="fix", repair_run_id="task-1"), None)
+        orch._prepare_host_worktree(RepairState(issue_input="fix", repair_run_id="task-1"), resume=False)
 
 
 def test_backend_cannot_ignore_final_binding(temp_workspace, spec, monkeypatch):
@@ -525,6 +526,7 @@ def test_real_agent_fixed_workspace_and_external_runtime_state(temp_workspace, s
         sandbox_context=context,
         sandbox_task_spec=spec,
         sandbox_backend_factory=metadata_backend,
+        workspace_policy="worktree",
     )
     state = RepairState(issue_input="fix", repair_run_id="task-1")
     orch._prepare_sandbox_task(state, resume=False)
@@ -559,7 +561,7 @@ def test_real_agent_fixed_workspace_and_external_runtime_state(temp_workspace, s
 
 def test_backend_startup_failure_retains_worktree(temp_workspace, spec, monkeypatch):
     monkeypatch.setenv("FIXLOOP_USE_WORKTREE", "1")
-    orch = orchestrator(temp_workspace, spec, lambda _: SimpleNamespace())
+    orch = orchestrator(temp_workspace, spec, lambda _: SimpleNamespace(), workspace_policy="worktree")
     with pytest.raises(ValueError, match="backend_binding_mismatch"):
         orch.repair("fix", run_id="task-1", repair_timeout_s=0)
     handle = orch._sandbox_worktree_handle

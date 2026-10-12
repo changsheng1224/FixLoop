@@ -114,6 +114,7 @@ run_repair() {
   local log
   log="$(mktemp)"
   if ! python -m src.cli repair \
+    --workspace-policy provided \
     --issue "$issue" \
     --repo "$repo" \
     --verbose \

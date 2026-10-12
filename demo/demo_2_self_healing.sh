@@ -42,6 +42,7 @@ echo "③ repair --verbose（关注 stderr 中的 retry= 与 Verifier）"
 read -r -a extra <<< "$(demo_repair_extra_args)"
 log="$(mktemp)"
 if ! python -m src.cli repair \
+    --workspace-policy provided \
   --issue "$(tr '\n' ' ' < "$ISSUE_FILE" | sed 's/  */ /g' | sed 's/^ //;s/ $//')" \
   --repo "$REPO" \
   --verbose \

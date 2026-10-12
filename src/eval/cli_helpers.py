@@ -82,7 +82,9 @@ def run_eval(
     if fake:
         factory = fake_orchestrator_factory(cases_dir)
     else:
-        factory = make_orchestrator_factory(skip_verify=skip_verify, model_client=model_client)
+        factory = make_orchestrator_factory(
+            skip_verify=skip_verify, model_client=model_client, workspace_policy="provided"
+        )
 
     judge_client = None
     if with_judge:

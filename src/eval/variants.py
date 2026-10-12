@@ -84,6 +84,7 @@ def build_ablation_variants(
     else:
         all_variants = {
             "runtime": make_orchestrator_factory(
+                workspace_policy="provided",
                 skip_verify=skip_verify,
                 model_client=model_client,
             ),
