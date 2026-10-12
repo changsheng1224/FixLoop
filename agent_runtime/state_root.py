@@ -11,16 +11,31 @@ def workspace_id(root: str | Path) -> str:
     return hashlib.sha256(os.path.normcase(str(Path(root).resolve())).encode()).hexdigest()[:16]
 
 
-def managed_state_base(root: str | Path, explicit: str | Path | None = None) -> Path:
-    """Product-owned storage, never an implicit in-checkout .agent directory."""
+def project_id(root: str | Path) -> str:
+    """Identity of a registered source path, independent of Git/content versions.
+
+    Managed worktrees and snapshot copies must carry their source root explicitly.
+    Neither matching remotes nor matching commits merge independent clones.
+    """
+    return "project-" + workspace_id(root)
+
+
+def managed_storage_root(root: str | Path, explicit: str | Path | None = None) -> Path:
+    """Resolve shared product storage. Callers must not pass a project/run directory."""
     value = explicit or os.environ.get("FIXLOOP_STATE_ROOT")
     if not value:
         if os.name == "nt":
             parent = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
         else:
             parent = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
-        value = parent / "FixLoop" / "state" / workspace_id(root)
+        value = parent / "FixLoop" / "state"
     return trusted_state_root(root, value)
+
+
+def managed_state_base(root: str | Path, explicit: str | Path | None = None) -> Path:
+    """Project partition under shared storage, including explicit/environment roots."""
+    storage = managed_storage_root(root, explicit)
+    return trusted_state_root(root, storage / "projects" / project_id(root))
 
 
 def trusted_state_root(root: str | Path, explicit: str | Path | None = None) -> Path | None:
@@ -32,8 +47,8 @@ def trusted_state_root(root: str | Path, explicit: str | Path | None = None) -> 
     state = Path(value).expanduser().resolve()
     if state == workspace or workspace in state.parents:
         raise ValueError("workspace_mapping_rejected: state_root inside workspace")
-    state.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if not state.is_dir():
+    native_io_path(state).mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not native_io_path(state).is_dir():
         raise ValueError("workspace_mapping_rejected: invalid state_root")
     return state
 
@@ -105,7 +120,9 @@ def runtime_identity(
 __all__ = [
     "agent_state_root",
     "managed_state_base",
+    "managed_storage_root",
     "native_io_path",
+    "project_id",
     "runtime_identity",
     "state_root_for",
     "trusted_state_root",

@@ -103,6 +103,7 @@ def main(request_path):
                         ),
                         run_id=request["run_id"],
                         state_root=Path(request["state_root"]),
+                        project_root=request["project_root"],
                     )
             elif spec["kind"] == "chat":
                 result = ChatExecutor(**spec["config"])(

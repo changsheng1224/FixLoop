@@ -532,6 +532,9 @@ def test_real_agent_fixed_workspace_and_external_runtime_state(temp_workspace, s
     binding = context.sandbox_task_binding
     assert root != temp_workspace and agent.workspace.repo_root == str(root)
     assert agent.session["session_scope"]["workspace_id"] == binding.mapping.workspace_id
+    for key in ("session_scope", "session_identity"):
+        assert agent.session[key]["project_id"] == binding.project_id
+        assert agent.session[key]["run_id"] == binding.run_id
     assert str(temp_workspace) not in agent._prefix.workspace_text
     monkeypatch.chdir(Path(spec.state_base))
     agent._detect_workspace_switch()
@@ -561,7 +564,7 @@ def test_backend_startup_failure_retains_worktree(temp_workspace, spec, monkeypa
         orch.repair("fix", run_id="task-1", repair_timeout_s=0)
     handle = orch._sandbox_worktree_handle
     assert handle.path.exists() and orch._repo_root == str(temp_workspace)
-    lease = Path(spec.state_base) / "worktree-leases" / "task-1.json"
+    lease = managed_state_base(temp_workspace, spec.state_base) / "worktree-leases" / "task-1.json"
     assert json.loads(lease.read_text())["status"] == "retained"
     assert json.loads(lease.read_text())["reason"] == "startup_failed"
 

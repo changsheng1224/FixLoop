@@ -37,6 +37,7 @@ class InlineWorker:
                     publish=publish,
                     run_id=run_id,
                     state_root=state_root,
+                    project_root=resource["project_path"],
                 )
             return executor(messages, token, on_chunk)
         finally:

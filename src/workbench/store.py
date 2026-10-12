@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from agent_runtime.state_root import native_io_path
+from agent_runtime.state_root import native_io_path, project_id
 from src.workbench.models import (
     Branch,
     ConflictError,
@@ -171,7 +171,7 @@ class WorkbenchStore:
     @staticmethod
     def _bind_project(db, cid, path, root_identity):
         row = db.execute("SELECT id FROM projects WHERE path=?", (path,)).fetchone()
-        pid = row[0] if row else _id("project")
+        pid = row[0] if row else project_id(path)
         if row is None:
             db.execute(
                 "INSERT INTO projects VALUES (?, ?, 0, ?)", (pid, path, json.dumps(root_identity))
@@ -186,7 +186,9 @@ class WorkbenchStore:
                 "ON pc.project_id=p.id WHERE pc.conversation_id=?",
                 (cid,),
             ).fetchone()
-            return dict(row) if row else None
+            # Existing durable row IDs are relational keys; derive the same
+            # runtime identity without rewriting historical foreign keys.
+            return {**dict(row), "project_id": project_id(row["path"])} if row else None
 
     @staticmethod
     def _event(db, run_id, kind, payload):

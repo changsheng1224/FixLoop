@@ -31,6 +31,7 @@ python -m src.cli workbench --provider anthropic_compat --repair-tier sandbox
 运行状态保存于 `<state-dir>/runtime/<run-id>`，项目输入物化到独立
 `<state-dir>/workspaces/<run-id>/tree`。注册目录的手动修改也包含在输入中；不另建 L2 Git
 worktree，也不把执行根扩展到上层仓库。详见 [加固契约](WORKBENCH_HARDENING.md)。
+原项目、执行副本和 run 的身份及 sandbox 状态分区见 [隔离 S1 契约](ISOLATION_S1.md)。
 
 ## 文件与会话树
 

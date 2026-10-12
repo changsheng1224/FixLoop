@@ -12,6 +12,7 @@ from pathlib import Path
 from agent_runtime.cancellation import CancellationToken, CancelledError
 from agent_runtime.model_turn import FinishKind, ModelTurnResult
 from agent_runtime.providers.contracts import ProviderError
+from agent_runtime.state_root import project_id, workspace_id
 from src.workbench.chat import ChatExecutor
 from src.workbench.events import EventJournal
 from src.workbench.files import ProjectFiles
@@ -410,6 +411,8 @@ class WorkbenchService:
                     if s.id == turn.node.input_snapshot_id
                 )
                 resource.update(
+                    project_id=project_id(conversation.project_path),
+                    workspace_id=workspace_id(self.workspaces.path(turn.run.id)),
                     input_key=snapshot.storage_key,
                     root_identity=snapshot.manifest["root_identity"],
                     project_revision=self.store.project_record(conversation.id)["revision"],

@@ -184,7 +184,10 @@ class ProjectExecutor:
                 "workbench repair requires a filesystem sandbox; host/container tier unsupported"
             )
 
-    def __call__(self, *, mode, files, messages, token, on_chunk, publish, run_id, state_root):
+    def __call__(
+        self, *, mode, files, messages, token, on_chunk, publish, run_id, state_root,
+        project_root=None,
+    ):
         self.check_mode(mode)
         if sum(len(m["content"].encode("utf-8")) for m in messages) > self.max_context_bytes:
             raise ValueError("project context limit exceeded")
@@ -250,6 +253,7 @@ class ProjectExecutor:
                     orch_class=_PinnedOrchestrator,
                     workspace_context=workspace,
                     state_root=str(state_root),
+                    project_root=str(project_root or files.root),
                     execution_tier="auto"
                     if self.execution_tier == "sandbox"
                     else self.execution_tier,

@@ -9,6 +9,7 @@ import pytest
 
 from agent_runtime.cancellation import CancellationToken
 from agent_runtime.plan_runtime.processes import confirmed_exited, process_identity
+from agent_runtime.state_root import project_id, workspace_id
 from src.workbench.chat import ChatExecutor
 from src.workbench.models import ConflictError
 from src.workbench.process_scope import WindowsJob
@@ -93,6 +94,8 @@ def test_restart_reaps_live_writer_before_capturing_workspace(tmp_path):
                     "run_id": turn.run.id,
                     "state_root": str(service.state_dir / "runtime" / turn.run.id),
                     "workspace": str(work),
+                    "project_id": project_id(project),
+                    "workspace_id": workspace_id(work),
                     "project_path": str(project),
                     "root_identity": snapshot.manifest["root_identity"],
                 },
@@ -216,7 +219,9 @@ def test_production_project_conversations_run_simultaneously(tmp_path):
             ]
             eventually(lambda: len(model.snapshot()["requests"]) == 2, timeout=12)
             resources = [service.store.resource(turn.run.id) for turn in turns]
+            assert {r["project_id"] for r in resources} == {project_id(project)}
             assert len({r["workspace"] for r in resources}) == 2
+            assert len({r["workspace_id"] for r in resources}) == 2
             assert len({r["worker"]["pid"] for r in resources}) == 2
             assert all(
                 service.store.get_run(t.run.conversation_id, t.run.id).status == "running"

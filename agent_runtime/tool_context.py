@@ -46,6 +46,7 @@ class ToolContext:
     # This lets the canonical registry and gateway fail closed during startup.
     sandbox_mode: bool = False
     sandbox_task_binding: object | None = None
+    sandbox_project_id: str = ""
     sandbox_workspace_id: str = "workspace"
     sandbox_task_id: str = "task"
     sandbox_run_id: str = "run"

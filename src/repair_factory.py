@@ -13,7 +13,7 @@ from agent_runtime.linux_sandbox import GuardedWindowsWorkspaceBackend, SandboxT
 from agent_runtime.linux_sandbox.environment import SandboxEnvironmentManager
 from agent_runtime.prompt_prefix import build_repair_l1_prefix
 from agent_runtime.repair_budget import RepairBudgetContext
-from agent_runtime.state_root import managed_state_base
+from agent_runtime.state_root import managed_storage_root
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.warm_context import create_warm_context
 from agent_runtime.workspace import WorkspaceContext
@@ -102,6 +102,7 @@ def wire_orchestrator(
     sandbox_worktree: bool = True,
     workspace_context=None,
     state_root: str = "",
+    project_root: str = "",
     runtime_overrides: dict | None = None,
 ) -> O:
     """装配唯一的 Patcher-primary runtime 与可选 Verifier。"""
@@ -118,12 +119,13 @@ def wire_orchestrator(
         try:
             manager = sandbox_environment_manager or SandboxEnvironmentManager(repo_path)
             prepared = manager.ensure(package_proxy=sandbox_package_proxy)
-            state_base = managed_state_base(repo_path, state_root or None)
+            state_base = managed_storage_root(project_root or repo_path, state_root or None)
             sandbox_task_spec = SandboxTaskSpec(
                 prepared.identity,
                 SANDBOX_POLICY_VERSION,
                 _sandbox_policy_digest(prepared.identity),
                 str(state_base),
+                project_root,
             )
             sandbox_context = ToolContext(
                 root=str(Path(repo_path).resolve()),

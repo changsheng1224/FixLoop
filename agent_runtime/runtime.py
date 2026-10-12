@@ -177,8 +177,10 @@ class Agent:
         snapshot = self.session.get("config_snapshot")
         self.session = self._new_session()
         for key in ("session_scope", "session_identity"):
+            self.session[key]["project_id"] = binding.project_id
             self.session[key]["workspace_id"] = binding.mapping.workspace_id
             self.session[key]["task_id"] = binding.task_id
+            self.session[key]["run_id"] = binding.run_id
         if snapshot is not None:
             self.session["config_snapshot"] = snapshot
         self.tool_context.observation_state = self.session
