@@ -265,7 +265,7 @@ class RestoreCoordinator:
         )
         live = files.scan()
         return {
-            "manual_changes": live != expected,
+            "manual_changes": live["entries"] != expected["entries"],
             "pending": self.pending(cid),
             "policy": live["policy"],
         }
@@ -342,7 +342,7 @@ class RestoreCoordinator:
             "branch_id": branch_id,
             "destination_node": destination,
             "name": name,
-            "manual": before != source_manifest,
+            "manual": before["entries"] != source_manifest["entries"],
             "before_key": before_key,
             "before": before,
             "target_key": target_key,

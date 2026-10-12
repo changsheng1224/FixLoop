@@ -6,10 +6,13 @@ import hmac
 import json
 import logging
 import re
+import secrets
 import threading
 import time
 from dataclasses import asdict, is_dataclass
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib.resources import files
 from urllib.parse import parse_qs, urlsplit
 
 from src.workbench.models import ConflictError, NotFoundError
@@ -43,7 +46,20 @@ class WorkbenchHTTPServer(ThreadingHTTPServer):
         self.stream_slots = threading.BoundedSemaphore(16)
         self.request_slots = threading.BoundedSemaphore(32)
         self.stopping = threading.Event()
+        self.sessions = {}
+        self.session_lock = threading.Lock()
         super().__init__(address, WorkbenchHandler)
+        self.cookie_name = f"fixloop_session_{self.server_port}"
+
+    def new_session(self):
+        with self.session_lock:
+            now = time.monotonic()
+            self.sessions = {k: v for k, v in self.sessions.items() if v > now}
+            if len(self.sessions) >= 64:
+                del self.sessions[min(self.sessions, key=self.sessions.get)]
+            value = secrets.token_urlsafe(32)
+            self.sessions[value] = now + 12 * 60 * 60
+            return value
 
     def process_request(self, request, client_address):
         if not self.request_slots.acquire(blocking=False):
@@ -68,7 +84,7 @@ class WorkbenchHTTPServer(ThreadingHTTPServer):
 
 class WorkbenchHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "FixLoopWorkbench/2"
+    server_version = "FixLoopWorkbench/5"
 
     def setup(self):
         super().setup()
@@ -78,7 +94,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         # Do not log query strings, message bodies, or authorization headers.
         pass
 
-    def _json(self, status, value):
+    def _json(self, status, value, *, cookie=None):
         body = _encode(value)
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -86,11 +102,13 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Connection", "close")
+        if cookie is not None:
+            self.send_header("Set-Cookie", cookie)
         self.end_headers()
         self.wfile.write(body)
         self.close_connection = True
 
-    def _authenticate(self):
+    def _trusted_request(self):
         expected_hosts = {
             f"127.0.0.1:{self.server.server_port}",
             f"localhost:{self.server.server_port}",
@@ -102,12 +120,72 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         if origin and origin not in {"http://" + host for host in expected_hosts}:
             self._json(403, {"error": "invalid_origin"})
             return False
-        expected = "Bearer " + self.server.token
-        auth = self.headers.get("Authorization", "")
-        if not hmac.compare_digest(auth.encode("utf-8"), expected.encode("ascii")):
-            self._json(401, {"error": "unauthorized"})
-            return False
         return True
+
+    def _session_value(self):
+        cookie = SimpleCookie()
+        try:
+            cookie.load(self.headers.get("Cookie", ""))
+        except CookieError:
+            return ""
+        item = cookie.get(self.server.cookie_name)
+        return item.value if item else ""
+
+    def _authenticate(self, *, bearer_only=False):
+        auth = self.headers.get("Authorization")
+        if auth is not None:
+            expected = "Bearer " + self.server.token
+            if hmac.compare_digest(auth.encode("utf-8"), expected.encode("ascii")):
+                return True
+        elif not bearer_only:
+            value = self._session_value()
+            with self.server.session_lock:
+                valid = self.server.sessions.get(value, 0) > time.monotonic()
+            if valid:
+                # A cookie authorizes writes only from this exact page origin.
+                origin = self.headers.get("Origin")
+                if self.command != "GET" and origin != "http://" + self.headers.get("Host", ""):
+                    self._json(403, {"error": "invalid_origin"})
+                    return False
+                return True
+        self._json(401, {"error": "unauthorized"})
+        return False
+
+    def _session_cookie(self, value, *, clear=False):
+        return f"{self.server.cookie_name}={value}; Path=/api; HttpOnly; SameSite=Strict" + (
+            "; Max-Age=0" if clear else ""
+        )
+
+    def _static(self, path):
+        assets = {
+            "/": ("index.html", "text/html; charset=utf-8"),
+            "/assets/app.js": ("app.js", "text/javascript; charset=utf-8"),
+            "/assets/api.js": ("api.js", "text/javascript; charset=utf-8"),
+            "/assets/render.js": ("render.js", "text/javascript; charset=utf-8"),
+            "/assets/style.css": ("style.css", "text/css; charset=utf-8"),
+        }
+        if path not in assets:
+            raise NotFoundError("asset")
+        name, mime = assets[path]
+        body = files("src.workbench").joinpath("web", name).read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header(
+            "Content-Security-Policy",
+            (
+                "default-src 'none'; script-src 'self'; style-src 'self'; "
+                "connect-src 'self'; img-src 'self'; base-uri 'none'; "
+                "form-action 'self'; frame-ancestors 'none'"
+            ),
+        )
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+        self.close_connection = True
 
     def _body(self):
         if self.headers.get("Transfer-Encoding"):
@@ -151,9 +229,12 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
     def do_PATCH(self):  # noqa: N802
         self._handle("PATCH")
 
+    def do_DELETE(self):  # noqa: N802
+        self._handle("DELETE")
+
     def _handle(self, method):
         try:
-            if not self._authenticate():
+            if not self._trusted_request():
                 return
             parsed = urlsplit(self.path)
             if parsed.scheme or parsed.netloc:
@@ -162,6 +243,13 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             if any(len(values) != 1 for values in query.values()):
                 raise ValueError("duplicate query parameters")
             parts = parsed.path.strip("/").split("/")
+            if method == "GET" and parts[:1] != ["api"]:
+                if query:
+                    raise ValueError("static assets do not accept query parameters")
+                self._static(parsed.path)
+                return
+            if not self._authenticate(bearer_only=parts == ["api", "session"] and method == "POST"):
+                return
             if parts[:1] != ["api"]:
                 raise NotFoundError("route")
             body = self._body() if method in {"POST", "PATCH"} else {}
@@ -183,12 +271,29 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
     def _dispatch(self, method, parts, query, body):
         service = self.server.service
         store = service.store
+        if parts == ["session"]:
+            if method == "POST":
+                self._fields(body, allowed=set())
+                self._json(
+                    200,
+                    {"authenticated": True},
+                    cookie=self._session_cookie(self.server.new_session()),
+                )
+            elif method == "DELETE":
+                with self.server.session_lock:
+                    self.server.sessions.pop(self._session_value(), None)
+                self._json(
+                    200, {"authenticated": False}, cookie=self._session_cookie("", clear=True)
+                )
+            else:
+                raise NotFoundError("route")
+            return
         if parts == ["health"] and method == "GET":
             self._json(
                 200,
                 {
                     "status": "ok",
-                    "stage": "S4",
+                    "stage": "S5",
                     "modes": ["chat", "project_chat", "repair"],
                     "file_restore": True,
                 },

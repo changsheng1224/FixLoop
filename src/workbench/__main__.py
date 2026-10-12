@@ -3,6 +3,7 @@
 import argparse
 import os
 import secrets
+import webbrowser
 from pathlib import Path
 
 from agent_runtime.bootstrap import load_dotenv
@@ -25,6 +26,7 @@ def add_workbench_arguments(parser):
     parser.add_argument("--timeout", type=float, default=120)
     parser.add_argument("--max-output-tokens", type=int, default=4096)
     parser.add_argument("--repair-tier", choices=["host", "container"], default="host")
+    parser.add_argument("--open-browser", action="store_true", help="Open the local workbench UI")
     return parser
 
 
@@ -60,6 +62,8 @@ def run_workbench(args):
             with WorkbenchHTTPServer(("127.0.0.1", args.port), service, token=token) as server:
                 print(f"FixLoop workbench: http://127.0.0.1:{server.server_port}", flush=True)
                 print(f"Bearer token file: {token_path}", flush=True)
+                if args.open_browser:
+                    webbrowser.open(f"http://127.0.0.1:{server.server_port}/")
                 try:
                     server.serve_forever(poll_interval=0.1)
                 except KeyboardInterrupt:

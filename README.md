@@ -40,11 +40,11 @@
 
 工作台在 `src/workbench/` 提供 SQLite 会话树和本地 JSON/SSE 普通聊天服务，覆盖开发讨论、
 写作和日常问答，支持流式输出、停止、历史编辑分叉、重新生成、分支切换及中断恢复。
-用 `python -m src.cli workbench` 启动；接口与示例见 [Workbench S2 指南](docs/WORKBENCH_S2.md)，
+用 `python -m src.cli workbench --open-browser` 启动；接口与示例见 [Workbench S2 指南](docs/WORKBENCH_S2.md)，
 存储契约见 [Workbench S1 指南](docs/WORKBENCH_S1.md)。
 [Workbench S3 指南](docs/WORKBENCH_S3.md) 提供项目快照、手动修改保存、恢复预览与中断恢复；
 [Workbench S4 指南](docs/WORKBENCH_S4.md) 提供只读项目问答、Layer 2 修复及历史编辑后的文件恢复与重新执行；
-桌面聊天和会话树界面属于 S5。
+[Workbench S5 指南](docs/WORKBENCH_S5.md) 提供本地浏览器界面、会话树、恢复预览和运行详情。
 
 **Layer 2** 当前主路径是 Patcher 工具环、轻量 Critic 和独立 Verifier；定位与检索通过规则种子、只读探索和上下文数据模型提供，不再装配为两个独立 LLM Agent。
 

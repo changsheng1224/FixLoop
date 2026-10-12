@@ -5,7 +5,7 @@ S2 在 [S1 会话树](WORKBENCH_S1.md) 上提供可启动的本地 JSON/SSE 服�
 历史编辑和重新生成创建新分支，保留原分支及其后续轮次。
 
 本阶段交付后端和命令行入口。项目文件快照、手动修改保护及回退见 [S3](WORKBENCH_S3.md)；
-项目问答和修复执行已由 [S4](WORKBENCH_S4.md) 接入；桌面聊天界面属于 S5。
+项目问答和修复执行已由 [S4](WORKBENCH_S4.md) 接入；本地聊天界面已由 [S5](WORKBENCH_S5.md) 提供。
 
 ## 启动
 
@@ -46,7 +46,8 @@ Bearer token，写入状态目录 `api-token`，正常退出时删除。Token �
 
 ## API
 
-所有请求均需 `Authorization: Bearer <api-token>`，包括健康检查。
+API 请求使用 `Authorization: Bearer <api-token>`，包括健康检查。
+S5 浏览器界面也可使用本地令牌交换 HttpOnly 会话 cookie，详见 [S5](WORKBENCH_S5.md)。
 `Host` 必须是服务实际端口的 `127.0.0.1` 或 `localhost`；存在 `Origin` 时必须匹配这两个
 本地 HTTP origin 之一。POST/PATCH 使用 `application/json`、单个 `Content-Length`，
 请求体上限 1 MB，不支持 chunked 请求体。

@@ -2,7 +2,7 @@
 
 S4 将 [S2 本地服务](WORKBENCH_S2.md) 和 [S3 文件快照](WORKBENCH_S3.md) 接入真实
 Layer 1 问答与 Layer 2 修复。普通聊天、项目问答、修复共用会话树、JSON/SSE API，
-历史编辑或重新生成保留原分支及后续轮次。桌面聊天和会话树界面属于 S5。
+历史编辑或重新生成保留原分支及后续轮次。浏览器聊天和会话树界面已由 [S5](WORKBENCH_S5.md) 提供。
 
 ## 模式与启动
 
@@ -58,7 +58,7 @@ python -m src.cli workbench --provider anthropic_compat --repair-tier host
 
 | 方法与路径 | JSON 请求 | 结果 |
 | --- | --- | --- |
-| `GET /api/health` | 无 | `stage: "S4"`，三个支持模式 |
+| `GET /api/health` | 无 | `stage: "S5"`，三个支持模式 |
 | `POST /api/conversations` | `{title?, project_path}` | 201，登记项目基线 |
 | `POST C/turns` | `{text, mode?, expected_revision?}` | 202，已接纳的新轮次 |
 | `POST C/restores/preview` | `{action: "input", node_id, expected_revision?}` | 201，文件恢复预览 |
@@ -116,7 +116,7 @@ SSE 在 S2 事件之外增加 `project.progress`（阶段、步骤或工具名�
 
 恢复中断的 complete/rollback、受保护文件范围、容量限制及并发外部编辑处理沿用 S3。
 文件快照不覆盖数据库、远端请求或其他项目外副作用，也不锁住外部编辑器。
-MVP 仍为一个项目一个会话，未提供桌面 UI、快照垃圾回收或跨会话项目切换。
+MVP 仍为一个项目一个会话，未提供快照垃圾回收或跨会话项目切换；本地 Web UI 见 S5。
 
 ## 验证
 
