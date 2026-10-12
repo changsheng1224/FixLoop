@@ -38,6 +38,8 @@ class BudgetPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
     prompt_tokens: int = Field(default=100_000, ge=512, le=2_000_000)
+    output_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
     max_turns: int = Field(default=0, ge=0, le=500)
     max_llm_calls: int = Field(default=0, ge=0, le=2_000)
     max_tool_calls: int = Field(default=0, ge=0, le=5_000)
@@ -93,6 +95,8 @@ class RuntimePolicy(BaseModel):
     max_steps: int = Field(default=6, ge=1, le=500)
     max_new_tokens: int = Field(default=2_048, ge=1, le=8_192)
     prompt_budget: int = Field(default=100_000, ge=512, le=2_000_000)
+    model_context_window: int = Field(default=0, ge=0)
+    context_safety_margin: int = Field(default=256, ge=0)
     hard_cap: int = Field(default=8_000, ge=512, le=2_000_000)
     approval: Literal["auto", "ask", "never"] = "ask"
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
@@ -126,12 +130,25 @@ class RuntimePolicy(BaseModel):
                 raise ValueError("degradation.max_output_floor must be <= max_new_tokens")
         return self
 
+    def input_window(self, max_output_tokens: int) -> int:
+        """Single-request capacity; zero model window means unspecified."""
+        limit = min(self.prompt_budget, self.hard_cap or 8_000)
+        if self.model_context_window:
+            limit = min(
+                limit, self.model_context_window - max_output_tokens - self.context_safety_margin
+            )
+        if limit <= 0:
+            raise ValueError("model_context_window_exhausted")
+        return limit
+
     def effective_budget(self) -> dict[str, int | float]:
         """Project the canonical budget policy into ledger resource names."""
         return {
             # Prompt tokens are reserved from the run-level ledger using the
             # context builder's estimate before each model dispatch.
             "prompt_tokens": self.budget.prompt_tokens,
+            "output_tokens": self.budget.output_tokens,
+            "total_tokens": self.budget.total_tokens,
             "turns": self.budget.max_turns,
             "llm_calls": self.budget.max_llm_calls,
             "tool_calls": self.budget.max_tool_calls,

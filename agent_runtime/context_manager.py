@@ -319,6 +319,18 @@ class ContextManager:
 
         if protocol not in {"xml", "native"}:
             raise ValueError("unknown_context_protocol")
+        try:
+            input_limit = self.agent.config.input_window(max_output_tokens)
+        except ValueError:
+            raise ContextBuildBlockedError("model_context_window_exhausted") from None
+        self._request_input_limit = min(self.budget.total_limit, input_limit)
+        self._model_input_window = (
+            self.agent.config.model_context_window
+            - max_output_tokens
+            - self.agent.config.context_safety_margin
+            if self.agent.config.model_context_window
+            else self.agent.config.prompt_budget
+        )
         tools = copy.deepcopy(list(tools))
         all_groups = native_groups(list(native_tail)) if protocol == "native" else []
         groups = [] if action_required else all_groups
@@ -402,7 +414,7 @@ class ContextManager:
                 )
             )
 
-        limit = min(self.budget.total_limit, self.hard_cap, self.agent.config.prompt_budget)
+        limit = self._request_input_limit
         request = encode()
         actual = count(request)
         if governed:
@@ -447,6 +459,11 @@ class ContextManager:
                     metadata={"actual_tokens": actual, "available_tokens": limit},
                 )
             self.agent._plan_session.validate_required_context(metadata["long_task_context"])
+        if actual > limit:
+            raise ContextBuildBlockedError(
+                "model_input_window_exceeded",
+                metadata={"actual_tokens": actual, "available_tokens": limit},
+            )
         projected = project_tail(retained, tail_refs or {}, metadata)
         if retained:
             sections["tail"] = json.dumps(projected, ensure_ascii=False)
@@ -546,8 +563,17 @@ class ContextManager:
         tail_refs=None,
     ) -> dict[str, str]:
         """按预算填充各 section，返回 name → 文本。"""
-        total = self.budget.total_limit
         governed = getattr(self.agent, "_plan_session", None) is not None
+        total = min(
+            self.budget.total_limit,
+            getattr(
+                self,
+                "_request_input_limit" if governed else "_model_input_window",
+                self.budget.total_limit,
+            ),
+        )
+        if native_tools and not governed:
+            total = max(0, total - protocol_tokens)
         state_text = self._get_long_task(metadata) if governed else self._get_state()
         if governed and not native_tools:
             # Reserve delimiters before optional filling, then count the joined
@@ -1329,7 +1355,10 @@ class ContextManager:
                 )
             parts.append("\n".join(lines))
         results = retrieval_candidates_semantic(
-            mem, query, limit=2, semantic_memory=getattr(self.agent, "semantic_memory", None),
+            mem,
+            query,
+            limit=2,
+            semantic_memory=getattr(self.agent, "semantic_memory", None),
         )
         results = filter_relevant_results(results, self.tier_policy)
         recalled_ids.extend(str(item.get("memory_id", "")) for item in results)

@@ -66,13 +66,16 @@ class Agent:
         self.state_root = str(getattr(self.tool_context, "state_root", "") or "")
         from agent_runtime.state_root import managed_storage_root
 
-        self.tool_context.project_root = str(Path(
-            self.tool_context.project_root or self._cwd
-        ).resolve())
-        self.tool_context.embedding_state_base = str(managed_storage_root(
-            self.tool_context.project_root, self.tool_context.embedding_state_base or None,
-            create=False,
-        ))
+        self.tool_context.project_root = str(
+            Path(self.tool_context.project_root or self._cwd).resolve()
+        )
+        self.tool_context.embedding_state_base = str(
+            managed_storage_root(
+                self.tool_context.project_root,
+                self.tool_context.embedding_state_base or None,
+                create=False,
+            )
+        )
         self.tool_context.exploration_mode = config.code_exploration.mode
         self.tool_context.lsp_argv = config.code_exploration.server_argv
         self.tools = tools if tools is not None else build_tool_registry(self.tool_context)
@@ -257,8 +260,10 @@ class Agent:
         self.session = self._new_session()
         for key in ("session_scope", "session_identity"):
             self.session[key].update(
-                project_id=project_id(project), workspace_id=workspace_id(root),
-                task_id=run_id, run_id=run_id,
+                project_id=project_id(project),
+                workspace_id=workspace_id(root),
+                task_id=run_id,
+                run_id=run_id,
             )
         if snapshot is not None:
             self.session["config_snapshot"] = snapshot
@@ -268,14 +273,18 @@ class Agent:
         workspace_text = self.workspace.text()
         fingerprint = self.workspace.fingerprint()
         self._prefix = replace(
-            self._prefix, workspace_text=workspace_text, workspace_fingerprint=fingerprint,
+            self._prefix,
+            workspace_text=workspace_text,
+            workspace_fingerprint=fingerprint,
             text=join_stable_parts(
                 self._prefix.stable_text, self._prefix.role_text, workspace_text
             ),
         )
         if self._l1_prefix is not None:
             self._l1_prefix = replace(
-                self._l1_prefix, workspace_text=workspace_text, workspace_fingerprint=fingerprint,
+                self._l1_prefix,
+                workspace_text=workspace_text,
+                workspace_fingerprint=fingerprint,
             )
 
     def pending_sandbox_approval(self) -> dict | None:
@@ -319,6 +328,12 @@ class Agent:
         if self.cancel_token is None or self.cancel_token.is_cancelled:
             self.cancel_token = CancellationToken()
         self._active_cancel_token = self.cancel_token
+
+        if getattr(self, "_standalone_model_budget", False) and not getattr(
+            self, "_model_budget_run_bound", False
+        ):
+            self._run_budget_manager = None
+            self._repair_deadline = None
 
         loop = AgentLoop(agent=self, stream=stream)
         self.tool_context.exploration_event_sink = loop._emit
@@ -413,20 +428,25 @@ class Agent:
         默认使用构造时的 ``system_prompt``；传入 ``system_prompt`` 可 per-call 覆盖
         （如 Patcher 按 issue_type 注入变体，且故意不含 L1 repair prefix）。
         """
+        if getattr(self, "_standalone_model_budget", False) and not getattr(
+            self, "_model_budget_run_bound", False
+        ):
+            self._run_budget_manager = None
+            self._repair_deadline = None
         user_message, budget_meta = self.fit_user_message(
             user_message, system_override=system_prompt
         )
         self._last_budget_meta = budget_meta
         prefix = system_prompt if system_prompt is not None else self._system_prompt
         full_prompt = f"{prefix}\n\n{user_message}" if prefix else user_message
-        from agent_runtime.cancellation import run_with_cancellation
+        from agent_runtime.model_call_budget import complete_text
 
-        return run_with_cancellation(
-            lambda: self.model_client.complete(
-                full_prompt,
-                max_new_tokens=self.config.max_new_tokens or 4096,
-            ),
-            self.cancel_token,
+        return complete_text(
+            self,
+            self.model_client,
+            full_prompt,
+            max_output_tokens=self.config.max_new_tokens or 4096,
+            purpose="repair",
         )
 
     def fit_user_message(

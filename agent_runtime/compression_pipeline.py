@@ -812,7 +812,9 @@ def make_summarizer(agent) -> Summarizer | None:
         return None
 
     def _summarize(prompt: str) -> str:
-        raw = client.complete(prompt, max_new_tokens=2048)
+        from agent_runtime.model_call_budget import complete_text
+
+        raw = complete_text(agent, client, prompt, max_output_tokens=2048, purpose="summary")
         return raw.strip()[:L5_SUMMARY_MAX_CHARS] if raw else ""
 
     return _summarize

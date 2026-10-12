@@ -10,7 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
-from agent_runtime.cancellation import CancellationToken, CancelledError, run_blocking
+from agent_runtime.cancellation import CancellationToken, CancelledError
 from agent_runtime.plan_runtime.models import digest
 from agent_runtime.plan_runtime.planner import grounded_plan, retry_plan
 from agent_runtime.plan_runtime.recovery import recover
@@ -411,6 +411,7 @@ class RepairPlanBinding:
                 self.agent.tool_context.readonly_exploration_runtime = None
             if (
                 self.exploration is not None
+                and not getattr(self.agent, "_model_budget_run_bound", False)
                 and getattr(self.agent, "_run_budget_manager", None) is self.exploration.budget
             ):
                 del self.agent._run_budget_manager
@@ -502,23 +503,15 @@ class RepairPlanBinding:
         client = getattr(self.agent, "light_client", None) or self.agent.model_client
 
         def complete(prompt, max_new_tokens):
-            decisions = self.exploration.budget.reserve_many(
-                {
-                    "llm_calls": 1,
-                    "prompt_tokens": len(prompt.encode("utf-8")),
-                }
-            )
-            if any(not decision.allowed for decision in decisions):
-                raise ValueError("plan_generation_global_budget_exhausted")
-            deadline = getattr(self.agent, "_repair_deadline", None)
-            remaining = deadline.remaining_s() if deadline else None
-            if remaining is not None and remaining <= 0:
-                raise ValueError("plan_generation_deadline_exceeded")
-            timeout = min(60, remaining) if remaining is not None else 60
-            return run_blocking(
-                lambda: client.complete(prompt, max_new_tokens=max_new_tokens),
-                cancel_token=getattr(self.agent, "cancel_token", None),
-                timeout_s=timeout,
+            from agent_runtime.model_call_budget import complete_text
+
+            return complete_text(
+                self.agent,
+                client,
+                prompt,
+                max_output_tokens=max_new_tokens,
+                purpose="planning",
+                timeout_s=60,
             )
 
         return SimpleNamespace(complete=complete)

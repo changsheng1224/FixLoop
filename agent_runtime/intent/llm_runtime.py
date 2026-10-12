@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from functools import partial
 from typing import Any
 
-from agent_runtime.cancellation import CancelledError
+from agent_runtime.budget_manager import BudgetManager
+from agent_runtime.cancellation import BlockingDeadlineError, CancelledError
+from agent_runtime.model_call_budget import ModelBudgetExceededError, invoke_model_call
 from agent_runtime.tool_resilience import ToolResilienceController
-from agent_runtime.tool_timeout import ToolTimeoutError, run_with_timeout
 
 
 @dataclass(frozen=True)
@@ -68,6 +68,7 @@ class IntentLlmRuntime:
         deadline=None,
         budget=None,
         max_new_tokens: int = 384,
+        input_limit=None,
     ) -> IntentLlmCallResult:
         started = time.perf_counter()
         spec = self.policy.resilience_spec()
@@ -83,10 +84,7 @@ class IntentLlmRuntime:
             return self._result(started, status="cancelled", reason="cancelled")
         if deadline is not None and getattr(deadline, "expired", lambda: False)():
             return self._result(started, status="degraded", reason="deadline_exceeded")
-        if budget is not None and hasattr(budget, "reserve"):
-            budget_decision = budget.reserve("llm_calls")
-            if not budget_decision.allowed:
-                return self._result(started, status="degraded", reason="budget_exceeded")
+        budget = budget if budget is not None else BudgetManager()
 
         attempts = self.resilience.max_attempts(spec)
         last_reason = "provider_error"
@@ -104,16 +102,27 @@ class IntentLlmRuntime:
                         )
                     timeout_s = min(timeout_s, max(0.05, float(remaining)))
             try:
-                content = run_with_timeout(
-                    partial(_complete, client, prompt, max_new_tokens),
-                    timeout_s=timeout_s,
+                content = invoke_model_call(
+                    lambda: _complete(client, prompt, max_new_tokens),
+                    budget=budget,
+                    client=client,
+                    input_tokens=len(prompt.encode()) + 32,
+                    output_tokens=max_new_tokens,
+                    purpose="repair",
                     cancel_token=cancel_token,
+                    deadline=deadline,
+                    timeout_s=timeout_s,
+                    input_limit=input_limit,
+                )
+            except ModelBudgetExceededError:
+                return self._result(
+                    started, status="degraded", reason="budget_exceeded", attempts=attempt - 1
                 )
             except CancelledError:
                 return self._result(
                     started, status="cancelled", reason="cancelled", attempts=attempt
                 )
-            except ToolTimeoutError:
+            except BlockingDeadlineError:
                 last_reason = "timeout"
             except Exception:
                 last_reason = "provider_error"

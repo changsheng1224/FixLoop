@@ -42,6 +42,7 @@ class BudgetManager:
         self._rejected = {key: 0 for key in self._limits}
         self._lock = threading.RLock()
         self._scopes: dict[str, dict[str, float]] = {}
+        self._model_calls: dict[str, dict[str, Any]] = {}
 
     @classmethod
     def from_config(cls, config) -> BudgetManager:
@@ -182,7 +183,21 @@ class BudgetManager:
 
     def record(self, resource: str, amount: float) -> BudgetDecision:
         """Record usage which was not reserved in advance, such as API tokens."""
-        return self.reserve(resource, amount)
+        with self._lock:
+            self._used[resource] = self._used.get(resource, 0.0) + max(0.0, float(amount))
+            return self.check(resource, 0)
+
+    def reserve_model_call(self, key: str, purpose: str, costs: dict[str, float]) -> bool:
+        with self._lock:
+            if not self.reserve_scope(key, costs):
+                return False
+            self._model_calls[key] = {"purpose": purpose, "usage_status": "unknown"}
+            return True
+
+    def settle_model_call(self, key: str, costs: dict[str, float], status: str) -> None:
+        with self._lock:
+            self.reconcile_scope(key, costs)
+            self._model_calls[key]["usage_status"] = status
 
     def remaining(self, resource: str) -> float | None:
         with self._lock:
@@ -196,6 +211,7 @@ class BudgetManager:
                 "used": dict(self._used),
                 "rejected": dict(self._rejected),
                 "scopes": {k: dict(v) for k, v in self._scopes.items()},
+                "model_calls": {k: dict(v) for k, v in self._model_calls.items()},
             }
 
     def restore(self, snapshot: dict[str, Any] | None) -> None:
@@ -208,6 +224,9 @@ class BudgetManager:
             for key, value in (data.get("rejected") or {}).items():
                 self._rejected[str(key)] = max(0, int(value or 0))
             self._scopes = {str(k): dict(v) for k, v in (data.get("scopes") or {}).items()}
+            self._model_calls = {
+                str(k): dict(v) for k, v in (data.get("model_calls") or {}).items()
+            }
 
     def summary(self) -> dict[str, dict[str, float | int | str]]:
         with self._lock:

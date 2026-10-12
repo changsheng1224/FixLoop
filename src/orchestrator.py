@@ -421,6 +421,7 @@ class Orchestrator(RepairPipelineMixin):
                 resume_checkpoint=checkpoint,
                 worktree_handle=self._sandbox_worktree_handle,
             )
+            self._initialize_model_budget(checkpoint, repair_timeout_s)
             self._set_collaboration_context(state)
             if token.is_cancelled and not resume_run_id:
                 state.control.user_cancel = True
@@ -464,6 +465,7 @@ class Orchestrator(RepairPipelineMixin):
                 finally:
                     pool.shutdown(wait=False, cancel_futures=True)
         finally:
+            self._release_model_budget(state)
             self._repair_ctx = None
             if sandbox_prepared and not sandbox_pipeline_started:
                 self._cleanup_sandbox_startup_failure(state)
@@ -478,6 +480,46 @@ class Orchestrator(RepairPipelineMixin):
                     retain_worktree(self._sandbox_worktree_handle, reason="startup_stopped")
                 except (WorktreeError, OSError) as exc:
                     state.agent_errors.setdefault("worktree_retention", str(exc)[:500])
+
+    def _initialize_model_budget(self, checkpoint, timeout_s):
+        from agent_runtime.budget_manager import BudgetManager
+        from agent_runtime.repair_runtime import ExecutionDeadline
+
+        config = getattr(self.patcher, "config", None)
+        if config is None or not hasattr(config, "effective_budget"):
+            return
+        self._model_budget = BudgetManager.from_config(config)
+        saved = (checkpoint or {}).get("node_timings", {})
+        if saved.get("model_budget"):
+            self._model_budget.restore(saved["model_budget"])
+        limits = [s for s in (timeout_s, config.deadline.repair_s) if s > 0]
+        self._model_deadline = ExecutionDeadline(min(limits) if limits else 0)
+        if saved.get("model_deadline"):
+            remaining = saved["model_deadline"].get("remaining_s")
+            current = self._model_deadline.remaining_s()
+            if remaining is not None:
+                self._model_deadline = ExecutionDeadline.from_remaining(
+                    min(remaining, current) if current is not None else remaining
+                )
+        for agent in self._active_agents:
+            agent._model_budget_run_bound = True
+            agent._standalone_model_budget = False
+            agent._run_budget_manager = self._model_budget
+            agent._repair_deadline = self._model_deadline
+
+    def _release_model_budget(self, state):
+        budget = getattr(self, "_model_budget", None)
+        if budget is None:
+            return
+        state.node_timings["model_budget"] = budget.snapshot()
+        state.node_timings["model_deadline"] = self._model_deadline.snapshot()
+        for agent in self._active_agents:
+            if getattr(agent, "_run_budget_manager", None) is budget:
+                agent._run_budget_manager = None
+                agent._repair_deadline = None
+                agent._model_budget_run_bound = False
+        self._model_budget = None
+        self._model_deadline = None
 
     def _workspace_entry(self) -> dict:
         """Trusted entry decisions; checkpoint recovery must reproduce them exactly."""
@@ -513,17 +555,22 @@ class Orchestrator(RepairPipelineMixin):
         base = self._workspace_state_base or None
         if resume:
             handle = adopt_worktree(
-                repository, default_worktree_path(repository, state.repair_run_id, state_base=base),
-                state.repair_run_id, state_base=base, ownership="task",
+                repository,
+                default_worktree_path(repository, state.repair_run_id, state_base=base),
+                state.repair_run_id,
+                state_base=base,
+                ownership="task",
                 branch=f"fixloop/wt-{state.repair_run_id}",
             )
         else:
             handle = create_worktree(repository, state.repair_run_id, state_base=base)
         self._sandbox_worktree_handle = handle
         self._repo_root = str(handle.path)
-        state_root = str(trusted_state_root(
-            handle.path, managed_state_base(repository, base) / "tasks" / state.repair_run_id
-        ))
+        state_root = str(
+            trusted_state_root(
+                handle.path, managed_state_base(repository, base) / "tasks" / state.repair_run_id
+            )
+        )
         for agent in self._active_agents:
             binder = getattr(agent, "bind_repair_workspace", None)
             if callable(binder):
@@ -725,6 +772,11 @@ class Orchestrator(RepairPipelineMixin):
                 light_client=getattr(self, "_light_client", None),
                 emit=_emit,
                 cancel_token=getattr(repair_ctx, "cancel_token", None),
+                budget=getattr(self, "_model_budget", None),
+                deadline=getattr(self, "_model_deadline", None),
+                model_input_limit=self.patcher.config.input_window(384)
+                if getattr(self, "_model_budget", None) is not None
+                else None,
             ),
         )
         self._last_intent_result = result
@@ -764,7 +816,9 @@ class Orchestrator(RepairPipelineMixin):
             f"Reply with ONLY the category name.\n\n{issue[:800]}"
         )
         try:
-            raw = light.complete(prompt, max_new_tokens=32)
+            from agent_runtime.model_call_budget import complete_text
+
+            raw = complete_text(self.patcher, light, prompt, max_output_tokens=32, purpose="repair")
             for word in raw.strip().split():
                 word = word.strip(".,;:\"'").lower()
                 if word in ROUTED_ISSUE_TYPES:
