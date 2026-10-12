@@ -380,6 +380,8 @@ class RepairPlanBinding:
     def sync(self):
         seal = self.session.checkpoint()
         self.state.control.plan_checkpoint = seal
+        # A reporting/checkpoint mirror, never the authority used to restore Plan.
+        self.state.hard_constraints = list(self.session.long_task_state.hard_constraints)
         if self.exploration is not None:
             self.state.control.exploration_checkpoint = self.exploration.checkpoint()
             self.state.node_timings["exploration_progress"] = self.exploration.progress()
@@ -554,10 +556,13 @@ class RepairPlanBinding:
         if self.extraction is None:
             raise ValueError("automatic_context_extraction_disabled")
         self.exploration.drain(cancel=True)
-        result = self.extraction.process_user_message(message_id, body, resolves=resolves)
-        if self.session.plan is not None:
-            self.extraction.resume_pending()
-            self.sync()
+        try:
+            result = self.extraction.process_user_message(message_id, body, resolves=resolves)
+            if self.session.plan is not None:
+                self.extraction.resume_pending()
+                self.sync()
+        finally:
+            self.state.hard_constraints = list(self.session.long_task_state.hard_constraints)
         self.state.node_timings.pop("context_extraction_blocked", None)
         return result
 

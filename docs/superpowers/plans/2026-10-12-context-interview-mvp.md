@@ -149,6 +149,8 @@ S1/S2 开发时自动提取被排除；用户随后明确要求“开始开发 S
 
 ## 阶段 P5：主路径集成与面试说明收敛
 
+已实现。S5 补齐最终历史选取审计、状态/约束版本与模型容量诊断的 checkpoint 保留、宿主约束镜像同步，并完成 XML/native 修复、压缩、委派更新与恢复的相关验证。验收见 `docs/S5_CONTEXT_MAIN_PATH_ACCEPTANCE_2026-10-13.md`；面试说明见 `docs/CONTEXT_MAIN_PATH_INTERVIEW.md`。未新增缓存优化或演示产品。
+
 目标：把预算、显式状态、压缩、委派与恢复接成同一条可说明的路径，形成明确支持边界。
 
 模块：src/repair/plan_binding.py、agent_runtime/context_manager.py、checkpoint.py 及新服务接线；补短版设计说明和面试问答，不增加演示产品。

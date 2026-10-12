@@ -334,6 +334,13 @@ class ContextManager:
         # Keep at most the recent three complete groups, never slice messages.
         groups = groups[-3:]
         metadata = self._base_metadata()
+        metadata["model_limits"] = {
+            "input_limit": self._request_input_limit,
+            "max_output_tokens": max_output_tokens,
+            "model_context_window": self.agent.config.model_context_window,
+            "context_safety_margin": self.agent.config.context_safety_margin,
+            "cumulative_limits": self.agent.config.effective_budget(),
+        }
         protocol_tokens = (
             self.budget.count(json.dumps(tools, ensure_ascii=False)) + 64
             if protocol == "native"
@@ -1016,8 +1023,31 @@ class ContextManager:
 
     def _record_context_manifest(self, metadata: dict, sections: dict[str, str]) -> None:
         """Persist the exact dynamic selection needed for trace/checkpoint replay."""
-        selected = list(dict.fromkeys(metadata.get("_selected_context_ids", []) or []))
-        dropped = list(dict.fromkeys(metadata.get("_dropped_context_ids", []) or []))
+        history_refs = metadata.get("_observation_refs", []) if sections.get("history") else []
+        offered = [ref for refs in metadata.get("_history_unit_refs", []) for ref in refs]
+        selected = list(
+            dict.fromkeys(
+                [
+                    *metadata.get("_selected_context_ids", []),
+                    *history_refs,
+                    *metadata.get("_source_observation_refs", []),
+                    *metadata.get("feedback_observation_refs", []),
+                ]
+            )
+        )
+        dropped = [
+            ref
+            for ref in dict.fromkeys(
+                [
+                    *metadata.get("_dropped_context_ids", []),
+                    *offered,
+                ]
+            )
+            if ref not in selected
+        ]
+        metadata["_observation_refs"] = list(history_refs)
+        metadata["_selected_context_ids"] = selected
+        metadata["_dropped_context_ids"] = dropped
         selection = metadata.get("_context_selection", {}) or {}
         canonical = {
             "context_sections": metadata.get("context_sections", {}),
@@ -1029,6 +1059,7 @@ class ContextManager:
             },
             "required_state_ref": metadata.get("required_state_ref", {}),
             "decision_refs": copy.deepcopy(metadata.get("decision_refs", [])),
+            "constraint_refs": copy.deepcopy(metadata.get("constraint_refs", [])),
             "request_hash": metadata.get("request_hash", ""),
             "request_protocol": metadata.get("request_protocol", ""),
             "code_evidence": {
@@ -1053,6 +1084,22 @@ class ContextManager:
             "code_evidence_checks": metadata.get("code_evidence_checks", {}),
             "required_state_ref": canonical["required_state_ref"],
             "decision_refs": canonical["decision_refs"],
+            "constraint_refs": canonical["constraint_refs"],
+            "model_limits": copy.deepcopy(metadata.get("model_limits", {})),
+            "history_compression": {
+                key: copy.deepcopy(value)
+                for key, value in metadata.get("compression_pipeline", {}).items()
+                if key
+                in {
+                    "contract_version",
+                    "l5",
+                    "l5_failure_reason",
+                    "l5_input_coverage",
+                    "l5_summary_dropped_items",
+                    "l5_dropped_groups",
+                    "history_omitted_units",
+                }
+            },
             "required_sections": metadata.get("required_sections", {}),
             "protocol_reserved_tokens": metadata.get("protocol_reserved_tokens", 0),
             "section_hashes": canonical["section_hashes"],
@@ -1234,6 +1281,13 @@ class ContextManager:
         except (ValueError, OSError):
             raise ContextBuildBlockedError("state_mismatch") from None
         metadata["long_task_context"] = context
+        from agent_runtime.plan_runtime.constraint_records import constraint_history
+
+        latest = constraint_history(plan_session.long_task_state.constraint_records)[1]
+        metadata["constraint_refs"] = [
+            {key: record[key] for key in ("constraint_id", "revision", "checksum", "status")}
+            for record in latest.values()
+        ]
         metadata["decision_refs"] = [
             {key: check[key] for key in ("decision_id", "revision", "checksum", "status")}
             for check in context.get("decision_checks", [])
@@ -1255,6 +1309,7 @@ class ContextManager:
         metadata["required_state_ref"].update(
             node_id=context["current_node"]["node_id"],
             task_state_revision=context["state_revision"],
+            task_context_revision=context["context_revision"],
             state_checksum=context["state_checksum"],
         )
         compact = {
@@ -1438,18 +1493,31 @@ class ContextManager:
 
         sealed_count, sealed_text = get_sealed_history(self.agent.session)
         if sealed_count > 0 and sealed_text:
+            manifest = self.agent.session.get("context_manifest", {})
+            sealed_refs = (
+                list(manifest.get("observation_refs", []))
+                if manifest.get("section_hashes", {}).get("history")
+                == hashlib.sha256(sealed_text.encode()).hexdigest()
+                else []
+            )
             if sealed_count >= len(history):
                 if metadata is not None:
                     metadata["_history_units"] = [sealed_text]
+                    metadata["_history_unit_refs"] = [sealed_refs]
                 return sealed_text
             tail = history[sealed_count:]
             tail_text = self._format_projected_history(tail, metadata)
             if not tail_text:
                 if metadata is not None:
                     metadata["_history_units"] = [sealed_text]
+                    metadata["_history_unit_refs"] = [sealed_refs]
                 return sealed_text
             if metadata is not None:
                 metadata["_history_units"] = [sealed_text, *metadata.get("_history_units", [])]
+                metadata["_history_unit_refs"] = [
+                    sealed_refs,
+                    *metadata.get("_history_unit_refs", []),
+                ]
             return f"{sealed_text.rstrip()}\n{tail_text}"
 
         return self._format_projected_history(history, metadata)
@@ -1503,14 +1571,17 @@ class ContextManager:
         observation_refs = [
             str(item.get("observation_id")) for item in projected if item.get("observation_id")
         ]
-        meta.setdefault("_selected_context_ids", []).extend(observation_refs)
         meta["_observation_refs"] = list(dict.fromkeys(observation_refs))
 
+        groups = interaction_groups(projected)
         units = [
-            self._strip_history_header(self._format_compressed_result(group))
-            for group in interaction_groups(projected)
+            self._strip_history_header(self._format_compressed_result(group)) for group in groups
         ]
         meta["_history_units"] = units
+        meta["_history_unit_refs"] = [
+            [str(item["observation_id"]) for item in group if item.get("observation_id")]
+            for group in groups
+        ]
         body = self._format_split_history(projected, include_header)
         return body
 
@@ -1518,21 +1589,29 @@ class ContextManager:
         """Fit optional history as complete interactions, including sealed text."""
         from agent_runtime.context_preparation import pack_units
 
-        if self.budget.count(text) <= limit:
-            return text
         units = metadata.get("_history_units", [text])
+        references = metadata.get("_history_unit_refs", [[] for _ in units])
 
         def render(items):
             omitted = len(units) - len(items)
             notice = f"[History omitted: {omitted} complete units. Not current evidence.]"
-            return "\n".join([*items, notice]) if omitted else "\n".join(items)
+            texts = [units[index] for index in items]
+            return "\n".join([*texts, notice]) if omitted else "\n".join(texts)
 
-        chosen = pack_units(units, limit, self.budget, render, newest=True)
+        if self.budget.count(text) <= limit:
+            chosen, fitted = list(range(len(units))), text
+        else:
+            chosen = pack_units(list(range(len(units))), limit, self.budget, render, newest=True)
+            fitted = render(chosen)
+            if self.budget.count(fitted) > limit:
+                chosen, fitted = [], ""
+        metadata["_observation_refs"] = list(
+            dict.fromkeys(ref for index in chosen for ref in references[index])
+        )
         metadata.setdefault("compression_pipeline", {})["history_omitted_units"] = len(units) - len(
             chosen
         )
-        fitted = render(chosen)
-        return fitted if self.budget.count(fitted) <= limit else ""
+        return fitted
 
     def _format_split_history(self, projected: list, include_header: bool) -> str:
         """按完整交互格式化管线结果，不在显示阶段二次截断。"""
