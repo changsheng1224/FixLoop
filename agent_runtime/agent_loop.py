@@ -7,7 +7,7 @@ import json
 import time as _time
 import uuid
 
-from agent_runtime.cancellation import CancelledError, run_with_cancellation
+from agent_runtime.cancellation import CancelledError
 from agent_runtime.errors import ContextBuildBlockedError, ContextTooLargeError
 from agent_runtime.loop_limits import max_parse_attempts
 from agent_runtime.loop_protocols import (
@@ -81,7 +81,9 @@ class AgentLoop:
         from agent_runtime.latency_controller import LatencySLOController
         from agent_runtime.repair_runtime import ExecutionDeadline, RepairBudget
 
-        self._repair_deadline = ExecutionDeadline(agent.config.deadline.repair_s)
+        self._repair_deadline = getattr(agent, "_repair_deadline", None) or ExecutionDeadline(
+            agent.config.deadline.repair_s
+        )
         agent._repair_deadline = self._repair_deadline
         self._repair_budget = RepairBudget(
             max_turns=self.max_steps,
@@ -90,9 +92,11 @@ class AgentLoop:
             max_verify_calls=agent.config.budget.max_verify_calls,
             max_recovery_attempts=agent.config.budget.max_recovery_attempts or 0,
         )
-        self._budget_manager = getattr(
-            agent, "_run_budget_manager", None
-        ) or BudgetManager.from_config(agent.config)
+        self._budget_manager = getattr(agent, "_run_budget_manager", None)
+        if self._budget_manager is None:
+            self._budget_manager = BudgetManager.from_config(agent.config)
+            agent._standalone_model_budget = True
+        agent._run_budget_manager = self._budget_manager
         self._budget_turns_seen = 0
         self._latency_controller = LatencySLOController(
             getattr(agent.config, "slo", None),
@@ -322,10 +326,59 @@ class AgentLoop:
         return self._complete_run(ts, "<final>用户已取消当前任务。</final>")
 
     def _invoke_model_call(self, fn):
-        token = self._cancel_token
-        if token is None:
-            return fn()
-        return run_with_cancellation(fn, token)
+        from agent_runtime.cancellation import BlockingDeadlineError
+        from agent_runtime.model_call_budget import ModelBudgetExceededError, invoke_model_call
+        from agent_runtime.repair_runtime import ExecutionDeadline
+
+        request = self._protocol_state.prepared_request
+        manager = self._protocol_state.prepared_context_manager
+        meta = self._protocol_state.last_budget_meta or self._protocol_state.last_token_meta or {}
+        deadline = self._repair_deadline
+        if request.deadline is not None:
+            remaining = max(0, request.deadline - _time.monotonic())
+            repair_remaining = deadline.remaining_s()
+            deadline = ExecutionDeadline.from_remaining(
+                min(remaining, repair_remaining) if repair_remaining is not None else remaining
+            )
+        try:
+            result = invoke_model_call(
+                fn,
+                budget=self._budget_manager,
+                client=self.agent.model_client,
+                input_tokens=int(meta.get("provider_input_tokens", meta.get("total_tokens", 0))),
+                output_tokens=request.max_output_tokens,
+                purpose="repair",
+                cancel_token=self._cancel_token,
+                deadline=deadline,
+                timeout_s=self.agent.config.deadline.step_s or None,
+                input_limit=min(
+                    manager.budget.total_limit,
+                    self.agent.config.input_window(request.max_output_tokens),
+                ),
+            )
+            return result
+        except ModelBudgetExceededError:
+            self._tool_state.stop_reason = StopReason.BUDGET_EXHAUSTED
+            ts = self._task_state
+            ts.stop_with_reason(
+                StopReason.BUDGET_EXHAUSTED, "stopped", detail="model_call_budget_exhausted"
+            )
+            raise CancelledError(
+                "budget", answer=self._complete_run(ts, "<final>统一模型预算已耗尽。</final>")
+            ) from None
+        except (BlockingDeadlineError, TimeoutError):
+            if self._repair_deadline.expired():
+                answer = self._check_run_deadline(self._task_state)
+                raise CancelledError("deadline", answer=answer) from None
+            raise StepTimeoutError(
+                self._step_timeout_limit_s(), step=self._task_state.tool_steps + 1, path="model"
+            ) from None
+        finally:
+            self._protocol_state.llm_call_count = sum(
+                call["purpose"] == "repair"
+                for call in self._budget_manager.snapshot()["model_calls"].values()
+            )
+            self.agent.session["runtime_budget"] = self._budget_manager.snapshot()
 
     # ---- 停机与 trace 收尾 ----
 
@@ -980,7 +1033,11 @@ class AgentLoop:
                     "将以下任务分解为 2-5 个步骤。只输出 JSON 数组：\n"
                     f'[{{"id":"1","content":"...","status":"pending"}},...]\n\n{user_message[:500]}'
                 )
-                raw = light.complete(prompt, max_new_tokens=256)
+                from agent_runtime.model_call_budget import complete_text
+
+                raw = complete_text(
+                    self.agent, light, prompt, max_output_tokens=256, purpose="planning"
+                )
                 start = raw.find("[")
                 end = raw.rfind("]") + 1
                 if start >= 0 and end > start:
@@ -1212,6 +1269,7 @@ class AgentLoop:
         self._budget_manager = getattr(
             self.agent, "_run_budget_manager", None
         ) or BudgetManager.from_config(self.agent.config)
+        self.agent._run_budget_manager = self._budget_manager
         self._budget_turns_seen = 0
         self._latency_controller = LatencySLOController(
             getattr(self.agent.config, "slo", None),
@@ -1225,7 +1283,9 @@ class AgentLoop:
         self._tool_state.recovery_kind = ""
         from agent_runtime.repair_runtime import ExecutionDeadline
 
-        self._repair_deadline = ExecutionDeadline(self.agent.config.deadline.repair_s)
+        self._repair_deadline = getattr(self.agent, "_repair_deadline", None) or ExecutionDeadline(
+            self.agent.config.deadline.repair_s
+        )
         self.agent._repair_deadline = self._repair_deadline
         self._repair_budget.turns = 0
         self._repair_budget.tool_calls = 0
@@ -1401,12 +1461,17 @@ class AgentLoop:
         if budget:
             self._repair_budget.restore(budget)
         manager_snapshot = control.get("budget_manager")
-        if manager_snapshot:
+        run_bound = getattr(self.agent, "_model_budget_run_bound", False)
+        if manager_snapshot and not run_bound:
             self._budget_manager.restore(manager_snapshot)
             self.agent.session["runtime_budget"] = self._budget_manager.snapshot()
             self._budget_turns_seen = int((manager_snapshot.get("used") or {}).get("turns", 0) or 0)
         deadline = control.get("deadline") or {}
-        self._repair_deadline = ExecutionDeadline.from_remaining(deadline.get("remaining_s"))
+        remaining = deadline.get("remaining_s")
+        current = self._repair_deadline.remaining_s() if run_bound else None
+        if current is not None:
+            remaining = min(remaining, current) if remaining is not None else current
+        self._repair_deadline = ExecutionDeadline.from_remaining(remaining)
         self.agent._repair_deadline = self._repair_deadline
         self._protocol_state.retry_count = int(
             control.get("retry_count", self._protocol_state.retry_count) or 0
@@ -1690,9 +1755,14 @@ class AgentLoop:
             return
 
         try:
-            raw = client.complete(
+            from agent_runtime.model_call_budget import complete_text
+
+            raw = complete_text(
+                self.agent,
+                client,
                 f"Summarize this task in one short sentence (max 20 words):\n{user_message[:500]}",
-                max_new_tokens=2048,
+                max_output_tokens=2048,
+                purpose="summary",
             )
             summary = raw.strip()[:300] if raw else user_message[:300]
         except Exception:

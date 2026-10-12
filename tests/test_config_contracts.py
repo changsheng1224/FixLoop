@@ -7,6 +7,15 @@ import pytest
 from agent_runtime.config_loader import load_runtime_policy
 
 
+def test_automatic_context_extraction_switch_loads_with_provenance(tmp_path):
+    config = load_runtime_policy(
+        env={"FIXLOOP_AUTO_CONTEXT_EXTRACTION": "false"},
+        user_config=str(tmp_path / "missing.json"),
+    )
+    assert not config.auto_context_extraction
+    assert config.snapshot()["provenance"]["auto_context_extraction"] == "environment"
+
+
 def test_empty_environment_means_no_environment_overrides(tmp_path, monkeypatch):
     monkeypatch.setenv("FIXLOOP_PROVIDER", "unexpected-host-provider")
     policy = load_runtime_policy(env={}, user_config=str(tmp_path / "missing.json"))

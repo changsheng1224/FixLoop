@@ -55,6 +55,7 @@ class ExplorationRuntime:
             agent.config
         )
         agent._run_budget_manager = self.budget
+        agent._standalone_model_budget = False
         self.event_sink = event_sink
         self.store.exploration_event_sink = event_sink
         self.client_factory = client_factory or self._client
@@ -217,6 +218,8 @@ class ExplorationRuntime:
             budget_key = "exploration:" + batch
             costs = {
                 "prompt_tokens": len(tasks) * self.limits.tokens,
+                "output_tokens": len(tasks) * self.limits.tokens,
+                "total_tokens": len(tasks) * self.limits.tokens,
                 "llm_calls": len(tasks) * self.limits.model_turns,
                 "tool_calls": len(tasks) * self.limits.tool_calls,
             }
@@ -303,9 +306,11 @@ class ExplorationRuntime:
             worker.start()
 
     def _run(self, task_id, token):
+        from agent_runtime.cancellation import BlockingScope
+
         claimed = None
         try:
-            with read_permits(self.root, self.run_id).lease(token):
+            with read_permits(self.root, self.run_id).lease(token), BlockingScope():
                 token.check()
                 claimed = self.store.claim(task_id, process_identity(os.getpid()) or {})
                 data = claimed.payload["exploration"]
@@ -327,6 +332,8 @@ class ExplorationRuntime:
                     token=token,
                     limits=self.limits,
                     state_root=self.agent.state_root,
+                    model_context_window=self.agent.config.model_context_window,
+                    context_safety_margin=self.agent.config.context_safety_margin,
                 )
                 child.shared_run_id = self.run_id
                 result = child.explore(
@@ -461,6 +468,7 @@ class ExplorationRuntime:
             if (
                 context["goal"] != state.original_request
                 or context["hard_constraints"] != state.hard_constraints
+                or context.get("task_context_revision") != state.context_revision
             ):
                 return "task_context_changed"
         observations = self._observations(data)
@@ -672,6 +680,8 @@ class ExplorationRuntime:
                     key,
                     {
                         "prompt_tokens": task.budget["tokens"],
+                        "output_tokens": task.budget["tokens"],
+                        "total_tokens": task.budget["tokens"],
                         "llm_calls": self.limits.model_turns,
                         "tool_calls": self.limits.tool_calls,
                     },
@@ -683,8 +693,10 @@ class ExplorationRuntime:
                         versions=snapshot(self.root),
                         deadline_s=self.limits.deadline_s,
                         run_token_limit=self.limits.run_tokens,
-                        stopped=lambda t: t.payload["exploration"].get("cleanup_confirmed")
-                        or confirmed_exited(t.payload["exploration"].get("owner", {})),
+                        stopped=lambda t: (
+                            t.payload["exploration"].get("cleanup_confirmed")
+                            or confirmed_exited(t.payload["exploration"].get("owner", {}))
+                        ),
                     )
                 finally:
                     self.budget.reconcile_scope(key, {})
@@ -699,14 +711,29 @@ class ExplorationRuntime:
             data = task.payload["exploration"]
             costs = batches.setdefault(
                 "exploration:" + data["batch_id"],
-                {"prompt_tokens": 0, "llm_calls": 0, "tool_calls": 0},
+                {
+                    "prompt_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                    "llm_calls": 0,
+                    "tool_calls": 0,
+                },
             )
-            costs["prompt_tokens"] += data["charged_tokens"]
+            costs["total_tokens"] += data["charged_tokens"]
             receipts = data.get("receipts", [])
             for receipt in receipts:
+                for resource, field in (
+                    ("prompt_tokens", "input_tokens"),
+                    ("output_tokens", "output_tokens"),
+                ):
+                    amount = receipt.get(field)
+                    # Unknown directional usage retains a conservative cap.
+                    costs[resource] += receipt["charged_tokens"] if amount is None else amount
                 costs["llm_calls"] += receipt.get("model_turns", self.limits.model_turns)
                 costs["tool_calls"] += receipt.get("tool_calls", self.limits.tool_calls)
             if not data.get("reservation_settled"):
+                costs["prompt_tokens"] += task.budget["tokens"]
+                costs["output_tokens"] += task.budget["tokens"]
                 costs["llm_calls"] += self.limits.model_turns
                 costs["tool_calls"] += self.limits.tool_calls
         for key, costs in batches.items():

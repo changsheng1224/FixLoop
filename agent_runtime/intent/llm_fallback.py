@@ -146,6 +146,7 @@ def maybe_refine(
     cancel_token=None,
     deadline=None,
     budget=None,
+    input_limit=None,
 ) -> LlmRefineResult:
     """Ask light_client for graph correction **and** Top-k candidates.
 
@@ -184,6 +185,7 @@ def maybe_refine(
         deadline=deadline,
         budget=budget,
         max_new_tokens=384,
+        input_limit=input_limit,
     )
     if call.status != "success":
         return LlmRefineResult(

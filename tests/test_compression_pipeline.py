@@ -6,7 +6,7 @@ from agent_runtime.compression_pipeline import (
     L2_TRIGGER_RATIO,
     L3_TRIGGER_RATIO,
     L4_TRIGGER_RATIO,
-    L5_FALLBACK_KEEP_ENTRIES,
+    L5_FALLBACK_KEEP_GROUPS,
     L5_TRIGGER_RATIO,
     TOOL_TRUNCATION_TOKENS,
     apply_l1_to_request_text,
@@ -25,6 +25,7 @@ from agent_runtime.context_manager import ContextManager, TokenBudget, history_w
 from agent_runtime.providers.clients import FakeModelClient
 from agent_runtime.runtime import Agent
 from agent_runtime.workspace import WorkspaceContext
+from tests.history_summary_support import summary_json
 
 
 @pytest.fixture
@@ -336,7 +337,7 @@ class TestL5AutoCompact:
     def test_l5_summarizes_old_half(self, budget):
         history = _long_user_history(20, pad=300)
         meta: dict = {}
-        summary_text = "Read config.py, patched tools.py."
+        summary_text = summary_json("Read config.py, patched tools.py.")
 
         result = l5_auto_compact(
             history,
@@ -367,7 +368,7 @@ class TestL5AutoCompact:
         )
         assert meta["compression_pipeline"]["l5_triggered"] is True
         assert meta["compression_pipeline"]["l5_fallback"] is True
-        assert len(result) <= L5_FALLBACK_KEEP_ENTRIES
+        assert len(result) <= L5_FALLBACK_KEEP_GROUPS + 1  # Whole groups + omission notice.
 
     def test_l5_cache_prevents_duplicate_summarizer_calls(self, budget):
         history = _long_user_history(20, pad=200)
@@ -376,7 +377,7 @@ class TestL5AutoCompact:
 
         def summarizer(_prompt: str) -> str:
             calls.append(1)
-            return "cached summary"
+            return summary_json("cached summary")
 
         meta1: dict = {}
         result1 = l5_auto_compact(
@@ -407,7 +408,7 @@ class TestL5AutoCompact:
             history,
             budget,
             metadata=meta,
-            summarizer=lambda _p: "Earlier work summarized.",
+            summarizer=lambda _p: summary_json("Earlier work summarized."),
             l5_trigger_tokens=50,
         )
         pipe = meta["compression_pipeline"]
@@ -549,7 +550,7 @@ class TestSummaryCachePersistence:
 
         def summarizer(prompt: str) -> str:
             summarizer_calls.append(1)
-            return "fresh summary"
+            return summary_json("fresh summary")
 
         # 第一次：无缓存 → 调 summarizer
         meta1: dict = {}
@@ -654,7 +655,7 @@ class TestIncrementalSummary:
             history1,
             budget,
             meta1,
-            summarizer=lambda p: "round 1 summary",
+            summarizer=lambda p: summary_json("round 1 summary"),
             trigger_tokens=10,
         )
         assert meta1["compression_pipeline"]["l5_incremental"] is False
@@ -670,7 +671,7 @@ class TestIncrementalSummary:
             history2,
             budget,
             meta2,
-            summarizer=lambda p: "round 2 incremental summary",
+            summarizer=lambda p: summary_json("round 2 incremental summary"),
             trigger_tokens=10,
         )
         assert meta2["compression_pipeline"]["l5_incremental"] is True
@@ -687,7 +688,7 @@ class TestIncrementalSummary:
             history1,
             budget,
             {},
-            summarizer=lambda p: "s1",
+            summarizer=lambda p: summary_json("s1"),
             trigger_tokens=10,
         )
 
@@ -698,7 +699,7 @@ class TestIncrementalSummary:
 
         def counted_summarizer(prompt: str) -> str:
             summarizer_calls.append(prompt)
-            return "s2 incremental"
+            return summary_json("s2 incremental")
 
         l5_auto_compact(
             history2,
@@ -710,7 +711,7 @@ class TestIncrementalSummary:
         # 增量模式：summarizer 被调用（因为新内容触发新的 cache key）
         assert len(summarizer_calls) == 1
         # prompt 应是增量模式（含 "Current summary"）
-        assert "Current summary" in summarizer_calls[0]
+        assert "previous_summaries" in summarizer_calls[0]
 
     def test_incremental_only_summarizes_new_items(self, budget):
         """增量模式只摘要 [Earlier summary] 之后的新条目。"""
@@ -721,7 +722,7 @@ class TestIncrementalSummary:
             history1,
             budget,
             {},
-            summarizer=lambda p: "initial summary",
+            summarizer=lambda p: summary_json("initial summary"),
             trigger_tokens=10,
         )
 
@@ -734,15 +735,15 @@ class TestIncrementalSummary:
             history2,
             budget,
             {},
-            summarizer=lambda p: summarizer_inputs.append(p) or "updated summary",
+            summarizer=lambda p: summarizer_inputs.append(p) or summary_json("updated summary"),
             trigger_tokens=10,
         )
 
         # prompt 中的 "New items" 应只含新条目
         assert len(summarizer_inputs) == 1
         prompt = summarizer_inputs[0]
-        assert "Update the following summary" in prompt
-        assert "Current summary: initial summary" in prompt
+        assert "previous_summaries" in prompt
+        assert "initial summary" in prompt
         # 结果中保留更新后的摘要
         assert "updated summary" in str(r2[0]["content"])
 
@@ -755,7 +756,7 @@ class TestIncrementalSummary:
             history1,
             budget,
             {},
-            summarizer=lambda p: "first summary",
+            summarizer=lambda p: summary_json("first summary"),
             trigger_tokens=10,
         )
 
@@ -767,7 +768,7 @@ class TestIncrementalSummary:
 
         def counted(prompt: str) -> str:
             calls.append(1)
-            return "incremental summary"
+            return summary_json("incremental summary")
 
         # 第一次增量
         l5_auto_compact(

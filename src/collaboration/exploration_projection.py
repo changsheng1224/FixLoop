@@ -27,9 +27,11 @@ def delegation_context(session, plan):
             "schema_version": "delegation-context-v1",
             "goal": source["original_request"],
             "hard_constraints": source["hard_constraints"],
+            "key_decisions": source["key_decisions"],
             "plan_view": {k: v for k, v in view.items() if k not in {"nodes", "active_node_ids"}},
             "current_node": node,
             "task_state_revision": source["state_revision"],
+            "task_context_revision": source["context_revision"],
         }
     )
     result["checksum"] = digest(result)

@@ -25,6 +25,18 @@ MAX_EMPTY_RETRIES = 3
 MAX_JSON_RETRIES = 2
 
 
+def _extraction_before_model(agent):
+    service = getattr(getattr(agent, "_plan_session", None), "context_extraction", None)
+    if service is not None:
+        service.before_model()
+
+
+def _extraction_before_tools(agent, text):
+    service = getattr(getattr(agent, "_plan_session", None), "context_extraction", None)
+    if service is not None:
+        service.before_tools(text)
+
+
 @dataclass
 class ProtocolState:
     last_token_meta: dict = field(default_factory=dict)
@@ -193,6 +205,7 @@ def last_successful_tool_call(agent) -> dict | None:
 
 
 def xml_build_context(runtime, ts, user_message: str, *, step: int, callback) -> str:
+    _extraction_before_model(runtime.agent)
     t0 = _time.time()
     # XML continuations (including old checkpoints) carry raw tool output.
     # Reference code observations instead, so the current history projection
@@ -206,7 +219,14 @@ def xml_build_context(runtime, ts, user_message: str, *, step: int, callback) ->
     from agent_runtime.context_manager import ContextManager
 
     manager = ContextManager(runtime.agent)
-    request, token_meta = manager.prepare_request(user_message, protocol="xml")
+    output_tokens = int(
+        (runtime.agent.session.get("runtime_degradation") or {}).get(
+            "max_output_tokens", runtime.agent.config.max_new_tokens
+        )
+    )
+    request, token_meta = manager.prepare_request(
+        user_message, protocol="xml", max_output_tokens=output_tokens
+    )
     prompt_text = request.messages[0]["content"]
     runtime.state.prepared_context_manager = manager
     runtime.state.prepared_request = request
@@ -225,8 +245,6 @@ def xml_build_context(runtime, ts, user_message: str, *, step: int, callback) ->
     context_prefix = build_context_prefix(runtime.agent, token_meta)
     attach_projection_metadata(token_meta, runtime.agent.session, context_prefix=context_prefix)
     runtime.state.last_token_meta = token_meta
-    if not runtime.hooks.budget_reserve("prompt_tokens", token_meta.get("total_tokens", 0)):
-        return "<final>Prompt token 预算已耗尽。</final>"
     runtime.hooks.accumulate_context_stats(token_meta)
     runtime.hooks.emit("context_built", build_trace_payload(token_meta))
     runtime.hooks.begin_edit_lock_turn()
@@ -252,15 +270,6 @@ def xml_call_model(runtime, ts, prompt_text: str, *, step: int, callback=None) -
         raise CancelledError(
             "budget", answer=(f"<final>LLM 调用达到硬顶 ({max_calls})，任务终止。</final>")
         )
-    if not runtime.hooks.budget_reserve("llm_calls"):
-        ts.stop_with_reason(
-            StopReason.BUDGET_EXHAUSTED,
-            "stopped",
-            detail="unified budget llm_calls exhausted",
-        )
-        runtime.control.stop_reason = StopReason.BUDGET_EXHAUSTED
-        raise CancelledError("budget", answer="<final>统一预算已耗尽，任务终止。</final>")
-    runtime.state.llm_call_count += 1
     ts.record_attempt()
     t1 = _time.time()
     runtime.hooks.emit(
@@ -306,25 +315,25 @@ def xml_call_model(runtime, ts, prompt_text: str, *, step: int, callback=None) -
                     )
                 )
             else:
-                try:
-                    raw = runtime.hooks.invoke_model_call(
-                        lambda: runtime.agent.circuit_breaker.call(
+
+                def complete():
+                    try:
+                        return runtime.agent.circuit_breaker.call(
                             runtime.agent.model_client.complete,
                             prompt_text,
                             max_new_tokens=effective_output_tokens,
                             prompt_cache_key=cache_key,
                         )
-                    )
-                except TypeError as exc:
-                    if "prompt_cache_key" not in str(exc):
-                        raise
-                    raw = runtime.hooks.invoke_model_call(
-                        lambda: runtime.agent.circuit_breaker.call(
+                    except TypeError as exc:
+                        if "prompt_cache_key" not in str(exc):
+                            raise
+                        return runtime.agent.circuit_breaker.call(
                             runtime.agent.model_client.complete,
                             prompt_text,
                             max_new_tokens=effective_output_tokens,
                         )
-                    )
+
+                raw = runtime.hooks.invoke_model_call(complete)
             break  # 成功，退出重试循环
         except EmptyModelResponse:
             runtime.state.empty_retries += 1
@@ -532,6 +541,7 @@ def native_model_turn(
     callback=None,
 ):
     """Build native messages, call once and normalize the response for the shared loop."""
+    _extraction_before_model(runtime.agent)
     from agent_runtime.context_manager import ContextManager
     from agent_runtime.message_projection import (
         attach_projection_metadata,
@@ -595,32 +605,12 @@ def native_model_turn(
     attach_projection_metadata(budget_meta, runtime.agent.session, context_prefix=context_prefix)
     runtime.state.last_budget_meta = budget_meta
     budget_meta["runtime_budget"] = runtime.hooks.budget_payload()
-    if not runtime.hooks.budget_reserve("prompt_tokens", budget_meta["provider_input_tokens"]):
-        ts.stop_with_reason(
-            StopReason.CONTEXT_OVERFLOW, "stopped", detail="prompt token budget exhausted"
-        )
-        return CanonicalResponse.create(
-            "final",
-            "stop",
-            {"text": runtime.hooks.complete_run(ts, "<final>Prompt token 预算已耗尽。</final>")},
-        )
     runtime.hooks.accumulate_context_stats(budget_meta)
     runtime.hooks.emit("context_built", build_trace_payload(budget_meta))
     if isinstance(budget_meta.get("emergency_compaction"), dict):
         runtime.hooks.emit(
             "context_emergency_compacted",
             {"step": turn, **budget_meta["emergency_compaction"]},
-        )
-    if not runtime.hooks.budget_reserve("llm_calls"):
-        ts.stop_with_reason(
-            StopReason.BUDGET_EXHAUSTED,
-            "stopped",
-            detail="unified budget llm_calls exhausted",
-        )
-        return CanonicalResponse.create(
-            "final",
-            "stop",
-            {"text": runtime.hooks.complete_run(ts, "<final>统一 LLM 调用预算已耗尽。</final>")},
         )
     runtime.hooks.emit(
         "model_request_start",
@@ -677,6 +667,12 @@ def native_model_turn(
     )
 
     if finish.kind == FinishKind.TOOL_CALLS and result.tool_calls:
+        visible = result.text or "\n".join(
+            block.get("text", "")
+            for block in (result.content or [])
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+        _extraction_before_tools(runtime.agent, visible)
         assistant_content = result.content or [
             {"type": "tool_use", "id": call.call_id, "name": call.name, "input": call.arguments}
             for call in result.tool_calls
@@ -725,6 +721,9 @@ def xml_model_turn(runtime, ts, user_message: str, *, step: int, step_clock, cal
     )
     raw, t1 = xml_call_model(runtime, ts, prompt_text, step=step, callback=callback)
     # CoT 提取：剥离思考内容后再进 history
+    import re
+
+    visible = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
     raw = strip_cot(raw)
 
     if (msg := runtime.hooks.abort_if_cancelled(ts, phase="post_model")) is not None:
@@ -746,5 +745,7 @@ def xml_model_turn(runtime, ts, user_message: str, *, step: int, step_clock, cal
     from agent_runtime.canonical_protocol import parse_model_response
 
     response = parse_model_response(raw, expected_tools=set(runtime.agent.tools))
+    if response.response_kind == "tool_call":
+        _extraction_before_tools(runtime.agent, visible.split("<tool>", 1)[0].strip())
     response.payload["raw"] = raw
     return response

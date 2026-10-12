@@ -176,6 +176,8 @@ class ExplorationStore(CollaborationStore):
                 "reserved_tokens": task.budget["tokens"],
                 "charged_tokens": charge,
                 "usage_known": result.get("usage", {}).get("tokens") is not None,
+                "input_tokens": result.get("usage", {}).get("input_tokens"),
+                "output_tokens": result.get("usage", {}).get("output_tokens"),
                 "model_turns": result.get("usage", {}).get("model_turns", 3),
                 "tool_calls": result.get("usage", {}).get("tool_calls", 4),
             }

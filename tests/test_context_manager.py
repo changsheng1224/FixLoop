@@ -10,6 +10,7 @@ from agent_runtime.context_manager import (
     TokenBudget,
     history_window_budget,
 )
+from agent_runtime.errors import ContextBuildBlockedError
 from agent_runtime.providers.clients import FakeModelClient
 from agent_runtime.runtime import Agent
 from agent_runtime.workspace import WorkspaceContext
@@ -365,7 +366,7 @@ class TestFitPriorityMatrix:
         """渐进收缩：验证关键不变式 request > system > memory > history。"""
         self._populate_all_sections(agent)
 
-        budgets = [100000, 6000, 4000, 2500, 1500, 1000, 700, 400, 200]
+        budgets = [100000, 6000, 4000, 2500, 1500, 1000, 700, 400]
         surviving_seq: list[set[str]] = []
         for b in budgets:
             surviving_seq.append(self._surviving_sections(agent, b))
@@ -426,24 +427,21 @@ class TestFitPriorityMatrix:
         assert found, "应存在一个 budget 使 memory 存活但 knowledge 被裁"
 
     def test_request_always_survives_all_budgets(self, agent):
-        """request section 在任何 budget 下都不被裁。"""
+        """成功组装保留 request；受保护交互装不下则阻断。"""
         self._populate_all_sections(agent)
-        for b in [100000, 5000, 1000, 500, 200, 100, 50, 20, 10]:
+        for b in [100000, 5000, 1000, 500]:
             s = self._surviving_sections(agent, b)
             assert "request" in s, f"request 在 budget={b} 时不应被裁，surviving={s}"
+        for b in [200, 100, 50, 20, 10]:
+            with pytest.raises(ContextBuildBlockedError, match="history_protected_over_budget"):
+                self._surviving_sections(agent, b)
 
     def test_small_budget_request_survives(self, agent):
-        """极小 budget 下 request 仍存活，低优先级 section 先消失。"""
+        """极小预算不能静默丢弃当前交互后继续调用。"""
         self._populate_all_sections(agent)
-        s = self._surviving_sections(agent, 200)
-        assert "request" in s, "request 在 budget=200 时应存活"
-        # 关键不变式：history/knowledge 不应同时与 system 共存且比例失衡
-        # 当 budget 极度紧张时，低优先级 section 应被裁剪
-        cm = ContextManager(agent, total_budget=200)
-        _, meta = cm.build("verify")
-        cuts = meta.get("cuts", [])
-        # 应至少有些 section 被裁剪
-        assert len(cuts) >= 0  # 松断言：压缩管线可能保留压缩后的内容
+        with pytest.raises(ContextBuildBlockedError, match="history_protected_over_budget"):
+            self._surviving_sections(agent, 200)
+        assert agent.model_client.prompts == []
 
 
 class TestSectionHardCapEnforce:

@@ -1059,6 +1059,10 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
     def _save_repair_checkpoint(self, state) -> None:
         """写入 L2 repair_state.json + checkpoint.json（供 --resume-repair + 审计）。"""
+        budget = getattr(self, "_model_budget", None)
+        if budget is not None:
+            state.node_timings["model_budget"] = budget.snapshot()
+            state.node_timings["model_deadline"] = self._model_deadline.snapshot()
         try:
             import json
             import time

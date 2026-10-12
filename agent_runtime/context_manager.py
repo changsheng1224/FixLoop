@@ -14,15 +14,11 @@ import re
 from pathlib import Path
 
 from agent_runtime.compression_pipeline import (
-    DEFAULT_TOOL_TRUNCATION,
     L5_TRIGGER_RATIO,
     apply_l1_to_request_text,
     l5_auto_compact,
     make_summarizer,
     run_compression_pipeline,
-)
-from agent_runtime.compression_pipeline import (
-    truncate_tool_content as _truncate_tool_content,
 )
 from agent_runtime.context_projection import attach_context_projection
 from agent_runtime.context_runtime import (
@@ -33,6 +29,7 @@ from agent_runtime.context_runtime import (
     ContextViewPolicy,
 )
 from agent_runtime.errors import ContextBuildBlockedError, ContextTooLargeError
+from agent_runtime.history_summary import SUMMARY_PREFIX, content_text, interaction_groups
 from agent_runtime.message_projection import (
     get_sealed_history,
     run_memory_snapshot,
@@ -60,7 +57,7 @@ BUDGET_MEMORY = 800
 BUDGET_KNOWLEDGE = 600  # 持久知识检索（episodic notes + durable facts）
 BUDGET_SOURCE = 1500
 BUDGET_HISTORY = 2600
-KEEP_RECENT_HISTORY = 6  # 最近 N 条历史完整保留
+KEEP_RECENT_HISTORY = 6  # 最近 N 组完整交互，最终装箱时仍按组选择
 HARD_CAP = 8000  # 硬顶 token 数，超出拒绝 ask
 
 
@@ -319,12 +316,31 @@ class ContextManager:
 
         if protocol not in {"xml", "native"}:
             raise ValueError("unknown_context_protocol")
+        try:
+            input_limit = self.agent.config.input_window(max_output_tokens)
+        except ValueError:
+            raise ContextBuildBlockedError("model_context_window_exhausted") from None
+        self._request_input_limit = min(self.budget.total_limit, input_limit)
+        self._model_input_window = (
+            self.agent.config.model_context_window
+            - max_output_tokens
+            - self.agent.config.context_safety_margin
+            if self.agent.config.model_context_window
+            else self.agent.config.prompt_budget
+        )
         tools = copy.deepcopy(list(tools))
         all_groups = native_groups(list(native_tail)) if protocol == "native" else []
         groups = [] if action_required else all_groups
         # Keep at most the recent three complete groups, never slice messages.
         groups = groups[-3:]
         metadata = self._base_metadata()
+        metadata["model_limits"] = {
+            "input_limit": self._request_input_limit,
+            "max_output_tokens": max_output_tokens,
+            "model_context_window": self.agent.config.model_context_window,
+            "context_safety_margin": self.agent.config.context_safety_margin,
+            "cumulative_limits": self.agent.config.effective_budget(),
+        }
         protocol_tokens = (
             self.budget.count(json.dumps(tools, ensure_ascii=False)) + 64
             if protocol == "native"
@@ -402,7 +418,7 @@ class ContextManager:
                 )
             )
 
-        limit = min(self.budget.total_limit, self.hard_cap, self.agent.config.prompt_budget)
+        limit = self._request_input_limit
         request = encode()
         actual = count(request)
         if governed:
@@ -447,6 +463,11 @@ class ContextManager:
                     metadata={"actual_tokens": actual, "available_tokens": limit},
                 )
             self.agent._plan_session.validate_required_context(metadata["long_task_context"])
+        if actual > limit:
+            raise ContextBuildBlockedError(
+                "model_input_window_exceeded",
+                metadata={"actual_tokens": actual, "available_tokens": limit},
+            )
         projected = project_tail(retained, tail_refs or {}, metadata)
         if retained:
             sections["tail"] = json.dumps(projected, ensure_ascii=False)
@@ -546,8 +567,17 @@ class ContextManager:
         tail_refs=None,
     ) -> dict[str, str]:
         """按预算填充各 section，返回 name → 文本。"""
-        total = self.budget.total_limit
         governed = getattr(self.agent, "_plan_session", None) is not None
+        total = min(
+            self.budget.total_limit,
+            getattr(
+                self,
+                "_request_input_limit" if governed else "_model_input_window",
+                self.budget.total_limit,
+            ),
+        )
+        if native_tools and not governed:
+            total = max(0, total - protocol_tokens)
         state_text = self._get_long_task(metadata) if governed else self._get_state()
         if governed and not native_tools:
             # Reserve delimiters before optional filling, then count the joined
@@ -705,6 +735,10 @@ class ContextManager:
                 f"**tool**: [source selected in current context: {observation_id}]\n",
                 history_text,
             )
+        history_limit = min(
+            history_window_budget(section_cap or total), max(0, filler.section_cap - filler.used)
+        )
+        history_text = self._fit_history_text(history_text, history_limit, metadata)
         metadata["_history_section_text"] = history_text
         filler.add_section(
             "history",
@@ -807,6 +841,7 @@ class ContextManager:
 
                 fitters["source"] = fit_source
             candidates["history"] = self._get_compressed_history(metadata)
+            fitters["history"] = lambda text, limit: self._fit_history_text(text, limit, metadata)
         filler.add_elastic(candidates, weights, priority, fitters=fitters)
         if self._source_selection:
             selection = self._source_selection
@@ -988,8 +1023,31 @@ class ContextManager:
 
     def _record_context_manifest(self, metadata: dict, sections: dict[str, str]) -> None:
         """Persist the exact dynamic selection needed for trace/checkpoint replay."""
-        selected = list(dict.fromkeys(metadata.get("_selected_context_ids", []) or []))
-        dropped = list(dict.fromkeys(metadata.get("_dropped_context_ids", []) or []))
+        history_refs = metadata.get("_observation_refs", []) if sections.get("history") else []
+        offered = [ref for refs in metadata.get("_history_unit_refs", []) for ref in refs]
+        selected = list(
+            dict.fromkeys(
+                [
+                    *metadata.get("_selected_context_ids", []),
+                    *history_refs,
+                    *metadata.get("_source_observation_refs", []),
+                    *metadata.get("feedback_observation_refs", []),
+                ]
+            )
+        )
+        dropped = [
+            ref
+            for ref in dict.fromkeys(
+                [
+                    *metadata.get("_dropped_context_ids", []),
+                    *offered,
+                ]
+            )
+            if ref not in selected
+        ]
+        metadata["_observation_refs"] = list(history_refs)
+        metadata["_selected_context_ids"] = selected
+        metadata["_dropped_context_ids"] = dropped
         selection = metadata.get("_context_selection", {}) or {}
         canonical = {
             "context_sections": metadata.get("context_sections", {}),
@@ -1001,6 +1059,7 @@ class ContextManager:
             },
             "required_state_ref": metadata.get("required_state_ref", {}),
             "decision_refs": copy.deepcopy(metadata.get("decision_refs", [])),
+            "constraint_refs": copy.deepcopy(metadata.get("constraint_refs", [])),
             "request_hash": metadata.get("request_hash", ""),
             "request_protocol": metadata.get("request_protocol", ""),
             "code_evidence": {
@@ -1025,6 +1084,22 @@ class ContextManager:
             "code_evidence_checks": metadata.get("code_evidence_checks", {}),
             "required_state_ref": canonical["required_state_ref"],
             "decision_refs": canonical["decision_refs"],
+            "constraint_refs": canonical["constraint_refs"],
+            "model_limits": copy.deepcopy(metadata.get("model_limits", {})),
+            "history_compression": {
+                key: copy.deepcopy(value)
+                for key, value in metadata.get("compression_pipeline", {}).items()
+                if key
+                in {
+                    "contract_version",
+                    "l5",
+                    "l5_failure_reason",
+                    "l5_input_coverage",
+                    "l5_summary_dropped_items",
+                    "l5_dropped_groups",
+                    "history_omitted_units",
+                }
+            },
             "required_sections": metadata.get("required_sections", {}),
             "protocol_reserved_tokens": metadata.get("protocol_reserved_tokens", 0),
             "section_hashes": canonical["section_hashes"],
@@ -1206,6 +1281,13 @@ class ContextManager:
         except (ValueError, OSError):
             raise ContextBuildBlockedError("state_mismatch") from None
         metadata["long_task_context"] = context
+        from agent_runtime.plan_runtime.constraint_records import constraint_history
+
+        latest = constraint_history(plan_session.long_task_state.constraint_records)[1]
+        metadata["constraint_refs"] = [
+            {key: record[key] for key in ("constraint_id", "revision", "checksum", "status")}
+            for record in latest.values()
+        ]
         metadata["decision_refs"] = [
             {key: check[key] for key in ("decision_id", "revision", "checksum", "status")}
             for check in context.get("decision_checks", [])
@@ -1227,6 +1309,7 @@ class ContextManager:
         metadata["required_state_ref"].update(
             node_id=context["current_node"]["node_id"],
             task_state_revision=context["state_revision"],
+            task_context_revision=context["context_revision"],
             state_checksum=context["state_checksum"],
         )
         compact = {
@@ -1329,7 +1412,10 @@ class ContextManager:
                 )
             parts.append("\n".join(lines))
         results = retrieval_candidates_semantic(
-            mem, query, limit=2, semantic_memory=getattr(self.agent, "semantic_memory", None),
+            mem,
+            query,
+            limit=2,
+            semantic_memory=getattr(self.agent, "semantic_memory", None),
         )
         results = filter_relevant_results(results, self.tier_policy)
         recalled_ids.extend(str(item.get("memory_id", "")) for item in results)
@@ -1407,12 +1493,31 @@ class ContextManager:
 
         sealed_count, sealed_text = get_sealed_history(self.agent.session)
         if sealed_count > 0 and sealed_text:
+            manifest = self.agent.session.get("context_manifest", {})
+            sealed_refs = (
+                list(manifest.get("observation_refs", []))
+                if manifest.get("section_hashes", {}).get("history")
+                == hashlib.sha256(sealed_text.encode()).hexdigest()
+                else []
+            )
             if sealed_count >= len(history):
+                if metadata is not None:
+                    metadata["_history_units"] = [sealed_text]
+                    metadata["_history_unit_refs"] = [sealed_refs]
                 return sealed_text
             tail = history[sealed_count:]
             tail_text = self._format_projected_history(tail, metadata)
             if not tail_text:
+                if metadata is not None:
+                    metadata["_history_units"] = [sealed_text]
+                    metadata["_history_unit_refs"] = [sealed_refs]
                 return sealed_text
+            if metadata is not None:
+                metadata["_history_units"] = [sealed_text, *metadata.get("_history_units", [])]
+                metadata["_history_unit_refs"] = [
+                    sealed_refs,
+                    *metadata.get("_history_unit_refs", []),
+                ]
             return f"{sealed_text.rstrip()}\n{tail_text}"
 
         return self._format_projected_history(history, metadata)
@@ -1439,6 +1544,7 @@ class ContextManager:
             ),
             history_window=history_window_budget(self.budget.total_limit),
             tier_policy=self.tier_policy,
+            allow_summary=SUMMARY_PREFIX not in sealed_text,
         )
         source_refs = set(meta.get("_source_observation_refs", []))
         if source_refs:
@@ -1465,26 +1571,59 @@ class ContextManager:
         observation_refs = [
             str(item.get("observation_id")) for item in projected if item.get("observation_id")
         ]
-        meta.setdefault("_selected_context_ids", []).extend(observation_refs)
         meta["_observation_refs"] = list(dict.fromkeys(observation_refs))
 
-        pipe = meta.get("compression_pipeline", {})
-        if pipe.get("l5_triggered"):
-            body = self._format_compressed_result(projected, apply_l1=False)
-            return body if include_header else self._strip_history_header(body)
+        groups = interaction_groups(projected)
+        units = [
+            self._strip_history_header(self._format_compressed_result(group)) for group in groups
+        ]
+        meta["_history_units"] = units
+        meta["_history_unit_refs"] = [
+            [str(item["observation_id"]) for item in group if item.get("observation_id")]
+            for group in groups
+        ]
+        body = self._format_split_history(projected, include_header)
+        return body
 
-        return self._format_split_history(projected, pipe, include_header)
+    def _fit_history_text(self, text, limit, metadata):
+        """Fit optional history as complete interactions, including sealed text."""
+        from agent_runtime.context_preparation import pack_units
 
-    def _format_split_history(self, projected: list, pipe: dict, include_header: bool) -> str:
-        """格式化未触发 L5 的 history：早期摘要 + 最近对话。"""
-        recent = projected[-KEEP_RECENT_HISTORY:]
-        old = projected[:-KEEP_RECENT_HISTORY]
+        units = metadata.get("_history_units", [text])
+        references = metadata.get("_history_unit_refs", [[] for _ in units])
+
+        def render(items):
+            omitted = len(units) - len(items)
+            notice = f"[History omitted: {omitted} complete units. Not current evidence.]"
+            texts = [units[index] for index in items]
+            return "\n".join([*texts, notice]) if omitted else "\n".join(texts)
+
+        if self.budget.count(text) <= limit:
+            chosen, fitted = list(range(len(units))), text
+        else:
+            chosen = pack_units(list(range(len(units))), limit, self.budget, render, newest=True)
+            fitted = render(chosen)
+            if self.budget.count(fitted) > limit:
+                chosen, fitted = [], ""
+        metadata["_observation_refs"] = list(
+            dict.fromkeys(ref for index in chosen for ref in references[index])
+        )
+        metadata.setdefault("compression_pipeline", {})["history_omitted_units"] = len(units) - len(
+            chosen
+        )
+        return fitted
+
+    def _format_split_history(self, projected: list, include_header: bool) -> str:
+        """按完整交互格式化管线结果，不在显示阶段二次截断。"""
+        groups = interaction_groups(projected)
+        recent = [item for group in groups[-KEEP_RECENT_HISTORY:] for item in group]
+        old = [item for group in groups[:-KEEP_RECENT_HISTORY] for item in group]
         lines: list[str] = []
         if include_header:
             lines.extend(["## 对话历史", ""])
 
-        if old and not any(pipe.get(k) for k in ("l2_triggered", "l3_triggered", "l4_triggered")):
-            compressed = self._compress_old_entries(old)
+        if old:
+            compressed = self._strip_history_header(self._format_compressed_result(old))
             if compressed:
                 prefix = "### 早期摘要" if include_header else "### 追加早期摘要"
                 lines.append(prefix)
@@ -1493,13 +1632,8 @@ class ContextManager:
 
         if include_header:
             lines.append("### 最近对话")
-        for item in recent:
-            role = item.get("role", "unknown")
-            content = str(item.get("content", ""))
-            if role == "user" and len(content) > 300:
-                content = content[:300] + "..."
-            lines.append(f"**{role}**: {content}")
-            lines.append("")
+        if recent:
+            lines.append(self._strip_history_header(self._format_compressed_result(recent)))
         return "\n".join(lines)
 
     @staticmethod
@@ -1512,17 +1646,12 @@ class ContextManager:
             lines.pop(0)
         return "\n".join(lines).strip()
 
-    def _format_compressed_result(self, history: list, *, apply_l1: bool = False) -> str:
+    def _format_compressed_result(self, history: list) -> str:
         """将 history 列表格式化为 prompt 文本。"""
         lines = ["## 对话历史", ""]
         for item in history:
             role = item.get("role", "unknown")
-            content = str(item.get("content", ""))
-            if apply_l1 and role == "tool":
-                tool_name = item.get("tool_name", "")
-                content = _truncate_tool_content(content, tool_name, budget=self.budget)
-            elif self.budget.count(content) > DEFAULT_TOOL_TRUNCATION:
-                content = self.budget.fit(content, DEFAULT_TOOL_TRUNCATION) + "..."
+            content = content_text(item)
             lines.append(f"**{role}**: {content}")
             lines.append("")
         return "\n".join(lines)
@@ -1531,7 +1660,7 @@ class ContextManager:
         """当 history token 数超阈值时，用 LLM 压缩前一半为摘要（L5 薄封装）。
 
         成功：返回 [{"role":"system","content":"[Earlier summary]: ..."}, *recent]
-        失败：退化为简单裁剪（保留最近 8 条）
+        失败：按完整交互保留近期历史，受保护内容装不下时明确阻断。
         """
         if trigger_tokens is None:
             trigger_tokens = int(L5_TRIGGER_RATIO * history_window_budget(self.budget.total_limit))
@@ -1545,39 +1674,3 @@ class ContextManager:
             trigger_tokens=trigger_tokens,
             history_window=history_window_budget(self.budget.total_limit),
         )
-
-    def _compress_old_entries(self, entries: list) -> str:
-        """压缩旧历史条目。
-
-        - 重复 read_file 合并为一行
-        - 旧工具结果压缩为单行摘要
-        - 旧消息截断到 60 字符
-        """
-        items = []
-        seen_reads = []
-        for entry in entries:
-            content = str(entry.get("content", ""))
-            role = entry.get("role", "")
-
-            if role == "assistant" and "read_file" in content:
-                seen_reads.append(content.split("read_file")[-1].strip().rstrip(")"))
-                continue
-
-            if role == "tool":
-                # 压缩为一行摘要
-                first_line = content.split("\n")[0][:100]
-                items.append(f"工具结果: {first_line}...")
-                continue
-
-            if role == "user":
-                items.append(f"用户: {content[:60]}")
-                continue
-
-            items.append(f"{role}: {content[:60]}")
-
-        result = []
-        if seen_reads:
-            result.append(f"已读取文件: {', '.join(seen_reads[:5])}")
-        result.extend(items[-20:])  # 最多保留 20 条压缩项
-
-        return "\n".join(result)

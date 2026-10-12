@@ -148,6 +148,7 @@ def grounded_plan(
             + json.dumps(
                 {
                     "objective": objective[:4000],
+                    "hard_constraints": list(session.long_task_state.hard_constraints),
                     "evidence": summaries,
                     "nodes": [n.definition() for n in plan.nodes],
                     **({"replan": replan_context} if replan_context is not None else {}),

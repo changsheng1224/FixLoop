@@ -28,7 +28,7 @@ def _sanitize_provider_error_message(value: object) -> str:
     text = " ".join(str(value or "").split())
     for pattern in _SECRET_PATTERNS:
         text = pattern.sub(
-            lambda match: (match.group(1) + "<redacted>" if match.lastindex else "<redacted>"),
+            lambda match: match.group(1) + "<redacted>" if match.lastindex else "<redacted>",
             text,
         )
     if len(text) > _HTTP_ERROR_MESSAGE_LIMIT:
@@ -155,7 +155,11 @@ def _http_error_diagnostics(
 def _usage_dict(usage: dict | None) -> dict[str, int]:
     from agent_runtime.token_accounting import parse_provider_usage
 
-    return parse_provider_usage(usage or {})
+    if not usage or not all(
+        type(usage.get(key)) is int and usage[key] >= 0 for key in ("input_tokens", "output_tokens")
+    ):
+        return {}
+    return parse_provider_usage(usage)
 
 
 def _check_empty_response(raw: str, model: str = "") -> None:

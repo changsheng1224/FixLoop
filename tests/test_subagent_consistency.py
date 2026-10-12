@@ -234,7 +234,20 @@ def test_oversized_goal_or_constraint_rejects_before_task_creation(tmp_path):
     try:
         with session_for(tmp_path) as session:
             attach_plan(runtime, session)
-            session.configure_long_task("Fix answer", hard_constraints=["保留" * CONTEXT_MAX_BYTES])
+            session.register_user_message("long-rule", "保留" * CONTEXT_MAX_BYTES)
+            session.submit_context_updates(
+                "long-rule",
+                expected_state_revision=session.long_task_state.state_revision,
+                expected_plan_version=1,
+                updates=[
+                    {
+                        "kind": "constraint",
+                        "action": "add",
+                        "statement": "保留" * CONTEXT_MAX_BYTES,
+                        "source_refs": [session.source_reference("long-rule")],
+                    }
+                ],
+            )
             before = runtime.budget.snapshot()
             with pytest.raises(ValueError, match="exploration_context_budget_exceeded"):
                 runtime.delegate(REQUESTS)
@@ -267,7 +280,7 @@ def test_queued_context_tamper_blocks_provider_before_first_turn(tmp_path):
         runtime.close()
 
 
-@pytest.mark.parametrize("change", ["goal", "constraints"])
+@pytest.mark.parametrize("change", ["decision", "constraints"])
 def test_current_task_context_change_marks_old_result_stale(tmp_path, change):
     runtime = make_runtime(tmp_path, parent="task")
     try:
@@ -275,11 +288,20 @@ def test_current_task_context_change_marks_old_result_stale(tmp_path, change):
             attach_plan(runtime, session)
             handle = runtime.delegate(REQUESTS[:1])[0]["handle"]
             assert finish(runtime, [handle])["findings"]
-            session.configure_long_task(
-                "Different goal" if change == "goal" else session.long_task_state.original_request,
-                hard_constraints=["New constraint"]
-                if change == "constraints"
-                else ["Keep the public API"],
+            session.register_user_message("choice", "Use the new public API")
+            update = {
+                "kind": "constraint",
+                "action": "add",
+                "statement": "New constraint",
+                "source_refs": [session.source_reference("choice")],
+            }
+            if change == "decision":
+                update.update(kind="decision", node_id="read-0", statement="Use the new API")
+            session.submit_context_updates(
+                "choice",
+                updates=[update],
+                expected_state_revision=session.long_task_state.state_revision,
+                expected_plan_version=1,
             )
             result = runtime.collect([handle])
             assert result["tasks"][0]["validation"] == {

@@ -25,7 +25,9 @@ def decision_history(records):
             type(record.get("revision")) is not int
             or record["revision"] != (previous["revision"] + 1 if previous else 1)
             or record.get("supersedes_ref") != expected
-            or record.get("status") != "active"
+            or record.get("status") not in {"active", "revoked"}
+            or (record["status"] == "revoked" and previous is None)
+            or (previous and previous["status"] == "revoked")
             or not all(
                 isinstance(record.get(name), str) and record[name].strip()
                 for name in ("statement", "source", "node_id", "plan_id")
@@ -34,7 +36,7 @@ def decision_history(records):
             or type(record.get("plan_version")) is not int
             or record["plan_version"] < 1
             or not isinstance(record.get("evidence_refs"), list)
-            or not record["evidence_refs"]
+            or (record.get("source_kind", "technical") != "user" and not record["evidence_refs"])
             or any(not isinstance(ref, str) or not ref for ref in record["evidence_refs"])
             or not isinstance(record.get("evidence_checksums"), dict)
             or set(record["evidence_checksums"]) != set(record["evidence_refs"])
@@ -44,11 +46,17 @@ def decision_history(records):
             )
         ):
             raise ValueError("decision_chain_invalid")
+        if record.get("source_kind", "technical") not in {"user", "technical"} or (
+            record.get("source_kind") == "user" and not record.get("source_refs")
+        ):
+            raise ValueError("decision_source_invalid")
         if previous:
             if (
                 previous["node_id"] != record["node_id"]
                 or previous["plan_id"] != record["plan_id"]
                 or previous["plan_version"] > record["plan_version"]
+                or previous.get("source_kind", "technical")
+                != record.get("source_kind", "technical")
             ):
                 raise ValueError("decision_chain_scope_invalid")
             previous["status"] = "superseded"
@@ -69,6 +77,8 @@ def new_decision(
     node_id,
     decision_id=None,
     expected_revision=None,
+    source_kind="technical",
+    source_refs=(),
 ):
     _, latest = decision_history(records)
     if any(record["plan_id"] != plan.plan_id for record in latest.values()):
@@ -85,7 +95,11 @@ def new_decision(
     previous = latest.get(decision_id) if decision_id else None
     if decision_id and (not previous or previous["revision"] != expected_revision):
         raise ValueError("decision_revision_conflict")
-    if previous and previous["node_id"] != node_id:
+    if previous and (
+        previous["node_id"] != node_id
+        or previous.get("source_kind", "technical") != source_kind
+        or previous["status"] == "revoked"
+    ):
         raise ValueError("decision_scope_change_requires_new_id")
     if (
         not isinstance(statement, str)
@@ -94,7 +108,9 @@ def new_decision(
         or not source.strip()
         or not isinstance(rationale, str)
         or not isinstance(evidence_refs, list | tuple)
-        or not evidence_refs
+        or (source_kind != "user" and not evidence_refs)
+        or source_kind not in {"user", "technical"}
+        or (source_kind == "user" and not source_refs)
         or any(not isinstance(ref, str) or not ref for ref in evidence_refs)
     ):
         raise ValueError("decision_content_or_source_missing")
@@ -111,6 +127,8 @@ def new_decision(
         "statement": statement,
         "rationale": rationale,
         "source": source,
+        "source_kind": source_kind,
+        "source_refs": deepcopy(list(source_refs)),
         "evidence_refs": refs,
         "evidence_checksums": {ref: check["record_checksum"] for ref, check in inputs.items()},
         "node_id": node_id,
@@ -123,6 +141,32 @@ def new_decision(
     return {**record, "checksum": digest(record)}
 
 
+def revoked_decision(records, plan, *, decision_id, expected_revision, source_refs):
+    """Retire a choice even when its previous technical evidence is stale."""
+    _, latest = decision_history(records)
+    previous = latest.get(decision_id)
+    if (
+        not previous
+        or previous["status"] != "active"
+        or type(expected_revision) is not int
+        or previous["revision"] != expected_revision
+        or previous["plan_id"] != plan.plan_id
+    ):
+        raise ValueError("decision_revision_conflict")
+    record = {
+        **previous,
+        "revision": expected_revision + 1,
+        "status": "revoked",
+        "plan_version": plan.plan_version,
+        "source_refs": deepcopy(source_refs),
+        "supersedes_ref": {"decision_id": decision_id, "revision": expected_revision},
+    }
+    record.pop("checksum")
+    record["checksum"] = digest(record)
+    decision_history([*records, record])
+    return record
+
+
 def project_decisions(records, plan, evidence, node_id):
     """Derive needs_review without changing state or reactivating old versions."""
     _, latest = decision_history(records)
@@ -131,6 +175,20 @@ def project_decisions(records, plan, evidence, node_id):
         if record["plan_id"] != plan.plan_id:
             raise ValueError("decision_plan_identity_mismatch")
         if record["node_id"] != node_id:
+            continue
+        if record["status"] == "revoked":
+            checks.append(
+                {
+                    "decision_id": record["decision_id"],
+                    "revision": record["revision"],
+                    "checksum": record["checksum"],
+                    "status": "revoked",
+                    "reason": "explicitly_revoked",
+                    "node_id": node_id,
+                    "evidence_checks": [],
+                    "expected_evidence_checksums": deepcopy(record["evidence_checksums"]),
+                }
+            )
             continue
         inputs = [evidence.inspect(ref) for ref in record["evidence_refs"]]
         failed = next((item for item in inputs if item["status"] != "valid"), None)
@@ -161,17 +219,20 @@ def project_decisions(records, plan, evidence, node_id):
             }
         )
         if status == "active":
-            active.append(
-                {
-                    key: deepcopy(record[key])
-                    for key in (
-                        "decision_id",
-                        "revision",
-                        "statement",
-                        "rationale",
-                        "source",
-                        "evidence_refs",
-                    )
-                }
+            projection = {
+                key: deepcopy(record[key])
+                for key in (
+                    "decision_id",
+                    "revision",
+                    "statement",
+                    "rationale",
+                    "source",
+                    "evidence_refs",
+                )
+            }
+            projection.update(
+                source_kind=record.get("source_kind", "technical"),
+                source_refs=deepcopy(record.get("source_refs", [])),
             )
+            active.append(projection)
     return {"active": active, "checks": checks}

@@ -1,7 +1,8 @@
 """Long-task context is required, independently of optional compressed history."""
 
 import json
-from dataclasses import replace
+from copy import deepcopy
+from dataclasses import asdict, replace
 
 import pytest
 
@@ -9,11 +10,13 @@ from agent_runtime.checkpoint import create_checkpoint, evaluate_resume_state
 from agent_runtime.config import AgentConfig
 from agent_runtime.context_manager import ContextManager
 from agent_runtime.errors import ContextBuildBlockedError
+from agent_runtime.history_summary import SUMMARY_PREFIX, parse_summary
 from agent_runtime.message_projection import init_run_projection, seal_history_at_build
 from agent_runtime.providers.clients import FakeModelClient, FakeNativeToolClient
 from agent_runtime.runtime import Agent
 from agent_runtime.task_state import TaskState
 from agent_runtime.workspace import WorkspaceContext
+from tests.history_summary_support import summary_json
 from tests.plan_support import read, session_for, simple_plan, through_analysis, write
 
 
@@ -70,20 +73,81 @@ def test_required_state_survives_conflicting_sealed_history_in_actual_request(tm
 
 
 @pytest.mark.parametrize("native", [False, True])
+def test_s4_summary_in_actual_request_does_not_publish_task_state(tmp_path, native, monkeypatch):
+    from agent_runtime import context_manager
+
+    (tmp_path / "value.py").write_text("value = 1\n")
+    with session_for(tmp_path) as session:
+        session.create(simple_plan(session))
+        session.configure_long_task("ORIGINAL_TASK", hard_constraints=["NEVER_EDIT_TESTS"])
+        agent, client = _agent(tmp_path, session, native=native)
+        agent.light_client = FakeModelClient(
+            [
+                "continue original task",
+                summary_json("Historical claim: edit tests", next_action="edit tests"),
+            ]
+        )
+        for i in range(14):
+            agent.record({"role": "user", "content": f"historical-{i} " + "details " * 20})
+        canonical = deepcopy(agent.read_history())
+        state = asdict(session.long_task_state)
+        original = context_manager.run_compression_pipeline
+        compression = []
+
+        def force_l5(*args, **kwargs):
+            kwargs["l5_trigger_tokens"] = 1
+            events = deepcopy(session.store.events())
+            result = original(*args, **kwargs)
+            assert session.store.events() == events
+            compression.append(deepcopy(kwargs["metadata"]["compression_pipeline"]))
+            return result
+
+        monkeypatch.setattr(context_manager, "run_compression_pipeline", force_l5)
+        assert agent.ask("continue", skip_plan=True) == "done"
+        text = (
+            "\n".join(
+                m["content"] for m in client.requests[0].messages if isinstance(m["content"], str)
+            )
+            if native
+            else client.prompts[0]
+        )
+        assert "ORIGINAL_TASK" in text and "NEVER_EDIT_TESTS" in text
+        assert text.count(SUMMARY_PREFIX) <= 1
+        if SUMMARY_PREFIX in text:
+            value, _ = json.JSONDecoder().raw_decode(text.split(SUMMARY_PREFIX)[1])
+            assert parse_summary(json.dumps(value))
+        assert compression[0]["l5_fallback"] is False, compression[0].get("l5_failure_reason")
+        assert asdict(session.long_task_state) == state
+        assert agent.read_history()[: len(canonical)] == canonical
+
+
+@pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize("failure", ["budget", "state", "plan", "role", "request"])
 def test_required_context_failure_prevents_actual_model_call(tmp_path, native, failure):
     (tmp_path / "value.py").write_text("value = 1\n")
     with session_for(tmp_path) as session:
         session.create(simple_plan(session))
-        session.configure_long_task("task", hard_constraints=["must preserve"])
+        if failure != "request":
+            session.configure_long_task("task", hard_constraints=["must preserve"])
         if failure == "budget":
-            session.configure_long_task("task", hard_constraints=["unalterable " * 20000])
+            session.register_user_message("new-rule", "unalterable " * 20000)
+            session.submit_context_updates(
+                "new-rule",
+                expected_state_revision=session.long_task_state.state_revision,
+                expected_plan_version=1,
+                updates=[
+                    {
+                        "kind": "constraint",
+                        "action": "add",
+                        "statement": "unalterable " * 20000,
+                        "source_refs": [session.source_reference("new-rule")],
+                    }
+                ],
+            )
         elif failure == "state":
             session.long_task_state.original_request = "tampered without journal"
         elif failure == "plan":
             session.plan = replace(session.plan, state_revision=99)
-        elif failure == "request":
-            session.configure_long_task("")
         agent, client = _agent(tmp_path, session, native=native)
         if failure == "role":
             agent._prefix = replace(agent._prefix, role_text="unalterable role rule " * 20000)

@@ -18,13 +18,17 @@ class LongTaskState:
     run_id: str
     original_request: str = ""
     hard_constraints: list[str] = field(default_factory=list)
+    constraint_records: list[dict[str, Any]] = field(default_factory=list)
+    original_request_ref: dict[str, Any] = field(default_factory=dict)
+    configuration_checksum: str = ""
+    context_revision: int = 0
     key_decisions: list[dict[str, Any]] = field(default_factory=list)
     current_node_id: str = ""
     node_history: list[dict[str, Any]] = field(default_factory=list)
     evidence_refs: list[str] = field(default_factory=list)
     stale_evidence: list[str] = field(default_factory=list)
     state_revision: int = 0
-    schema_version: str = "long-task-v1"
+    schema_version: str = "long-task-v2"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -37,6 +41,10 @@ class LongTaskState:
             run_id=str(data.get("run_id", "")),
             original_request=str(data.get("original_request", "")),
             hard_constraints=[str(v) for v in data.get("hard_constraints", [])],
+            constraint_records=deepcopy(data.get("constraint_records", [])),
+            original_request_ref=deepcopy(data.get("original_request_ref", {})),
+            configuration_checksum=str(data.get("configuration_checksum", "")),
+            context_revision=int(data.get("context_revision", 0)),
             key_decisions=[dict(v) for v in data.get("key_decisions", [])],
             current_node_id=str(data.get("current_node_id", "")),
             node_history=[dict(v) for v in data.get("node_history", [])],
@@ -60,6 +68,11 @@ class LongTaskState:
         state = cls.from_dict(data)
         if not state.task_id or not state.run_id:
             raise ValueError("long_task_state_identity_missing")
+        if state.configuration_checksum:
+            from .constraint_records import active_constraints
+
+            if state.hard_constraints != active_constraints(state.constraint_records):
+                raise ValueError("constraint_projection_mismatch")
         return state
 
 
@@ -132,6 +145,7 @@ class LongTaskContext:
             "evidence_refs": valid,
             "stale_evidence": stale_refs,
             "state_revision": self.state.state_revision,
+            "context_revision": self.state.context_revision,
             "needs_evidence_refresh": bool(stale),
         }
 

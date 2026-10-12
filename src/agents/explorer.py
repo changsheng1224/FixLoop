@@ -8,12 +8,16 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+from agent_runtime.budget_manager import BudgetManager
 from agent_runtime.cancellation import CancellationToken, CancelledError
 from agent_runtime.canonical_protocol import parse_model_response
 from agent_runtime.config import AgentConfig
+from agent_runtime.context_manager import TokenBudget
 from agent_runtime.context_runtime import ObservationStore
+from agent_runtime.model_call_budget import ModelBudgetExceededError, invoke_model_call
 from agent_runtime.model_turn import FinishKind, ModelTurnRequest, ModelTurnResult, ToolCall
 from agent_runtime.plan_runtime.models import digest
+from agent_runtime.repair_runtime import ExecutionDeadline
 from agent_runtime.runtime import Agent
 from agent_runtime.tool_batch import ToolBatchProtocolError, ToolCallBatch, validate_native_content
 from agent_runtime.tool_context import ToolContext
@@ -80,7 +84,10 @@ class ExplorerAgent(Agent):
         store = ObservationStore(state, self._cwd, self.state_root)
         observations, coverage = {}, []
         messages = [{"role": "user", "content": json.dumps(projection, ensure_ascii=False)}]
-        used, calls, turns, usage_known = 0, 0, 0, True
+        used, calls, turns = 0, 0, 0
+        budget = BudgetManager({"total_tokens": limits.tokens, "llm_calls": limits.model_turns})
+        deadline = ExecutionDeadline.from_remaining(max(0, task.deadline_at - time.time()))
+        counter = TokenBudget(model=self.config.model, provider=self.config.provider)
         result = {"summary": "", "findings": [], "unknowns": []}
         status, error = "partial", "model_turn_limit"
         try:
@@ -94,8 +101,7 @@ class ExplorerAgent(Agent):
                     }
                     for n, s in self.tools.items()
                 ]
-                # UTF-8 bytes bound prompt tokens conservatively without loading a tokenizer.
-                input_bound = len((SYSTEM + json.dumps(messages) + json.dumps(tools)).encode())
+                input_bound = counter.count(SYSTEM + json.dumps(messages) + json.dumps(tools)) + 32
                 output_limit = min(1024, limits.tokens - used - input_bound)
                 if output_limit <= 0:
                     error = "token_budget_exhausted"
@@ -109,20 +115,18 @@ class ExplorerAgent(Agent):
                 )
                 turns += 1
                 event("subagent_model_started", model_turn=turns)
-                previous_usage_known = usage_known
-                usage_known = False  # A cancelled in-flight request may have consumed tokens.
-                turn = self._turn(request)
-                usage = turn.usage
-                known = all(
-                    type(usage.get(k)) is int and usage[k] >= 0
-                    for k in ("input_tokens", "output_tokens")
+                turn = invoke_model_call(
+                    lambda: self._turn(request),
+                    budget=budget,
+                    client=self.model_client,
+                    input_tokens=input_bound,
+                    output_tokens=output_limit,
+                    purpose="exploration",
+                    cancel_token=self.cancel_token,
+                    deadline=deadline,
+                    input_limit=self.config.input_window(output_limit),
                 )
-                usage_known = previous_usage_known and known
-                used += (
-                    usage["input_tokens"] + usage["output_tokens"]
-                    if known
-                    else input_bound + output_limit
-                )
+                used = int(budget.summary()["total_tokens"]["used"])
                 event("subagent_model_completed", model_turn=turns)
                 self.cancel_token.check()
                 if used > limits.tokens or turn.finish.kind == FinishKind.MAX_OUTPUT_TOKENS:
@@ -234,13 +238,18 @@ class ExplorerAgent(Agent):
             error = self.cancel_token.reason
         except ToolBatchProtocolError:
             status, error = "partial", ToolBatchProtocolError.code
+        except ModelBudgetExceededError:
+            status, error = "partial", "token_budget_exhausted"
         except (ValueError, TypeError, KeyError) as exc:
             status, error = "partial", exploration_error_code(exc)
         except Exception:
             status, error = "failed", "exploration_provider_or_runtime_failed"
-            usage_known = False  # A provider failure may still have consumed its allocation.
         finally:
             store.close()
+        accounting = budget.summary()
+        usage_known = all(
+            entry["usage_status"] == "actual" for entry in budget.snapshot()["model_calls"].values()
+        )
         return {
             "schema_version": "1",
             "task_id": task.task_id,
@@ -258,8 +267,16 @@ class ExplorerAgent(Agent):
             "coverage": coverage,
             "complete": status == "completed",
             "usage": {
-                "tokens": used if usage_known else None,
-                "model_turns": turns,
+                "tokens": int(accounting.get("total_tokens", {}).get("used", 0))
+                if usage_known
+                else None,
+                "input_tokens": int(budget.summary().get("prompt_tokens", {}).get("used", 0))
+                if usage_known
+                else None,
+                "output_tokens": int(budget.summary().get("output_tokens", {}).get("used", 0))
+                if usage_known
+                else None,
+                "model_turns": int(accounting["llm_calls"]["used"]),
                 "tool_calls": calls,
             },
             "started_at": data["started_at"],
@@ -273,23 +290,41 @@ class ExplorerAgent(Agent):
         prompt = (
             SYSTEM + "\nTools: " + json.dumps(request.tools) + "\n" + json.dumps(request.messages)
         )
+        before = dict(getattr(self.model_client, "session_usage", {}) or {})
         text = self.model_client.complete(prompt, max_new_tokens=request.max_output_tokens)
+        after = dict(getattr(self.model_client, "session_usage", {}) or {})
+        usage = (
+            {key: after[key] - before.get(key, 0) for key in ("input_tokens", "output_tokens")}
+            if after.get("calls", 0) > before.get("calls", 0)
+            else {}
+        )
         response = parse_model_response(text)
         if response.response_kind == "tool_call":
             call = response.payload["call"]
             return ModelTurnResult(
+                usage=usage,
                 tool_calls=[
                     ToolCall(
                         call.name, call.arguments, call.call_id or f"xml-{len(request.messages)}"
                     )
-                ]
+                ],
             )
         if response.response_kind == "final":
             text = response.payload["text"]
-        return ModelTurnResult(text=text)
+        return ModelTurnResult(text=text, usage=usage)
 
 
-def create_explorer_agent(model_client, *, root, scopes, token, limits, state_root=""):
+def create_explorer_agent(
+    model_client,
+    *,
+    root,
+    scopes,
+    token,
+    limits,
+    state_root="",
+    model_context_window=0,
+    context_safety_margin=256,
+):
     from agent_runtime.code_exploration.io import grep_result
 
     def resolve(raw):
@@ -331,7 +366,12 @@ def create_explorer_agent(model_client, *, root, scopes, token, limits, state_ro
 
     agent = ExplorerAgent(
         AgentConfig(
-            approval="auto", max_steps=limits.model_turns, max_new_tokens=1024, prompt_budget=4000
+            approval="auto",
+            max_steps=limits.model_turns,
+            max_new_tokens=1024,
+            prompt_budget=4000,
+            model_context_window=model_context_window,
+            context_safety_margin=context_safety_margin,
         ),
         model_client,
         SimpleNamespace(repo_root=root),

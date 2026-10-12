@@ -422,6 +422,7 @@ class IntentRouter:
                 cancel_token=ctx.cancel_token,
                 deadline=ctx.deadline,
                 budget=ctx.budget,
+                input_limit=ctx.model_input_limit,
             )
             graph = refine.graph
             llm_candidates_payload = [c.to_dict() for c in refine.candidates]

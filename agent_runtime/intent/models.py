@@ -153,6 +153,7 @@ class RouteContext:
     cancel_token: Any | None = None
     deadline: Any | None = None
     budget: Any | None = None
+    model_input_limit: int | None = None
     llm_timeout_s: float = 8.0
     llm_max_retries: int = 1
     llm_rate_limit_per_minute: int = 30
