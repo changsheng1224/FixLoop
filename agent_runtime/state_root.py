@@ -42,14 +42,42 @@ def state_root_for(root: str | Path, explicit: str | Path | None = None) -> Path
     return trusted_state_root(root, explicit) or Path(root).resolve()
 
 
+def agent_state_root(agent) -> Path:
+    """Use one configured location for all of an Agent's durable memory/cache."""
+    return state_root_for(
+        getattr(agent, "_cwd", ".") or ".",
+        getattr(getattr(agent, "tool_context", None), "state_root", "") or "",
+    )
+
+
 def native_io_path(path: str | Path) -> Path:
-    """Use Windows extended paths for deep external-state files at the I/O boundary."""
+    """Adapt a long Win32 file path at a known I/O boundary, never as identity.
+
+    Short paths (including relative and UNC paths) retain their spelling. 248
+    reserves the Win32 directory-creation suffix; callers must adapt child paths
+    separately rather than store the returned spelling as a logical root.
+    """
     value = Path(path)
     if os.name != "nt":
         return value
-    raw = str(value.resolve())
-    if raw.startswith("\\\\?\\"):
-        return Path(raw)
+    spelling = str(value)
+    if spelling.startswith(("\\\\?\\", "\\\\.\\")):
+        return value
+    raw = os.path.abspath(spelling)
+    if max(len(spelling), len(raw)) < 248:
+        return value
+    # Extended paths disable Win32 trailing-dot/space normalization. Refuse to
+    # silently address a different file when a caller supplied an ambiguous name.
+    devices = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+    devices.update(prefix + digit for prefix in ("COM", "LPT") for digit in "123456789¹²³")
+    if any(
+        part not in {".", ".."}
+        and (part.endswith((".", " ")) or part.split(".")[0].rstrip(" ").upper() in devices)
+        for part in value.parts
+    ):
+        raise ValueError("ambiguous Windows path cannot use extended I/O spelling")
+    if len(raw) < 248:
+        return value
     if raw.startswith("\\\\"):
         return Path("\\\\?\\UNC\\" + raw[2:])
     return Path("\\\\?\\" + raw)
@@ -75,6 +103,7 @@ def runtime_identity(
 
 
 __all__ = [
+    "agent_state_root",
     "managed_state_base",
     "native_io_path",
     "runtime_identity",

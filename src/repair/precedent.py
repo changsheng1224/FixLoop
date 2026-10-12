@@ -26,8 +26,10 @@ def _precedent_topic_path(repo_root: str) -> Path:
 class RepairPrecedentStore:
     """Repair 先例存储：读相似修复 + 写成功先例。"""
 
-    def __init__(self, repo_root: str):
-        self._path = _precedent_topic_path(repo_root)
+    def __init__(self, repo_root: str, *, state_root: str = ""):
+        from agent_runtime.state_root import state_root_for
+
+        self._path = _precedent_topic_path(state_root_for(repo_root, state_root))
 
     # ---- 读 ----
 

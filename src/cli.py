@@ -73,6 +73,10 @@ def main() -> int:
     add_log_level_argument(parser)
     sub = parser.add_subparsers(dest="command")
 
+    from src.workbench.__main__ import add_workbench_arguments
+
+    add_workbench_arguments(sub.add_parser("workbench", help="启动本地工作台聊天服务"))
+
     p_repair = sub.add_parser("repair", help="执行修复")
     issue_input = p_repair.add_mutually_exclusive_group(required=True)
     issue_input.add_argument("--issue", help="问题描述（可附堆栈、复现步骤和预期行为）")
@@ -234,6 +238,10 @@ def main() -> int:
 
     args = parser.parse_args()
     setup_logging_from_args(args)
+    if args.command == "workbench":
+        from src.workbench.__main__ import run_workbench
+
+        return run_workbench(args)
     if args.command == "repair":
         return _repair(args)
     if args.command == "eval":

@@ -1,6 +1,7 @@
 """AgentLoop run finalization and artifact persistence."""
 
 from agent_runtime.model_timing import build_report_latency_fields
+from agent_runtime.state_root import agent_state_root
 from agent_runtime.stop_reasons import StopReason
 
 
@@ -138,7 +139,7 @@ def finalize_agent_run(loop, ts) -> None:
         promote_durable_memory(
             ts.user_request,
             ts.final_answer,
-            root=agent._cwd,
+            root=str(agent_state_root(agent)),
         )
         _promote_memory_candidates(agent, ts)
         SessionStore(
@@ -163,7 +164,7 @@ def _promote_memory_candidates(agent, ts) -> None:
             identity = memory_state.get("memory_identity") or {}
             governance = MemoryGovernanceService(
                 memory_state,
-                repo_root=agent._cwd,
+                repo_root=str(agent_state_root(agent)),
                 user_id=str(identity.get("user_id", "") or ""),
                 task_id=str(identity.get("task_id", "") or ""),
             )
@@ -199,7 +200,7 @@ def _feedback_recalled_memories(agent, ts) -> None:
             return
         governance = MemoryGovernanceService(
             memory_state,
-            repo_root=agent._cwd,
+            repo_root=str(agent_state_root(agent)),
             user_id=str(identity.get("user_id", "") or ""),
             task_id=str(identity.get("task_id", "") or ""),
         )

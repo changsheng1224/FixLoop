@@ -9,6 +9,7 @@ from typing import Literal
 
 from agent_runtime.config import AgentConfig
 from agent_runtime.prompt_prefix import build_prompt_prefix
+from agent_runtime.state_root import agent_state_root
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.tools import build_tool_registry
 
@@ -254,6 +255,9 @@ class Agent:
         与上次记录的 _last_root_hash，变更时 invalidate prefix hash 并清空 recent_files。
         """
         import os
+
+        if getattr(self, "_workspace_pinned", False):
+            return
 
         binding = self.tool_context.sandbox_task_binding
         if binding is not None:
@@ -626,7 +630,7 @@ class Agent:
             identity = mem.get("memory_identity") or {}
             governance = MemoryGovernanceService(
                 mem,
-                repo_root=str(self._cwd or ""),
+                repo_root=str(agent_state_root(self)),
                 user_id=str(identity.get("user_id", "") or ""),
                 task_id=str(identity.get("task_id", "") or ""),
             )

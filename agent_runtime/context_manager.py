@@ -40,6 +40,7 @@ from agent_runtime.message_projection import (
     seal_history_at_build,
 )
 from agent_runtime.section_filler import SectionFiller
+from agent_runtime.state_root import agent_state_root
 from agent_runtime.task_section import (
     render_task_message,
     reserve_section_budget,
@@ -207,7 +208,7 @@ class ContextManager:
         self.hard_cap = int(
             getattr(getattr(agent, "config", None), "hard_cap", HARD_CAP) or HARD_CAP
         )
-        cache_dir = Path(getattr(agent, "_cwd", ".")) / ".agent" / "summary_cache"
+        cache_dir = agent_state_root(agent) / ".agent" / "summary_cache"
         self._summary_cache: dict[str, str] = _DiskCache(cache_dir)
         self.tier_policy = TierPolicy.from_agent(agent)
 
@@ -1272,7 +1273,7 @@ class ContextManager:
 
         governed = MemoryGovernanceService(
             mem,
-            repo_root=str(getattr(self.agent, "_cwd", "") or ""),
+            repo_root=str(agent_state_root(self.agent)),
             user_id=str(identity.get("user_id", "") or ""),
             task_id=str(identity.get("task_id", "") or ""),
         )
@@ -1348,7 +1349,7 @@ class ContextManager:
 
         # Layer 2: Durable 检索
         try:
-            store = DurableMemoryStore(root=self.agent._cwd)
+            store = DurableMemoryStore(root=str(agent_state_root(self.agent)))
             durable_results = store.retrieval(query, limit=2)
             if durable_results:
                 recalled_ids.extend(str(item.get("memory_id", "")) for item in durable_results)

@@ -114,10 +114,10 @@ def process_identity(pid: int) -> dict | None:
 
 class ReceiptStore:
     def __init__(self, state_root: Path, workspace: Path) -> None:
-        self.root = native_io_path(state_root.resolve() / "linux_sandbox")
+        self.root = state_root.resolve() / "linux_sandbox"
         self.key = _key(workspace)
         self.workspace = workspace.resolve()
-        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        native_io_path(self.root).mkdir(mode=0o700, parents=True, exist_ok=True)
 
     @property
     def registry(self) -> Path:
@@ -128,7 +128,7 @@ class ReceiptStore:
 
     @contextmanager
     def lock(self):
-        fd = os.open(self.root / f"{self.key}.lock", os.O_CREAT | os.O_RDWR, 0o600)
+        fd = os.open(native_io_path(self.root / f"{self.key}.lock"), os.O_CREAT | os.O_RDWR, 0o600)
         acquired = False
         try:
             try:

@@ -9,6 +9,18 @@ from pathlib import Path
 from src.repair.precedent import RepairPrecedentStore
 
 
+def test_external_precedents_do_not_recall_project_or_other_run(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    RepairPrecedentStore(str(repo)).upsert("logic_error", "old future")
+    current = RepairPrecedentStore(str(repo), state_root=str(tmp_path / "run1"))
+    assert current.load_all() == []
+    current.upsert("logic_error", "current")
+    assert current.load_all()[0]["summary"] == "current"
+    assert RepairPrecedentStore(str(repo), state_root=str(tmp_path / "run2")).load_all() == []
+    assert RepairPrecedentStore(str(repo)).load_all()[0]["summary"] == "old future"
+
+
 def _write_raw(path: Path, lines: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")

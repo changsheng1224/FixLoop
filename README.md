@@ -38,6 +38,16 @@
 
 **Layer 1** 是通用 Agent 内核，不依赖 LangChain/LangGraph 等 LLM 编排框架。
 
+工作台在 `src/workbench/` 提供 SQLite 会话树和本地 JSON/SSE 普通聊天服务，覆盖开发讨论、
+写作和日常问答，支持流式输出、停止、历史编辑分叉、重新生成、分支切换及中断恢复。
+用 `python -m src.cli workbench --open-browser` 启动；接口与示例见 [Workbench S2 指南](docs/WORKBENCH_S2.md)，
+存储契约见 [Workbench S1 指南](docs/WORKBENCH_S1.md)。
+[Workbench S3 指南](docs/WORKBENCH_S3.md) 提供项目快照、手动修改保存、恢复预览与中断恢复；
+[Workbench S4 指南](docs/WORKBENCH_S4.md) 提供只读项目问答、Layer 2 修复及历史编辑后的文件恢复与重新执行；
+[Workbench S5 指南](docs/WORKBENCH_S5.md) 提供本地浏览器界面、会话树、恢复预览和运行详情。
+[Workbench S6 指南](docs/WORKBENCH_S6.md) 提供生产执行链路的端到端验收、故障恢复验证与分场景报告入口。
+[Workbench 加固记录](docs/WORKBENCH_HARDENING.md) 说明隔离执行、候选应用、统一存储、增量摘要与项目多会话的当前契约和验证边界。
+
 **Layer 2** 当前主路径是 Patcher 工具环、轻量 Critic 和独立 Verifier；定位与检索通过规则种子、只读探索和上下文数据模型提供，不再装配为两个独立 LLM Agent。
 
 修复只消费公开 Issue、仓库源码、工具结果和实际验证反馈。`FAIL_TO_PASS`、
@@ -66,10 +76,14 @@ Repair 默认使用证据驱动的小型任务 DAG：最多 8 个节点、两路
 ```bash
 git clone git@github.com:changsheng1224/FixLoop.git
 cd FixLoop
-pip install -e ".[dev]"
+python -m pip install -e ".[dev]"
 cp .env.example .env
 # 编辑 .env，填入 DEEPSEEK_API_KEY
 ```
+
+安装依赖、运行程序和测试时使用同一个 Python 解释器。尤其在 Windows 上，
+`python` 和独立的 `pip` 命令可能来自不同环境，因此统一使用 `python -m pip`。
+`jsonschema` 和 `referencing` 已包含在默认依赖中，无需单独安装。
 
 ### 2. Layer 1：Agent 运行时（无需 Docker）
 
@@ -118,7 +132,7 @@ bash demo/demo_repair.sh calculator
 安装 CLI 与容器验证依赖，配置 `DEEPSEEK_API_KEY`，并构建上述沙箱镜像：
 
 ```bash
-pip install -e ".[sandbox]"
+python -m pip install -e ".[sandbox]"
 fixloop repair --repo https://github.com/owner/project --issue "复现步骤……实际行为……预期行为……"
 ```
 
@@ -276,7 +290,7 @@ FixLoop/
 | Python | **3.11+** |
 | 核心依赖 | `pydantic`, `tiktoken`, `sentence-transformers`, `pyyaml` |
 | 可选 | Docker（Verifier 沙箱）、DeepSeek API Key（真实修复/评测） |
-| 开发 | `pytest`, `pytest-cov`, `ruff`（`pip install -e ".[dev]"`） |
+| 开发 | `pytest`, `pytest-cov`, `ruff`（`python -m pip install -e ".[dev]"`） |
 
 环境变量见 [`.env.example`](.env.example)：`DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL` 等。
 

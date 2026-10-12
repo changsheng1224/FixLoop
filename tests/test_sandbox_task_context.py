@@ -67,33 +67,54 @@ def metadata_backend(binding):
         }
         if request.tool_name == "workspace_inventory":
             return SandboxResult(
-                "completed", exit_code=0, actual_backend="linux_sandbox", cleanup="confirmed",
-                receipt_id=request.call_id, policy_digest=binding.policy_digest,
-                tool_result=tool_result_to_wire(ToolResult(
-                    "workspace inventory", data={},
-                    metadata={"content_version": content_version({})},
-                )),
+                "completed",
+                exit_code=0,
+                actual_backend="linux_sandbox",
+                cleanup="confirmed",
+                receipt_id=request.call_id,
+                policy_digest=binding.policy_digest,
+                tool_result=tool_result_to_wire(
+                    ToolResult(
+                        "workspace inventory",
+                        data={},
+                        metadata={"content_version": content_version({})},
+                    )
+                ),
             )
         if request.tool_name == "workspace_snapshot":
             return SandboxResult(
-                "completed", exit_code=0, actual_backend="linux_sandbox", cleanup="confirmed",
-                receipt_id=request.call_id, policy_digest=binding.policy_digest,
-                tool_result=tool_result_to_wire(ToolResult(
-                    "workspace snapshot", data={
-                        "files": {},
-                        "version": content_version({}),
-                        "cursor": "",
-                        "complete": True,
-                    },
-                )),
+                "completed",
+                exit_code=0,
+                actual_backend="linux_sandbox",
+                cleanup="confirmed",
+                receipt_id=request.call_id,
+                policy_digest=binding.policy_digest,
+                tool_result=tool_result_to_wire(
+                    ToolResult(
+                        "workspace snapshot",
+                        data={
+                            "files": {},
+                            "version": content_version({}),
+                            "cursor": "",
+                            "complete": True,
+                        },
+                    )
+                ),
             )
         return SandboxResult(
-            "completed", exit_code=0, actual_backend="linux_sandbox", cleanup="confirmed",
-            receipt_id=request.call_id, policy_digest=binding.policy_digest,
-            tool_result=tool_result_to_wire(ToolResult(
-                "workspace metadata", data={"doc_contents": {}, "git_available": False},
-                metadata={"workspace_versions": {}, "source_dependencies": {}},
-            )),
+            "completed",
+            exit_code=0,
+            actual_backend="linux_sandbox",
+            cleanup="confirmed",
+            receipt_id=request.call_id,
+            policy_digest=binding.policy_digest,
+            tool_result=tool_result_to_wire(
+                ToolResult(
+                    "workspace metadata",
+                    data={"doc_contents": {}, "git_available": False},
+                    metadata={"workspace_versions": {}, "source_dependencies": {}},
+                )
+            ),
         )
 
     return SimpleNamespace(task_binding=binding, execute=execute, cancel=lambda _: False)
@@ -162,7 +183,8 @@ def test_external_sessions_observations_and_collaboration(temp_workspace, spec):
 
 def test_binding_roundtrip_and_duplicate_id(temp_workspace, spec):
     binding = SandboxTaskBinding.create(temp_workspace, temp_workspace, "task-1", spec)
-    binding.save()
+    path = binding.save()
+    assert SandboxTaskBinding.load_record(path) == binding
     assert SandboxTaskBinding.load(temp_workspace, "task-1", spec) == binding
     with pytest.raises(FileExistsError):
         binding.save()
@@ -180,6 +202,8 @@ def test_corrupt_binding_is_not_accepted(temp_workspace, spec):
     raw = json.loads(path.read_text())
     raw["policy_version"] = "other"
     path.write_text(json.dumps(raw))
+    with pytest.raises(ValueError, match="checksum"):
+        SandboxTaskBinding.load_record(path)
     with pytest.raises(ValueError, match="sandbox_task_unavailable"):
         SandboxTaskBinding.load(temp_workspace, "task-1", spec)
 
@@ -576,3 +600,22 @@ def test_long_external_plan_blob_can_be_read_and_replaced(tmp_path):
         assert store.put_blob("external plan state") == key
     finally:
         store.close()
+
+
+def test_long_binding_record_remains_available_for_cleanup(tmp_path, spec):
+    import os
+
+    if os.name != "nt":
+        pytest.skip("Windows extended binding record")
+    project = tmp_path / "project"
+    project.mkdir()
+    state = tmp_path / ("s" * (230 - len(str(tmp_path)) - 1))
+    binding = SandboxTaskBinding.create(
+        project, project, "task-1", replace(spec, state_base=str(state))
+    )
+    path = binding.save()
+    assert len(str(path)) > 260
+    assert SandboxTaskBinding.load_record(path) == binding
+    assert (
+        SandboxTaskBinding.load(project, "task-1", replace(spec, state_base=str(state))) == binding
+    )

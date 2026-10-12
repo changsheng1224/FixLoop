@@ -226,9 +226,13 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             repo_root=self._repo_root,
             allowed_edit=set(),
             max_auto_allow=5,
-            sandbox_only=bool(self.patcher is not None and (
-                self.patcher.tool_context.sandbox_task_binding is not None
-                or self.patcher.tool_context.sandbox_backend is not None)),
+            sandbox_only=bool(
+                self.patcher is not None
+                and (
+                    self.patcher.tool_context.sandbox_task_binding is not None
+                    or self.patcher.tool_context.sandbox_backend is not None
+                )
+            ),
         )
         lock.seed_and_preread(allowed_unique)
         if not lock.allowed_edit:
@@ -604,7 +608,12 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         if state.repair_plan and state.repair_plan.issue_type:
             from src.repair.precedent import RepairPrecedentStore
 
-            store = RepairPrecedentStore(self._repo_root)
+            store = RepairPrecedentStore(
+                self._repo_root,
+                state_root=str(
+                    getattr(getattr(self.patcher, "tool_context", None), "state_root", "") or ""
+                ),
+            )
             similar = store.load_similar(
                 state.repair_plan.issue_type,
                 query="",
@@ -963,7 +972,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     state,
                     self._repo_root,
                     state_root=str(
-                        getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""
+                        getattr(getattr(self.patcher, "tool_context", None), "state_root", "") or ""
                     ),
                 )
             except Exception:
@@ -994,7 +1003,12 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             try:
                 from src.repair.precedent import RepairPrecedentStore
 
-                store = RepairPrecedentStore(self._repo_root)
+                store = RepairPrecedentStore(
+                    self._repo_root,
+                    state_root=str(
+                        getattr(getattr(self.patcher, "tool_context", None), "state_root", "") or ""
+                    ),
+                )
                 summary = _build_precedent_summary(state)
                 case_id = getattr(self, "_case_id", "") or ""
                 store.upsert(state.repair_plan.issue_type, summary, case_id=case_id)
@@ -1024,7 +1038,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                     state,
                     self._repo_root,
                     state_root=str(
-                        getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""
+                        getattr(getattr(self.patcher, "tool_context", None), "state_root", "") or ""
                     ),
                 )
             except Exception:
@@ -1052,7 +1066,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             repair_dir = (
                 state_root_for(
                     self._repo_root,
-                    str(getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""),
+                    str(
+                        getattr(getattr(self.patcher, "tool_context", None), "state_root", "") or ""
+                    ),
                 )
                 / ".agent"
                 / "repairs"

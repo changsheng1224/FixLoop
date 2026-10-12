@@ -181,6 +181,7 @@ class Orchestrator(RepairPipelineMixin):
         sandbox_context=None,
         sandbox_task_spec=None,
         sandbox_backend_factory=None,
+        sandbox_worktree: bool = True,
         repair_config=None,
     ):
         self.patcher = patcher
@@ -211,6 +212,7 @@ class Orchestrator(RepairPipelineMixin):
         ):
             raise ValueError("wsl_bwrap patcher and verifier must share ToolContext")
         self._sandbox_context = sandbox_context
+        self._sandbox_worktree = sandbox_worktree
         self._sandbox_task_spec = sandbox_task_spec
         self._sandbox_backend_factory = sandbox_backend_factory
         self._sandbox_worktree_handle = None
@@ -320,7 +322,7 @@ class Orchestrator(RepairPipelineMixin):
         if (
             self._sandbox_task_spec is None
             and self._sandbox_context is not None
-            and not getattr(self._sandbox_context, "state_root", "")
+            and not getattr(getattr(self.patcher, "tool_context", None), "state_root", "")
         ):
             raise ValueError("wsl_bwrap repair requires P3 external state_root isolation")
 
@@ -369,7 +371,10 @@ class Orchestrator(RepairPipelineMixin):
                     checkpoint = load_repair_checkpoint(
                         self._repo_root,
                         resume_run_id,
-                        state_root=str(getattr(self._sandbox_context, "state_root", "") or ""),
+                        state_root=str(
+                            getattr(getattr(self.patcher, "tool_context", None), "state_root", "")
+                            or ""
+                        ),
                         require_valid=True,
                         issue=issue,
                     )
@@ -879,7 +884,9 @@ class Orchestrator(RepairPipelineMixin):
             self._repo_root,
             state.repair_run_id,
             state.repair_run_id,
-            state_root=str(getattr(self.patcher.tool_context, "state_root", "") or ""),
+            state_root=str(
+                getattr(getattr(self.patcher, "tool_context", None), "state_root", "") or ""
+            ),
         )
         coordinator.acquire()
         self._entry_coordinator = coordinator
@@ -968,7 +975,7 @@ class Orchestrator(RepairPipelineMixin):
         else:
             workspace = repository
             ownership, branch = "user", ""
-            if worktree_enabled():
+            if self._sandbox_worktree and worktree_enabled():
                 handle = create_worktree(
                     repository, state.repair_run_id, state_base=spec.state_base or None
                 )
@@ -1054,7 +1061,7 @@ class Orchestrator(RepairPipelineMixin):
         tracer = RepairRunTracer(
             self._repo_root,
             state_root=str(
-                getattr(getattr(self, "_sandbox_context", None), "state_root", "") or ""
+                getattr(getattr(self.patcher, "tool_context", None), "state_root", "") or ""
             ),
         )
         l1_meta = {}
@@ -1148,7 +1155,9 @@ class Orchestrator(RepairPipelineMixin):
                 self._repo_root,
                 run_id,
                 state,
-                state_root=str(getattr(self._sandbox_context, "state_root", "") or ""),
+                state_root=str(
+                    getattr(getattr(self.patcher, "tool_context", None), "state_root", "") or ""
+                ),
             )
         except Exception as exc:
             self._collaboration_runtime = None
@@ -1473,7 +1482,17 @@ class Orchestrator(RepairPipelineMixin):
         run_id = state.repair_run_id or ""
         if not run_id:
             return
-        run_dir = Path(self._repo_root) / ".agent" / "runs" / run_id
+        from agent_runtime.state_root import state_root_for
+
+        run_dir = (
+            state_root_for(
+                self._repo_root,
+                getattr(getattr(self.patcher, "tool_context", None), "state_root", ""),
+            )
+            / ".agent"
+            / "runs"
+            / run_id
+        )
         summary = summarize_repair_rejections(run_dir)
         for key, value in summary.items():
             state.node_timings[key] = value

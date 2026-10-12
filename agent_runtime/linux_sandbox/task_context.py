@@ -9,7 +9,12 @@ import re
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-from agent_runtime.state_root import managed_state_base, trusted_state_root, workspace_id
+from agent_runtime.state_root import (
+    managed_state_base,
+    native_io_path,
+    trusted_state_root,
+    workspace_id,
+)
 
 _ID = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}\Z")
 
@@ -260,7 +265,7 @@ class SandboxTaskBinding:
         """Exclusive creation: never replace the authority of an existing task."""
         self.validate()
         path = Path(self.state_root) / "sandbox-task.json"
-        with path.open("x", encoding="utf-8") as stream:
+        with native_io_path(path).open("x", encoding="utf-8") as stream:
             raw = self.to_wire()
             json.dump({**raw, "checksum": _digest(raw)}, stream, ensure_ascii=False, sort_keys=True)
             stream.flush()
@@ -268,12 +273,35 @@ class SandboxTaskBinding:
         return path
 
     @classmethod
+    def load_record(cls, path):
+        """Load a durable binding for resource cleanup, without acquiring a run."""
+        path = Path(path)
+        raw = json.loads(native_io_path(path).read_text(encoding="utf-8"))
+        if not isinstance(raw, dict) or raw.pop("checksum", None) != _digest(raw):
+            raise ValueError("sandbox binding checksum invalid")
+        mapping = raw.pop("mapping")
+        environment = SandboxEnvironmentIdentity(**raw.pop("environment"))
+        binding = cls(
+            **raw,
+            mapping=WorkspaceMapping(
+                **{**mapping, "filesystem_identity": tuple(mapping["filesystem_identity"])}
+            ),
+            environment=environment,
+        )
+        if Path(binding.state_root).resolve() != path.parent.resolve():
+            raise ValueError("sandbox binding state root mismatch")
+        binding.validate()
+        return binding
+
+    @classmethod
     def load(cls, repository: str | Path, task_id: str, spec: SandboxTaskSpec):
         checked_id(task_id)
         base = managed_state_base(repository, spec.state_base or None)
         state = trusted_state_root(repository, base / "tasks" / task_id)
         try:
-            raw = json.loads((state / "sandbox-task.json").read_text(encoding="utf-8"))
+            raw = json.loads(
+                native_io_path(state / "sandbox-task.json").read_text(encoding="utf-8")
+            )
             if not isinstance(raw, dict) or raw.pop("checksum", None) != _digest(raw):
                 raise ValueError("binding checksum")
             mapping_raw = raw.pop("mapping")

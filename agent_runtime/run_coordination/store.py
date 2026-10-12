@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_runtime.plan_runtime.processes import confirmed_exited
-from agent_runtime.state_root import state_root_for
+from agent_runtime.state_root import native_io_path, state_root_for
 
 from .models import OwnerLease, ResourceRecord, RunSnapshot, encode, process_owner_identity
 
@@ -87,7 +87,7 @@ class RunCoordinationStore:
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.path), timeout=10, isolation_level=None)
+        conn = sqlite3.connect(native_io_path(self.path), timeout=10, isolation_level=None)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout=10000")
         deadline = time.monotonic() + 10

@@ -18,6 +18,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from agent_runtime.state_root import native_io_path
+
 
 @dataclass
 class ContextRequest:
@@ -361,8 +363,10 @@ class ObservationStore:
         if self.root is not None:
             try:
                 db_path = self.root / ".agent" / "observations" / "observations.sqlite3"
-                db_path.parent.mkdir(parents=True, exist_ok=True)
-                self._db = sqlite3.connect(str(db_path), timeout=5, check_same_thread=False)
+                native_io_path(db_path.parent).mkdir(parents=True, exist_ok=True)
+                self._db = sqlite3.connect(
+                    native_io_path(db_path), timeout=5, check_same_thread=False
+                )
                 self._db.execute("PRAGMA journal_mode=WAL")
                 self._db.execute(
                     """CREATE TABLE IF NOT EXISTS observations (
@@ -752,7 +756,8 @@ class ObservationStore:
                 return text
             if self.root is not None:
                 path.resolve().relative_to((self.root / ".agent" / "observations").resolve())
-            text = path.read_text(encoding="utf-8") if path.is_file() else ""
+            io_path = native_io_path(path)
+            text = io_path.read_text(encoding="utf-8") if io_path.is_file() else ""
             if (
                 raw.get("checksum")
                 and hashlib.sha256(text.encode("utf-8", "replace")).hexdigest() != raw["checksum"]
@@ -929,7 +934,7 @@ class ObservationStore:
                 )
                 if ref and not ref.startswith("memory:") and not still_referenced:
                     try:
-                        Path(ref).unlink(missing_ok=True)
+                        native_io_path(ref).unlink(missing_ok=True)
                     except OSError:
                         pass
                 removed += 1
@@ -952,14 +957,15 @@ class ObservationStore:
             )
         checksum = digest or hashlib.sha256(raw_text.encode()).hexdigest()
         path = self.root / ".agent" / "observations" / f"blob-{checksum}.txt"
+        io_path = native_io_path(path)
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
+            io_path.parent.mkdir(parents=True, exist_ok=True)
             # Content-addressed blobs are immutable. Replacing an identical
             # blob can fail on Windows while another reader holds it open.
-            if path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == checksum:
+            if io_path.is_file() and hashlib.sha256(io_path.read_bytes()).hexdigest() == checksum:
                 return str(path), checksum, len(raw_text.encode("utf-8"))
             fd, tmp_name = tempfile.mkstemp(
-                prefix=f".{observation_id}.", suffix=".tmp", dir=str(path.parent)
+                prefix=f".{observation_id}.", suffix=".tmp", dir=str(io_path.parent)
             )
             tmp = Path(tmp_name)
             try:
@@ -969,7 +975,7 @@ class ObservationStore:
                     handle.write(raw_text)
                     handle.flush()
                     os.fsync(handle.fileno())
-                tmp.replace(path)
+                tmp.replace(io_path)
             finally:
                 tmp.unlink(missing_ok=True)
             encoded = raw_text.encode("utf-8")

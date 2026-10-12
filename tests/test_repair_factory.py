@@ -33,6 +33,43 @@ class FakeSandboxEnvironmentManager:
 
 
 class TestRuntimeWiring:
+    def test_external_state_and_exact_workspace_reach_patcher_and_verifier(
+        self, tmp_path, monkeypatch
+    ):
+        from agent_runtime.providers.clients import FakeModelClient
+        from agent_runtime.workspace import WorkspaceContext
+        from src.agents.factory import create_verifier
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        state = tmp_path / "state"
+        ws = WorkspaceContext(
+            cwd=str(repo), repo_root=str(repo), doc_contents={}, dirty_file_hashes={}
+        )
+        monkeypatch.setattr(
+            "src.repair_factory.WorkspaceContext.build", lambda *_: pytest.fail("rescanned root")
+        )
+
+        def verifier(client, workspace, root, **kw):
+            kw.pop("required")
+            return create_verifier(client, workspace, cwd=root, **kw)
+
+        monkeypatch.setattr("src.repair_factory.try_create_verifier", verifier)
+        orch = wire_orchestrator(
+            FakeModelClient(["<final>ok</final>"]),
+            str(repo),
+            workspace_context=ws,
+            state_root=str(state),
+            execution_tier="container",
+            runtime_overrides={"provider": "fake", "model": "fake-test", "max_new_tokens": 1234},
+        )
+        for agent in orch._active_agents:
+            assert agent.workspace is ws
+            assert agent.tool_context.root == str(repo)
+            assert agent.state_root == str(state)
+            assert agent.config.provider == "fake" and agent.config.model == "fake-test"
+            assert agent.config.max_new_tokens == 1234
+
     def test_wires_patcher_without_verifier(self):
         with tempfile.TemporaryDirectory() as tmp:
             from agent_runtime.providers.clients import FakeModelClient
