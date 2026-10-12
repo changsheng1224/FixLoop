@@ -7,11 +7,13 @@ import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
+from contextvars import ContextVar, copy_context
 from typing import TypeVar
 
 T = TypeVar("T")
 
 __all__ = [
+    "BlockingScope",
     "BlockingDeadlineError",
     "CancelledError",
     "CancellationToken",
@@ -21,6 +23,54 @@ __all__ = [
 ]
 
 _DEFAULT_POLL_S = 0.05
+_blocking_scope = ContextVar("blocking_scope", default=None)
+
+
+class BlockingScope:
+    """Drain nested blocking calls before releasing a writable workspace.
+
+    Ordinary callers retain prompt cancellation. A workspace owner opts into
+    this scope when detached calls could still mutate files after cancellation.
+    """
+
+    def __init__(self):
+        self._condition = threading.Condition()
+        self._pending = 0
+        self._closed = False
+
+    def __enter__(self):
+        self._binding = _blocking_scope.set(self)
+        return self
+
+    def reserve(self):
+        with self._condition:
+            if self._closed:
+                raise CancelledError("workspace execution scope closed")
+            self._pending += 1
+
+    def call(self, func):
+        """Bind explicit worker threads (e.g. the plan scheduler) to this owner."""
+        self.reserve()
+        binding = _blocking_scope.set(self)
+        try:
+            return func()
+        finally:
+            _blocking_scope.reset(binding)
+            self.release()
+
+    def release(self):
+        with self._condition:
+            self._pending -= 1
+            self._condition.notify_all()
+
+    def __exit__(self, *_):
+        try:
+            with self._condition:
+                while self._pending:
+                    self._condition.wait(0.1)
+                self._closed = True
+        finally:
+            _blocking_scope.reset(self._binding)
 
 
 class CancelledError(Exception):
@@ -151,8 +201,27 @@ def run_blocking(
         return func()
 
     deadline = time.time() + timeout_s if timeout_s is not None else None
-    pool = ThreadPoolExecutor(max_workers=1)
-    fut = pool.submit(func)
+    scope = _blocking_scope.get()
+    context = copy_context()
+    if scope is not None:
+        scope.reserve()
+
+    def invoke():
+        try:
+            return context.run(func)
+        finally:
+            if scope is not None:
+                scope.release()
+
+    try:
+        pool = ThreadPoolExecutor(max_workers=1)
+        fut = pool.submit(invoke)
+    except BaseException:
+        if scope is not None:
+            scope.release()
+        if "pool" in locals():
+            pool.shutdown(wait=False)
+        raise
     try:
         return wait_future(
             fut,
@@ -166,7 +235,8 @@ def run_blocking(
             raise BlockingDeadlineError(timeout_s) from exc
         raise
     finally:
-        pool.shutdown(wait=False, cancel_futures=True)
+        # Reserved work must enter invoke() to release its scope reservation.
+        pool.shutdown(wait=False, cancel_futures=scope is None)
 
 
 def run_with_cancellation(

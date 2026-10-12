@@ -1,4 +1,4 @@
-"""Run the local S2 workbench: python -m src.workbench."""
+"""Run the local workbench: python -m src.workbench."""
 
 import argparse
 import os
@@ -8,6 +8,7 @@ from pathlib import Path
 from agent_runtime.bootstrap import load_dotenv
 from src.workbench.chat import ChatExecutor
 from src.workbench.http import WorkbenchHTTPServer
+from src.workbench.project import ProjectExecutor
 from src.workbench.service import WorkbenchService
 
 
@@ -23,6 +24,7 @@ def add_workbench_arguments(parser):
     parser.add_argument("--base-url")
     parser.add_argument("--timeout", type=float, default=120)
     parser.add_argument("--max-output-tokens", type=int, default=4096)
+    parser.add_argument("--repair-tier", choices=["host", "container"], default="host")
     return parser
 
 
@@ -39,7 +41,17 @@ def run_workbench(args):
     )
     # API token is separate from provider credentials. Never include it in URLs.
     token = secrets.token_urlsafe(32)
-    with WorkbenchService(args.state_dir, executor=executor) as service:
+    project_executor = ProjectExecutor(
+        provider=args.provider,
+        model=args.model,
+        base_url=args.base_url,
+        timeout_s=args.timeout,
+        max_output_tokens=args.max_output_tokens,
+        execution_tier=args.repair_tier,
+    )
+    with WorkbenchService(
+        args.state_dir, executor=executor, project_executor=project_executor
+    ) as service:
         token_path = service.state_dir / "api-token"
         fd = os.open(token_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="ascii") as file:

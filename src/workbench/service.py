@@ -1,4 +1,4 @@
-"""S2 execution coordinator: one durable turn per conversation, fresh chat context."""
+"""Workbench execution coordinator with fresh runtimes and durable file states."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from src.workbench.chat import ChatExecutor
 from src.workbench.events import EventJournal
 from src.workbench.models import ConflictError, Run, Turn
 from src.workbench.ownership import ServiceOwnership
+from src.workbench.project import ProjectExecutor, ProjectResult
 from src.workbench.restore import RestoreCoordinator
 from src.workbench.store import WorkbenchStore
 
@@ -23,7 +24,7 @@ _LOG = logging.getLogger(__name__)
 
 
 class UnsupportedModeError(ValueError):
-    """Project execution and restoration need S3/S4, before any history mutation."""
+    """Unsupported mode or operation, rejected before any history mutation."""
 
 
 @dataclass
@@ -51,6 +52,7 @@ class WorkbenchService:
         state_dir: str | Path,
         *,
         executor=None,
+        project_executor=None,
         max_active_runs: int = 8,
         max_output_bytes: int = 1_000_000,
         project_lock_dir: str | Path | None = None,
@@ -66,6 +68,9 @@ class WorkbenchService:
         self._closing = False
         self._active: dict[str, _Execution] = {}
         self.executor = executor if executor is not None else ChatExecutor()
+        self.project_executor = (
+            project_executor if project_executor is not None else ProjectExecutor()
+        )
         self.max_active_runs = max_active_runs
         self.max_output_bytes = max_output_bytes
         try:
@@ -87,12 +92,17 @@ class WorkbenchService:
         for conversation in self.store.list_conversations():
             for run in self.store.get_tree(conversation.id).runs:
                 if run.status not in _TERMINAL:
+                    snapshot = None
+                    if conversation.project_path:
+                        _, files = self.restoration.project(conversation.id, recovery=True)
+                        snapshot = self.restoration.repository.save(files)
                     run = self.store.finish_run(
                         conversation.id,
                         run.id,
                         status="interrupted",
                         answer=self.journal.partial_answer(run.id),
                         error="service restarted; previous execution interrupted",
+                        output_snapshot=snapshot,
                     )
                 events = self.journal.read(run.id, max(0, self.journal.latest(run.id) - 1))
                 if not events or events[-1]["kind"] != "run.finished":
@@ -112,15 +122,21 @@ class WorkbenchService:
         conversation = self.store.get_conversation(conversation_id)
         if conversation.project_path is not None:
             raise UnsupportedModeError(
-                "project execution requires S4; file restore uses preview/apply"
+                "project branch operations require a reviewed file restore preview"
             )
         return conversation
 
     def _admit(self, conversation_id, mode="chat"):
         self._open()
-        self._chat_only(conversation_id)
-        if mode != "chat":
-            raise UnsupportedModeError("S2 supports ordinary chat only")
+        conversation = self.store.get_conversation(conversation_id)
+        if mode not in {"chat", "project_chat", "repair"}:
+            raise UnsupportedModeError("unknown execution mode")
+        if mode != "chat" and conversation.project_path is None:
+            raise UnsupportedModeError("project modes require a project conversation")
+        if any(e.conversation_id == conversation_id for e in self._active.values()):
+            raise ConflictError("conversation has an active worker")
+        if conversation.project_path:
+            self.restoration.project(conversation_id)
         if len(self._active) >= self.max_active_runs:
             raise ConflictError("workbench execution capacity reached")
 
@@ -142,12 +158,40 @@ class WorkbenchService:
     def send(self, conversation_id, text, *, mode="chat", expected_revision=None) -> Turn:
         with self._lock:
             self._admit(conversation_id, mode)
-            return self._schedule(
-                self.store.append_turn(conversation_id, text, expected_revision=expected_revision)
-            )
+            return self._schedule(self._append(conversation_id, text, mode, expected_revision))
 
-    def edit(self, conversation_id, node_id, text, *, expected_revision=None) -> Turn:
+    def _append(self, cid, text, mode, revision):
+        conversation = self.store.get_conversation(cid)
+        if conversation.project_path is None:
+            return self.store.append_turn(cid, text, mode=mode, expected_revision=revision)
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("text must not be empty")
+        if revision is not None and conversation.revision != revision:
+            raise ConflictError("conversation revision is stale")
+        tree = self.store.get_tree(cid)
+        head = next(b.head_node_id for b in tree.branches if b.id == conversation.active_branch_id)
+        sid = self.store.get_effective_snapshot(cid, head)
+        previous = next(s.manifest for s in tree.snapshots if s.id == sid)
+        _, files = self.restoration.project(cid)
+        key, manifest = self.restoration.repository.save(files)
+        # Restore receipts are history metadata, not a file-state difference.
+        manual = manifest["entries"] != previous["entries"]
+        return self.store.append_project_turn(
+            cid,
+            text,
+            mode=mode,
+            key=key,
+            manifest=manifest,
+            manual=manual,
+            expected_revision=revision,
+        )
+
+    def edit(self, conversation_id, node_id, text, *, expected_revision=None, plan_id=None) -> Turn:
         with self._lock:
+            if self.store.get_conversation(conversation_id).project_path:
+                return self._repeat_project(
+                    conversation_id, node_id, text, expected_revision, plan_id
+                )
             self._admit(conversation_id)
             self._ordinary_node(conversation_id, node_id)
             return self._schedule(
@@ -156,8 +200,12 @@ class WorkbenchService:
                 )
             )
 
-    def regenerate(self, conversation_id, node_id, *, expected_revision=None) -> Turn:
+    def regenerate(self, conversation_id, node_id, *, expected_revision=None, plan_id=None) -> Turn:
         with self._lock:
+            if self.store.get_conversation(conversation_id).project_path:
+                return self._repeat_project(
+                    conversation_id, node_id, None, expected_revision, plan_id
+                )
             self._admit(conversation_id)
             self._ordinary_node(conversation_id, node_id)
             return self._schedule(
@@ -166,10 +214,38 @@ class WorkbenchService:
                 )
             )
 
+    def _repeat_project(self, cid, node_id, text, revision, plan_id):
+        path = self.store.get_path(cid, node_id)
+        if not path or path[-1].kind != "turn":
+            raise ValueError("only turn nodes can be reexecuted")
+        original = path[-1]
+        self._admit(cid, original.mode)
+        if text is None:
+            text = original.user_text
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("text must not be empty")
+        conversation = self.store.get_conversation(cid)
+        if revision is not None and revision != conversation.revision:
+            raise ConflictError("conversation revision is stale")
+        plan = self.restoration.plans.get(plan_id)
+        if (
+            plan is None
+            or plan["conversation_id"] != cid
+            or plan["action"] != "input"
+            or plan.get("input_node") != node_id
+        ):
+            raise ConflictError(
+                "project reexecution requires this node's reviewed input restore plan"
+            )
+        self.restoration.apply(cid, plan_id)
+        # Apply records a fork/checkpoint durably first. A dispatch failure can
+        # be retried by sending on that branch without replaying old future.
+        return self._schedule(self._append(cid, text, original.mode, None))
+
     def _ordinary_node(self, conversation_id, node_id):
         path = self.store.get_path(conversation_id, node_id)
         if not path or path[-1].kind != "turn" or path[-1].mode != "chat":
-            raise UnsupportedModeError("only ordinary chat turns can be reexecuted in S2")
+            raise UnsupportedModeError("only ordinary chat turns can be reexecuted here")
 
     def view(self, conversation_id, node_id, *, expected_revision=None):
         with self._lock:
@@ -197,6 +273,8 @@ class WorkbenchService:
 
     def _project_idle(self, conversation_id):
         if self.store.get_conversation(conversation_id).project_path is not None:
+            if any(e.conversation_id == conversation_id for e in self._active.values()):
+                raise ConflictError("conversation has an active worker")
             self.restoration.project(conversation_id)
 
     def project_status(self, conversation_id):
@@ -207,21 +285,26 @@ class WorkbenchService:
     def save_checkpoint(self, conversation_id, **kwargs):
         with self._lock:
             self._open()
+            self._project_idle(conversation_id)
             return self.restoration.checkpoint(conversation_id, **kwargs)
 
     def preview_restore(self, conversation_id, **kwargs):
         with self._lock:
             self._open()
+            self._project_idle(conversation_id)
             return self.restoration.preview(conversation_id, **kwargs)
 
     def apply_restore(self, conversation_id, plan_id):
         with self._lock:
             self._open()
+            self._project_idle(conversation_id)
             return self.restoration.apply(conversation_id, plan_id)
 
     def recover_restore(self, conversation_id, operation_id, *, decision):
         with self._lock:
             self._open()
+            if any(e.conversation_id == conversation_id for e in self._active.values()):
+                raise ConflictError("conversation has an active worker")
             return self.restoration.recover(conversation_id, operation_id, decision=decision)
 
     def _schedule(self, turn: Turn) -> Turn:
@@ -238,11 +321,16 @@ class WorkbenchService:
             execution.thread.start()
         except BaseException:
             self._active.pop(turn.run.id, None)
+            snapshot = None
+            if self.store.get_conversation(turn.run.conversation_id).project_path:
+                _, files = self.restoration.project(turn.run.conversation_id)
+                snapshot = self.restoration.repository.save(files)
             run = self.store.finish_run(
                 turn.run.conversation_id,
                 turn.run.id,
                 status="interrupted",
                 error="execution could not be dispatched",
+                output_snapshot=snapshot,
             )
             self._publish(run.id, "run.finished", asdict(run))
             raise
@@ -272,8 +360,35 @@ class WorkbenchService:
                     execution.parts.append(text)
                     execution.output_bytes += size
 
-            result = self.executor(messages, execution.token, chunk)
+            if turn.node.mode in {"project_chat", "repair"}:
+                _, files = self.restoration.project(execution.conversation_id)
+                result = self.project_executor(
+                    mode=turn.node.mode,
+                    files=files,
+                    messages=messages,
+                    token=execution.token,
+                    on_chunk=chunk,
+                    publish=lambda kind, payload: self._progress(execution, kind, payload),
+                    run_id=execution.run_id,
+                    state_root=self.state_dir / "runtime" / execution.run_id,
+                )
+            else:
+                result = self.executor(messages, execution.token, chunk)
             execution.token.check()
+            if isinstance(result, ProjectResult):
+                if result.status not in {"succeeded", "failed"} or not result.answer.strip():
+                    raise ValueError("invalid project result")
+                if not execution.parts:
+                    chunk(result.answer)
+                if "".join(execution.parts) != result.answer:
+                    raise ValueError("project stream does not match final answer")
+                status, answer, error, artifacts = (
+                    result.status,
+                    result.answer,
+                    result.error,
+                    result.artifacts,
+                )
+                return
             if (
                 not isinstance(result, ModelTurnResult)
                 or result.finish.kind != FinishKind.TEXT_COMPLETE
@@ -306,6 +421,22 @@ class WorkbenchService:
                 if status != "succeeded":
                     answer = "".join(execution.parts)
                 try:
+                    snapshot = None
+                    if self.store.get_conversation(execution.conversation_id).project_path:
+                        _, files = self.restoration.project(execution.conversation_id)
+                        snapshot = self.restoration.repository.save(files)
+                        tree = self.store.get_tree(execution.conversation_id)
+                        before = next(
+                            s.manifest
+                            for s in tree.snapshots
+                            if s.id == turn.node.input_snapshot_id
+                        )
+                        after = snapshot[1]
+                        artifacts["changed_files"] = [
+                            p
+                            for p in sorted(set(before["entries"]) | set(after["entries"]))
+                            if before["entries"].get(p) != after["entries"].get(p)
+                        ]
                     run = self.store.finish_run(
                         execution.conversation_id,
                         execution.run_id,
@@ -313,6 +444,7 @@ class WorkbenchService:
                         answer=answer,
                         error=error,
                         artifacts=artifacts,
+                        output_snapshot=snapshot,
                     )
                     self._publish(run.id, "run.finished", asdict(run))
                 except Exception:
@@ -321,6 +453,11 @@ class WorkbenchService:
                 self._active.pop(execution.run_id, None)
             with self._changed:
                 self._changed.notify_all()
+
+    def _progress(self, execution, kind, payload):
+        with execution.gate:
+            if execution.accepting and not execution.token.is_cancelled:
+                self._publish(execution.run_id, kind, payload)
 
     def stop(self, conversation_id, run_id) -> Run:
         with self._lock:

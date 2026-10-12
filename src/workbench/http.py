@@ -185,7 +185,13 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         store = service.store
         if parts == ["health"] and method == "GET":
             self._json(
-                200, {"status": "ok", "stage": "S3", "modes": ["chat"], "file_restore": True}
+                200,
+                {
+                    "status": "ok",
+                    "stage": "S4",
+                    "modes": ["chat", "project_chat", "repair"],
+                    "file_restore": True,
+                },
             )
             return
         if parts == ["conversations"]:
@@ -208,7 +214,6 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 self._json(200, service.rename_conversation(cid, **body))
                 return
         tail = parts[2:]
-        revision = {"expected_revision": body.get("expected_revision")}
         if method == "GET" and tail == ["tree"]:
             self._json(200, store.get_tree(cid))
         elif method == "GET" and tail == ["workspace"]:
@@ -249,11 +254,13 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             self._json(202, service.send(cid, **body))
         elif method == "POST" and len(tail) == 3 and tail[0] == "nodes":
             if tail[2] == "edit":
-                self._fields(body, allowed={"text", "expected_revision"}, required={"text"})
+                self._fields(
+                    body, allowed={"text", "expected_revision", "plan_id"}, required={"text"}
+                )
                 self._json(202, service.edit(cid, tail[1], **body))
             elif tail[2] == "regenerate":
-                self._fields(body, allowed={"expected_revision"})
-                self._json(202, service.regenerate(cid, tail[1], **revision))
+                self._fields(body, allowed={"expected_revision", "plan_id"})
+                self._json(202, service.regenerate(cid, tail[1], **body))
             else:
                 raise NotFoundError("route")
         elif method == "POST" and tail == ["view"]:

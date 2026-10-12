@@ -404,6 +404,30 @@ class WorkbenchStore:
         _text(user_text, "user_text")
         return self._repeat_turn(conversation_id, node_id, user_text, name, expected_revision)
 
+    def append_project_turn(
+        self,
+        conversation_id,
+        user_text,
+        *,
+        mode,
+        key,
+        manifest,
+        manual=False,
+        expected_revision=None,
+    ):
+        """Capture the actual input and manual checkpoint with admission atomically."""
+        with self._transaction() as db:
+            conversation = self._conversation(db, conversation_id, expected_revision)
+            self._idle(db, conversation_id)
+            self._validate_mode(conversation, mode)
+            _text(user_text, "user_text")
+            snapshot = self._insert_snapshot(db, conversation_id, key, manifest)
+            bid = conversation["active_branch_id"]
+            if manual:
+                self._checkpoint(db, conversation_id, bid, snapshot, "本地修改")
+            branch = self._get(db, "branches", bid, conversation_id)
+            return self._append_turn(db, conversation, branch, user_text, mode, snapshot)
+
     def regenerate_turn(
         self,
         conversation_id: str,
@@ -458,6 +482,7 @@ class WorkbenchStore:
         error: str | None = None,
         artifacts: dict[str, Any] | None = None,
         output_snapshot_id: str | None = None,
+        output_snapshot: tuple | None = None,
     ) -> Run:
         if status not in _TERMINAL:
             raise ValueError(f"invalid terminal status: {status}")
@@ -472,6 +497,8 @@ class WorkbenchStore:
                 raise ConflictError("a terminal run cannot be changed")
             if run["status"] == "queued" and status not in {"cancelled", "interrupted"}:
                 raise ConflictError("start the run before finishing execution")
+            if output_snapshot is not None:
+                output_snapshot_id = self._insert_snapshot(db, conversation_id, *output_snapshot)
             db.execute(
                 "UPDATE runs SET status = ?, answer = ?, error = ?, artifacts = ?, "
                 "output_snapshot_id = ?, finished_at = ? WHERE id = ?",

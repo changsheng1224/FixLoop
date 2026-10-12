@@ -558,7 +558,6 @@ def test_disjoint_project_storage_and_execution_gate(tmp_path):
         chat = service.create_conversation(project_path=str(repo))
         before = service.store.get_tree(chat.id)
         for operation in (
-            lambda: service.send(chat.id, "repair", mode="repair"),
             lambda: service.fork(chat.id, None),
             lambda: service.switch_branch(chat.id, chat.active_branch_id),
         ):

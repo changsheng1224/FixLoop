@@ -338,6 +338,7 @@ class RestoreCoordinator:
             "root": str(files.root),
             "revision": conversation.revision,
             "action": action,
+            "input_node": node_id if action == "input" else None,
             "branch_id": branch_id,
             "destination_node": destination,
             "name": name,

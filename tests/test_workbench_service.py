@@ -129,7 +129,6 @@ def test_stale_revision_and_project_execution_rejected_before_mutation(service, 
     project = service.store.create_conversation(project_path=str(tmp_path / "repo"))
     before = service.store.get_tree(project.id)
     for operation in [
-        lambda: service.send(project.id, "question"),
         lambda: service.fork(project.id, None),
         lambda: service.switch_branch(project.id, project.active_branch_id),
     ]:

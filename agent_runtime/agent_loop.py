@@ -27,6 +27,7 @@ from agent_runtime.model_timing import (
 )
 from agent_runtime.providers.retry_policy import RateLimitExceededError
 from agent_runtime.react_phases import ReactPath, ReactPhase
+from agent_runtime.state_root import agent_state_root
 from agent_runtime.step_clock import StepClock, StepTimeoutError
 from agent_runtime.step_guard import StepGuard
 from agent_runtime.stop_reasons import StopReason
@@ -210,7 +211,7 @@ class AgentLoop:
 
             session = self.agent.session or {}
             episodic = session.get("episodic_notes", [])
-            store = DurableMemoryStore(self.agent._cwd)
+            store = DurableMemoryStore(str(agent_state_root(self.agent)))
             prefs = store.get_preferences()
             avg_conf = round(sum(p.confidence for p in prefs) / max(len(prefs), 1), 2)
 
@@ -748,8 +749,10 @@ class AgentLoop:
             emit=self._emit,
             on_changed_paths=self._invalidate_tool_exploration,
             on_retrieval=self._observe_tool_retrieval,
-            sandbox_bound=(self.agent.tool_context.sandbox_task_binding is not None
-                           or self.agent.tool_context.sandbox_backend is not None),
+            sandbox_bound=(
+                self.agent.tool_context.sandbox_task_binding is not None
+                or self.agent.tool_context.sandbox_backend is not None
+            ),
         )
 
     def _invalidate_tool_exploration(self, tool_name):
@@ -759,8 +762,10 @@ class AgentLoop:
                 service.invalidate("tool_write")
 
     def _observe_tool_retrieval(self, tool_name, tool_args, retrieval, observation_id):
-        if (self.agent.tool_context.sandbox_task_binding is not None
-                or self.agent.tool_context.sandbox_backend is not None):
+        if (
+            self.agent.tool_context.sandbox_task_binding is not None
+            or self.agent.tool_context.sandbox_backend is not None
+        ):
             return
         if self.agent.tool_context.exploration_mode == "relations" and isinstance(retrieval, dict):
             from agent_runtime.tools import _exploration_service
@@ -1090,8 +1095,11 @@ class AgentLoop:
             effects = [
                 {
                     "path": path,
-                    "post_hash": (current_versions.get(path, "") if current_versions is not None
-                                  else file_content_hash(self.agent._cwd, path)),
+                    "post_hash": (
+                        current_versions.get(path, "")
+                        if current_versions is not None
+                        else file_content_hash(self.agent._cwd, path)
+                    ),
                 }
                 for path in affected_paths
             ]
@@ -1112,7 +1120,8 @@ class AgentLoop:
                 from copy import deepcopy
 
                 self.agent.session["_sandbox_approval_call"] = {
-                    "tool": tool_name, "args": deepcopy(tool_args),
+                    "tool": tool_name,
+                    "args": deepcopy(tool_args),
                     "approval_id": result.metadata.get("approval_id", ""),
                 }
             cp = create_checkpoint(
@@ -1158,8 +1167,10 @@ class AgentLoop:
             checked = evaluate_resume_state(self.agent)
             self.agent.session["resume_state"] = checked
             if checked["status"] != "approval-resumable":
-                return "等待审批。" if checked["status"] == "approval-pending" else (
-                    "审批调用无法恢复：" + checked["status"]
+                return (
+                    "等待审批。"
+                    if checked["status"] == "approval-pending"
+                    else ("审批调用无法恢复：" + checked["status"])
                 )
         resume_state = self._consume_step_resume_state()
         if resume_state is not None:
@@ -1357,7 +1368,9 @@ class AgentLoop:
                         # owner/arguments/preimages and consumes the approval exactly once.
                         try:
                             user_message = self._run_tool_step(
-                                ts, sealed["tool"], sealed["args"],
+                                ts,
+                                sealed["tool"],
+                                sealed["args"],
                                 step=int(checkpoint.get("step_index", 0)),
                                 path="xml",
                                 callback=callback,
@@ -1614,7 +1627,8 @@ class AgentLoop:
                 )
             if self.stop_reason:
                 return self._complete_run(
-                    ts, "等待工具审批。" if native else user_message,
+                    ts,
+                    "等待工具审批。" if native else user_message,
                     recording=None if native else recording,
                 )
 
@@ -1750,8 +1764,7 @@ class AgentLoop:
             return
         from agent_runtime.features.memory.dream import dream_summary_to_trace, run_memory_dream
 
-        root = getattr(self.agent, "_cwd", "") or ""
-        stats, dreamer = run_memory_dream(mem, durable_root=root)
+        stats, dreamer = run_memory_dream(mem, durable_root=str(agent_state_root(self.agent)))
         if any(
             stats.get(k, 0)
             for k in (

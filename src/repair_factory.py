@@ -99,6 +99,9 @@ def wire_orchestrator(
     code_exploration_server_argv: tuple[str, ...] | None = None,
     sandbox_environment_manager=None,
     sandbox_package_proxy: str = "",
+    workspace_context=None,
+    state_root: str = "",
+    runtime_overrides: dict | None = None,
 ) -> O:
     """装配唯一的 Patcher-primary runtime 与可选 Verifier。"""
     if execution_backend not in {"legacy", "wsl_bwrap"}:
@@ -134,11 +137,13 @@ def wire_orchestrator(
     ws = (
         WorkspaceContext(cwd=repo, repo_root=repo, doc_contents={}, dirty_file_hashes={})
         if sandbox_context is not None
-        else WorkspaceContext.build(repo)
+        else workspace_context or WorkspaceContext.build(repo)
     )
     ctx = sandbox_context or ToolContext(
         root=repo, exploration_mode=code_exploration_mode, lsp_argv=code_exploration_server_argv
     )
+    if state_root:
+        ctx.state_root = state_root
     tools = build_repair_canonical_tools(ctx)
     policies = {
         role: load_repair_agent_config(
@@ -152,6 +157,11 @@ def wire_orchestrator(
         for role in ("patcher", "verifier")
     }
     policy = policies["patcher"]
+    if runtime_overrides:
+        policies = {
+            role: config.model_copy(update=runtime_overrides) for role, config in policies.items()
+        }
+        policy = policies["patcher"]
     client = create_model_client(
         client,
         model=policy.model,
@@ -192,7 +202,10 @@ def wire_orchestrator(
         base_kw["sandbox_context"] = sandbox_context
         patcher = create_patcher(client, ws, cwd=repo, **base_kw)
     else:
-        patcher = create_patcher(client, ws, cwd=repo, **_agent_kw("patcher"))
+        patcher_kw = _agent_kw("patcher")
+        if state_root:
+            patcher_kw["sandbox_context"] = ctx
+        patcher = create_patcher(client, ws, cwd=repo, **patcher_kw)
     normalized_tier = (
         execution_tier if execution_tier in {"auto", "container", "host", "static"} else "auto"
     )
@@ -201,9 +214,7 @@ def wire_orchestrator(
     # The WSL profile verifies through the task-bound BwrapVerifyStrategy. A
     # host/Docker verifier would violate the single-backend task contract.
     should_try_verifier = (
-        sandbox_context is None
-        and (not skip_verify)
-        and normalized_tier in {"auto", "container"}
+        sandbox_context is None and (not skip_verify) and normalized_tier in {"auto", "container"}
     )
 
     orch = orch_class(
@@ -220,12 +231,15 @@ def wire_orchestrator(
     )
     orch._budget_ctx = budget_ctx
     if should_try_verifier:
+        verifier_kw = _agent_kw("verifier")
+        if state_root:
+            verifier_kw["sandbox_context"] = ToolContext(root=repo, state_root=state_root)
         verifier = try_create_verifier(
             client,
             ws,
             repo,
             required=require_sandbox or normalized_tier == "container",
-            **_agent_kw("verifier"),
+            **verifier_kw,
         )
         if verifier:
             orch.verifier = verifier

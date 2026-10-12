@@ -19,8 +19,13 @@ TOKEN = "test-workbench-token-for-http-only"
 
 
 @contextmanager
-def running_server(tmp_path, *, executor=None):
-    with WorkbenchService(tmp_path, executor=executor or Echo()) as service:
+def running_server(tmp_path, *, executor=None, project_executor=None):
+    with WorkbenchService(
+        tmp_path,
+        executor=executor or Echo(),
+        project_executor=project_executor,
+        project_lock_dir=tmp_path.parent / "http-locks",
+    ) as service:
         with WorkbenchHTTPServer(("127.0.0.1", 0), service, token=TOKEN) as server:
             thread = threading.Thread(
                 target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
@@ -71,7 +76,7 @@ def frame(response):
 def test_http_chat_crud_edit_regenerate_and_switch(tmp_path):
     with running_server(tmp_path) as server:
         status, health = request(server, "GET", "/api/health")
-        assert status == 200 and health["modes"] == ["chat"]
+        assert status == 200 and health["modes"] == ["chat", "project_chat", "repair"]
         status, chat = request(server, "POST", "/api/conversations", {"title": "日常"})
         assert status == 201 and chat["project_path"] is None
         cid = chat["id"]
@@ -104,6 +109,63 @@ def test_http_chat_crud_edit_regenerate_and_switch(tmp_path):
         tree = request(server, "GET", base + "/tree")[1]
         assert len(tree["branches"]) == 4 and len(tree["runs"]) == 3
         assert len(request(server, "GET", "/api/conversations")[1]["conversations"]) == 1
+
+
+def test_http_project_reexecution_requires_exact_reviewed_input_plan(tmp_path):
+    from src.workbench.project import ProjectResult
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "v.py").write_text("base", encoding="utf-8")
+
+    def editor(**kw):
+        text = kw["messages"][-1]["content"]
+        (kw["files"].root / "v.py").write_text(text, encoding="utf-8")
+        kw["publish"]("project.progress", {"stage": "test"})
+        kw["publish"]("project.report", {"verified": True})
+        return ProjectResult("done", artifacts={"verified": True})
+
+    with running_server(tmp_path / "state", project_executor=editor) as server:
+        status, chat = request(server, "POST", "/api/conversations", {"project_path": str(repo)})
+        assert status == 201
+        cid = chat["id"]
+        base = "/api/conversations/" + cid
+        status, turn = request(server, "POST", base + "/turns", {"text": "one", "mode": "repair"})
+        assert status == 202
+        run = server.service.wait(cid, turn["run"]["id"])
+        assert run.output_snapshot_id and run.artifacts["verified"]
+        node_path = base + "/nodes/" + turn["node"]["id"]
+        assert request(server, "POST", node_path + "/edit", {"text": "new"})[0] == 409
+        (repo / "v.py").write_text("manual", encoding="utf-8")
+        status, preview = request(
+            server,
+            "POST",
+            base + "/restores/preview",
+            {"action": "input", "node_id": turn["node"]["id"]},
+        )
+        assert status == 201
+        status, edited = request(
+            server, "POST", node_path + "/edit", {"text": "new", "plan_id": preview["id"]}
+        )
+        assert status == 202
+        server.service.wait(cid, edited["run"]["id"])
+        assert (repo / "v.py").read_text(encoding="utf-8") == "new"
+        events = server.service.events(cid, edited["run"]["id"])
+        assert {"project.progress", "project.report"} <= {e["kind"] for e in events}
+        status, preview = request(
+            server,
+            "POST",
+            base + "/restores/preview",
+            {"action": "input", "node_id": edited["node"]["id"]},
+        )
+        status, repeated = request(
+            server,
+            "POST",
+            base + "/nodes/" + edited["node"]["id"] + "/regenerate",
+            {"plan_id": preview["id"]},
+        )
+        assert status == 202
+        assert server.service.wait(cid, repeated["run"]["id"]).status == "succeeded"
 
 
 def test_sse_delivers_before_completion_disconnect_does_not_cancel_and_replays(tmp_path):

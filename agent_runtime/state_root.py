@@ -42,6 +42,14 @@ def state_root_for(root: str | Path, explicit: str | Path | None = None) -> Path
     return trusted_state_root(root, explicit) or Path(root).resolve()
 
 
+def agent_state_root(agent) -> Path:
+    """Use one configured location for all of an Agent's durable memory/cache."""
+    return state_root_for(
+        getattr(agent, "_cwd", ".") or ".",
+        getattr(getattr(agent, "tool_context", None), "state_root", "") or "",
+    )
+
+
 def native_io_path(path: str | Path) -> Path:
     """Use Windows extended paths for deep external-state files at the I/O boundary."""
     value = Path(path)
@@ -75,6 +83,7 @@ def runtime_identity(
 
 
 __all__ = [
+    "agent_state_root",
     "managed_state_base",
     "native_io_path",
     "runtime_identity",
