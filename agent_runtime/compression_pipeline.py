@@ -12,7 +12,19 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any
+
+from agent_runtime.history_summary import (
+    SUMMARY_PREFIX,
+    build_summary_prompt,
+    content_text,
+    fit_summary,
+    has_tool_call,
+    interaction_groups,
+    is_summary,
+    parse_summary,
+)
 
 if TYPE_CHECKING:
     from agent_runtime.context_manager import TokenBudget
@@ -43,9 +55,9 @@ TAIL_PROTECT_TOKENS = 20_000
 # 小 window 时保护区不超过旧布局 2000/2600，为 L2–L4 留出可压缩空间
 TAIL_PROTECT_WINDOW_RATIO = 2000 / 2600
 L4_MIN_TURN_TOKENS = 40
-L5_FALLBACK_KEEP_ENTRIES = 8
-L5_SUMMARY_MAX_CHARS = 300
-L5_PROMPT_TAIL_ENTRIES = 20
+L5_FALLBACK_KEEP_GROUPS = 8
+L5_SUMMARY_MAX_TOKENS = 512
+L5_INPUT_MAX_TOKENS = 6000
 
 READONLY_TOOLS = frozenset({"list_files", "read_file", "grep"})
 HIGH_VALUE_TOOLS = frozenset({"write_file", "patch_file", "run_shell"})
@@ -128,7 +140,7 @@ def apply_l1_to_request_text(
 
 def history_item_text(item: dict) -> str:
     """单条 history 的计数字符串。"""
-    return f"{item.get('role', '?')}: {item.get('content', '')}"
+    return f"{item.get('role', '?')}: {content_text(item)}"
 
 
 def count_history_tokens(history: list[dict], budget: TokenBudget) -> int:
@@ -139,22 +151,8 @@ def count_history_tokens(history: list[dict], budget: TokenBudget) -> int:
 
 
 def group_history_into_turns(history: list[dict]) -> list[list[dict]]:
-    """按 user 消息边界分组为 turn（一轮 = user + 后续 assistant/tool 链）。"""
-    turns: list[list[dict]] = []
-    current: list[dict] = []
-    for item in history:
-        if item.get("role") == "user":
-            if current:
-                turns.append(current)
-            current = [item]
-        else:
-            if not current:
-                current = [item]
-            else:
-                current.append(item)
-    if current:
-        turns.append(current)
-    return turns
+    """User turns with indivisible tool call/result chains."""
+    return interaction_groups(history)
 
 
 def _turn_tool_names(turn: list[dict]) -> list[str]:
@@ -339,6 +337,8 @@ def is_collapsible_turn(
         return False
     if any(item.get("_snip") or item.get("_collapsed") for item in turn):
         return False
+    if any(is_repair_state_item(item) or is_summary(item) for item in turn):
+        return False
     if turn_has_protected_content(turn):
         return False
     return turn_tokens(turn, budget) >= L4_MIN_TURN_TOKENS
@@ -370,7 +370,17 @@ def l0_tier_guard(
 
     pipe = metadata.setdefault("compression_pipeline", {})
     tier = policy if policy is not None else _TierPolicy()
-    filtered, stats = l0_filter_history(history, tier)
+    filtered, stats = [], {"dropped": 0, "rules_applied": []}
+    for group in interaction_groups(history):
+        # Historical calls are data, not permission to execute. Keep both sides
+        # together, including empty native assistant text and rejected results.
+        if has_tool_call(group) or any(is_repair_state_item(item) for item in group):
+            filtered.extend(group)
+            continue
+        kept, group_stats = l0_filter_history(group, tier)
+        filtered.extend(kept)
+        stats["dropped"] += group_stats["dropped"]
+        stats["rules_applied"].extend(group_stats["rules_applied"])
     pipe["l0"] = "applied" if stats["dropped"] else "skipped"
     pipe["l0_dropped"] = stats["dropped"]
     pipe["l0_rules_applied"] = stats["rules_applied"]
@@ -386,6 +396,12 @@ def l1_budget_reduction(
     truncations = 0
     for item in history:
         if item.get("role") != "tool":
+            continue
+        if (
+            is_repair_state_item(item)
+            or isinstance(item.get("content"), list)
+            or item.get("tool_call_id")
+        ):
             continue
         original = str(item.get("content", ""))
         tool_name = str(item.get("tool_name", ""))
@@ -492,7 +508,11 @@ def l3_microcompact(
         for idx, item in enumerate(working):
             if item.get("role") != "tool":
                 continue
-            if is_repair_state_item(item):
+            if (
+                is_repair_state_item(item)
+                or isinstance(item.get("content"), list)
+                or item.get("tool_call_id")
+            ):
                 continue
             if item.get("_snip") or item.get("_compact_ref"):
                 continue
@@ -614,12 +634,10 @@ def l5_auto_compact(
     summary_cache: dict[str, str] | None = None,
     trigger_tokens: int | None = None,
     history_window: int | None = None,
+    current_turn_id: int | None = None,
+    allow_summary: bool = True,
 ) -> list[dict]:
-    """L5 Auto Compact：history 超 100% window 时 LLM 摘要前半段，保留后半段。
-
-    成功：[system summary] + recent_half
-    失败：保留最近 L5_FALLBACK_KEEP_ENTRIES 条
-    """
+    """Replace old summaries once; fit complete interactions or fail explicitly."""
     pipe = metadata.setdefault("compression_pipeline", {})
     window = history_window if history_window is not None else resolve_history_window(budget)
     trigger = (
@@ -629,114 +647,160 @@ def l5_auto_compact(
     )
     tokens_before = count_history_tokens(history, budget)
 
-    if tokens_before <= trigger:
+    if tokens_before <= trigger and not any(is_summary(item) for item in history):
         pipe["l5_triggered"] = False
         pipe["l5"] = "skipped"
         return history
 
-    # 增量摘要：检测已有 [Earlier summary]，只摘要其后新增条目
     existing_summary_idx = _find_existing_summary(history)
     incremental = existing_summary_idx is not None
+    prior_omitted = sum(item.get("_omitted_interactions", 0) for item in history)
+    prior_items = sum(item.get("_omitted_summary_items", 0) for item in history)
+    working = [
+        deepcopy(item)
+        for item in history
+        if not is_summary(item) and not item.get("_history_omission")
+    ]
+    groups = interaction_groups(working)
+    pinned = _l5_pinned(groups, current_turn_id)
+    if count_history_tokens([item for i in sorted(pinned) for item in groups[i]], budget) > window:
+        from agent_runtime.errors import ContextBuildBlockedError
 
-    pinned: list[dict]
-    unpinned: list[dict]
-    old_history: list[dict]
-    recent_history: list[dict]
-
+        raise ContextBuildBlockedError("history_protected_over_budget")
+    eligible = [i for i in range(max(0, len(groups) - 2)) if i not in pinned]
+    old_indices = set(eligible[: max(1, len(eligible) // 2)])
+    old_history = [item for i in sorted(old_indices) for item in groups[i]]
+    recent_history = [
+        item for i, group in enumerate(groups) if i not in old_indices for item in group
+    ]
+    cache_key = _summary_cache_key(old_history)
     if incremental:
-        # 已有摘要前的内容已摘要过 → 跳过；只处理摘要后的新条目
-        existing_summary = str(history[existing_summary_idx].get("content", ""))
-        existing_summary = existing_summary.replace("[Earlier summary]: ", "").strip()
-        preserved = [dict(item) for item in history[: existing_summary_idx + 1]]
-        new_items = [dict(item) for item in history[existing_summary_idx + 1 :]]
-        pinned = []
-        # 钉扎保护：new_items 中的关键条目移到后半段
-        pinned_new, unpinned_new = _partition_pinned(new_items)
-        mid = max(len(unpinned_new) // 2, 1)
-        old_history = unpinned_new[:mid]
-        recent_history = unpinned_new[mid:] + pinned_new
-        # 已摘要的前缀保留在结果前部
-        recent_history = preserved + recent_history
-        len(pinned_new)
-        # cache key 含 offset → 不同轮次不同 key
-        cache_key = _summary_cache_key(old_history) + f"@offset{existing_summary_idx}"
-    else:
-        pinned, unpinned = _partition_pinned(history)
-        len(pinned)
-        mid = max(len(unpinned) // 2, 1)
-        old_history = unpinned[:mid]
-        recent_history = unpinned[mid:] + pinned  # pinned 数据在最后
-        cache_key = _summary_cache_key(old_history)
-
+        cache_key += f"@offset{existing_summary_idx}"
     cache = summary_cache if summary_cache is not None else {}
-
-    summary = ""
     cache_hit = False
-    if cache_key in cache:
-        summary = cache[cache_key]
-        cache_hit = True
-    elif summarizer is not None:
-        try:
-            summary_prompt = _build_l5_summary_prompt(
-                old_history,
-                existing_summary=existing_summary if incremental else "",
-            )
-            summary = summarizer(summary_prompt)
-        except Exception:
-            summary = ""
-        if summary:
-            cache[cache_key] = summary
-
-    if summary:
-        result = [
-            {"role": "system", "content": f"[Earlier summary]: {summary}"},
-            *[dict(item) for item in recent_history],
+    pipe.update(l5_triggered=True, l5_incremental=incremental, l5_tokens_before=tokens_before)
+    try:
+        if not allow_summary:
+            raise ValueError("summary_sealed_prefix_retained")
+        previous = [
+            parse_summary(str(item["content"]).removeprefix(SUMMARY_PREFIX))
+            for item in history
+            if is_summary(item)
         ]
-        tokens_after = count_history_tokens(result, budget)
-        pipe["l5_triggered"] = True
-        pipe["l5"] = "summarized"
-        pipe["l5_incremental"] = incremental
-        pipe["l5_summary_cache_hit"] = cache_hit
-        pipe["l5_fallback"] = False
-        pipe["l5_tokens_before"] = tokens_before
-        pipe["l5_tokens_after"] = tokens_after
+        if tokens_before <= trigger and len(previous) == 1:
+            pipe.update(l5_triggered=False, l5="skipped")
+            return deepcopy(history)
+        if not old_history and not previous:
+            raise ValueError("summary_no_old_interactions")
+        input_limit = min(
+            L5_INPUT_MAX_TOKENS, getattr(summarizer, "input_limit", budget.total_limit)
+        )
+        prompt, refs, coverage = build_summary_prompt(old_history, budget, input_limit, previous)
+        pipe["l5_input_coverage"] = coverage
+        if cache_key in cache:
+            raw, cache_hit = cache[cache_key], True
+        elif summarizer is not None:
+            raw = summarizer(prompt)
+            if raw:
+                cache[cache_key] = raw
+        else:
+            raise ValueError("summary_unavailable")
+        value = parse_summary(raw, offered_refs=refs)
+        text, dropped = fit_summary(value, budget, min(L5_SUMMARY_MAX_TOKENS, max(0, window // 3)))
+        pipe["l5_summary_dropped_items"] = dropped
+        marker = {"role": "system", "content": SUMMARY_PREFIX + text, "_history_summary": True}
+        result = _fit_l5_groups(
+            [marker, *recent_history],
+            budget,
+            window,
+            pipe,
+            current_turn_id,
+            omitted=prior_omitted + coverage["omitted_groups"],
+            summary_items=prior_items + dropped,
+        )
+        pipe.update(
+            l5="summarized",
+            l5_summary_cache_hit=cache_hit,
+            l5_fallback=False,
+            l5_tokens_after=count_history_tokens(result, budget),
+        )
+        return result
+    except Exception as exc:
+        from agent_runtime.cancellation import CancelledError
+
+        if isinstance(exc, CancelledError):
+            raise
+        pipe.update(
+            l5="fallback_trim",
+            l5_summary_cache_hit=cache_hit,
+            l5_fallback=True,
+            l5_failure_reason=str(exc) if isinstance(exc, ValueError) else type(exc).__name__,
+        )
+    result = _fit_l5_groups(
+        working,
+        budget,
+        window,
+        pipe,
+        current_turn_id,
+        max_groups=L5_FALLBACK_KEEP_GROUPS,
+        omitted=prior_omitted,
+        summary_items=prior_items + sum(is_summary(item) for item in history),
+    )
+    pipe["l5_tokens_after"] = count_history_tokens(result, budget)
+    return result
+
+
+def _l5_pinned(groups, current_turn_id):
+    from agent_runtime.turn_tracking import is_current_turn
+
+    first = next(
+        (i for i, group in enumerate(groups) if any(item.get("role") == "user" for item in group)),
+        None,
+    )
+    return {
+        i
+        for i, group in enumerate(groups)
+        if i == first
+        or is_current_turn(group, current_turn_id)
+        or any(is_repair_state_item(item) or is_summary(item) for item in group)
+    }
+
+
+def _fit_l5_groups(
+    history, budget, window, pipe, current_turn_id, *, max_groups=None, omitted=0, summary_items=0
+):
+    from agent_runtime.errors import ContextBuildBlockedError
+
+    groups = interaction_groups(history)
+    pinned = _l5_pinned(groups, current_turn_id)
+    selected = set(pinned)
+
+    def render():
+        result = [deepcopy(item) for i in sorted(selected) for item in groups[i]]
+        lost = len(groups) - len(selected) + omitted
+        if lost or summary_items:
+            result.append(
+                {
+                    "role": "system",
+                    "_history_omission": True,
+                    "_omitted_interactions": lost,
+                    "_omitted_summary_items": summary_items,
+                    "content": f"[History omitted: {lost} interactions; "
+                    f"{summary_items} summary items. Not current evidence.]",
+                }
+            )
         return result
 
-    fallback = [dict(item) for item in history[-L5_FALLBACK_KEEP_ENTRIES:]]
-    tokens_after = count_history_tokens(fallback, budget)
-    pipe["l5_triggered"] = True
-    pipe["l5"] = "fallback_trim"
-    pipe["l5_summary_cache_hit"] = False
-    pipe["l5_fallback"] = True
-    pipe["l5_tokens_before"] = tokens_before
-    pipe["l5_tokens_after"] = tokens_after
-    return fallback
-
-
-def _partition_pinned(history: list[dict]) -> tuple[list[dict], list[dict]]:
-    """将 history 分为 pinned（钉扎保护）和 unpinned 两部分。
-
-    保护规则：第一个 user 消息（含 issue/stack）+ Error: Traceback + [Earlier summary]。
-    """
-    pinned: list[dict] = []
-    unpinned: list[dict] = []
-    seen_user = False
-    for item in history:
-        role = str(item.get("role", ""))
-        content = str(item.get("content", ""))
-        is_first_user = role == "user" and not seen_user
-        if role == "user":
-            seen_user = True
-        if (
-            is_first_user
-            or "Error: Traceback" in content
-            or "[Earlier summary]" in content
-            or is_repair_state_item(item)
-        ):
-            pinned.append(dict(item))
-        else:
-            unpinned.append(dict(item))
-    return pinned, unpinned
+    if count_history_tokens(render(), budget) > window:
+        raise ContextBuildBlockedError("history_protected_over_budget")
+    for index in range(len(groups) - 1, -1, -1):
+        if index in selected or max_groups is not None and len(selected) >= max_groups:
+            continue
+        selected.add(index)
+        if count_history_tokens(render(), budget) > window:
+            selected.remove(index)
+    pipe["l5_dropped_groups"] = len(groups) - len(selected)
+    return render()
 
 
 def _summary_cache_key(old_history: list[dict]) -> str:
@@ -749,60 +813,9 @@ def _summary_cache_key(old_history: list[dict]) -> str:
 def _find_existing_summary(history: list[dict]) -> int | None:
     """返回第一个 [Earlier summary] 条目的索引，无则返回 None。"""
     for i, item in enumerate(history):
-        content = str(item.get("content", ""))
-        if content.startswith("[Earlier summary]"):
+        if is_summary(item):
             return i
     return None
-
-
-def _build_l5_summary_prompt(
-    old_history: list[dict],
-    existing_summary: str = "",
-) -> str:
-    """构建 L5 摘要 prompt（增量或全量模式）。"""
-    # 检测已有摘要 → 增量模式
-    existing = existing_summary
-    new_items: list[str] = []
-    for item in old_history:
-        content = str(item.get("content", ""))
-        if (
-            not existing
-            and item.get("role") == "system"
-            and content.startswith("[Earlier summary]")
-        ):
-            existing = content.replace("[Earlier summary]: ", "").strip()
-            new_items = []
-        elif existing:
-            role = item.get("role", "unknown")
-            new_items.append(f"{role}: {content[:150]}")
-        else:
-            role = item.get("role", "unknown")
-            new_items.append(f"{role}: {content[:150]}")
-
-    if existing and new_items:
-        prompt_lines = [
-            "Update the following summary with new information in 1-2 sentences.",
-            f"Current summary: {existing}",
-            "",
-            "New items:",
-        ]
-        prompt_lines.extend(new_items[-L5_PROMPT_TAIL_ENTRIES:])
-        return "\n".join(prompt_lines)
-
-    # 全量摘要（无已有摘要）
-    prompt_lines = [
-        "Summarize the following repair conversation as JSON only.",
-        "Schema: {confirmed_facts:[], hypotheses:[], rejected_hypotheses:[], "
-        "files_changed:[], verification:{}, next_action:'', evidence_refs:[]}",
-        "Never turn a hypothesis into a confirmed fact; preserve evidence IDs "
-        "and failed assertions.",
-        "",
-    ]
-    for item in old_history[-L5_PROMPT_TAIL_ENTRIES:]:
-        role = item.get("role", "unknown")
-        content = str(item.get("content", ""))[:150]
-        prompt_lines.append(f"{role}: {content}")
-    return "\n".join(prompt_lines)
 
 
 def make_summarizer(agent) -> Summarizer | None:
@@ -811,12 +824,21 @@ def make_summarizer(agent) -> Summarizer | None:
     if client is None:
         return None
 
+    output_limit = min(agent.config.max_new_tokens, 2048)
+
     def _summarize(prompt: str) -> str:
         from agent_runtime.model_call_budget import complete_text
 
-        raw = complete_text(agent, client, prompt, max_output_tokens=2048, purpose="summary")
-        return raw.strip()[:L5_SUMMARY_MAX_CHARS] if raw else ""
+        raw = complete_text(
+            agent, client, prompt, max_output_tokens=output_limit, purpose="summary", timeout_s=30
+        )
+        return raw.strip() if raw else ""
 
+    try:
+        _summarize.input_limit = agent.config.input_window(output_limit)
+    except ValueError:
+        # L5 will report input-over-budget without making an auxiliary call.
+        _summarize.input_limit = 0
     return _summarize
 
 
@@ -830,6 +852,7 @@ def run_compression_pipeline(
     l5_trigger_tokens: int | None = None,
     history_window: int | None = None,
     tier_policy: TierPolicy | None = None,
+    allow_summary: bool = True,
 ) -> list[dict]:
     """按 L0→L5 顺序处理 history 投影副本，不修改 canonical session。"""
     from agent_runtime.tier_policy import TierPolicy as _TierPolicy
@@ -852,7 +875,7 @@ def run_compression_pipeline(
     pipe_meta["l4_threshold"] = compression_threshold(L4_TRIGGER_RATIO, window)
     pipe_meta["l5_threshold"] = compression_threshold(L5_TRIGGER_RATIO, window)
 
-    projected = [dict(item) for item in history]
+    projected = deepcopy(history)
 
     projected = l0_tier_guard(projected, meta, policy=tier)
     projected, _ = l1_budget_reduction(projected, budget, meta)
@@ -888,6 +911,8 @@ def run_compression_pipeline(
         summary_cache=summary_cache,
         trigger_tokens=l5_trigger_tokens,
         history_window=window,
+        current_turn_id=active_turn_id,
+        allow_summary=allow_summary,
     )
 
     from agent_runtime.repair_context import context_integrity
@@ -932,7 +957,7 @@ def run_compression_pipeline(
         pipe_meta["compression_events"] = events
 
     contract = validate_compression_contract(history, projected)
-    pipe_meta["contract_version"] = "compression-v2"
+    pipe_meta["contract_version"] = "compression-v3"
     pipe_meta["contract_ok"] = contract["ok"]
     pipe_meta["contract_violations"] = contract["violations"]
 

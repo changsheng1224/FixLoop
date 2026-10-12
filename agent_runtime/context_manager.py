@@ -14,15 +14,11 @@ import re
 from pathlib import Path
 
 from agent_runtime.compression_pipeline import (
-    DEFAULT_TOOL_TRUNCATION,
     L5_TRIGGER_RATIO,
     apply_l1_to_request_text,
     l5_auto_compact,
     make_summarizer,
     run_compression_pipeline,
-)
-from agent_runtime.compression_pipeline import (
-    truncate_tool_content as _truncate_tool_content,
 )
 from agent_runtime.context_projection import attach_context_projection
 from agent_runtime.context_runtime import (
@@ -33,6 +29,7 @@ from agent_runtime.context_runtime import (
     ContextViewPolicy,
 )
 from agent_runtime.errors import ContextBuildBlockedError, ContextTooLargeError
+from agent_runtime.history_summary import SUMMARY_PREFIX, content_text, interaction_groups
 from agent_runtime.message_projection import (
     get_sealed_history,
     run_memory_snapshot,
@@ -60,7 +57,7 @@ BUDGET_MEMORY = 800
 BUDGET_KNOWLEDGE = 600  # 持久知识检索（episodic notes + durable facts）
 BUDGET_SOURCE = 1500
 BUDGET_HISTORY = 2600
-KEEP_RECENT_HISTORY = 6  # 最近 N 条历史完整保留
+KEEP_RECENT_HISTORY = 6  # 最近 N 组完整交互，最终装箱时仍按组选择
 HARD_CAP = 8000  # 硬顶 token 数，超出拒绝 ask
 
 
@@ -731,6 +728,10 @@ class ContextManager:
                 f"**tool**: [source selected in current context: {observation_id}]\n",
                 history_text,
             )
+        history_limit = min(
+            history_window_budget(section_cap or total), max(0, filler.section_cap - filler.used)
+        )
+        history_text = self._fit_history_text(history_text, history_limit, metadata)
         metadata["_history_section_text"] = history_text
         filler.add_section(
             "history",
@@ -833,6 +834,7 @@ class ContextManager:
 
                 fitters["source"] = fit_source
             candidates["history"] = self._get_compressed_history(metadata)
+            fitters["history"] = lambda text, limit: self._fit_history_text(text, limit, metadata)
         filler.add_elastic(candidates, weights, priority, fitters=fitters)
         if self._source_selection:
             selection = self._source_selection
@@ -1437,11 +1439,17 @@ class ContextManager:
         sealed_count, sealed_text = get_sealed_history(self.agent.session)
         if sealed_count > 0 and sealed_text:
             if sealed_count >= len(history):
+                if metadata is not None:
+                    metadata["_history_units"] = [sealed_text]
                 return sealed_text
             tail = history[sealed_count:]
             tail_text = self._format_projected_history(tail, metadata)
             if not tail_text:
+                if metadata is not None:
+                    metadata["_history_units"] = [sealed_text]
                 return sealed_text
+            if metadata is not None:
+                metadata["_history_units"] = [sealed_text, *metadata.get("_history_units", [])]
             return f"{sealed_text.rstrip()}\n{tail_text}"
 
         return self._format_projected_history(history, metadata)
@@ -1468,6 +1476,7 @@ class ContextManager:
             ),
             history_window=history_window_budget(self.budget.total_limit),
             tier_policy=self.tier_policy,
+            allow_summary=SUMMARY_PREFIX not in sealed_text,
         )
         source_refs = set(meta.get("_source_observation_refs", []))
         if source_refs:
@@ -1497,23 +1506,45 @@ class ContextManager:
         meta.setdefault("_selected_context_ids", []).extend(observation_refs)
         meta["_observation_refs"] = list(dict.fromkeys(observation_refs))
 
-        pipe = meta.get("compression_pipeline", {})
-        if pipe.get("l5_triggered"):
-            body = self._format_compressed_result(projected, apply_l1=False)
-            return body if include_header else self._strip_history_header(body)
+        units = [
+            self._strip_history_header(self._format_compressed_result(group))
+            for group in interaction_groups(projected)
+        ]
+        meta["_history_units"] = units
+        body = self._format_split_history(projected, include_header)
+        return body
 
-        return self._format_split_history(projected, pipe, include_header)
+    def _fit_history_text(self, text, limit, metadata):
+        """Fit optional history as complete interactions, including sealed text."""
+        from agent_runtime.context_preparation import pack_units
 
-    def _format_split_history(self, projected: list, pipe: dict, include_header: bool) -> str:
-        """格式化未触发 L5 的 history：早期摘要 + 最近对话。"""
-        recent = projected[-KEEP_RECENT_HISTORY:]
-        old = projected[:-KEEP_RECENT_HISTORY]
+        if self.budget.count(text) <= limit:
+            return text
+        units = metadata.get("_history_units", [text])
+
+        def render(items):
+            omitted = len(units) - len(items)
+            notice = f"[History omitted: {omitted} complete units. Not current evidence.]"
+            return "\n".join([*items, notice]) if omitted else "\n".join(items)
+
+        chosen = pack_units(units, limit, self.budget, render, newest=True)
+        metadata.setdefault("compression_pipeline", {})["history_omitted_units"] = len(units) - len(
+            chosen
+        )
+        fitted = render(chosen)
+        return fitted if self.budget.count(fitted) <= limit else ""
+
+    def _format_split_history(self, projected: list, include_header: bool) -> str:
+        """按完整交互格式化管线结果，不在显示阶段二次截断。"""
+        groups = interaction_groups(projected)
+        recent = [item for group in groups[-KEEP_RECENT_HISTORY:] for item in group]
+        old = [item for group in groups[:-KEEP_RECENT_HISTORY] for item in group]
         lines: list[str] = []
         if include_header:
             lines.extend(["## 对话历史", ""])
 
-        if old and not any(pipe.get(k) for k in ("l2_triggered", "l3_triggered", "l4_triggered")):
-            compressed = self._compress_old_entries(old)
+        if old:
+            compressed = self._strip_history_header(self._format_compressed_result(old))
             if compressed:
                 prefix = "### 早期摘要" if include_header else "### 追加早期摘要"
                 lines.append(prefix)
@@ -1522,13 +1553,8 @@ class ContextManager:
 
         if include_header:
             lines.append("### 最近对话")
-        for item in recent:
-            role = item.get("role", "unknown")
-            content = str(item.get("content", ""))
-            if role == "user" and len(content) > 300:
-                content = content[:300] + "..."
-            lines.append(f"**{role}**: {content}")
-            lines.append("")
+        if recent:
+            lines.append(self._strip_history_header(self._format_compressed_result(recent)))
         return "\n".join(lines)
 
     @staticmethod
@@ -1541,17 +1567,12 @@ class ContextManager:
             lines.pop(0)
         return "\n".join(lines).strip()
 
-    def _format_compressed_result(self, history: list, *, apply_l1: bool = False) -> str:
+    def _format_compressed_result(self, history: list) -> str:
         """将 history 列表格式化为 prompt 文本。"""
         lines = ["## 对话历史", ""]
         for item in history:
             role = item.get("role", "unknown")
-            content = str(item.get("content", ""))
-            if apply_l1 and role == "tool":
-                tool_name = item.get("tool_name", "")
-                content = _truncate_tool_content(content, tool_name, budget=self.budget)
-            elif self.budget.count(content) > DEFAULT_TOOL_TRUNCATION:
-                content = self.budget.fit(content, DEFAULT_TOOL_TRUNCATION) + "..."
+            content = content_text(item)
             lines.append(f"**{role}**: {content}")
             lines.append("")
         return "\n".join(lines)
@@ -1560,7 +1581,7 @@ class ContextManager:
         """当 history token 数超阈值时，用 LLM 压缩前一半为摘要（L5 薄封装）。
 
         成功：返回 [{"role":"system","content":"[Earlier summary]: ..."}, *recent]
-        失败：退化为简单裁剪（保留最近 8 条）
+        失败：按完整交互保留近期历史，受保护内容装不下时明确阻断。
         """
         if trigger_tokens is None:
             trigger_tokens = int(L5_TRIGGER_RATIO * history_window_budget(self.budget.total_limit))
@@ -1574,39 +1595,3 @@ class ContextManager:
             trigger_tokens=trigger_tokens,
             history_window=history_window_budget(self.budget.total_limit),
         )
-
-    def _compress_old_entries(self, entries: list) -> str:
-        """压缩旧历史条目。
-
-        - 重复 read_file 合并为一行
-        - 旧工具结果压缩为单行摘要
-        - 旧消息截断到 60 字符
-        """
-        items = []
-        seen_reads = []
-        for entry in entries:
-            content = str(entry.get("content", ""))
-            role = entry.get("role", "")
-
-            if role == "assistant" and "read_file" in content:
-                seen_reads.append(content.split("read_file")[-1].strip().rstrip(")"))
-                continue
-
-            if role == "tool":
-                # 压缩为一行摘要
-                first_line = content.split("\n")[0][:100]
-                items.append(f"工具结果: {first_line}...")
-                continue
-
-            if role == "user":
-                items.append(f"用户: {content[:60]}")
-                continue
-
-            items.append(f"{role}: {content[:60]}")
-
-        result = []
-        if seen_reads:
-            result.append(f"已读取文件: {', '.join(seen_reads[:5])}")
-        result.extend(items[-20:])  # 最多保留 20 条压缩项
-
-        return "\n".join(result)

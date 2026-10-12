@@ -7,6 +7,7 @@ from agent_runtime.context_manager import ContextManager
 from agent_runtime.providers.clients import FakeModelClient
 from agent_runtime.runtime import Agent
 from agent_runtime.workspace import WorkspaceContext
+from tests.history_summary_support import summary_json
 
 
 @pytest.fixture
@@ -57,13 +58,15 @@ class TestSummarization:
         agent.model_client.complete = failing_complete
         try:
             result = cm._maybe_summarize_history(history, trigger_tokens=50)
-            assert len(result) <= 8  # 降级为保留最近 8 条
+            assert len(result) <= 9  # 最近完整交互与省略说明。
         finally:
             agent.model_client.complete = original
 
     def test_summary_with_fake_client(self, agent):
         """使用 FakeClient 提供摘要内容。"""
-        agent.model_client = FakeModelClient(["Read config.py and tools.py, found Agent class."])
+        agent.model_client = FakeModelClient(
+            [summary_json("Read config.py and tools.py, found Agent class.")]
+        )
         cm = ContextManager(agent)
         history = [{"role": "user", "content": f"msg {i}: " + "z" * 300} for i in range(20)]
 
