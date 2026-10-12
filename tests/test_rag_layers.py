@@ -134,9 +134,6 @@ class TestRAGLayersIntegration:
 
         assert RepairPrecedentStore is not None
 
-    def test_embed_cache_layer3_exists(self):
-        """Layer 3 embed_cache directory 常量存在。"""
-        from agent_runtime.features.memory.semantic import _EMBED_CACHE_DIR
-
-        assert _EMBED_CACHE_DIR is not None
-        assert "embed_cache" in str(_EMBED_CACHE_DIR)
+    def test_embed_cache_requires_explicit_scope(self):
+        """An unscoped auxiliary semantic index never writes a cwd cache."""
+        assert SemanticMemory().cache is None

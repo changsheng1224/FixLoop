@@ -20,7 +20,9 @@ def project_id(root: str | Path) -> str:
     return "project-" + workspace_id(root)
 
 
-def managed_storage_root(root: str | Path, explicit: str | Path | None = None) -> Path:
+def managed_storage_root(
+    root: str | Path, explicit: str | Path | None = None, *, create: bool = True,
+) -> Path:
     """Resolve shared product storage. Callers must not pass a project/run directory."""
     value = explicit or os.environ.get("FIXLOOP_STATE_ROOT")
     if not value:
@@ -29,7 +31,7 @@ def managed_storage_root(root: str | Path, explicit: str | Path | None = None) -
         else:
             parent = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
         value = parent / "FixLoop" / "state"
-    return trusted_state_root(root, value)
+    return trusted_state_root(root, value, create=create)
 
 
 def managed_state_base(root: str | Path, explicit: str | Path | None = None) -> Path:
@@ -38,7 +40,9 @@ def managed_state_base(root: str | Path, explicit: str | Path | None = None) -> 
     return trusted_state_root(root, storage / "projects" / project_id(root))
 
 
-def trusted_state_root(root: str | Path, explicit: str | Path | None = None) -> Path | None:
+def trusted_state_root(
+    root: str | Path, explicit: str | Path | None = None, *, create: bool = True,
+) -> Path | None:
     """Return the external state root only for an explicitly configured sandbox."""
     value = explicit or os.environ.get("FIXLOOP_STATE_ROOT", "")
     if not value:
@@ -47,9 +51,16 @@ def trusted_state_root(root: str | Path, explicit: str | Path | None = None) -> 
     state = Path(value).expanduser().resolve()
     if state == workspace or workspace in state.parents:
         raise ValueError("workspace_mapping_rejected: state_root inside workspace")
-    native_io_path(state).mkdir(mode=0o700, parents=True, exist_ok=True)
-    if not native_io_path(state).is_dir():
-        raise ValueError("workspace_mapping_rejected: invalid state_root")
+    if create:
+        native_io_path(state).mkdir(mode=0o700, parents=True, exist_ok=True)
+        if not native_io_path(state).is_dir():
+            raise ValueError("workspace_mapping_rejected: invalid state_root")
+        # Windows non-strict resolution can retain an extended prefix when a
+        # shared parent appears between probes. Resolve the original spelling
+        # again after creation, before this path becomes durable identity.
+        state = Path(value).expanduser().resolve()
+        if state == workspace or workspace in state.parents:
+            raise ValueError("workspace_mapping_rejected: state_root inside workspace")
     return state
 
 

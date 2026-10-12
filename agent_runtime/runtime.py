@@ -65,6 +65,15 @@ class Agent:
         # 构建工具上下文和注册表（允许外部注入）
         self.tool_context = tool_context or ToolContext(root=self._cwd)
         self.state_root = str(getattr(self.tool_context, "state_root", "") or "")
+        from agent_runtime.state_root import managed_storage_root
+
+        self.tool_context.project_root = str(Path(
+            self.tool_context.project_root or self._cwd
+        ).resolve())
+        self.tool_context.embedding_state_base = str(managed_storage_root(
+            self.tool_context.project_root, self.tool_context.embedding_state_base or None,
+            create=False,
+        ))
         self.tool_context.exploration_mode = config.code_exploration.mode
         self.tool_context.lsp_argv = config.code_exploration.server_argv
         self.tools = tools if tools is not None else build_tool_registry(self.tool_context)
@@ -114,8 +123,17 @@ class Agent:
         """首次访问时加载语义模型（全局单例，线程安全）。"""
         if self._semantic_memory is None:
             from agent_runtime.features.memory import SemanticMemory
+            from agent_runtime.features.memory.embedding_cache import project_embedding_cache_root
 
-            self._semantic_memory = SemanticMemory()
+            cache_root = None
+            try:
+                cache_root = project_embedding_cache_root(
+                    self.tool_context.project_root or self._cwd,
+                    self.tool_context.embedding_state_base or None,
+                )
+            except OSError:
+                pass  # Optional derived cache; an unwritable storage root disables persistence.
+            self._semantic_memory = SemanticMemory(cache_root=cache_root)
         return self._semantic_memory
 
     # ---- 公开方法 ----
@@ -148,6 +166,7 @@ class Agent:
         binding.attach(self.tool_context)
         self.tool_context.sandbox_backend = backend
         self.state_root = binding.state_root
+        self.tool_context.project_root = binding.project_root
         # Source-repository snapshots and warm evidence cannot describe another checkout.
         from agent_runtime.linux_sandbox.workspace_routing import (
             bind_workspace_tools,
@@ -221,6 +240,7 @@ class Agent:
         self.tool_context.exploration_service = None
         self._cwd = self.tool_context.root = root
         self.state_root = self.tool_context.state_root = state_root
+        self.tool_context.project_root = project
         self._workspace_pinned = True
         self.workspace = WorkspaceContext.build(root)
         self._warm_context = self._semantic_memory = None
@@ -348,6 +368,8 @@ class Agent:
             old_service.close()
         # Registered tool closures already hold this context; preserve its identity.
         self.tool_context.root = current
+        self.tool_context.project_root = current
+        self._semantic_memory = None
         self.tool_context.exploration_service = None
         self.tool_context.exploration_mode = self.config.code_exploration.mode
         self.tool_context.lsp_argv = self.config.code_exploration.server_argv

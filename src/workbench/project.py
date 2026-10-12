@@ -6,6 +6,7 @@ import fnmatch
 import json
 import threading
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from agent_runtime.bootstrap import create_model_client
 from agent_runtime.callbacks import AgentCallback
@@ -195,6 +196,10 @@ class ProjectExecutor:
             except FileNotFoundError:
                 pass
         root = str(files.root)
+        from agent_runtime.state_root import managed_storage_root
+
+        source_project = str(Path(project_root or root).resolve())
+        embedding_state_base = str(managed_storage_root(source_project, create=False))
         workspace = WorkspaceContext(
             cwd=root, repo_root=root, doc_contents=docs, dirty_file_hashes={}
         )
@@ -207,7 +212,10 @@ class ProjectExecutor:
         try:
             with BlockingScope() as scope:
                 if mode == "project_chat":
-                    context = ToolContext(root=root, state_root=str(state_root), cancel_token=token)
+                    context = ToolContext(
+                        root=root, state_root=str(state_root), cancel_token=token,
+                        project_root=source_project, embedding_state_base=embedding_state_base,
+                    )
                     config = AgentConfig(
                         provider=self.provider,
                         model=self.model or "",
@@ -247,6 +255,7 @@ class ProjectExecutor:
                     workspace_context=workspace,
                     state_root=str(state_root),
                     project_root=str(project_root or files.root),
+                    embedding_state_base=embedding_state_base,
                     execution_tier="auto"
                     if self.execution_tier == "sandbox"
                     else self.execution_tier,

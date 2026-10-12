@@ -112,11 +112,14 @@ def create_repair_agent(
         },
     )
     approval = config.approval
-    if sandbox_context is not None and (
+    if sandbox_context is not None and sandbox_context.sandbox_mode and (
         code_exploration_mode != "text" or code_exploration_server_argv is not None
     ):
         raise ValueError("wsl_bwrap does not support LSP or external exploration services")
-    if sandbox_context is not None and sandbox_context.exploration_service is not None:
+    if (
+        sandbox_context is not None and sandbox_context.sandbox_mode
+        and sandbox_context.exploration_service is not None
+    ):
         raise ValueError("wsl_bwrap does not support external exploration services")
     if sandbox_context is not None and sandbox_context.root != root:
         raise ValueError("wsl_bwrap agent workspace mismatch")

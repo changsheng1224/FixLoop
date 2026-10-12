@@ -147,6 +147,7 @@ CLI 默认 `--workspace-policy worktree`：从干净 Git 根目录创建独立�
 工作区策略与执行后端独立：默认 `legacy` 保留宿主工具；推荐隔离组合为
 `worktree` + `--execution-backend wsl_bwrap`。创建副本或沙箱失败时停止，不自动降级。
 详见 [S2 隔离设计](docs/ISOLATION_S2.md)。
+embedding 缓存按源项目归属，编码配置变化自动失效；详见 [S3 缓存设计](docs/ISOLATION_S3.md)。
 
 长问题和指定版本：
 

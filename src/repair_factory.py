@@ -104,6 +104,7 @@ def wire_orchestrator(
     workspace_context=None,
     state_root: str = "",
     project_root: str = "",
+    embedding_state_base: str = "",
     runtime_overrides: dict | None = None,
 ) -> O:
     """装配唯一的 Patcher-primary runtime 与可选 Verifier。"""
@@ -154,6 +155,10 @@ def wire_orchestrator(
     ctx = sandbox_context or ToolContext(
         root=repo, exploration_mode=code_exploration_mode, lsp_argv=code_exploration_server_argv
     )
+    ctx.project_root = str(Path(project_root or repo).resolve())
+    ctx.embedding_state_base = str(managed_storage_root(
+        ctx.project_root, embedding_state_base or state_root or None, create=False,
+    ))
     if state_root:
         ctx.state_root = state_root
     tools = build_repair_canonical_tools(ctx)
@@ -215,8 +220,7 @@ def wire_orchestrator(
         patcher = create_patcher(client, ws, cwd=repo, **base_kw)
     else:
         patcher_kw = _agent_kw("patcher")
-        if state_root:
-            patcher_kw["sandbox_context"] = ctx
+        patcher_kw["sandbox_context"] = ctx
         patcher = create_patcher(client, ws, cwd=repo, **patcher_kw)
     normalized_tier = execution_tier
     use_pytest_verify = (not skip_verify) and normalized_tier in {"auto", "host"}
@@ -249,8 +253,10 @@ def wire_orchestrator(
     orch._budget_ctx = budget_ctx
     if should_try_verifier:
         verifier_kw = _agent_kw("verifier")
-        if state_root:
-            verifier_kw["sandbox_context"] = ToolContext(root=repo, state_root=state_root)
+        verifier_kw["sandbox_context"] = ToolContext(
+            root=repo, state_root=state_root, project_root=ctx.project_root,
+            embedding_state_base=ctx.embedding_state_base,
+        )
         verifier = try_create_verifier(
             client,
             ws,
@@ -283,6 +289,7 @@ def make_orchestrator_factory(
     workspace_policy: str = "worktree",
     state_root: str = "",
     project_root: str = "",
+    embedding_state_base: str = "",
     model_client=None,
 ) -> Callable[[str], Orchestrator]:
     """返回 `(repo_path) -> Orchestrator` 工厂。"""
@@ -303,6 +310,7 @@ def make_orchestrator_factory(
             workspace_policy=workspace_policy,
             state_root=state_root,
             project_root=project_root,
+            embedding_state_base=embedding_state_base,
         )
 
     return factory

@@ -54,6 +54,9 @@ class ToolContext:
     sandbox_uncertain_event: object = field(default_factory=threading.Event, repr=False)
     execution_uncertain: bool = False
     state_root: str = ""
+    # Trusted source and shared cache storage; state_root may be a run directory.
+    project_root: str = ""
+    embedding_state_base: str = ""
     sandbox_identity: dict = field(default_factory=dict)
     run_coordinator: object | None = None
     sandbox_owner_token: str = ""

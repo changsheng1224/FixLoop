@@ -1244,7 +1244,7 @@ class ContextManager:
 
         Layer 1 (投影层): episodic notes → semantic/keyword → knowledge section
         Layer 2 (流水线): RepairPrecedentStore → similar_fixes (by Orchestrator)
-        Layer 3 (缓存层): .agent/embed_cache → content_hash → embedding reuse
+        Layer 3 (缓存层): explicit project cache → encoding/text key → embedding reuse
 
         三层共用 derive_embed_query() 作为查询提取入口。
         """
@@ -1334,7 +1334,9 @@ class ContextManager:
                     f"[utility={item.utility(request):.4f} confidence={item.confidence:.2f}]"
                 )
             parts.append("\n".join(lines))
-        results = retrieval_candidates_semantic(mem, query, limit=2)
+        results = retrieval_candidates_semantic(
+            mem, query, limit=2, semantic_memory=getattr(self.agent, "semantic_memory", None),
+        )
         results = filter_relevant_results(results, self.tier_policy)
         recalled_ids.extend(str(item.get("memory_id", "")) for item in results)
         if results:
