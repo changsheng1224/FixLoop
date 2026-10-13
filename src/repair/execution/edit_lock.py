@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from agent_runtime.sensitive_paths import is_sensitive_path
+
 __all__ = ["EditLockState", "normalize_repo_rel"]
 
 
@@ -157,6 +159,10 @@ class EditLockState:
         rel = normalize_repo_rel(path, self.repo_root)
         if not rel:
             return False, "path_escape_or_invalid"
+        # 扩锁只授予写权限，但授予本身不应覆盖控制面路径：否则 .git/hooks/* 之类
+        # 会先拿到许可，再依赖下游逐点拒绝。
+        if is_sensitive_path(rel):
+            return False, f"sensitive_path:{rel}"
         target = self.repo_root / rel
         if operation == "create":
             if target.exists() or target.is_symlink():
@@ -240,6 +246,9 @@ class EditLockState:
         if not rel:
             self.apply_path_reject_count += 1
             return False, "path_escape_or_invalid"
+        if is_sensitive_path(rel):
+            self.apply_path_reject_count += 1
+            return False, f"sensitive_path:{rel}"
         paths = {
             "modify": self.allowed_edit,
             "create": self.allowed_create,
