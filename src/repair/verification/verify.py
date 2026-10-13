@@ -83,6 +83,26 @@ def _tier_internal(
     return data
 
 
+_COUNT_KINDS = ("passed", "failed", "error", "skipped")
+
+
+def _pytest_counts(output: str) -> dict[str, int]:
+    """pytest 的计数只出现在汇总行；取最后一个含计数的行。
+
+    不能只看输出尾部：``run_command`` 把 stdout 与 stderr 顺序拼接，stderr
+    较长时尾部窗口里根本没有汇总行，一次真实通过的运行会被判成 0 个测试。
+    只解析单行也避免把多行里的同名计数重复相加。
+    """
+    counts = dict.fromkeys(_COUNT_KINDS, 0)
+    for line in reversed(output.splitlines()):
+        found = {
+            kind: sum(int(n) for n in re.findall(rf"(\d+) {kind}\b", line)) for kind in _COUNT_KINDS
+        }
+        if any(found.values()):
+            return found
+    return counts
+
+
 def _verify_cancelled_run(start: float) -> VerifyRun:
     from src.harness.sandbox_results import verification_result_for_user_cancel
 
@@ -228,10 +248,7 @@ class PytestVerifyStrategy:
             )
         elapsed_ms = int((time.time() - t0) * 1000)
         passed = code == 0
-        counts = {
-            kind: sum(int(n) for n in re.findall(rf"(\d+) {kind}\b", out[-1000:]))
-            for kind in ("passed", "failed", "error", "skipped")
-        }
+        counts = _pytest_counts(out)
         if not passed:
             print(
                 f"  [verifier] pytest 失败 (exit={code})\n",
