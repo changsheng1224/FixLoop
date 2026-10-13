@@ -299,6 +299,7 @@ class ProjectExecutor:
                 report = {
                     "mode": mode,
                     "repair_status": status.value,
+                    "pending_approval_id": state.control.pending_approval_id,
                     "errors": dict(state.agent_errors),
                     "recovery": state.recovery_outcome,
                     "verified": bool(
@@ -318,17 +319,22 @@ class ProjectExecutor:
                 }
                 token.check()
                 success = status is RepairStatus.FIXED and report["verified"]
-                answer = (
-                    "修复验证通过，候选结果已生成。"
-                    if success
-                    else f"修复未完成：{status.value}；验证结果已保存。"
-                )
+                awaiting_approval = status is RepairStatus.WAITING_APPROVAL
+                if success:
+                    answer = "修复验证通过，候选结果已生成。"
+                    result_status = "succeeded"
+                elif awaiting_approval:
+                    answer = "修复已暂停，等待沙箱审批；审批后可从同一 checkpoint 续跑。"
+                    result_status = "waiting_approval"
+                else:
+                    answer = f"修复未完成：{status.value}；验证结果已保存。"
+                    result_status = "failed"
                 on_chunk(answer)
                 publish("project.report", report)
                 return ProjectResult(
                     answer,
-                    "succeeded" if success else "failed",
-                    None if success else status.value,
+                    result_status,
+                    None if success or awaiting_approval else status.value,
                     report,
                 )
         finally:

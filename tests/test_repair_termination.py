@@ -9,8 +9,9 @@ from src.repair.verification.termination import (
     is_repair_success,
     is_terminal,
     regression_detected,
+    resolve_terminal_status,
 )
-from src.state import CandidatePatch, RepairState, VerificationResult
+from src.state import CandidatePatch, RepairState, RepairStatus, VerificationResult
 
 
 class TestRepairTerminalStatus:
@@ -125,3 +126,71 @@ class TestFinalizeRepairState:
         finalize_repair_state(state)
         assert state.status == RepairTerminalStatus.TIMEOUT
         assert state.failure_tags == ["timeout"]
+
+
+class TestWaitingApproval:
+    """沙箱审批暂停是一等状态：非终态、可恢复、退出码与失败区分。"""
+
+    def test_not_terminal(self):
+        assert not is_terminal(RepairStatus.WAITING_APPROVAL)
+
+    def test_set_status_accepts_the_member(self):
+        state = RepairState(issue_input="x")
+        state.set_status(RepairStatus.WAITING_APPROVAL, "sandbox_approval_required")
+        assert state.status == RepairStatus.WAITING_APPROVAL
+        assert state.state_revision >= 1
+
+    def test_resolve_preserves_the_pause_instead_of_reporting_failure(self):
+        state = RepairState(issue_input="x", status=RepairStatus.WAITING_APPROVAL)
+        assert resolve_terminal_status(state) == RepairStatus.WAITING_APPROVAL
+
+    def test_pause_outranks_exhaustion(self):
+        """重试上限同时用尽时仍是暂停，不得降级成 exhausted。"""
+        state = RepairState(
+            issue_input="x",
+            status=RepairStatus.WAITING_APPROVAL,
+            retry_count=3,
+            max_retries=3,
+        )
+        assert resolve_terminal_status(state) == RepairStatus.WAITING_APPROVAL
+
+    def test_timeout_supersedes_the_pause(self):
+        state = RepairState(issue_input="x", status=RepairStatus.WAITING_APPROVAL)
+        state.control.repair_timeout = 60
+        assert resolve_terminal_status(state) == RepairStatus.TIMEOUT
+
+    def test_cancel_supersedes_the_pause(self):
+        state = RepairState(issue_input="x", status=RepairStatus.WAITING_APPROVAL)
+        state.control.user_cancel = True
+        assert resolve_terminal_status(state) == RepairStatus.USER_CANCEL
+
+    def test_apply_terminal_status_keeps_the_pause(self):
+        state = RepairState(issue_input="x", status=RepairStatus.WAITING_APPROVAL)
+        apply_terminal_status(state)
+        assert state.status == RepairStatus.WAITING_APPROVAL
+
+    def test_checkpoint_payload_is_accepted(self):
+        """暂停时写出的 checkpoint 必须通过持久化校验，否则无法续跑。"""
+        from src.state import CURRENT_STATE_SCHEMA_VERSION, validate_state_payload
+
+        payload = {
+            "schema_version": CURRENT_STATE_SCHEMA_VERSION,
+            "status": RepairStatus.WAITING_APPROVAL,
+            "phase": "patch",
+        }
+        assert validate_state_payload(payload)["status"] == RepairStatus.WAITING_APPROVAL
+
+    def test_pending_approval_id_survives_a_round_trip(self):
+        state = RepairState(issue_input="x", status=RepairStatus.WAITING_APPROVAL)
+        state.control.pending_approval_id = "approval-123"
+        restored = RepairState.from_dict(state.to_dict())
+        assert restored.control.pending_approval_id == "approval-123"
+
+    def test_exit_code_is_distinct_from_failure(self):
+        from src.cli_exit_codes import REPAIR_EXIT_APPROVAL, REPAIR_EXIT_FAIL, repair_exit_code
+
+        paused = RepairState(issue_input="x", status=RepairStatus.WAITING_APPROVAL)
+        failed = RepairState(issue_input="x", status=RepairStatus.FAILED)
+        assert repair_exit_code(paused) == REPAIR_EXIT_APPROVAL
+        assert repair_exit_code(paused) != REPAIR_EXIT_FAIL
+        assert repair_exit_code(failed) == REPAIR_EXIT_FAIL

@@ -10,7 +10,7 @@ from src.repair.verification.termination import (
     RepairTerminalStatus,
     mark_pending_verify,
 )
-from src.state import RepairState, RetrievedContext, SuspectLocation
+from src.state import RepairState, RepairStatus, RetrievedContext, SuspectLocation
 
 log = get_logger("repair.pipeline")
 
@@ -190,8 +190,8 @@ class RepairCoordinator:
         try:
             return self.repair_impl_with_plan(state, initial_snapshot)
         except SandboxApprovalRequired as exc:
-            state.status = "waiting_approval"
-            state.node_timings["sandbox_approval_id"] = exc.approval_id
+            state.control.pending_approval_id = exc.approval_id
+            state.set_status(RepairStatus.WAITING_APPROVAL, "sandbox_approval_required")
             self.session.events.checkpoint_progress(state)
             return state
         except OwnerConflictError as exc:

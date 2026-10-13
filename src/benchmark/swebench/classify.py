@@ -72,6 +72,9 @@ def classify_post_repair(
     if status == "timeout":
         # E14: 有可导出 unified patch 的超时
         return FailureClass.NONE, "timeout_with_patch"
+    if status == "waiting_approval":
+        # 审批暂停既非成功也非 agent 失败：补丁尚未定稿，等待调用方履行审批。
+        return FailureClass.NONE, "waiting_approval"
     if status != "fixed":
         return FailureClass.AGENT, "patch_without_fixed_status"
     return FailureClass.NONE, "pending_verify"

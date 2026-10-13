@@ -5,7 +5,15 @@ from typing import Any, Literal
 
 TurnMode = Literal["chat", "project_chat", "repair"]
 NodeKind = Literal["turn", "local_checkpoint"]
-RunStatus = Literal["queued", "running", "succeeded", "failed", "cancelled", "interrupted"]
+RunStatus = Literal[
+    "queued",
+    "running",
+    "succeeded",
+    "failed",
+    "cancelled",
+    "interrupted",
+    "waiting_approval",
+]
 TerminalStatus = Literal["succeeded", "failed", "cancelled", "interrupted"]
 
 
