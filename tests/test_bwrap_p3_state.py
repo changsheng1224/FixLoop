@@ -55,9 +55,9 @@ def test_sandbox_step_resume_is_uncertain(tmp_path):
         "checkpoint_sequence": 0,
     }
     agent = SimpleNamespace(
-        _cwd=str(workspace),
+        cwd=str(workspace),
         config=SimpleNamespace(provider="fake", model="m", approval="auto", max_steps=3),
-        _prefix=Prefix(),
+        prefix=Prefix(),
         session=session,
         tool_context=SimpleNamespace(
             sandbox_identity={"backend": "wsl_bwrap", "policy_digest": "p1"}

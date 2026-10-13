@@ -31,10 +31,10 @@ def test_checkpoint_contains_control_state(tmp_path):
     from agent_runtime.tool_context import ToolContext
 
     agent = SimpleNamespace(
-        _cwd=str(tmp_path),
+        cwd=str(tmp_path),
         tool_context=ToolContext(root=str(tmp_path)),
         config=SimpleNamespace(provider="fake", model="m", approval="auto", max_steps=3),
-        _prefix=SimpleNamespace(tool_signature="tools", assets_fingerprint=""),
+        prefix=SimpleNamespace(tool_signature="tools", assets_fingerprint=""),
         session={
             "memory": {
                 "working": {

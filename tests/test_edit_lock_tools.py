@@ -13,7 +13,7 @@ from src.repair.execution.edit_lock import EditLockState
 def test_tool_write_rejected_until_read():
     raw = tempfile.mkdtemp(prefix="fixloop-tool-elock-")
     root = Path(raw)
-    (root / "a.py").write_text("x\n", encoding="utf-8")
+    (root / "a.py").write_bytes(b"x\n")
     ctx = ToolContext(root=str(root))
     lock = EditLockState(repo_root=root, allowed_edit={"a.py"})
     ctx.edit_lock = lock
@@ -32,8 +32,8 @@ def test_tool_write_rejected_until_read():
 def test_tool_patch_respects_allowed_edit():
     raw = tempfile.mkdtemp(prefix="fixloop-tool-elock2-")
     root = Path(raw)
-    (root / "a.py").write_text("old\n", encoding="utf-8")
-    (root / "b.py").write_text("keep\n", encoding="utf-8")
+    (root / "a.py").write_bytes(b"old\n")
+    (root / "b.py").write_bytes(b"keep\n")
     ctx = ToolContext(root=str(root))
     lock = EditLockState(repo_root=root, allowed_edit={"a.py"})
     lock.mark_read("a.py")
