@@ -21,9 +21,26 @@ def default_repair_tool_registry(*, sandbox_mode: bool = False) -> tool_spec.Too
         _spec("code_relations", _READERS, capabilities=frozenset({"code.relations"})),
         _spec("list_files", _READERS, capabilities=frozenset({"filesystem.list"})),
         _spec("inspect_file", _PATCHER, capabilities=frozenset({"filesystem.read", "code.ast"})),
-        _spec("find_test", _PATCHER, capabilities=frozenset({"test.discover"})),
-        _spec("git_blame", _PATCHER, capabilities=frozenset({"git.read"})),
-        _spec("git_diff", _PATCHER, capabilities=frozenset({"git.read"})),
+        _spec(
+            "find_test",
+            _PATCHER,
+            capabilities=frozenset({"test.discover"}),
+            path_args=frozenset({"file_path"}),
+        ),
+        _spec(
+            "git_blame",
+            _PATCHER,
+            capabilities=frozenset({"git.read"}),
+            path_args=frozenset({"file"}),
+        ),
+        # commit_a/commit_b 被拼进 `git diff "{a}..{b}"`；不加约束时以 "-"
+        # 开头的取值会被 git 当选项解析（例如 --output=<workspace 外的文件>）。
+        _spec(
+            "git_diff",
+            _PATCHER,
+            capabilities=frozenset({"git.read"}),
+            argv_args=frozenset({"commit_a", "commit_b"}),
+        ),
         _spec("ast_parse", _PATCHER, capabilities=frozenset({"code.ast"})),
         _spec("stack_parse", _PATCHER, capabilities=frozenset({"trace.parse"})),
         _spec("java_ast_parse", _PATCHER, capabilities=frozenset({"code.ast"})),
@@ -91,6 +108,8 @@ def default_repair_tool_registry(*, sandbox_mode: bool = False) -> tool_spec.Too
             risk_level="high" if sandbox_mode else "low",
             requires_approval=sandbox_mode,
             capabilities=frozenset({"test.run"}),
+            # nodeid 优先于 path 进入 pytest argv，必须与 path 同等约束。
+            argv_args=frozenset({"nodeid"}),
         ),
         tool_spec.ToolSpec(
             "run_shell",
@@ -109,6 +128,7 @@ def default_repair_tool_registry(*, sandbox_mode: bool = False) -> tool_spec.Too
             phases=frozenset({"verify"}),
             budget_group="verify",
             side_effect="external",
+            path_args=frozenset({"repo_path"}),
         ),
         tool_spec.ToolSpec(
             "sandbox_test",
@@ -116,6 +136,7 @@ def default_repair_tool_registry(*, sandbox_mode: bool = False) -> tool_spec.Too
             phases=frozenset({"verify"}),
             budget_group="verify",
             side_effect="external",
+            path_args=frozenset({"repo_path", "test_path"}),
         ),
         tool_spec.ToolSpec(
             "sandbox_verify",
@@ -123,6 +144,7 @@ def default_repair_tool_registry(*, sandbox_mode: bool = False) -> tool_spec.Too
             phases=frozenset({"verify"}),
             budget_group="verify",
             side_effect="external",
+            path_args=frozenset({"repo_path", "test_path"}),
         ),
     ]
     if sandbox_mode:

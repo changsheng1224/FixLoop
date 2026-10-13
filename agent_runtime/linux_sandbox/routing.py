@@ -14,15 +14,22 @@ from .models import SandboxRequest, SandboxResult
 from .permissions import permission_rejection, permission_service
 
 
-def pytest_target(root: str | Path, raw: str) -> str:
-    """Validate a nodeid's file independently of its pytest selector."""
+def pytest_target(root: str | Path, raw: str, *, python_file_only: bool = True) -> str:
+    """Validate a nodeid's file independently of its pytest selector.
+
+    ``python_file_only`` is relaxed on the host tier, where a directory is a
+    legitimate pytest target; containment and option-injection checks stay on
+    in both tiers.
+    """
     file_part, separator, selector = raw.partition("::")
     if not file_part or file_part.startswith("-") or (separator and not selector):
         raise ValueError("policy_denied: invalid pytest target")
     if any(part.startswith("-") for part in selector.split("::")):
         raise ValueError("policy_denied: invalid pytest selector")
     path = resolve_under_root(root, file_part)
-    if not path.exists() or path.suffix != ".py":
+    if not path.exists():
+        raise ValueError("policy_denied: pytest target does not exist")
+    if python_file_only and path.suffix != ".py":
         raise ValueError("policy_denied: pytest target must be an existing Python file")
     return path.relative_to(Path(root).resolve()).as_posix() + (
         separator + selector if separator else ""
