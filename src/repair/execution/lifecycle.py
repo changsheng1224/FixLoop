@@ -13,6 +13,9 @@ from src.state import RepairState
 log = get_logger("repair.lifecycle")
 
 DEFAULT_REPAIR_TIMEOUT_S = 180
+# Long enough for the timeout callback's coordination-store write to finish
+# (its own busy timeout is 10s), short enough not to hang the owner thread.
+_CANCEL_JOIN_TIMEOUT_S = 10.0
 
 
 class ExecutionLifecycle:
@@ -188,6 +191,7 @@ class ExecutionLifecycle:
                 timer.start()
                 wall_started = time.monotonic()
                 sandbox_pipeline_started = True
+                result = None
                 try:
                     result = self.session.coordinator.repair_impl(state, initial_snapshot)
                     if expired.is_set() and result.status != "recovery_required":
@@ -200,6 +204,20 @@ class ExecutionLifecycle:
                     return result
                 finally:
                     timer.cancel()
+                    # Timer.cancel() only clears a timer that has not fired yet;
+                    # it neither waits for nor stops `expire` already running on
+                    # the timer thread, where `token.cancel` invokes the whole
+                    # cancel callback chain (coordination store, recovery
+                    # outcome). Returning first would let this run report a
+                    # terminal state while that writer is still live.
+                    if expired.is_set():
+                        timer.join(timeout=_CANCEL_JOIN_TIMEOUT_S)
+                        if timer.is_alive():
+                            state.set_status("recovery_required", "cancel_callback_unconfirmed")
+                            if result is not None:
+                                result.set_status(
+                                    "recovery_required", "cancel_callback_unconfirmed"
+                                )
         finally:
             self.release_model_budget(state)
             self.session.repair_ctx = None

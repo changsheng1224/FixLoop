@@ -1115,23 +1115,37 @@ class AgentLoop:
         from agent_runtime.task_state import TaskState
 
         checkpoints = self.agent.session.get("checkpoints") or []
-        if checkpoints and checkpoints[-1].get("trigger") == "approval_required":
+        last_checkpoint = checkpoints[-1] if checkpoints else {}
+        if last_checkpoint.get("trigger") == "approval_required" and not last_checkpoint.get(
+            "superseded"
+        ):
+            from agent_runtime.checkpoint import supersede_approval_checkpoint
+
             token = getattr(self.agent, "cancel_token", None)
             if token is not None and token.is_cancelled:
                 from agent_runtime.linux_sandbox.permissions import permission_service
 
                 permission_service(self.agent.tool_context).cancel_pending()
+                supersede_approval_checkpoint(self.agent, "user_cancelled")
                 return "用户已取消当前任务，审批调用未执行。"
             from agent_runtime.checkpoint import evaluate_resume_state
 
             checked = evaluate_resume_state(self.agent)
             self.agent.session["resume_state"] = checked
+            if checked["status"] == "approval-pending":
+                # The approval is still outstanding; the caller has to resolve it
+                # before this turn can run, so say so instead of consuming input.
+                self.agent.session["awaiting_approval"] = {
+                    "status": checked["status"],
+                    "checkpoint_id": str(last_checkpoint.get("checkpoint_id", "")),
+                }
+                return "等待审批。"
             if checked["status"] != "approval-resumable":
-                return (
-                    "等待审批。"
-                    if checked["status"] == "approval-pending"
-                    else "审批调用无法恢复：" + checked["status"]
-                )
+                # A pause whose approval can no longer be resolved (cancelled,
+                # restarted, or its authority changed) will never be resumable.
+                # Re-checking it every turn used to wedge the session permanently
+                # and discard the user's message; retire it and run this turn.
+                supersede_approval_checkpoint(self.agent, checked["status"])
         resume_state = self._consume_step_resume_state()
         if resume_state is not None:
             self._reset_exploration_on_resume()

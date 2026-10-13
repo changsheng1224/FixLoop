@@ -26,10 +26,12 @@ def install_sigint_cancel(
     def _handle_sigint(signum, frame) -> None:
         del signum, frame
         if not token.is_cancelled:
-            token.cancel("user")
-            if on_first_cancel is not None:
-                on_first_cancel()
-            elif first_message:
+            # Mark only. The durable cancel chain runs on the owner thread from
+            # ``sigint_cancel_scope``'s exit: in the interrupted frame it would
+            # block on a lock that same frame holds and could raise at any
+            # bytecode. Immediate feedback stays here because it is cheap.
+            token.request("user")
+            if first_message:
                 print(f"\n{first_message}", file=sys.stderr)
             return
         raise KeyboardInterrupt
@@ -51,12 +53,21 @@ def sigint_cancel_scope(
     first_message: str = "[cancel] 正在取消当前任务…",
     on_first_cancel: Callable[[], None] | None = None,
 ) -> Iterator[CancellationToken]:
-    previous = install_sigint_cancel(
-        token,
-        first_message=first_message,
-        on_first_cancel=on_first_cancel,
-    )
+    previous = install_sigint_cancel(token, first_message=first_message)
     try:
         yield token
     finally:
-        restore_sigint(previous)
+        try:
+            # The handler only marked the token; run the durable chain here,
+            # once the interrupted work has unwound and this thread owns a
+            # defined point again.
+            if token.is_cancelled:
+                if on_first_cancel is not None:
+                    on_first_cancel()
+                token.run_pending_callbacks()
+        except Exception as exc:  # noqa: BLE001 - must not mask the body's error
+            from agent_runtime.logging_setup import get_logger
+
+            get_logger("signal_cancel").warning("取消回调执行失败: %s", exc)
+        finally:
+            restore_sigint(previous)

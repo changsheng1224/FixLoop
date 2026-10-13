@@ -99,14 +99,48 @@ class CancellationToken:
         self._lock = threading.Lock()
         self._cause = None
         self._callbacks: list[Callable[[], None]] = []
+        self._callbacks_run = False
 
-    def cancel(self, reason: str = "user") -> None:
+    def _mark_cancelled(self, reason: str) -> None:
         from agent_runtime.repair_run import CancellationCause
 
+        self._cancelled = True
+        self._reason = reason or "user"
+        self._cause = CancellationCause(kind=self._reason, reason=self._reason)
+
+    def request(self, reason: str = "user") -> None:
+        """Set the cancelled flag without running the callbacks.
+
+        A signal handler must not run the durable cancel chain: it executes
+        inside whatever frame was interrupted, where a coordination-store write
+        can block on a lock that same frame holds, and any error it raises
+        unwinds that frame at an arbitrary bytecode. The handler records the
+        cancellation; the owner thread calls ``run_pending_callbacks`` at a
+        point of its own choosing.
+        """
         with self._lock:
-            self._cancelled = True
-            self._reason = reason or "user"
-            self._cause = CancellationCause(kind=self._reason, reason=self._reason)
+            self._mark_cancelled(reason)
+
+    def run_pending_callbacks(self) -> None:
+        """Run the registered callbacks once, on the calling thread."""
+        with self._lock:
+            if self._callbacks_run or not self._cancelled:
+                return
+            self._callbacks_run = True
+            callbacks = list(self._callbacks)
+        first_error = None
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception as exc:
+                first_error = first_error or exc
+        if first_error is not None:
+            raise first_error
+
+    def cancel(self, reason: str = "user") -> None:
+        with self._lock:
+            self._mark_cancelled(reason)
+            self._callbacks_run = True
             callbacks = list(self._callbacks)
         first_error = None
         for callback in callbacks:
@@ -121,14 +155,17 @@ class CancellationToken:
         """Subscribe a durable dispatch gate; invoke immediately if cancelled."""
         with self._lock:
             self._callbacks.append(callback)
-            cancelled = self._cancelled
+            # A token cancelled through ``request`` has not run its callbacks
+            # yet, so this one is picked up by ``run_pending_callbacks``
+            # instead; only an already-drained token needs the catch-up.
+            invoke_now = self._cancelled and self._callbacks_run
 
         def unsubscribe():
             with self._lock:
                 if callback in self._callbacks:
                     self._callbacks.remove(callback)
 
-        if cancelled:
+        if invoke_now:
             try:
                 callback()
             except BaseException:
