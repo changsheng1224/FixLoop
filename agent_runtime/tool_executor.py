@@ -155,7 +155,7 @@ class ToolExecutor:
             coordinator.assert_can_dispatch()
         if getattr(ctx, "execution_uncertain", False) and (
             name in self._ASK_TOOLS | self._DENY_TOOLS
-            or tool_spec.get("side_effect") in {"write", "process"}
+            or tool_spec.get("side_effect") in {"write", "process", "state"}
         ):
             return self._rejected(
                 2, "execution_uncertain", "Error: previous cleanup unverified; resume required."

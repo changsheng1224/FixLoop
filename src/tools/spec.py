@@ -77,6 +77,9 @@ def default_repair_tool_registry(*, sandbox_mode: bool = False) -> tool_spec.Too
             phases=frozenset({"patch"}),
             budget_group="recovery",
             capabilities=frozenset({"policy.edit_scope"}),
+            # 它改写的是写权限本身，而不是文件：标成 "read" 会让只读模式拦不住它，
+            # 标成 "write" 则会触发 before_write()，把仍在进行的委派探索一并取消。
+            side_effect="state",
         ),
         tool_spec.ToolSpec(
             "quick_test",
