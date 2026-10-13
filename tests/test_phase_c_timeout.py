@@ -31,15 +31,32 @@ def test_timeout_keeps_token_and_budget_until_execution_returns(tmp_path, monkey
     timers = []
 
     class ImmediateTimer:
+        """Stands in for ``threading.Timer``; runs the callback synchronously.
+
+        It must offer the surface the caller uses, not just the two methods the
+        happy path needs: the repair lifecycle joins the timer after cancelling
+        it so it does not report a terminal state while the cancel callback is
+        still running, and asks whether it survived the join.
+        """
+
         def __init__(self, seconds, callback):
-            self.callback, self.cancelled = callback, False
+            self.callback, self.cancelled, self.finished = callback, False, False
             timers.append(self)
 
         def start(self):
-            self.callback()
+            try:
+                self.callback()
+            finally:
+                self.finished = True
 
         def cancel(self):
             self.cancelled = True
+
+        def join(self, timeout=None):
+            return None
+
+        def is_alive(self):
+            return not self.finished and not self.cancelled
 
     def execute(state, initial_snapshot):
         assert token.is_cancelled and token.reason == "timeout"
