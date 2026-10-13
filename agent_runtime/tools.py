@@ -436,6 +436,15 @@ def tool_quick_test(context, args: dict) -> ToolResult:
         return sandbox_tool_result(result, f"quick_test target={target}")
 
     root = getattr(context, "root", ".") or "."
+    # The target reaches pytest's argv in both tiers, so the host tier applies
+    # the same containment and option-injection checks as the sandbox tier --
+    # but still accepts a directory, which is a legitimate pytest target here.
+    from agent_runtime.linux_sandbox.routing import pytest_target
+
+    try:
+        target = pytest_target(root, target, python_file_only=False)
+    except (ValueError, TypeError) as exc:
+        return ToolResult.error(f"Error: quick_test target 被拒绝: {exc}", code="invalid_args")
     cmd = ["python", "-m", "pytest", target, "-q", "--tb=line", "--maxfail=3"]
     try:
         proc = subprocess.run(
@@ -1012,6 +1021,8 @@ def build_tool_registry(context) -> dict:
         "risky": context.sandbox_backend is not None,
         "execution_tier": "linux_sandbox" if context.sandbox_backend is not None else TIER_HOST,
         "description": "环内快检 pytest nodeid/path。参数: nodeid 或 path, timeout",
+        # nodeid 优先于 path，因此它必须和 path 一样受参数治理约束。
+        "argv_args": frozenset({"nodeid"}),
         "run": lambda args: tool_quick_test(context, args),
     }
 

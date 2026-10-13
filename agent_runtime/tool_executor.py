@@ -506,6 +506,9 @@ class ToolExecutor:
         path_reject = self._validate_path_args(name, args)
         if path_reject is not None:
             return args, path_reject
+        argv_reject = self._validate_argv_args(name, args)
+        if argv_reject is not None:
+            return args, argv_reject
         shell_reject = self._validate_shell_args(name, args)
         if shell_reject is not None:
             return args, shell_reject
@@ -825,14 +828,50 @@ class ToolExecutor:
                 metadata["shell_env_keys"] = sorted(provider().keys())
         return metadata
 
+    def _declaration(self, name: str) -> dict:
+        """该工具已解析的执行声明（未注册时为空）。"""
+        declared = (self.agent.tools or {}).get(name)
+        return declared if isinstance(declared, dict) else {}
+
     def _validate_path_args(self, name: str, args) -> ToolResult | None:
-        """Gate 3 续：路径 resolve、敏感路径、超大/二进制读拦截。"""
-        if isinstance(args, dict):
-            raw_path = args.get("path")
-        else:
-            raw_path = getattr(args, "path", None)
-        if not raw_path:
-            return None
+        """Gate 3 续：路径 resolve 与敏感路径判定。
+
+        每个工具声明自己的 ``path_args``。只检查字面量键 ``path`` 会让
+        ``git_diff`` 的 commit 参数、``git_blame`` 的 ``file``、``quick_test``
+        的 ``nodeid`` 这类参数完全绕过 Gate 3。缺省值 ``{"path"}`` 保持既有行为。
+        """
+        declared = self._declaration(name).get("path_args", frozenset({"path"}))
+        for key in sorted(declared or ()):
+            raw_path = args.get(key) if isinstance(args, dict) else getattr(args, key, None)
+            if not raw_path:
+                continue
+            reject = self._validate_one_path(name, raw_path)
+            if reject is not None:
+                return reject
+        return None
+
+    def _validate_argv_args(self, name: str, args) -> ToolResult | None:
+        """Gate 3 续：会被拼进子进程 argv 的参数不得形似命令行选项。
+
+        ``git diff "{a}..{b}"`` 这类拼接里，以 ``-`` 开头的取值会被程序自身
+        解析成选项（例如 ``--output=<文件>``），从而在 workspace 之外产生写入。
+        """
+        declared = self._declaration(name).get("argv_args") or ()
+        for key in sorted(declared):
+            raw = args.get(key) if isinstance(args, dict) else getattr(args, key, None)
+            if raw is None or raw == "":
+                continue
+            text = str(raw)
+            if text.startswith("-") or any(char in text for char in "\x00\n\r"):
+                return self._rejected(
+                    3,
+                    "option_injection",
+                    f"Error: 参数 '{key}' 不得以 '-' 开头或包含控制字符。",
+                    error_code="invalid_arguments",
+                )
+        return None
+
+    def _validate_one_path(self, name: str, raw_path) -> ToolResult | None:
         from agent_runtime.linux_sandbox.workspace_routing import sandbox_enabled
 
         if sandbox_enabled(self.agent.tool_context):

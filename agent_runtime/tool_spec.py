@@ -21,6 +21,13 @@ class ToolSpec:
     budget_group: str = "read"
     timeout_s: float = 30.0
     side_effect: str = "read"
+    # Argument governance.  ``path_args`` names the arguments that are
+    # workspace-relative paths and must be resolved and sensitivity-checked;
+    # ``argv_args`` names the arguments that are forwarded into a subprocess
+    # argv and must therefore never look like an option.  The ``path`` default
+    # preserves the behaviour every existing tool already relied on.
+    path_args: frozenset[str] = frozenset({"path"})
+    argv_args: frozenset[str] = frozenset()
     risk_level: str = "low"
     requires_approval: bool = False
     replay_policy: str = "revalidate"
@@ -54,6 +61,8 @@ class ToolSpec:
         raw["phases"] = sorted(self.phases)
         raw["modes"] = sorted(self.modes)
         raw["capabilities"] = sorted(self.capabilities)
+        raw["path_args"] = sorted(self.path_args)
+        raw["argv_args"] = sorted(self.argv_args)
         raw["input_schema"] = self.json_schema()
         return raw
 
@@ -106,7 +115,7 @@ class ToolRegistry:
 
         names = {item.name for item in fields(ToolSpec)} - {"name"}
         aliases = {"schema": "input_schema", "run": "executor"}
-        sets = {"roles", "phases", "modes", "capabilities"}
+        sets = {"roles", "phases", "modes", "capabilities", "path_args", "argv_args"}
         for name, execution in tools.items():
             updates = {}
             for key, value in execution.items():
@@ -162,6 +171,8 @@ def bind_execution_tools(tools: dict[str, dict], registry: ToolRegistry) -> dict
                 "rate_limit_per_minute": spec.rate_limit_per_minute,
                 "circuit_breaker_threshold": spec.circuit_breaker_threshold,
                 "terminal": spec.terminal,
+                "path_args": sorted(spec.path_args),
+                "argv_args": sorted(spec.argv_args),
             }
         )
     return tools
@@ -198,5 +209,7 @@ def project_tool_specs(specs: list[ToolSpec]) -> dict[str, dict]:
             "rate_limit_per_minute": spec.rate_limit_per_minute,
             "circuit_breaker_threshold": spec.circuit_breaker_threshold,
             "terminal": spec.terminal,
+            "path_args": sorted(spec.path_args),
+            "argv_args": sorted(spec.argv_args),
         }
     return projected
