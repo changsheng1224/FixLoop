@@ -14,7 +14,6 @@ class RepairConfig(BaseModel):
 
     schema_version: Literal["2.0"] = "2.0"
     sandbox_policy: Literal["required", "preferred", "disabled"] = "preferred"
-    patcher_compact: bool = True
     progress: bool = True
     progress_stdout: bool = True
     progress_jsonl: str = ""
@@ -40,7 +39,6 @@ def _stdout_bool(value: str) -> bool:
 
 _ENV_FIELDS = {
     "sandbox_policy": str,
-    "patcher_compact": parse_bool,
     "progress": _progress_bool,
     "progress_stdout": _stdout_bool,
     "progress_jsonl": str,
