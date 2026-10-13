@@ -979,57 +979,6 @@ class ObservationStore:
 
 
 @dataclass
-class Hypothesis:
-    hypothesis_id: str
-    statement: str
-    target_files: list[str] = field(default_factory=list)
-    status: str = "active"
-    confidence: float = 0.5
-    evidence_ids: list[str] = field(default_factory=list)
-    counter_evidence_ids: list[str] = field(default_factory=list)
-
-
-class HypothesisEvidenceGraph:
-    def __init__(self, state: dict[str, Any]):
-        self.state = state
-        self.hypotheses = state.setdefault("hypotheses", {})
-        self.evidence = state.setdefault("evidence", {})
-
-    def add_hypothesis(
-        self, statement: str, *, target_files: list[str] | None = None
-    ) -> Hypothesis:
-        hid = "H-" + hashlib.sha256(statement.encode()).hexdigest()[:12]
-        item = Hypothesis(hid, statement, list(target_files or []))
-        self.hypotheses[hid] = asdict(item)
-        return item
-
-    def link(self, hypothesis_id: str, evidence_id: str, relation: str) -> bool:
-        raw = self.hypotheses.get(hypothesis_id)
-        if not raw or relation not in {"supports", "contradicts", "neutral"}:
-            return False
-        target = "evidence_ids" if relation == "supports" else "counter_evidence_ids"
-        if evidence_id not in raw[target]:
-            raw[target].append(evidence_id)
-        if relation == "supports":
-            raw["confidence"] = min(1.0, float(raw["confidence"]) + 0.1)
-        elif relation == "contradicts":
-            raw["confidence"] = max(0.0, float(raw["confidence"]) - 0.2)
-            if raw["confidence"] < 0.2:
-                raw["status"] = "rejected"
-        return True
-
-    def update_from_verification(self, passed: bool) -> None:
-        for raw in self.hypotheses.values():
-            if raw.get("status") == "rejected":
-                continue
-            if passed:
-                raw["status"] = "supported"
-                raw["confidence"] = min(1.0, float(raw.get("confidence", 0.5)) + 0.15)
-            elif raw.get("counter_evidence_ids"):
-                raw["status"] = "rejected"
-
-
-@dataclass
 class ActionRecord:
     action_id: str
     tool: str
