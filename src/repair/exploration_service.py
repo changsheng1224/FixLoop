@@ -16,8 +16,6 @@ log = get_logger("repair.pipeline")
 
 log = get_logger("orchestrator")
 
-DEFAULT_REPAIR_TIMEOUT_S = 180
-
 
 class ExplorationService:
     def __init__(self, session):

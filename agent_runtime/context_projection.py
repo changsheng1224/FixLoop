@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from agent_runtime.context_manager import TokenBudget
+    from agent_runtime.token_budget import TokenBudget
 CONTEXT_SCHEMA_VERSION = 1
 EIGHT_SECTIONS = ("system", "task", "state", "knowledge", "tools", "skills", "memory", "history")
 TOOLS_MARKER = "## 可用工具"

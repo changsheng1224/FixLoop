@@ -2,9 +2,9 @@
 
 import json
 
-from agent_runtime.context_manager import TokenBudget
 from agent_runtime.context_preparation import request_hash
 from agent_runtime.model_turn import ModelTurnRequest
+from agent_runtime.token_budget import TokenBudget
 
 
 class IsolatedContextManager:

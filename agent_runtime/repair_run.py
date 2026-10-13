@@ -10,7 +10,7 @@ from enum import StrEnum
 from typing import Any
 
 
-class RepairPhase(StrEnum):
+class RunPhase(StrEnum):
     INTENT = "intent"
     CONTEXT = "context"
     LOCALIZATION = "localization"
@@ -84,7 +84,7 @@ class RunTerminalGuard:
                     StreamEvent(
                         run_id=run_id,
                         kind="run_terminal_late",
-                        phase=RepairPhase.FINALIZATION.value,
+                        phase=RunPhase.FINALIZATION.value,
                         payload={"status": status, **(payload or {})},
                         terminal=False,
                         replayable=False,
@@ -96,7 +96,7 @@ class RunTerminalGuard:
             self.event = StreamEvent(
                 run_id=run_id,
                 kind="run_terminal",
-                phase=RepairPhase.FINALIZATION.value,
+                phase=RunPhase.FINALIZATION.value,
                 payload=payload or {},
                 terminal=True,
             )

@@ -11,8 +11,6 @@ from src.state import (
 
 log = get_logger("orchestrator")
 
-DEFAULT_REPAIR_TIMEOUT_S = 180
-
 
 class VerificationController:
     def __init__(self, session):

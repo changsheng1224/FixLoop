@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from agent_runtime.context_manager import TokenBudget
+    from agent_runtime.token_budget import TokenBudget
 
 __all__ = ["SectionFiller"]
 

@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from agent_runtime.context_manager import TokenBudget
+from agent_runtime.token_budget import TokenBudget
 
 
 @dataclass

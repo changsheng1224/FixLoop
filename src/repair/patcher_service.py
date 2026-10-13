@@ -11,7 +11,6 @@ from src.repair.prompt_router import patcher_variant_for
 from src.state import CandidatePatch, RepairPlan, RepairState, RetrievedContext, SuspectLocation
 
 log = get_logger("orchestrator")
-DEFAULT_REPAIR_TIMEOUT_S = 180
 
 
 class PatcherService:
