@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
@@ -91,15 +92,14 @@ class RepairPhaseFSM:
         return transition
 
     def snapshot(self) -> dict[str, Any]:
-        return {"phase": self.phase, "revision": self.revision, "history": list(self.history)}
+        return {"phase": self.phase, "revision": self.revision, "history": deepcopy(self.history)}
 
     @classmethod
     def from_state(cls, state) -> RepairPhaseFSM:
-        snapshot = (getattr(state, "node_timings", {}) or {}).get("phase_fsm") or {}
         return cls(
-            phase=str(getattr(state, "phase", "") or snapshot.get("phase", "")),
-            revision=int(snapshot.get("revision", 0) or 0),
-            history=snapshot.get("history", []),
+            phase=str(state.phase),
+            revision=state.execution.phase_revision,
+            history=[item for item in state.phase_history if "to_phase" in item],
         )
 
     def apply(
@@ -124,7 +124,8 @@ class RepairPhaseFSM:
             state.state_revision = max(
                 int(getattr(state, "state_revision", 0)), transition.revision
             )
-        state.phase_history = list(self.history)
+        state.phase_history = deepcopy(self.history)
+        state.execution.phase_revision = self.revision
         state.node_timings["phase_fsm"] = self.snapshot()
         return transition
 

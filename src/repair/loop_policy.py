@@ -405,6 +405,8 @@ class RepairLoopPolicy(LoopPolicy):
                     {"apply_patch", "patch_file", "finish_repair"},
                 )
         if tool_name == "expand_lock" and tool_args.get("path") and "expanded:" in result.content:
+            if tool_args.get("operation") == "create":
+                return
             generation = 0
             lock = context.agent.tool_context.edit_lock
             if lock is not None:

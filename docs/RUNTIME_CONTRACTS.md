@@ -50,12 +50,12 @@ Patcher 通过受治理工具修改磁盘，运行时根据快照差异生成 `C
 
 ## 状态和恢复
 
-`RepairState` 只读取显式标注 `schema_version: "1.2"` 的状态。
+`RepairState` 只读取显式标注 `schema_version: "1.3"` 的状态。
 旧版本、缺失版本、旧阶段 `retrieve`、旧状态 `patched` 均被拒绝；上下文阶段使用
 `context`，已生成但未验证的补丁使用 `pending_verify`，验证成功使用 `fixed`。
 
 L1 和 L2 checkpoint 必须携带当前版本 `2.0` 的 `CheckpointEnvelope`，并通过完整性
-校验。历史无 envelope 的 checkpoint 和 L2 `1.0`/`1.1` 状态不能继续恢复，需创建新运行。
+校验。历史无 envelope 的 checkpoint 和 L2 `1.0`/`1.1`/`1.2` 状态不能继续恢复，需创建新运行。
 现有历史结果文件仍可留作人工审计，不会被自动改写。
 
 
@@ -133,3 +133,95 @@ Skill 注册、上下文装配和持久化格式的其余兼容路径于 2026-10
   `require_canonical` 形参与其旧格式短路。
 - **死代码**：删除 `agent_runtime.tools` 未使用的 `json` 导入；
   修正 `loop_protocols` 中遮蔽 `dataclasses.field` 的循环变量。
+
+## 2026-10-13: Execution, Authorization And Recovery
+
+### File Operations
+
+Editing, creating and deleting a file require separate grants. Use
+`expand_lock(path, operation="modify" | "create" | "delete")`. Creation accepts
+missing paths within the workspace, including new modules and tests, and verifies
+absence before granting access. Modification and deletion require a fresh read
+after the grant. Restoring a checkpoint restores scope, but never read evidence.
+The sandbox supplies its own source/absence evidence; host paths are not used to
+authorize sandbox edits.
+
+Atomic writes use an exclusively created temporary file in the target directory.
+They preserve an existing target's permission bits and leave neighboring `.tmp`
+files untouched. Creation uses an exclusive final link, so a concurrent creator
+cannot be overwritten. New files use private `0600` permissions on POSIX.
+
+### Verification
+
+Startup resolves sandbox policy and execution tier into one immutable execution
+policy. Disabled sandbox plus automatic tier selects host/static execution even
+if a container backend is available. Required sandbox rejects host/static tiers;
+disabled sandbox rejects explicit container/bwrap execution. No later module
+reinterprets the original configuration. The verifier is a backend description,
+not an Agent with a model loop, prompt, session or token budget.
+
+Linux host execution runs through a dedicated subreaper. Normal completion,
+cancellation and timeout drain all descendants, including processes that fork
+and leave the original session. A confirmed cleanup receipt is required before
+success, cancellation or timeout is acknowledged. Unknown cleanup fences the
+workspace against rollback/reuse. WSL bwrap retains its PID namespace boundary.
+
+Critic supports `rules_first` and `off`. `llm` and unknown modes are rejected during
+startup. `off` is explicitly skipped, never recorded as a passed review.
+
+Static checks have their own verification mode; they do not establish a green
+test baseline. A successful dynamic command without collected tests cannot
+establish a successful test result.
+
+### Language Scope
+
+Source-read authorization uses the same capability list across languages;
+supported implementation files can be authorized without consuming explicit
+scope expansions, subject to the same automatic-scope limit. Test files still
+require explicit authorization when outside the seeded scope.
+
+| Language | Source extensions | Host test profile | Static checker |
+| --- | --- | --- | --- |
+| Python | `.py` | pytest | Python compile |
+| JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs` | npm test | node --check for JS/MJS/CJS |
+| TypeScript | `.ts`, `.tsx` | npm test | tsc, using tsconfig when present |
+| Java | `.java` | Maven or Gradle | javac |
+| Go | `.go` | go test | gofmt; profile uses go vet |
+| Rust | `.rs` | cargo test | rustc; profile uses cargo check |
+| Ruby | `.rb` | No built-in test profile | ruby -c |
+| PHP | `.php` | No built-in test profile | php -l |
+
+JSX requires a project test/build toolchain; `node --check` does not validate
+JSX. Standalone Java/Rust checks may require project dependencies; use a project
+profile for full build/test validation.
+
+Project `.venv`/`venv` Python, `node_modules/.bin` tools and Maven/Gradle wrappers
+take precedence over PATH tools. Windows batch wrappers support project paths
+containing spaces. No resolver installs or downloads tools; missing tools are
+reported as unavailable. Source discovery excludes dependency/build directories.
+
+### Durable State And Recovery
+
+Repair state schema is `1.3`. Verification receipts, phase revision, run/workspace
+identity, model budgets/deadlines and recovery inputs belong to typed execution
+state. Operation grants and confirmed export scope belong to typed control state.
+Timing dictionaries contain observations/projections; changing them cannot
+authorize files or override verification/phase recovery. Older checkpoints are
+rejected with a schema mismatch; there is no implicit migration.
+
+Workbench terminal results are journaled before database commit. Stop, send,
+admission, wait and restart retry pending results. Replay is idempotent, including
+a failure after the original database commit. Unconfirmed resources remain
+fenced and cannot publish candidate patches or successful output snapshots.
+
+### Packaging And Dependencies
+
+Wheels include runtime YAML for intent prototypes, pricing and fixed context
+fields. The packaging regression installs a wheel and loads these resources from
+outside the source directory with isolated Python.
+
+Semantic retrieval is optional: install `agent_runtime[semantic]` to enable its
+embedding model dependency. Without it, keyword retrieval remains available and
+enabling semantic retrieval emits installation guidance. The retained public
+patch applier executes only explicit, exact patches; it does not infer import
+renames or rewrite calls/strings.

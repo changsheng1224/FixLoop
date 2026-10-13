@@ -20,12 +20,16 @@ from src.state import RepairState
 def host_orchestrator(repo, storage, *, policy="worktree", profile="legacy:host"):
     agent = SimpleNamespace(_cwd=str(repo), tool_context=ToolContext(str(repo)))
     return Orchestrator(
-        agent, workspace_policy=policy, workspace_state_base=str(storage),
+        agent,
+        workspace_policy=policy,
+        workspace_state_base=str(storage),
         execution_profile=profile,
     )
 
 
-def test_concurrent_worktrees_use_final_roots_before_snapshot(temp_workspace, tmp_path, monkeypatch):
+def test_concurrent_worktrees_use_final_roots_before_snapshot(
+    temp_workspace, tmp_path, monkeypatch
+):
     monkeypatch.delenv("FIXLOOP_USE_WORKTREE", raising=False)
     storage = tmp_path / "state"
     barrier = threading.Barrier(2)
@@ -33,6 +37,7 @@ def test_concurrent_worktrees_use_final_roots_before_snapshot(temp_workspace, tm
     runs = [host_orchestrator(temp_workspace, storage) for _ in range(2)]
 
     for index, orch in enumerate(runs):
+
         def snapshot(orch=orch):
             assert Path(orch._repo_root) != temp_workspace
             assert orch.patcher.tool_context.root == orch._repo_root
@@ -100,18 +105,19 @@ def test_host_recovery_uses_retained_checkout_or_rejects_entry_drift(
     first._prepare_host_worktree(state, resume=False)
     root = Path(first._repo_root)
     (root / "README.md").write_text("candidate")
-    state.node_timings["run_entry"] = first._workspace_entry()
+    state.execution.run_entry = first._workspace_entry()
     if damage == "missing":
-        state.node_timings.pop("run_entry")
+        state.execution.run_entry = {}
     if damage == "directory":
-        state.node_timings["run_entry"]["project"]["identity"] = [0, 0]
+        state.execution.run_entry["project"]["identity"] = [0, 0]
     save_repair_checkpoint(state, str(root), state_root=first.patcher.state_root)
     second = host_orchestrator(
         temp_workspace, storage, profile="legacy:static" if damage == "profile" else "legacy:host"
     )
     monkeypatch.setattr(second, "_snapshot_repo", lambda: {})
     monkeypatch.setattr(
-        second, "_repair_impl",
+        second,
+        "_repair_impl",
         lambda state, initial_snapshot: state if damage == "none" else pytest.fail("executed"),
     )
     result = second.repair("fix", resume_run_id="retained", repair_timeout_s=0)
@@ -124,10 +130,15 @@ def test_host_recovery_uses_retained_checkout_or_rejects_entry_drift(
         assert result.agent_errors["checkpoint"] == "resume_workspace_policy_mismatch"
 
 
-def test_real_host_agent_rebuilds_workspace_prefix_and_pins_cwd(temp_workspace, tmp_path, monkeypatch):
+def test_real_host_agent_rebuilds_workspace_prefix_and_pins_cwd(
+    temp_workspace, tmp_path, monkeypatch
+):
     orch = wire_orchestrator(
-        FakeModelClient([]), str(temp_workspace), skip_verify=True,
-        state_root=str(tmp_path / "state"), workspace_policy="worktree",
+        FakeModelClient([]),
+        str(temp_workspace),
+        skip_verify=True,
+        state_root=str(tmp_path / "state"),
+        workspace_policy="worktree",
     )
     state = RepairState(issue_input="fix", repair_run_id="real-agent")
     orch._prepare_host_worktree(state, resume=False)
@@ -158,24 +169,35 @@ def test_real_host_pipeline_cli_delivery_uses_candidate_checkout(
     git_run(temp_workspace, "commit", "-m", "Python fixture")
     monkeypatch.setenv("FIXLOOP_STATE_ROOT", str(tmp_path / "state"))
     monkeypatch.setenv("DEEPSEEK_API_KEY", "fake-key")
-    client = FakeModelClient([
-        '{"conclusion":"Change value.py to initialize value to 2."}',
-        '<tool>{"name":"read_file","args":{"path":"value.py"}}</tool>',
-        '<tool>{"name":"patch_file","args":'
-        '{"path":"value.py","old_text":"value = 1","new_text":"value = 2"}}</tool>',
-        "<final>Changed the initial value.</final>",
-    ])
+    client = FakeModelClient(
+        [
+            '{"conclusion":"Change value.py to initialize value to 2."}',
+            '<tool>{"name":"read_file","args":{"path":"value.py"}}</tool>',
+            '<tool>{"name":"patch_file","args":'
+            '{"path":"value.py","old_text":"value = 1","new_text":"value = 2"}}</tool>',
+            "<final>Changed the initial value.</final>",
+        ]
+    )
     output = tmp_path / "delivery"
     args = arguments(temp_workspace, output, workspace_policy="worktree", execution_tier="host")
     orch = wire_orchestrator(
-        client, str(temp_workspace), execution_tier="host",
-        runtime_overrides={"provider": "fake", "model": "fake-test", "approval": "auto",
-                           "auto_context_extraction": False},
+        client,
+        str(temp_workspace),
+        execution_tier="host",
+        runtime_overrides={
+            "provider": "fake",
+            "model": "fake-test",
+            "approval": "auto",
+            "auto_context_extraction": False,
+        },
     )
 
     def execute(repo, token, workspace_ready):
         return orch.repair(
-            args.issue, cancel_token=token, workspace_ready=workspace_ready, repair_timeout_s=0,
+            args.issue,
+            cancel_token=token,
+            workspace_ready=workspace_ready,
+            repair_timeout_s=0,
         )
 
     assert run_repair_cli(args, execute) == 0
@@ -194,8 +216,10 @@ def test_factory_forwards_policy_and_trusted_source(monkeypatch):
     calls = []
     monkeypatch.setattr("src.repair_factory.wire_orchestrator", lambda *a, **kw: calls.append(kw))
     factory = make_orchestrator_factory(
-        workspace_policy="provided", execution_backend="wsl_bwrap",
-        state_root="storage", project_root="source",
+        workspace_policy="provided",
+        execution_backend="wsl_bwrap",
+        state_root="storage",
+        project_root="source",
     )
     factory("copy")
     assert calls[0]["workspace_policy"] == "provided"
@@ -205,7 +229,10 @@ def test_factory_forwards_policy_and_trusted_source(monkeypatch):
 
 def test_provided_real_agent_never_switches_to_process_cwd(temp_workspace, tmp_path, monkeypatch):
     orch = wire_orchestrator(
-        FakeModelClient([]), str(temp_workspace), skip_verify=True, workspace_policy="provided",
+        FakeModelClient([]),
+        str(temp_workspace),
+        skip_verify=True,
+        workspace_policy="provided",
     )
     agent = orch.patcher
     agent._detect_workspace_switch()
@@ -216,12 +243,18 @@ def test_provided_real_agent_never_switches_to_process_cwd(temp_workspace, tmp_p
     assert "edited candidate" in agent.execute_tool("read_file", {"path": "README.md"}).content
 
 
-@pytest.mark.parametrize("kwargs", [
-    {"workspace_policy": "auto"}, {"execution_tier": "unknown"},
-    {"execution_backend": "unknown"},
-])
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"workspace_policy": "auto"},
+        {"execution_tier": "unknown"},
+        {"execution_backend": "unknown"},
+    ],
+)
 def test_invalid_entry_decisions_fail_before_model_or_environment(tmp_path, monkeypatch, kwargs):
-    monkeypatch.setattr("src.repair_factory.create_model_client", lambda *a, **kw: pytest.fail("model"))
+    monkeypatch.setattr(
+        "src.repair_factory.create_model_client", lambda *a, **kw: pytest.fail("model")
+    )
     with pytest.raises(ValueError, match="unknown"):
         wire_orchestrator(None, str(tmp_path), **kwargs)
 
@@ -257,7 +290,9 @@ def test_sandbox_resume_rejects_changed_workspace_policy(temp_workspace, tmp_pat
     from agent_runtime.linux_sandbox.task_context import SandboxEnvironmentIdentity, SandboxTaskSpec
 
     spec = SandboxTaskSpec(
-        SandboxEnvironmentIdentity("Test", "1", "1", "a" * 64), "v1", "b" * 64,
+        SandboxEnvironmentIdentity("Test", "1", "1", "a" * 64),
+        "v1",
+        "b" * 64,
         str(tmp_path / "state"),
     )
 
@@ -265,7 +300,9 @@ def test_sandbox_resume_rejects_changed_workspace_policy(temp_workspace, tmp_pat
         context = ToolContext(str(temp_workspace))
         return Orchestrator(
             SimpleNamespace(_cwd=str(temp_workspace), tool_context=context),
-            sandbox_context=context, sandbox_task_spec=spec, workspace_policy=policy,
+            sandbox_context=context,
+            sandbox_task_spec=spec,
+            workspace_policy=policy,
             sandbox_backend_factory=lambda binding: SimpleNamespace(task_binding=binding),
         )
 

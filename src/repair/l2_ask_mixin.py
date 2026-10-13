@@ -83,6 +83,11 @@ class L2AskMixin:
         stop_reason: str = "",
         tool_steps: int = 0,
     ) -> None:
+        lock = getattr(getattr(agent, "tool_context", None), "edit_lock", None)
+        if lock is not None:
+            state.control.allowed_edit = sorted(lock.allowed_edit)
+            state.control.allowed_create = sorted(lock.allowed_create)
+            state.control.allowed_delete = sorted(lock.allowed_delete)
         if not task_id or not state.repair_run_id:
             clear_l2_context(agent)
             return

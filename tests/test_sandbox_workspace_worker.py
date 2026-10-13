@@ -119,6 +119,23 @@ def test_source_version_enforces_budget_before_read(tmp_path, monkeypatch):
     assert result.error_code == "output_too_large"
 
 
+def test_missing_source_version_requires_explicit_absence_probe(tmp_path):
+    assert not call(tmp_path, "workspace_source_version", {"path": "pkg/new.py"}).result.ok
+    reply = call(
+        tmp_path, "workspace_source_version", {"path": "pkg/new.py", "allow_missing": True}
+    )
+    assert reply.result.ok
+    assert reply.result.metadata["workspace_versions"] == {"pkg/new.py": None}
+    assert not (tmp_path / "pkg").exists()
+    (tmp_path / "existing.py").write_bytes(b"pass\n")
+    reply = call(
+        tmp_path, "workspace_source_version", {"path": "existing.py", "allow_missing": True}
+    )
+    assert reply.result.metadata["workspace_versions"] == {
+        "existing.py": digest(tmp_path / "existing.py")
+    }
+
+
 @pytest.fixture
 def workspace(tmp_path):
     (tmp_path / "src").mkdir()

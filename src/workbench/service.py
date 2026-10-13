@@ -22,6 +22,7 @@ from src.workbench.project import ProjectExecutor, ProjectResult
 from src.workbench.restore import RestoreCoordinator
 from src.workbench.store import WorkbenchStore
 from src.workbench.supervisor import ProcessWorkerRunner, WorkerFailedError, reconcile_execution
+from src.workbench.terminal_recovery import TerminalRecovery
 from src.workbench.workspaces import ExecutionWorkspaces
 
 _TERMINAL = {"succeeded", "failed", "cancelled", "interrupted"}
@@ -88,6 +89,7 @@ class WorkbenchService:
                 self.store, self.state_dir, lock_dir=project_lock_dir, fault=restore_fault
             )
             self.workspaces = ExecutionWorkspaces(self.state_dir, self.restoration.repository)
+            self.terminals = TerminalRecovery(self.store, self.state_dir / "pending-terminals")
             self._recover()
             self.restoration.reconcile_committed()
         except BaseException:
@@ -114,6 +116,12 @@ class WorkbenchService:
                         "project_path": conversation.project_path,
                     }
                     self.store.save_resource(run.id, resource)
+                if run.id in self.terminals.pending:
+                    try:
+                        self.terminals.retry(run.id)
+                    except Exception:
+                        _LOG.exception("pending terminal recovery failed for %s", run.id)
+                    continue
                 if run.status not in _TERMINAL:
                     snapshot = None
                     unknown = resource is not None and resource["state"] != "stopped"
@@ -162,6 +170,7 @@ class WorkbenchService:
 
     def _admit(self, conversation_id, mode="chat"):
         self._open()
+        self._retry_terminals(conversation_id)
         conversation = self.store.get_conversation(conversation_id)
         if mode not in {"chat", "project_chat", "repair"}:
             raise UnsupportedModeError("unknown execution mode")
@@ -559,7 +568,7 @@ class WorkbenchService:
                     snapshot = None
                     candidate = None
                     latest_resource = self.store.resource(execution.run_id)
-                    unknown = latest_resource and latest_resource["state"] == "unknown"
+                    unknown = latest_resource and latest_resource["state"] != "stopped"
                     if unknown:
                         status, error = "interrupted", "execution_cleanup_unconfirmed"
                         artifacts.update(
@@ -600,7 +609,7 @@ class WorkbenchService:
                             for p in sorted(set(before["entries"]) | set(after["entries"]))
                             if before["entries"].get(p) != after["entries"].get(p)
                         ]
-                    self.store.finish_run(
+                    self.terminals.prepare(
                         execution.conversation_id,
                         execution.run_id,
                         status=status,
@@ -610,8 +619,21 @@ class WorkbenchService:
                         output_snapshot=snapshot,
                         candidate=candidate,
                     )
+                    self.terminals.retry(execution.run_id)
                 except Exception:
                     _LOG.exception("could not persist workbench terminal state")
+                    if execution.run_id not in self.terminals.pending:
+                        try:
+                            self.terminals.prepare(
+                                execution.conversation_id,
+                                execution.run_id,
+                                status="interrupted",
+                                answer=answer,
+                                error="terminal_capture_failed",
+                                artifacts={"recovery_required": True},
+                            )
+                        except Exception:
+                            _LOG.exception("could not journal pending terminal state")
             with self._lock:
                 self._active.pop(execution.run_id, None)
             with self._changed:
@@ -627,6 +649,7 @@ class WorkbenchService:
     def stop(self, conversation_id, run_id) -> Run:
         with self._lock:
             self._open()
+            self._retry_terminals(conversation_id)
             run = self.store.get_run(conversation_id, run_id)
             execution = self._active.get(run_id)
             if run.status in _TERMINAL:
@@ -639,6 +662,15 @@ class WorkbenchService:
                     execution.token.cancel("user")
             return self.store.get_run(conversation_id, run_id)
 
+    def _retry_terminals(self, conversation_id):
+        for run_id in self.terminals.for_conversation(conversation_id):
+            if run_id in self._active:
+                continue
+            try:
+                self.terminals.retry(run_id)
+            except Exception as exc:
+                raise ConflictError("terminal persistence pending; retry this operation") from exc
+
     def events(self, conversation_id, run_id, *, after=0):
         self.store.get_run(conversation_id, run_id)
         if not isinstance(after, int) or after < 0 or after > self.journal.latest(run_id):
@@ -648,8 +680,9 @@ class WorkbenchService:
     def wait(self, conversation_id, run_id, *, timeout=5) -> Run:
         deadline = time.monotonic() + timeout
         while True:
-            run = self.store.get_run(conversation_id, run_id)
             with self._lock:
+                self._retry_terminals(conversation_id)
+                run = self.store.get_run(conversation_id, run_id)
                 if run.status in _TERMINAL and run_id not in self._active:
                     return run
             if time.monotonic() >= deadline:
@@ -674,6 +707,7 @@ class WorkbenchService:
         with self._lock:
             if self._active:
                 raise TimeoutError("workers have not exited; service ownership retained")
+            self.terminals.flush()
             self.restoration.close()
             self._ownership.close()
 

@@ -101,7 +101,9 @@ class ExecutionLifecycleMixin:
             if self._sandbox_task_spec is None and self._workspace_policy == "worktree":
                 self._prepare_host_worktree(state, resume=bool(resume_run_id))
             entry = self._workspace_entry()
-            state.node_timings["run_entry"] = entry
+            state.execution.run_entry = entry
+            state.execution.repo_root = self._repo_root
+            state.node_timings["run_entry"] = state.execution.model_dump()["run_entry"]
             checkpoint = None
             if workspace_ready is not None:
                 workspace_ready(self._repo_root)
@@ -119,11 +121,11 @@ class ExecutionLifecycleMixin:
                     )
                     binding = getattr(self._sandbox_context, "sandbox_task_binding", None)
                     if binding is not None and (
-                        checkpoint.get("node_timings", {}).get("sandbox_task_binding")
+                        checkpoint.get("execution", {}).get("sandbox_task_binding")
                         != binding.to_wire()
                     ):
                         raise RepairCheckpointError("sandbox_task_identity_mismatch")
-                    if checkpoint.get("node_timings", {}).get("run_entry") != entry:
+                    if checkpoint.get("execution", {}).get("run_entry") != entry:
                         raise RepairCheckpointError("resume_workspace_policy_mismatch")
                 except RepairCheckpointError as exc:
                     state.set_status("recovery_required", exc.code)
@@ -213,7 +215,7 @@ class ExecutionLifecycleMixin:
         if config is None or not hasattr(config, "effective_budget"):
             return
         self._model_budget = BudgetManager.from_config(config)
-        saved = (checkpoint or {}).get("node_timings", {})
+        saved = (checkpoint or {}).get("execution", {})
         if saved.get("model_budget"):
             self._model_budget.restore(saved["model_budget"])
         limits = [s for s in (timeout_s, config.deadline.repair_s) if s > 0]
@@ -235,8 +237,10 @@ class ExecutionLifecycleMixin:
         budget = getattr(self, "_model_budget", None)
         if budget is None:
             return
-        state.node_timings["model_budget"] = budget.snapshot()
-        state.node_timings["model_deadline"] = self._model_deadline.snapshot()
+        state.execution.model_budget = budget.snapshot()
+        state.execution.model_deadline = self._model_deadline.snapshot()
+        state.node_timings["model_budget"] = state.execution.model_dump()["model_budget"]
+        state.node_timings["model_deadline"] = state.execution.model_dump()["model_deadline"]
         for agent in self._active_agents:
             if getattr(agent, "_run_budget_manager", None) is budget:
                 agent._run_budget_manager = None
@@ -465,8 +469,12 @@ class ExecutionLifecycleMixin:
             except Exception as cleanup_error:
                 exc.add_note(f"sandbox startup cleanup unconfirmed: {cleanup_error}")
             raise
-        state.node_timings["sandbox_task_binding"] = binding.to_wire()
-        state.node_timings["run_entry"] = self._workspace_entry()
+        state.execution.sandbox_task_binding = binding.to_wire()
+        state.execution.run_entry = self._workspace_entry()
+        state.node_timings["sandbox_task_binding"] = state.execution.model_dump()[
+            "sandbox_task_binding"
+        ]
+        state.node_timings["run_entry"] = state.execution.model_dump()["run_entry"]
 
     def _close_sandbox_backend_before_binding_close(self, state: RepairState) -> None:
         """Close sandbox admission before an exceptional plan-binding teardown."""

@@ -168,6 +168,12 @@ def _source(context: ToolContext, raw: str, *, max_bytes=MAX_SOURCE_BYTES) -> tu
 
 def _source_version(context: ToolContext, args: dict) -> ToolResult:
     raw = relative_path(args.get("path", ""))
+    allow_missing = args.get("allow_missing", False)
+    if type(allow_missing) is not bool:
+        raise WorkspaceError("invalid_arguments", "allow_missing must be boolean")
+    target = context.resolve(raw)
+    if allow_missing and not target.exists() and not target.is_symlink():
+        return _evidence(ToolResult("source absence checked"), raw, None)
     limit = args.get("max_bytes", MAX_SOURCE_BYTES)
     if type(limit) is not int or not 0 <= limit <= MAX_SOURCE_BYTES:
         raise WorkspaceError("invalid_arguments", "invalid source byte budget")
@@ -183,7 +189,7 @@ def _text(context: ToolContext, args: dict) -> ToolResult:
     return _evidence(ToolResult(data={"text": data.decode("utf-8")}), raw, digest)
 
 
-def _evidence(result: ToolResult, path: str, digest: str) -> ToolResult:
+def _evidence(result: ToolResult, path: str, digest: str | None) -> ToolResult:
     result.metadata.setdefault("workspace_versions", {})[path] = digest
     result.metadata.setdefault("source_dependencies", {})[path] = digest
     return result

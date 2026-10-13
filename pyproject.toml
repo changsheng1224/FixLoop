@@ -13,7 +13,6 @@ dependencies = [
     "jsonschema>=4.22",
     "referencing>=0.35",
     "tiktoken>=0.5",
-    "sentence-transformers>=3.0",
     "pyyaml>=6.0",
 ]
 
@@ -21,6 +20,7 @@ dependencies = [
 fixloop = "src.cli:main"
 
 [project.optional-dependencies]
+semantic = ["sentence-transformers>=3.0"]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=4.0",
@@ -45,7 +45,7 @@ where = ["."]
 include = ["agent_runtime*", "src*"]
 
 [tool.setuptools.package-data]
-agent_runtime = ["data/tokenizers/**/*", "data/tiktoken/**/*", "linux_sandbox/*.json"]
+agent_runtime = ["*.yaml", "intent/*.yaml", "data/tokenizers/**/*", "data/tiktoken/**/*", "linux_sandbox/*.json"]
 "src.workbench" = ["web/*.html", "web/*.css", "web/*.js"]
 src = [
     "prompts/*.txt", "prompts/**/*.txt", "prompts/tasks/*.md",

@@ -33,6 +33,16 @@ class FakeSandboxEnvironmentManager:
 
 
 class TestRuntimeWiring:
+    def test_disabled_auto_never_probes_container(self, tmp_path, monkeypatch):
+        from agent_runtime.providers.clients import FakeModelClient
+
+        monkeypatch.setenv("FIXLOOP_SANDBOX_POLICY", "disabled")
+        monkeypatch.setattr("src.repair_factory.try_create_verifier",
+                            lambda *a, **k: pytest.fail("container probe"))
+        owner = wire_orchestrator(FakeModelClient([]), str(tmp_path), execution_tier="auto")
+        assert owner.verifier is None
+        assert owner.execution_policy.initial_tier("python") == "host"
+
     def test_sandbox_factory_keeps_shared_root_and_source_project(self, tmp_path):
         from agent_runtime.linux_sandbox.task_context import SandboxTaskBinding
         from agent_runtime.providers.clients import FakeModelClient
@@ -42,22 +52,30 @@ class TestRuntimeWiring:
         source.mkdir()
         copy.mkdir()
         orch = wire_orchestrator(
-            FakeModelClient([]), str(copy), project_root=str(source), state_root=str(storage),
-            execution_backend="wsl_bwrap", sandbox_environment_manager=FakeSandboxEnvironmentManager(),
-            workspace_policy="provided", skip_verify=True, dry_run=True,
+            FakeModelClient([]),
+            str(copy),
+            project_root=str(source),
+            state_root=str(storage),
+            execution_backend="wsl_bwrap",
+            sandbox_environment_manager=FakeSandboxEnvironmentManager(),
+            workspace_policy="provided",
+            skip_verify=True,
+            dry_run=True,
         )
         spec = orch._sandbox_task_spec
         assert spec.state_base == str(storage)
         binding = SandboxTaskBinding.create(copy, copy, "run", spec)
         assert binding.project_id == project_id(source)
-        assert Path(binding.state_root) == storage / "projects" / project_id(source) / "tasks" / "run"
+        assert (
+            Path(binding.state_root) == storage / "projects" / project_id(source) / "tasks" / "run"
+        )
 
     def test_external_state_and_exact_workspace_reach_patcher_and_verifier(
         self, tmp_path, monkeypatch
     ):
         from agent_runtime.providers.clients import FakeModelClient
         from agent_runtime.workspace import WorkspaceContext
-        from src.agents.factory import create_verifier
+        from src.repair.verification.execution_policy import VerificationBackend
 
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -70,8 +88,9 @@ class TestRuntimeWiring:
         )
 
         def verifier(client, workspace, root, **kw):
-            kw.pop("required")
-            return create_verifier(client, workspace, cwd=root, **kw)
+            assert client is None and workspace is None
+            assert kw == {"required": True}
+            return VerificationBackend()
 
         monkeypatch.setattr("src.repair_factory.try_create_verifier", verifier)
         orch = wire_orchestrator(

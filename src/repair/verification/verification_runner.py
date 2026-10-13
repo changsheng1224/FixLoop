@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 import subprocess
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from agent_runtime.test_execution import run_command
+from src.repair.language_capabilities import project_command
 from src.repair.verification.verification_profiles import VerificationProfile
 
 
@@ -91,8 +91,8 @@ def run_profile(
         command = list(step.command)
         if target and step.phase == "target_tests" and profile.language == "python":
             command.append(target)
-        executable = shutil.which(command[0])
-        if executable is None:
+        resolved = project_command(root, command)
+        if resolved is None:
             return {
                 "all_passed": False,
                 "category": "verification_environment_failed",
@@ -100,7 +100,7 @@ def run_profile(
                 "steps": results,
                 "completed": False,
             }
-        command[0] = executable
+        command = resolved
         started = time.monotonic()
         try:
             code, output = run_command(

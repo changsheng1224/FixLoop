@@ -85,6 +85,34 @@ class TestAtomicWriteText:
         atomic_write_text(path, "new")
         assert path.read_text() == "new"
 
+    def test_preserves_adjacent_tmp(self, tmp_path):
+        path = tmp_path / "main.py"
+        neighbor = tmp_path / "main.py.tmp"
+        neighbor.write_text("user data")
+        atomic_write_text(path, "new")
+        assert neighbor.read_text() == "user data"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["main.py", "main.py.tmp"]
+
+    def test_exclusive_create_cannot_overwrite_existing_target(self, tmp_path):
+        path = tmp_path / "main.py"
+        path.write_bytes(b"concurrent creator\n")
+        with pytest.raises(FileExistsError):
+            atomic_write_text(path, "new", create_only=True)
+        assert path.read_bytes() == b"concurrent creator\n"
+        assert list(tmp_path.iterdir()) == [path]
+
+    def test_preserves_executable_mode(self, tmp_path):
+        import os
+        import stat
+
+        if os.name == "nt":
+            pytest.skip("POSIX permission bits")
+        path = tmp_path / "run.sh"
+        path.write_text("old")
+        path.chmod(0o755)
+        atomic_write_text(path, "new")
+        assert stat.S_IMODE(path.stat().st_mode) == 0o755
+
 
 class TestPatchFile:
     """patch_file 工具测试。"""

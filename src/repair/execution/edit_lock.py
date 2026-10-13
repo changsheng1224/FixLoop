@@ -47,6 +47,8 @@ class EditLockState:
             normalize_repo_rel(p, self.repo_root) for p in (allowed_edit or []) if p
         }
         self.allowed_edit.discard("")
+        self.allowed_create: set[str] = set()
+        self.allowed_delete: set[str] = set()
         self.read_set: set[str] = set()
         self._generation = 0
         self._required_read_generation: dict[str, int] = {}
@@ -109,7 +111,9 @@ class EditLockState:
     def _accept_read(self, rel, *, auto_allow_impl=False):
         self.read_set.add(rel)
         self._read_generation[rel] = self._required_read_generation.get(rel, 0)
-        if auto_allow_impl and rel.endswith(".py") and not _is_test_path(rel):
+        from src.repair.language_capabilities import editable_source
+
+        if auto_allow_impl and editable_source(rel) and not _is_test_path(rel):
             if self.require_expand_before_auto and self.expand_count <= 0:
                 return True
             if rel not in self.allowed_edit and len(self.allowed_edit) < self.max_auto_allow:
@@ -125,10 +129,14 @@ class EditLockState:
             return ""
         meta = result.metadata
         version = meta.get("workspace_versions", {}).get(rel)
-        if (not result.ok or meta.get("actual_backend") != "linux_sandbox"
-                or meta.get("sandbox_cleanup") != "confirmed"
-                or not meta.get("sandbox_receipt_id")
-                or not isinstance(version, str) or len(version) != 64):
+        if (
+            not result.ok
+            or meta.get("actual_backend") != "linux_sandbox"
+            or meta.get("sandbox_cleanup") != "confirmed"
+            or not meta.get("sandbox_receipt_id")
+            or not isinstance(version, str)
+            or len(version) != 64
+        ):
             return ""
         return rel
 
@@ -142,24 +150,75 @@ class EditLockState:
             return False, "sandbox_read_evidence_required"
         return self._expand_checked(rel)
 
-    def expand_lock(self, path: str) -> tuple[bool, str]:
+    def expand_lock(self, path: str, *, operation: str = "modify") -> tuple[bool, str]:
         """显式扩锁（默认最多 2 次）；扩后须再 read 才可写。"""
         if self.sandbox_only:
             return False, "sandbox_read_evidence_required"
         rel = normalize_repo_rel(path, self.repo_root)
         if not rel:
             return False, "path_escape_or_invalid"
+        target = self.repo_root / rel
+        if operation == "create":
+            if target.exists() or target.is_symlink():
+                return False, f"create_target_exists:{rel}"
+            from agent_runtime.path_safety import resolve_under_root
+
+            try:
+                resolve_under_root(self.repo_root, rel)
+            except ValueError:
+                return False, "path_escape_or_invalid"
+            return self._grant_operation(rel, operation)
+        if operation == "delete":
+            if not target.is_file():
+                return False, f"not_a_file:{rel}"
+            return self._grant_operation(rel, operation)
+        if operation != "modify":
+            return False, "invalid_edit_operation"
         if rel in self.allowed_edit:
             return True, "already_allowed"
-        if self.expand_count >= self.max_expand:
-            return False, f"expand_lock_max:{self.max_expand}"
-        target = self.repo_root / rel
         try:
             if not target.is_file():
                 return False, f"not_a_file:{rel}"
         except OSError as e:
             return False, f"stat_failed:{e}"
         return self._expand_checked(rel)
+
+    def _grant_operation(self, rel, operation):
+        if operation not in {"create", "delete"}:
+            return False, "invalid_edit_operation"
+        paths = self.allowed_create if operation == "create" else self.allowed_delete
+        if rel in paths:
+            return True, "already_allowed"
+        if self.expand_count >= self.max_expand:
+            return False, f"expand_lock_max:{self.max_expand}"
+        paths.add(rel)
+        self.expand_count += 1
+        self._generation += 1
+        self._required_read_generation[rel] = self._generation
+        return True, f"expanded:{rel}:{operation}"
+
+    def expand_operation_evidence(self, path, result, operation):
+        from agent_runtime.linux_sandbox.workspace_contract import relative_path
+
+        try:
+            rel = relative_path(path)
+        except ValueError:
+            return False, "path_escape_or_invalid"
+        meta = result.metadata
+        versions = meta.get("workspace_versions", {})
+        if (
+            not result.ok
+            or meta.get("actual_backend") != "linux_sandbox"
+            or meta.get("sandbox_cleanup") != "confirmed"
+            or not meta.get("sandbox_receipt_id")
+            or rel not in versions
+        ):
+            return False, "sandbox_path_evidence_required"
+        if operation == "create" and versions[rel] is not None:
+            return False, "create_target_exists"
+        if operation == "delete" and not isinstance(versions[rel], str):
+            return False, "delete_target_missing"
+        return self._grant_operation(rel, operation)
 
     def _expand_checked(self, rel):
         if rel in self.allowed_edit:
@@ -176,14 +235,23 @@ class EditLockState:
         rel = normalize_repo_rel(path, self.repo_root)
         return int(self._required_read_generation.get(rel, 0) or 0)
 
-    def check_write(self, path: str) -> tuple[bool, str]:
+    def check_write(self, path: str, *, operation: str = "modify") -> tuple[bool, str]:
         rel = normalize_repo_rel(path, self.repo_root)
         if not rel:
             self.apply_path_reject_count += 1
             return False, "path_escape_or_invalid"
-        if rel not in self.allowed_edit:
+        paths = {
+            "modify": self.allowed_edit,
+            "create": self.allowed_create,
+            "delete": self.allowed_delete,
+        }.get(operation, set())
+        if rel not in paths:
             self.apply_path_reject_count += 1
             return False, f"not_in_allowed_edit:{rel}"
+        if operation == "create":
+            if not self.sandbox_only and (self.repo_root / rel).exists():
+                return False, f"create_target_exists:{rel}"
+            return True, ""
         required_generation = int(self._required_read_generation.get(rel, 0) or 0)
         read_generation = int(self._read_generation.get(rel, -1) or 0)
         if rel not in self.read_set or read_generation < required_generation:

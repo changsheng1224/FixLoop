@@ -121,8 +121,8 @@ def suspect_paths_from_state(state) -> list[str]:
     if plan is not None:
         for f in getattr(plan, "suspect_files", None) or []:
             _add(f)
-    timings = getattr(state, "node_timings", None) or {}
-    for f in timings.get("allowed_patch_extra") or []:
+    control = getattr(state, "control", None)
+    for f in getattr(control, "allowed_patch_extra", ()):
         _add(f)
     return paths
 

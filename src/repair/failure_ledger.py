@@ -173,11 +173,12 @@ class FailureLedger:
 
 
 def apply_ledger_to_state(state: RepairState, ledger: FailureLedger) -> None:
-    state.node_timings["failure_ledger"] = ledger.to_dict()
+    state.execution.failure_ledger = ledger.to_dict()
+    state.node_timings["failure_ledger"] = state.execution.model_dump()["failure_ledger"]
 
 
 def load_ledger_from_state(state: RepairState) -> FailureLedger:
-    return FailureLedger.from_dict(state.node_timings.get("failure_ledger"))
+    return FailureLedger.from_dict(state.execution.failure_ledger)
 
 
 def record_verify_into_ledger(

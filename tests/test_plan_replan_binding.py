@@ -22,10 +22,14 @@ def failed_binding(tmp_path, request):
     patches, meta = orch._run_patcher_toolized(state, "repair", {})
     assert patches, (meta, state.agent_errors)
     binding = orch._plan_binding
-    state.node_timings["plan_verification_receipt"] = {
-        "command": "controlled-verifier",
-        "completed": True,
-    }
+    from src.repair.execution_state import VerificationReceipt
+
+    state.execution.verification_receipt = VerificationReceipt.model_validate(
+        {
+            "command": ["controlled-verifier"],
+            "completed": True,
+        }
+    )
     failure = getattr(request, "param", None) or VerificationResult(
         total_tests=1, failed=1, failure_logs=["AssertionError: actual output mismatch"]
     )

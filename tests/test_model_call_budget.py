@@ -261,19 +261,21 @@ def test_repair_roles_and_resume_share_budget_and_deadline():
 
     owner = object.__new__(Orchestrator)
     owner.patcher = SimpleNamespace(config=AgentConfig())
-    owner.verifier = SimpleNamespace(config=AgentConfig())
+    from src.repair.verification.execution_policy import VerificationBackend
+
+    owner.verifier = VerificationBackend()
     owner._initialize_model_budget(None, 60)
-    assert owner.patcher._run_budget_manager is owner.verifier._run_budget_manager
-    assert owner.patcher._repair_deadline is owner.verifier._repair_deadline
+    assert owner.patcher._run_budget_manager is owner._model_budget
+    assert owner.patcher._repair_deadline is owner._model_deadline
     call(owner._model_budget, "unknown", purpose="planning")
     state = RepairState(issue_input="repair")
     owner._release_model_budget(state)
     assert owner.patcher._run_budget_manager is None
-    owner._initialize_model_budget({"node_timings": state.node_timings}, 90)
+    owner._initialize_model_budget(state.to_dict(), 90)
     try:
         assert owner._model_budget.summary()["total_tokens"]["used"] == 30
         assert owner._model_deadline.remaining_s() <= 60
-        assert owner.verifier._run_budget_manager is owner._model_budget
+        assert not hasattr(owner.verifier, "_run_budget_manager")
     finally:
         owner._release_model_budget(state)
 

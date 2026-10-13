@@ -19,7 +19,6 @@ from agent_runtime.warm_context import create_warm_context
 from agent_runtime.workspace import WorkspaceContext
 from src.agents.factory import load_repair_agent_config
 from src.agents.patcher import create_patcher
-from src.agents.verifier import create_verifier
 from src.middleware import build_repair_gateway
 from src.orchestrator import Orchestrator
 from src.tools.composite import build_repair_canonical_tools
@@ -66,7 +65,7 @@ class RequiredVerifierError(RuntimeError):
 
 
 def try_create_verifier(client, ws, repo: str, *, required: bool = False, **agent_kw):
-    """Docker 探针就绪时创建 Verifier Agent，否则返回 None。"""
+    """Probe a verification backend; no model, prompt, session or budget is built."""
     import sys
 
     from src.harness.sandbox_health import probe_sandbox_health
@@ -78,12 +77,9 @@ def try_create_verifier(client, ws, repo: str, *, required: bool = False, **agen
         if required:
             raise RequiredVerifierError(f"required verifier sandbox unavailable: {detail}")
         return None
-    try:
-        return create_verifier(client, ws, cwd=repo, **agent_kw)
-    except Exception as exc:
-        if required:
-            raise RequiredVerifierError(f"required verifier creation failed: {exc}") from exc
-        return None
+    from src.repair.verification.execution_policy import VerificationBackend
+
+    return VerificationBackend()
 
 
 def wire_orchestrator(
@@ -112,10 +108,32 @@ def wire_orchestrator(
         raise ValueError("unknown execution backend")
     if execution_tier not in {"auto", "container", "host", "static"}:
         raise ValueError("unknown execution tier")
+    from src.repair.config import load_repair_config
+    from src.repair.critic import resolve_critic_mode
+    from src.repair.verification.execution_policy import resolve_execution_policy
+
+    resolve_critic_mode()
+    repair_config = load_repair_config(workspace_root=repo_path)
+    if skip_verify and (
+        require_sandbox
+        or execution_tier == "container"
+        or repair_config.sandbox_policy == "required"
+    ):
+        raise ValueError("skip_verify conflicts with required verification")
+    resolve_execution_policy(
+        sandbox_policy=repair_config.sandbox_policy,
+        execution_tier=execution_tier,
+        require_sandbox=require_sandbox,
+        sandbox=execution_backend == "wsl_bwrap",
+        host=execution_tier in {"auto", "host"},
+        static=execution_tier == "static",
+    )
     if workspace_policy not in {"worktree", "provided"}:
         raise ValueError("unknown workspace policy")
-    if workspace_policy == "worktree" and project_root and (
-        Path(project_root).resolve() != Path(repo_path).resolve()
+    if (
+        workspace_policy == "worktree"
+        and project_root
+        and (Path(project_root).resolve() != Path(repo_path).resolve())
     ):
         raise ValueError("worktree source must be the registered project root")
     sandbox_context = None
@@ -156,9 +174,13 @@ def wire_orchestrator(
         root=repo, exploration_mode=code_exploration_mode, lsp_argv=code_exploration_server_argv
     )
     ctx.project_root = str(Path(project_root or repo).resolve())
-    ctx.embedding_state_base = str(managed_storage_root(
-        ctx.project_root, embedding_state_base or state_root or None, create=False,
-    ))
+    ctx.embedding_state_base = str(
+        managed_storage_root(
+            ctx.project_root,
+            embedding_state_base or state_root or None,
+            create=False,
+        )
+    )
     if state_root:
         ctx.state_root = state_root
     tools = build_repair_canonical_tools(ctx)
@@ -171,7 +193,7 @@ def wire_orchestrator(
                 "server_argv": code_exploration_server_argv,
             },
         )
-        for role in ("patcher", "verifier")
+        for role in ("patcher",)
     }
     policy = policies["patcher"]
     if runtime_overrides:
@@ -228,11 +250,28 @@ def wire_orchestrator(
     # The WSL profile verifies through the task-bound BwrapVerifyStrategy. A
     # host/Docker verifier would violate the single-backend task contract.
     should_try_verifier = (
-        sandbox_context is None and (not skip_verify) and normalized_tier in {"auto", "container"}
+        sandbox_context is None
+        and (not skip_verify)
+        and normalized_tier in {"auto", "container"}
+        and repair_config.sandbox_policy != "disabled"
+    )
+    verifier = (
+        try_create_verifier(
+            None,
+            None,
+            repo,
+            required=require_sandbox
+            or normalized_tier == "container"
+            or repair_config.sandbox_policy == "required",
+        )
+        if should_try_verifier
+        else None
     )
 
     orch = orch_class(
         patcher,
+        verifier=verifier,
+        repair_config=repair_config,
         use_pytest_verify=use_pytest_verify if sandbox_context is None else False,
         require_sandbox=(require_sandbox or normalized_tier == "container")
         if sandbox_context is None
@@ -252,22 +291,6 @@ def wire_orchestrator(
         project_root=project_root,
     )
     orch._budget_ctx = budget_ctx
-    if should_try_verifier:
-        verifier_kw = _agent_kw("verifier")
-        verifier_kw["sandbox_context"] = ToolContext(
-            root=repo, state_root=state_root, project_root=ctx.project_root,
-            embedding_state_base=ctx.embedding_state_base,
-        )
-        verifier = try_create_verifier(
-            client,
-            ws,
-            repo,
-            required=require_sandbox or normalized_tier == "container",
-            **verifier_kw,
-        )
-        if verifier:
-            orch.verifier = verifier
-            orch._repair_gateways = orch._collect_repair_gateways(patcher, verifier)
     if execution_backend == "legacy":
         for agent in orch._active_agents:
             # Host edits must not trigger process-cwd switching. Sandbox Agents

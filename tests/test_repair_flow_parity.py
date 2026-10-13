@@ -47,7 +47,7 @@ def flow(request, tmp_path, monkeypatch):
     if resumed:
         saved = RepairState(issue_input="public issue", repair_run_id="parity", max_retries=1)
         saved.phase = "patch"
-        saved.node_timings["run_entry"] = orch._workspace_entry()
+        saved.execution.run_entry = orch._workspace_entry()
         save_repair_checkpoint(saved, str(tmp_path))
         monkeypatch.setattr(orch, "_parse_issue", Mock(side_effect=AssertionError("resume parsed")))
 

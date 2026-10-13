@@ -34,12 +34,26 @@ def execute_workspace_tool(
                 operations = parse_apply_patch_text(patch)
                 paths = [relative_path(op.path) for op in operations]
                 additions = {relative_path(op.path) for op in operations if op.action == "add"}
+                actions = {
+                    relative_path(op.path): {"add": "create", "delete": "delete"}.get(
+                        op.action, "modify"
+                    )
+                    for op in operations
+                }
             else:
                 paths = [relative_path(args.get("path", ""))]
                 additions = set(paths) if name == "write_file" else set()
+                actions = {}
             with context.sandbox_versions_lock:
                 for path in paths:
-                    locked = _reject_if_edit_locked(context, path)
+                    operation = actions.get(
+                        path,
+                        "create"
+                        if path in additions
+                        and context.sandbox_workspace_versions.get(path) is None
+                        else "modify",
+                    )
+                    locked = _reject_if_edit_locked(context, path, operation=operation)
                     if locked:
                         return ToolResult.error(locked, code="edit_lock_rejected", retryable=False)
                     if path in context.sandbox_workspace_versions:

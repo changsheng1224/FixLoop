@@ -267,9 +267,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
     def _run_critic_gate(self, state: RepairState) -> bool:
         """提交 Verifier 前 Critic。返回 True 表示 reject（应 retry / 停）。"""
         from src.collaboration.isolation import role_projection
-        from src.repair.critic import resolve_critic_mode, review_patch
+        from src.repair.critic import review_patch
 
-        mode = resolve_critic_mode()
+        mode = self.critic_mode
         allowed = set()
         lock = getattr(self, "_edit_lock", None)
         if lock is not None:
@@ -289,6 +289,8 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         state.node_timings["critic_verdict"] = verdict.to_dict()
         if verdict.skipped:
             state.node_timings["critic_skipped"] = True
+            self._emit_repair_span("critic_finished", {"summary": "skipped", "skipped": True})
+            return False
 
         em = self._progress_emitter()
         if not verdict.accepted:
@@ -513,6 +515,8 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
 
             # Restore edit scope, never stale read authorization.
             lock = EditLockState(repo_root=self._repo_root, allowed_edit=state.control.allowed_edit)
+            lock.allowed_create.update(state.control.allowed_create)
+            lock.allowed_delete.update(state.control.allowed_delete)
             lock.write_serial = False
             self._edit_lock = lock
             if self.patcher is not None:
@@ -843,6 +847,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         cancelled = state.control.user_cancel
         coordination = state.control.coordination_status
         state.control = RepairControl.model_validate(checkpoint.get("control") or {})
+        from src.repair.execution_state import RepairExecutionState
+
+        state.execution = RepairExecutionState.model_validate(checkpoint.get("execution") or {})
         state.control.user_cancel = cancelled
         state.control.coordination_status = coordination
         state.control.repair_timeout = 0
@@ -1035,8 +1042,10 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         """写入 L2 repair_state.json + checkpoint.json（供 --resume-repair + 审计）。"""
         budget = getattr(self, "_model_budget", None)
         if budget is not None:
-            state.node_timings["model_budget"] = budget.snapshot()
-            state.node_timings["model_deadline"] = self._model_deadline.snapshot()
+            state.execution.model_budget = budget.snapshot()
+            state.execution.model_deadline = self._model_deadline.snapshot()
+            state.node_timings["model_budget"] = state.execution.model_dump()["model_budget"]
+            state.node_timings["model_deadline"] = state.execution.model_dump()["model_deadline"]
         try:
             import json
             import time
@@ -1061,11 +1070,9 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             state_path = sub_dir / "repair_state.json"
             state_payload = state.to_dict()
             state_payload["saved_at"] = time.time()
-            tmp = state_path.with_suffix(".tmp")
-            tmp.write_text(
-                json.dumps(state_payload, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-            tmp.replace(state_path)
+            from agent_runtime.atomic_io import atomic_write_text
+
+            atomic_write_text(state_path, json.dumps(state_payload, ensure_ascii=False, indent=2))
 
             # 轻量 checkpoint
             cp_path = sub_dir / "checkpoint.json"
@@ -1082,9 +1089,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 },
                 "saved_at": time.time(),
             }
-            tmp2 = cp_path.with_suffix(".tmp")
-            tmp2.write_text(json.dumps(cp_payload, ensure_ascii=False, indent=2), encoding="utf-8")
-            tmp2.replace(cp_path)
+            atomic_write_text(cp_path, json.dumps(cp_payload, ensure_ascii=False, indent=2))
         except Exception:
             pass
 

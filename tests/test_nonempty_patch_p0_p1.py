@@ -36,7 +36,7 @@ class TestFaithfulnessSoft:
     def test_promotes_existing_impl_outside_allowed(self, tmp_path):
         root = _tmp_repo(tmp_path)
         state = RepairState(issue_input="x")
-        state.node_timings["_repo_root_hint"] = str(root)
+        state.execution.repo_root = str(root)
         state.suspect_locations = [
             SuspectLocation(file_path="pkg/core.py", start_line=1, end_line=1, reason="grep命中")
         ]
@@ -60,7 +60,7 @@ class TestFaithfulnessSoft:
     def test_still_rejects_missing_hallucination(self, tmp_path):
         root = _tmp_repo(tmp_path)
         state = RepairState(issue_input="x")
-        state.node_timings["_repo_root_hint"] = str(root)
+        state.execution.repo_root = str(root)
         state.suspect_locations = [
             SuspectLocation(file_path="pkg/core.py", start_line=1, end_line=1)
         ]
@@ -162,7 +162,7 @@ class TestPromotePaths:
     def test_promote_adds_suspect(self, tmp_path):
         root = _tmp_repo(tmp_path)
         state = RepairState(issue_input="x")
-        state.node_timings["_repo_root_hint"] = str(root)
+        state.execution.repo_root = str(root)
         promoted = promote_paths_to_suspects(
             state, ["django/contrib/auth/validators.py"], repo_root=str(root)
         )

@@ -78,9 +78,9 @@ def save_repair_checkpoint(state, repo_root: str, *, state_root: str = "") -> Pa
     state_payload["checkpoint_envelope"] = envelope.to_dict()
     state_payload["checkpoint_checksum"] = envelope.checksum
     state_payload["state_root"] = str(path.parents[3])
-    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    tmp.write_text(json.dumps(state_payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    from agent_runtime.atomic_io import atomic_write_text
+
+    atomic_write_text(path, json.dumps(state_payload, ensure_ascii=False, indent=2))
     return path
 
 
@@ -159,6 +159,9 @@ def load_repair_checkpoint(
             return reject("resume_checkpoint_schema_mismatch")
         validated = validate_state_payload(data)
         RepairControl.model_validate(validated.get("control", {}))
+        from src.repair.execution_state import RepairExecutionState
+
+        RepairExecutionState.model_validate(validated.get("execution", {}))
         if set(validated.get("node_timings", {})) & set(RepairControl.model_fields):
             return reject("resume_checkpoint_malformed")
         return validated

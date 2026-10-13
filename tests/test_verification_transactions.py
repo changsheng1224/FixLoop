@@ -137,7 +137,11 @@ def test_cancel_stops_descendant_before_return(tmp_path):
     token.cancel()
     worker.join(5)
     assert not worker.is_alive()
-    expected = CancelledError if os.name == "nt" else ProcessCleanupUnconfirmedError
+    expected = (
+        CancelledError
+        if os.name == "nt" or sys.platform == "linux"
+        else ProcessCleanupUnconfirmedError
+    )
     assert len(errors) == 1 and isinstance(errors[0], expected)
     time.sleep(1.6)
     assert not late.exists()
@@ -268,6 +272,11 @@ def test_static_l2_plan_and_report_agree(tmp_path, capsys):
     orch, state, _ = repair_fixture(repo, full=True)
     orch.use_pytest_verify = False
     orch.allow_static_verify_fallback = True
+    from src.repair.verification.execution_policy import resolve_execution_policy
+
+    orch.execution_policy = resolve_execution_policy(
+        sandbox_policy="preferred", execution_tier="static", static=True
+    )
     result = orch.repair(state.issue_input, repair_timeout_s=0, max_retries=1)
     assert result.status == "pending_verify", result.agent_errors
     assert result.verification_result.verification_mode == "static"

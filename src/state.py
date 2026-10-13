@@ -11,6 +11,7 @@ from enum import StrEnum
 from typing import Any
 
 from src.repair.control_state import RepairControl
+from src.repair.execution_state import RepairExecutionState
 
 __all__ = [
     "AgentAskRef",
@@ -28,7 +29,7 @@ __all__ = [
 ]
 
 
-CURRENT_STATE_SCHEMA_VERSION = "1.2"
+CURRENT_STATE_SCHEMA_VERSION = "1.3"
 
 
 class RepairPhase(StrEnum):
@@ -469,6 +470,7 @@ class RepairState:
     failure_tags: list[str] = field(default_factory=list)
     node_timings: dict = field(default_factory=dict)
     control: RepairControl = field(default_factory=RepairControl)
+    execution: RepairExecutionState = field(default_factory=RepairExecutionState)
     agent_errors: dict = field(default_factory=dict)
     repair_run_id: str = ""
     agent_asks: list[AgentAskRef] = field(default_factory=list)
@@ -509,6 +511,7 @@ class RepairState:
     def __post_init__(self) -> None:
         """Validate the current control, phase and status contracts."""
         self.control = RepairControl.model_validate(self.control).model_copy(deep=True)
+        self.execution = RepairExecutionState.model_validate(self.execution).model_copy(deep=True)
         misplaced = set(self.node_timings) & set(RepairControl.model_fields)
         if misplaced:
             raise ValueError(
@@ -527,6 +530,10 @@ class RepairState:
         errors: list[str] = []
         self.control = RepairControl.model_validate(
             self.control.model_dump() if isinstance(self.control, RepairControl) else self.control
+        )
+        self.execution = RepairExecutionState.model_validate(
+            self.execution.model_dump()
+            if isinstance(self.execution, RepairExecutionState) else self.execution
         )
         if set(self.node_timings) & set(RepairControl.model_fields):
             errors.append("repair controls must not be stored in node_timings")
@@ -673,6 +680,7 @@ class RepairState:
             "failure_tags": list(self.failure_tags),
             "node_timings": deepcopy(self.node_timings),
             "control": self.control.model_dump(mode="json"),
+            "execution": self.execution.model_dump(mode="json"),
             "agent_errors": self.agent_errors,
             "repair_run_id": self.repair_run_id,
             "agent_asks": [ref.to_dict() for ref in self.agent_asks],
@@ -744,6 +752,7 @@ class RepairState:
             failure_tags=list(data.get("failure_tags", [])),
             node_timings=data.get("node_timings", {}),
             control=data.get("control", {}),
+            execution=data.get("execution", {}),
             agent_errors=data.get("agent_errors", {}),
             repair_run_id=data.get("repair_run_id", ""),
             agent_asks=[AgentAskRef.from_dict(item) for item in data.get("agent_asks", [])],

@@ -8,7 +8,7 @@ from src.collaboration_governance import atomic_collaboration_update
 from src.state import RepairState
 
 
-@pytest.mark.parametrize("version", [None, "1.0", "1.1", "9.0"])
+@pytest.mark.parametrize("version", [None, "1.0", "1.1", "1.2", "9.0"])
 def test_repairstate_rejects_missing_historical_and_unknown_schema(version):
     with pytest.raises(ValueError, match="unsupported"):
         RepairState.from_dict({"issue_input": "x", "schema_version": version})
@@ -16,7 +16,7 @@ def test_repairstate_rejects_missing_historical_and_unknown_schema(version):
 
 def test_current_control_roundtrip_and_snapshot_isolation():
     payload = {
-        "schema_version": "1.2",
+        "schema_version": "1.3",
         "issue_input": "x",
         "control": {"user_cancel": True, "allowed_edit": ["a.py"]},
         "node_timings": {"patch_ms": 7},
@@ -36,7 +36,7 @@ def test_historical_phase_and_status_are_rejected(field, value):
     with pytest.raises(ValueError):
         RepairState(issue_input="x", **{field: value})
     with pytest.raises(ValueError):
-        RepairState.from_dict({"schema_version": "1.2", "issue_input": "x", field: value})
+        RepairState.from_dict({"schema_version": "1.3", "issue_input": "x", field: value})
 
 
 def test_unsigned_repair_checkpoint_cannot_resume(tmp_path):
@@ -60,7 +60,7 @@ def test_control_rejects_unknown_fields_and_old_storage_on_new_schema():
     with pytest.raises(ValueError):
         RepairState(issue_input="x", control={"unrecognized_flag": True})
     with pytest.raises(ValueError, match="node_timings"):
-        RepairState.from_dict({"schema_version": "1.2", "node_timings": {"user_cancel": True}})
+        RepairState.from_dict({"schema_version": "1.3", "node_timings": {"user_cancel": True}})
     state = RepairState(issue_input="x")
     with pytest.raises(ValueError):
         state.control.consecutive_env_fails = -1

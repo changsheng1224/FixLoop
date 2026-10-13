@@ -49,7 +49,7 @@ def remember_negated_files(state: RepairState) -> None:
     """从 failure_ledger 否定文件写入 burned。"""
     mem = load_localize_memory(state)
     burned = list(mem["burned_files"])
-    ledger = state.node_timings.get("failure_ledger") or {}
+    ledger = state.execution.failure_ledger
     if isinstance(ledger, dict):
         for f in ledger.get("negated_files") or []:
             fp = str(f).replace("\\", "/")
@@ -73,7 +73,7 @@ def remember_confirmed_impls(
     mem = load_localize_memory(state)
     confirmed = list(mem["confirmed_impls"])
     seen = {c["file_path"] for c in confirmed}
-    root = repo_root or str(state.node_timings.get("_repo_root_hint") or "") or ""
+    root = repo_root or state.execution.repo_root
     for s in suspects or []:
         fp = str(getattr(s, "file_path", "") or "").replace("\\", "/")
         if not fp or fp in seen:

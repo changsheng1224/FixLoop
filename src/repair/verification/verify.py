@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -12,7 +11,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from agent_runtime.test_execution import ProcessCleanupUnconfirmedError, run_command, run_pytest
+from agent_runtime.test_execution import (
+    ProcessCleanupUnconfirmedError,
+    project_python,
+    run_command,
+    run_pytest,
+)
 from agent_runtime.tools import TIER_CONTAINER, TIER_HOST
 from src.repair.verification.verification_profiles import select_verification_profile
 from src.repair.verification.verification_runner import run_profile
@@ -227,7 +231,13 @@ class PytestVerifyStrategy:
                 trusted_execution=True,
                 warning=HOST_FALLBACK_WARNING,
                 pytest_ms=elapsed_ms,
-                command=[sys.executable, "-m", "pytest", "-q", *([test_path] if test_path else [])],
+                command=[
+                    project_python(repo_root),
+                    "-m",
+                    "pytest",
+                    "-q",
+                    *([test_path] if test_path else []),
+                ],
                 completed=True,
                 cleanup="confirmed",
                 pytest_exit_code=code,
@@ -410,7 +420,7 @@ class StaticVerifyStrategy:
             return self._run_external_static_check(root, language, t0, cancel_token)
 
         failures: list[str] = []
-        for path in root.rglob("*.py"):
+        for path in self._source_files(root, (".py",)):
             if cancel_token is not None:
                 cancel_token.check()
             if any(part in {".git", ".pytest_cache", "__pycache__"} for part in path.parts):
@@ -475,8 +485,9 @@ class StaticVerifyStrategy:
             return self._unsupported_static_language(root, language, start, "no checker configured")
 
         tool, extensions, command_builder = spec
-        executable = shutil.which(tool)
-        if not executable:
+        from src.repair.language_capabilities import project_command
+
+        if project_command(root, [tool]) is None:
             return self._unsupported_static_language(root, language, start, f"missing {tool}")
 
         files = self._source_files(root, extensions)
@@ -509,6 +520,7 @@ class StaticVerifyStrategy:
         steps = []
         with tempfile.TemporaryDirectory(prefix="fixloop_static_") as out_dir:
             for cmd in command_builder(root, files, out_dir):
+                cmd = project_command(root, cmd)
                 try:
                     code, output = run_command(cmd, root, cancel_token=cancel_token, timeout_s=30)
                 except (OSError, subprocess.TimeoutExpired) as exc:
@@ -583,15 +595,9 @@ class StaticVerifyStrategy:
 
     @staticmethod
     def _source_files(root: Path, extensions: tuple[str, ...]) -> list[Path]:
-        files: list[Path] = []
-        skip = {".git", ".pytest_cache", "__pycache__", "node_modules", "target", "dist"}
-        for path in root.rglob("*"):
-            if not path.is_file() or path.suffix.lower() not in extensions:
-                continue
-            if any(part in skip for part in path.parts):
-                continue
-            files.append(path)
-        return sorted(files)
+        from src.repair.language_capabilities import source_files
+
+        return source_files(root, extensions)
 
     @staticmethod
     def _rel(root: Path, path: Path) -> str:
@@ -619,7 +625,9 @@ class StaticVerifyStrategy:
 
     @classmethod
     def _tsc_check_command(cls, root: Path, files: list[Path], out_dir: str) -> list[list[str]]:
-        del root, out_dir
+        del out_dir
+        if (root / "tsconfig.json").is_file():
+            return [["tsc", "--noEmit", "--pretty", "false", "-p", str(root.resolve())]]
         return [["tsc", "--noEmit", "--pretty", "false", *[str(path) for path in files]]]
 
     @classmethod
@@ -716,25 +724,31 @@ class ProfileVerifyStrategy:
 
 def record_verify_timings(state, run: VerifyRun, *, log_sandbox: bool = False) -> None:
     """写入 RepairState.node_timings 并可选打印 sandbox 耗时。"""
+    from src.repair.execution_state import VerificationReceipt
     from src.repair.timing_schema import set_phase_ms
 
     set_phase_ms(state.node_timings, "verify", run.elapsed_ms, internal=run.internal)
-    state.node_timings["plan_verification_receipt"] = {
-        "command": run.internal.get("command", []),
-        "mode": run.internal.get("mode", "tests"),
-        "operation": run.internal.get("operation", ""),
-        "checked_files": run.internal.get("checked_files", 0),
-        "steps": run.internal.get("steps", []),
-        "cleanup": run.internal.get(
-            "cleanup", "confirmed" if run.internal.get("completed") else "unknown"
-        ),
-        "completed": run.internal.get("completed", False),
-        "not_started": run.internal.get("not_started", False),
-        "exit_code": run.internal.get("exit_code", run.internal.get("pytest_exit_code")),
-        "category": run.internal.get("category", run.error or "unknown"),
-        "receipt_id": run.internal.get("receipt_id", ""),
-        "verification_binding": run.internal.get("verification_binding", {}),
-    }
+    state.execution.verification_receipt = VerificationReceipt.model_validate(
+        {
+            "command": run.internal.get("command", []),
+            "mode": run.internal.get("mode", "tests"),
+            "operation": run.internal.get("operation", ""),
+            "checked_files": run.internal.get("checked_files", 0),
+            "steps": run.internal.get("steps", []),
+            "cleanup": run.internal.get(
+                "cleanup", "confirmed" if run.internal.get("completed") else "unknown"
+            ),
+            "completed": run.internal.get("completed", False),
+            "not_started": run.internal.get("not_started", False),
+            "exit_code": run.internal.get("exit_code", run.internal.get("pytest_exit_code")),
+            "category": run.internal.get("category", run.error or "unknown"),
+            "receipt_id": run.internal.get("receipt_id", ""),
+            "verification_binding": run.internal.get("verification_binding", {}),
+        }
+    )
+    state.node_timings["plan_verification_receipt"] = (
+        state.execution.verification_receipt.model_dump()
+    )
     if run.error:
         state.agent_errors["verifier"] = run.error
     if log_sandbox and run.internal:

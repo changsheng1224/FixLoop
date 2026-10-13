@@ -31,6 +31,9 @@ class RepairControl(BaseModel):
     consecutive_env_fails: int = Field(default=0, ge=0)
     verify_env_early_stop: bool = False
     allowed_edit: list[str] = Field(default_factory=list)
+    allowed_create: list[str] = Field(default_factory=list)
+    allowed_delete: list[str] = Field(default_factory=list)
+    allowed_patch_extra: list[str] = Field(default_factory=list)
     structured_verify_feedback: dict = Field(default_factory=dict)
     verify_failed_nodeids: list[str] = Field(default_factory=list)
     verify_bucket: str = ""

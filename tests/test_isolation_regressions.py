@@ -149,7 +149,7 @@ def test_retained_checkout_resume_keeps_run_memory_but_rechecks_content_and_poli
     original = (Path(agent._cwd) / "README.md").read_text()
     vector = memory.embed(original)
     old_key = memory.cache.path(original)
-    state.node_timings["run_entry"] = first._workspace_entry()
+    state.execution.run_entry = first._workspace_entry()
     save_repair_checkpoint(state, agent._cwd, state_root=agent.state_root)
     (Path(agent._cwd) / "README.md").write_text("dirty candidate", encoding="utf-8")
     before = copy.deepcopy(local.store.list_memories())

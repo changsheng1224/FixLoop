@@ -46,7 +46,7 @@ class TestPatcherToolizedOrchestrator:
         repo = tmp_path / "repo"
         repo.mkdir()
         target = repo / "v.py"
-        target.write_text("value = 1\n", encoding="utf-8")
+        target.write_bytes(b"value = 1\n")
 
         client = FakeModelClient(
             [
@@ -66,6 +66,7 @@ class TestPatcherToolizedOrchestrator:
         agent = create_repair_agent(
             "patcher", client, WorkspaceContext.build(str(repo)), cwd=str(repo)
         )
+        agent.config.auto_context_extraction = False
         orch = Orchestrator(agent, verifier=None, sandbox_policy="disabled")
         orch._repair_ctx = RepairRunContext(repair_started_at=time.time())
         orch._merge_blackboard_for_patch = lambda state: None
@@ -84,7 +85,8 @@ class TestPatcherToolizedOrchestrator:
             assert len(applied) == 1, (meta, state.agent_errors)
             assert applied[0].file_path == "v.py"
             assert applied[0].original_lines == "value = 1\n"
-            assert applied[0].patched_lines == target.read_text(encoding="utf-8") == "value = 2\n"
+            assert applied[0].patched_lines == target.read_bytes().decode("utf-8")
+            assert target.read_text(encoding="utf-8") == "value = 2\n"
             assert "--- a/v.py" in applied[0].diff and "+++ b/v.py" in applied[0].diff
             assert meta.get("edit_mode") == "tools"
             assert state.node_timings.get("patcher_edit_mode") == "tools"

@@ -57,15 +57,36 @@ def test_tests_only_rejected():
     assert v.accepted is False
 
 
-def test_mode_off_always_accepts():
+def test_mode_off_is_skipped():
     v = review_patch([], allowed_edit=set(), mode="off")
-    assert v.accepted is True
+    assert v.accepted is False
+    assert v.skipped is True
     assert v.mode == "off"
+
+
+def test_unimplemented_llm_mode_rejected():
+    import pytest
+
+    from src.repair.critic import resolve_critic_mode
+
+    with pytest.raises(ValueError, match="not implemented"):
+        review_patch([], mode="llm")
+    with pytest.raises(ValueError, match="not implemented"):
+        resolve_critic_mode({"FIXLOOP_CRITIC_MODE": "llm"})
 
 
 def test_verdict_fields():
     v = CriticVerdict(accepted=True, reason="ok", mode="rules_first")
     assert v.accepted and v.reason == "ok"
+
+
+def test_enabled_critic_rejects_unknown_mode():
+    import pytest
+
+    from src.repair.critic import resolve_critic_mode
+
+    with pytest.raises(ValueError, match="unknown critic mode"):
+        resolve_critic_mode({"FIXLOOP_CRITIC": "1", "FIXLOOP_CRITIC_MODE": "unknown"})
 
 
 def test_adjacent_duplicate_addition_rejected():
