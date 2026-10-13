@@ -117,13 +117,22 @@ def parse_unified_patch(diff: str) -> list[FilePatch]:
         raise PatchError("empty patch")
     lines, i, files, seen = _lines(diff), 0, [], set()
     while i < len(lines):
-        while i < len(lines) and lines[i].startswith(("diff --git ", "index ")):
-            i += 1
-        # Creation/deletion metadata must still agree with /dev/null headers.
+        # Preamble lines may appear in any order: git emits ``diff --git``, then
+        # the mode line, then ``index`` for creations and deletions.
         metadata = ""
-        if i < len(lines) and lines[i] in {"new file mode 100644", "deleted file mode 100644"}:
-            metadata = lines[i].split()[0]
-            i += 1
+        while i < len(lines):
+            line = lines[i]
+            if line.startswith(("diff --git ", "index ")):
+                i += 1
+                continue
+            if line in {"new file mode 100644", "deleted file mode 100644"}:
+                if metadata:
+                    raise PatchError("duplicate file mode metadata")
+                metadata = line.split()[0]
+                i += 1
+                continue
+            break
+        # Creation/deletion metadata must still agree with /dev/null headers.
         if (
             i + 1 >= len(lines)
             or not lines[i].startswith("--- ")
