@@ -5,6 +5,7 @@ from __future__ import annotations
 from src.state import RepairState, RepairStatus
 
 __all__ = [
+    "NON_TERMINAL_STATUSES",
     "RepairTerminalStatus",
     "TERMINAL_STATUSES",
     "apply_terminal_status",
@@ -21,8 +22,11 @@ __all__ = [
 
 
 RepairTerminalStatus = RepairStatus
+# Pauses, not outcomes: the run resumes from the same checkpoint once the
+# caller resolves them, so neither may be classified as terminal.
+NON_TERMINAL_STATUSES = frozenset({RepairStatus.PENDING, RepairStatus.WAITING_APPROVAL})
 TERMINAL_STATUSES = frozenset(
-    status.value for status in RepairStatus if status is not RepairStatus.PENDING
+    status.value for status in RepairStatus if status not in NON_TERMINAL_STATUSES
 )
 
 
@@ -96,6 +100,8 @@ def resolve_terminal_status(state: RepairState) -> RepairStatus:
         return control_status
     if has_repair_timeout(state):
         return RepairTerminalStatus.TIMEOUT
+    if state.status == RepairStatus.WAITING_APPROVAL:
+        return RepairStatus.WAITING_APPROVAL
     if state.status == RepairTerminalStatus.FIXED:
         verification = state.verification_result
         if (

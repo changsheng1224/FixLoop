@@ -48,6 +48,9 @@ class RepairPhase(StrEnum):
 
 class RepairStatus(StrEnum):
     PENDING = "pending"
+    # A sandbox approval pause: the run is neither finished nor failed and
+    # resumes from the same checkpoint once the caller resolves the approval.
+    WAITING_APPROVAL = "waiting_approval"
     PENDING_VERIFY = "pending_verify"
     FIXED = "fixed"
     FAILED = "failed"

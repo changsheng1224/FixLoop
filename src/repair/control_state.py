@@ -8,6 +8,7 @@ class RepairControl(BaseModel):
 
     user_cancel: bool = False
     repair_timeout: float = 0
+    pending_approval_id: str = ""
     phase_timeout: str = ""
     coordination_status: str = ""
     introduced_regression: bool = False

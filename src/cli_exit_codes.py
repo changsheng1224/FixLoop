@@ -12,12 +12,15 @@ REPAIR_EXIT_OK = 0
 REPAIR_EXIT_FAIL = 1
 REPAIR_EXIT_CONFIG = 2
 REPAIR_EXIT_TIMEOUT = 3
+# 沙箱审批暂停：运行未失败，等待调用方履行审批后从同一 checkpoint 续跑。
+REPAIR_EXIT_APPROVAL = 4
 
 __all__ = [
     "REPAIR_EXIT_OK",
     "REPAIR_EXIT_FAIL",
     "REPAIR_EXIT_CONFIG",
     "REPAIR_EXIT_TIMEOUT",
+    "REPAIR_EXIT_APPROVAL",
     "repair_config_error",
     "repair_exit_code",
 ]
@@ -35,8 +38,11 @@ def repair_config_error(repo: str, *, api_key: str | None = None) -> str | None:
 
 def repair_exit_code(state: RepairState) -> int:
     """根据 RepairState 计算 repair 子命令进程退出码。"""
-    if resolve_terminal_status(state) == RepairStatus.TIMEOUT:
+    terminal = resolve_terminal_status(state)
+    if terminal == RepairStatus.TIMEOUT:
         return REPAIR_EXIT_TIMEOUT
+    if terminal == RepairStatus.WAITING_APPROVAL:
+        return REPAIR_EXIT_APPROVAL
     if has_actionable_patch(state):
         return REPAIR_EXIT_OK
     return REPAIR_EXIT_FAIL
