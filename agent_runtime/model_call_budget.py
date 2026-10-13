@@ -31,6 +31,41 @@ def _costs(inp, out):
     return {"llm_calls": 1, "prompt_tokens": inp, "output_tokens": out, "total_tokens": inp + out}
 
 
+def _accumulate_cost(budget: BudgetManager, client, tokens: dict) -> None:
+    """Charge this call's estimated USD cost to the cost ledger.
+
+    A provider only reveals usage once it has answered, so the cost is recorded
+    on settle rather than reserved up front; ``_reject_if_cost_exhausted``
+    enforces it at the next dispatch. ``record`` is used instead of ``reserve``
+    on purpose: usage has to keep counting past the limit, otherwise the
+    exhausted state could never be observed.
+    """
+    from agent_runtime.token_accounting import estimate_cost
+
+    model = str(getattr(client, "model", "") or "")
+    if not model:
+        return
+    cost = estimate_cost(
+        {
+            "input_tokens": int(tokens.get("prompt_tokens", 0) or 0),
+            "output_tokens": int(tokens.get("output_tokens", 0) or 0),
+        },
+        model=model,
+    )
+    if cost <= 0:
+        return
+    budget.record("hard_cost_limit_usd", cost)
+    budget.record("soft_cost_limit_usd", cost)
+
+
+def _reject_if_cost_exhausted(budget: BudgetManager) -> None:
+    decision = budget.check("hard_cost_limit_usd", 0.0)
+    if not decision.allowed:
+        raise ModelBudgetExceededError(
+            f"cost_limit_exhausted: used={decision.used:.4f} USD, limit={decision.limit:.4f} USD"
+        )
+
+
 def invoke_model_call(
     fn: Callable,
     *,
@@ -66,6 +101,7 @@ def invoke_model_call(
         if remaining is not None:
             timeout_s = remaining if timeout_s is None else min(timeout_s, remaining)
     key = "model:" + uuid.uuid4().hex
+    _reject_if_cost_exhausted(budget)
     reserved = _costs(input_tokens, output_tokens)
     if not budget.reserve_model_call(key, purpose, reserved):
         rejected = [budget.check(resource, amount) for resource, amount in reserved.items()]
@@ -110,11 +146,12 @@ def invoke_model_call(
 
     result, usage = run_blocking(dispatch, cancel_token=cancel_token, timeout_s=timeout_s)
     if usage is not None:
-        budget.settle_model_call(
-            key, _costs(usage["input_tokens"], usage["output_tokens"]), "actual"
-        )
+        settled = _costs(usage["input_tokens"], usage["output_tokens"])
+        budget.settle_model_call(key, settled, "actual")
     else:
+        settled = reserved
         budget.settle_model_call(key, reserved, "estimated")
+    _accumulate_cost(budget, client, settled)
     return result
 
 

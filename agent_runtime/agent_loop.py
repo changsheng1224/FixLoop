@@ -615,9 +615,16 @@ class AgentLoop:
         decision = self._latency_controller.decide(
             remaining_s=self.execution_deadline.remaining_s(), max_output_tokens=max_output_tokens
         )
+        reasons = list(decision["reasons"])
+        skip_optional_context = "skip_optional_context" in decision["actions"]
+        # 软成本上限不终止运行，只让后续上下文降级，但它必须真的发生并被观测到。
+        if not self._budget_manager.check("soft_cost_limit_usd", 0.0).allowed:
+            skip_optional_context = True
+            reasons.append("soft_cost_limit_exceeded")
+            self._emit("soft_cost_limit_exceeded", {"reason": "soft_cost_limit_exceeded"})
         self.agent.session["runtime_degradation"] = {
-            "skip_optional_context": "skip_optional_context" in decision["actions"],
-            "reasons": list(decision["reasons"]),
+            "skip_optional_context": skip_optional_context,
+            "reasons": reasons,
             "max_output_tokens": int(decision["max_output_tokens"]),
         }
         for reason in decision["reasons"]:

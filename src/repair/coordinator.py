@@ -390,7 +390,7 @@ class RepairCoordinator:
             if self.session.transaction.reject_protected_interface_changes(state, initial_snapshot):
                 continue
             if not self.session.verification.verification_enabled():
-                mark_pending_verify(state)
+                mark_pending_verify(state, "verification_disabled")
                 break
             log.info("Verifier 开始...")
             self.session.events.progress_emitter().emit(

@@ -34,6 +34,10 @@ class BudgetManager:
         "writes": "read_only",
         "verifies": "partial_verify",
         "recoveries": "stop",
+        # Cost is only knowable after the provider reports usage, so these are
+        # recorded on settle and enforced at the next dispatch.
+        "hard_cost_limit_usd": "stop",
+        "soft_cost_limit_usd": "degrade",
     }
 
     def __init__(self, limits: dict[str, int | float] | None = None):
