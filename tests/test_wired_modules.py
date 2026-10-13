@@ -26,9 +26,12 @@ class TestQuotaCLI:
     """QuotaEnforcer 通过 CLI/Agent 参数控制测试。"""
 
     def test_default_quota_values(self, agent):
-        assert agent.quota._limits["write"] == 20
-        assert agent.quota._limits["shell"] == 10
-        assert agent.quota._limits["total"] == 50
+        # The policy default is 0 = unlimited, which `from_policy` normalises to inf.
+        assert agent.quota._limits == {
+            "write": float("inf"),
+            "shell": float("inf"),
+            "total": float("inf"),
+        }
 
     def test_quota_wired_to_tool_executor(self, agent):
         """QuotaEnforcer 通过 Agent.execute_tool() 传给 ToolExecutor。"""

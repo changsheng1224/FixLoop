@@ -16,13 +16,13 @@ class TestLLMClassifyIssue:
         """issue_type='unknown' 时调用 _llm_classify_issue。"""
         from unittest.mock import MagicMock, patch
 
-        from src.repair.session import ExecutionSession
-
         orch = make_orchestrator()
         orch.light_client = MagicMock()
         orch.light_client.complete.return_value = "type_error"
         with patch.object(
-            ExecutionSession, "_llm_classify_issue", wraps=orch.exploration.llm_classify_issue
+            type(orch.exploration),
+            "llm_classify_issue",
+            wraps=orch.exploration.llm_classify_issue,
         ):
             result = orch.exploration.llm_classify_issue("some unknown error description")
         assert result == "type_error"
@@ -79,7 +79,7 @@ class TestParseIssueFallback:
         orch.light_client.complete.return_value = "type_error"
         orch.exploration.classify_issue_type = lambda i: ("unknown", "none")
         orch.repo_root = "."
-        with patch.object(orch, "_parse_file_line", return_value=0):
+        with patch.object(type(orch.exploration), "parse_file_line", return_value=0):
             plan = orch.exploration.parse_issue("some ambiguous error")
         assert plan.issue_type == "type_error"
         assert plan.intent_parser == "llm"
@@ -92,7 +92,7 @@ class TestParseIssueFallback:
         orch.light_client = None
         orch.exploration.classify_issue_type = lambda i: ("unknown", "none")
         orch.repo_root = "."
-        with patch.object(orch, "_parse_file_line", return_value=0):
+        with patch.object(type(orch.exploration), "parse_file_line", return_value=0):
             plan = orch.exploration.parse_issue("ambiguous error")
         assert plan.issue_type == "unknown"
         assert plan.intent_parser == "rule"
@@ -105,7 +105,7 @@ class TestParseIssueFallback:
         orch.light_client = MagicMock()
         orch.exploration.classify_issue_type = lambda i: ("type_error", "explicit_exception")
         orch.repo_root = "."
-        with patch.object(orch, "_parse_file_line", return_value=0):
+        with patch.object(type(orch.exploration), "parse_file_line", return_value=0):
             plan = orch.exploration.parse_issue("TypeError at calc.py:42")
         assert plan.issue_type == "type_error"
         orch.light_client.complete.assert_not_called()

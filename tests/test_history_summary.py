@@ -317,7 +317,9 @@ def test_summarizer_retains_long_json_and_charges_shared_budget(tmp_path):
         summarizer=make_summarizer(agent),
         trigger_tokens=1,
     )
-    assert meta["compression_pipeline"]["l5_failure_reason"] == "model_call_budget_exhausted"
+    assert meta["compression_pipeline"]["l5_failure_reason"].startswith(
+        "llm_calls_budget_exhausted"
+    )
     assert not any(is_summary(i) for i in result)
     assert len(agent.model_client.prompts) == 1
 

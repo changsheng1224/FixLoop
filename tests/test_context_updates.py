@@ -277,7 +277,7 @@ def test_workers_and_expired_owner_cannot_register_or_commit(tmp_path, monkeypat
         def expired(**kwargs):
             raise ValueError("owner_generation_expired")
 
-        monkeypatch.setattr(session, "_fence", expired)
+        monkeypatch.setattr(session, "assert_execution_allowed", expired)
         with pytest.raises(ValueError, match="owner_generation_expired"):
             submit(session, [update])
         assert session.store.events() == before
@@ -420,7 +420,7 @@ def test_owner_expiring_during_evidence_validation_cannot_publish_batch(tmp_path
                 raise ValueError("owner_generation_expired")
 
         monkeypatch.setattr(session.evidence, "inspect", check)
-        monkeypatch.setattr(session, "_fence", fence)
+        monkeypatch.setattr(session, "assert_execution_allowed", fence)
         before, raw = session.store.events(), session.long_task_state.to_dict()
         with pytest.raises(ValueError, match="owner_generation_expired"):
             submit(session, [update])

@@ -398,7 +398,7 @@ def test_expired_owner_cannot_append_decision(tmp_path, monkeypatch):
         def reject(**kwargs):
             raise ValueError("owner_generation_expired")
 
-        monkeypatch.setattr(session, "_fence", reject)
+        monkeypatch.setattr(session, "assert_execution_allowed", reject)
         with pytest.raises(ValueError, match="owner_generation_expired"):
             _record(session)
         assert session.store.events() == before
@@ -477,7 +477,7 @@ def test_owner_expiring_during_evidence_check_cannot_commit(tmp_path, monkeypatc
                 raise ValueError("owner_generation_expired")
 
         monkeypatch.setattr(session.evidence, "inspect", check)
-        monkeypatch.setattr(session, "_fence", fence)
+        monkeypatch.setattr(session, "assert_execution_allowed", fence)
         with pytest.raises(ValueError, match="owner_generation_expired"):
             _record(session)
         assert session.store.events() == before

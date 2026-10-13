@@ -1022,7 +1022,10 @@ def build_tool_registry(context) -> dict:
         "execution_tier": "linux_sandbox" if context.sandbox_backend is not None else TIER_HOST,
         "description": "环内快检 pytest nodeid/path。参数: nodeid 或 path, timeout",
         # nodeid 优先于 path，因此它必须和 path 一样受参数治理约束。
-        "argv_args": frozenset({"nodeid"}),
+        # A list, not a frozenset: the execution registry is serialised into eval
+        # manifests, and `bind_execution_tools` normalises ToolSpec declarations
+        # to sorted lists for the same reason.
+        "argv_args": ["nodeid"],
         "run": lambda args: tool_quick_test(context, args),
     }
 

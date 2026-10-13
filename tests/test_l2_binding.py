@@ -33,9 +33,9 @@ class TestBindL2Context:
             started_ms=100,
         )
         assert task_id == "run-1-patcher"
-        assert agent._l2_agent == "patcher"
+        assert agent.correlation["role"] == "patcher"
         clear_l2_context(agent)
-        assert not hasattr(agent, "_l2_agent")
+        assert agent.correlation == {}
 
     def test_payload_from_agent(self):
         agent = _StubAgent()

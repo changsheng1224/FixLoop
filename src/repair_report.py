@@ -111,6 +111,22 @@ class RepairReport:
             self.data["status"] = category
         self.save()
 
+    def trace_path(self) -> Path | None:
+        """Where the run trace actually is.
+
+        The repair executes in a managed worktree, so the trace is not under
+        `repo_path`; it lives in the run's state root under the project that the
+        source repository identifies.
+        """
+        run_id = str(self.data.get("runtime_run_id") or "")
+        source = str(self.data.get("source_repo_path") or self.data.get("repo_path") or "")
+        if not run_id or not source:
+            return None
+        from agent_runtime.state_root import managed_state_base
+
+        run_root = managed_state_base(source, self.data.get("state_root")) / "tasks" / run_id
+        return run_root / ".agent" / "runs" / run_id / "trace.jsonl"
+
     def save(self) -> None:
         target = self.output / "result.json"
         temporary = target.with_suffix(".json.tmp")
@@ -150,7 +166,7 @@ class RepairReport:
                 [
                     "",
                     f"运行时 run_id：{self.data['runtime_run_id']}",
-                    f"Trace：{self.data['repo_path']}/.agent/runs/{self.data['runtime_run_id']}/trace.jsonl",
+                    f"Trace：{self.trace_path()}",
                 ]
             )
         recovery = self.data.get("recovery") or {}

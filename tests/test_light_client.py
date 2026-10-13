@@ -14,6 +14,7 @@ from agent_runtime.providers.clients import (
 )
 from agent_runtime.runtime import Agent
 from agent_runtime.workspace import WorkspaceContext
+from tests.history_summary_support import summary_json
 
 
 def _fake_ollama_server(response: str = "hello"):
@@ -87,7 +88,7 @@ class TestLightClientIntegration:
     def agent_with_light(self, temp_workspace):
         ws = WorkspaceContext.build(str(temp_workspace))
         main = FakeModelClient(["<final>ok</final>"])
-        light = FakeModelClient(["summary from light model"])
+        light = FakeModelClient([summary_json(fact="summary from light model")])
         agent = Agent(
             config=AgentConfig(provider="fake", max_steps=2, max_new_tokens=2048),
             model_client=main,

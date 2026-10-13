@@ -338,7 +338,15 @@ def tool_step_flow(
                 runtime.state.pending_batch_tools -= 1
     if budget_rejected or replayed or replay_blocked or convergence_blocked:
         result = yield result
+        transform = runtime.agent.tool_result_transform
+        if transform is not None:
+            result = transform(tool_name, tool_args, result)
         result = seal_result(result)
+        # A prepared (preflight-rejected) call still counts against an isolated
+        # child's attempt cap, and the child still records its Observation. The
+        # main loop keeps rejections off the executor quota on purpose (E5).
+        if prepared_result is not None and runtime.agent.isolated_context:
+            runtime.hooks.budget_reserve("tool_calls")
     # Gateway/权限拒绝不计入 tool_steps，避免无效步耗尽预算（E5）
     _meta = result.metadata
     if result.status != "rejected" and prepared_result is None:

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_runtime.model_turn import ModelTurnResult, ToolCall
+from agent_runtime.model_turn import FinishKind, ModelTurnResult, ProviderFinish, ToolCall
 from agent_runtime.plan_runtime.models import digest
 from agent_runtime.providers.clients import FakeModelClient
 from agent_runtime.read_permits import read_permits
@@ -31,6 +31,7 @@ class TurnClient:
             return self.turn
         return ModelTurnResult(
             text=json.dumps({"summary": "Inspected", "findings": [], "unknowns": []}),
+            finish=ProviderFinish(FinishKind.TEXT_COMPLETE),
             usage=USAGE,
         )
 
@@ -86,7 +87,14 @@ def test_native_protocol_rejection_performs_zero_reads(tmp_path, damage):
         content = raw_blocks(calls)
     else:
         calls = []
-    client = TurnClient(ModelTurnResult(tool_calls=calls, content=content, usage=USAGE))
+    client = TurnClient(
+        ModelTurnResult(
+            tool_calls=calls,
+            content=content,
+            finish=ProviderFinish(FinishKind.TOOL_CALLS),
+            usage=USAGE,
+        )
+    )
     runtime = make_runtime(tmp_path, client_factory=lambda t: client)
     try:
         before = (tmp_path / "value.py").read_text()
@@ -106,7 +114,14 @@ def test_native_protocol_rejection_performs_zero_reads(tmp_path, damage):
 def test_schema_denial_is_paired_and_legal_sibling_is_read_serially(tmp_path):
     calls = [ToolCall("read_file", {}, "bad"), ToolCall("read_file", {"path": "value.py"}, "good")]
     content = [{"type": "text", "text": "Inspect sources"}, *raw_blocks(calls)]
-    client = TurnClient(ModelTurnResult(tool_calls=calls, content=content, usage=USAGE))
+    client = TurnClient(
+        ModelTurnResult(
+            tool_calls=calls,
+            content=content,
+            finish=ProviderFinish(FinishKind.TOOL_CALLS),
+            usage=USAGE,
+        )
+    )
     runtime = make_runtime(tmp_path, client_factory=lambda t: client)
     try:
         result = finish(runtime, [runtime.delegate(REQUESTS[:1])[0]["handle"]])
@@ -449,6 +464,7 @@ def test_result_error_keeps_contract_reason_without_exposing_exception_text(tmp_
                 ],
             }
         ),
+        finish=ProviderFinish(FinishKind.TEXT_COMPLETE),
         usage=USAGE,
     )
     runtime = make_runtime(tmp_path, client_factory=lambda t: TurnClient(turn))

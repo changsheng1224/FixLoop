@@ -115,7 +115,7 @@ def test_compressed_repair_requests_and_restart_share_authority_and_budget(
             "extraction",
             "planning",
             "summary",
-            "repair",
+            "patcher",
         }
         saved_state = state.to_dict()
     finally:
@@ -147,7 +147,7 @@ def test_compressed_repair_requests_and_restart_share_authority_and_budget(
         assert restored.hard_constraints == ["Do not modify tests"]
         assert len(binding.session.store.latest("operation", "operation_id")) == writes
         assert len(binding.session.store.latest("attempt", "attempt_id")) == attempts
-        assert resumed._model_budget.snapshot() == saved_budget
+        assert resumed.model_budget.snapshot() == saved_budget
         assert not resumed_client.prompts and (not resumed_candidates)
         assert (tmp_path / "test_value.py").read_bytes() == original_tests
         assert (tmp_path / "value.py").read_text() == "def answer():\n    return 2\n"

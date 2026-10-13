@@ -1,6 +1,7 @@
 """Repair adapter uses a typed result contract, independently of display text."""
 
 from contextlib import closing
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,16 +15,26 @@ from src.workbench.project import ProjectExecutor
 @pytest.mark.parametrize("verified", [True, False])
 def test_success_depends_on_typed_status_and_verification(tmp_path, monkeypatch, status, verified):
     monkeypatch.setattr(RepairStatus, "__str__", lambda self: "display:" + self.value)
+    # The `fixed` contract needs a real passed run, not just all_passed: the
+    # executor also requires execution_status "passed" and at least one test.
+    verification = (
+        VerificationResult(all_passed=True, execution_status="passed", total_tests=1)
+        if verified
+        else VerificationResult(all_passed=False, execution_status="failed", total_tests=1)
+    )
     state = RepairState(
         issue_input="request",
         status=status,
-        verification_result=VerificationResult(all_passed=verified),
+        verification_result=verification,
     )
 
     class Orch:
-        _active_agents = ()
+        """Stands in for the repair service, with the surface the executor uses."""
 
-        def repair(self, *args, **kwargs):
+        def __init__(self):
+            self.session = SimpleNamespace(active_agents=[], progress=None)
+
+        def run(self, request):
             return state
 
     repo = tmp_path / "repo"
@@ -40,5 +51,12 @@ def test_success_depends_on_typed_status_and_verification(tmp_path, monkeypatch,
             run_id="run",
             state_root=tmp_path / "state",
         )
-    assert result.status == ("succeeded" if status is RepairStatus.FIXED and verified else "failed")
+    expected = (
+        "succeeded"
+        if status is RepairStatus.FIXED and verified
+        else "waiting_approval"
+        if status is RepairStatus.WAITING_APPROVAL
+        else "failed"
+    )
+    assert result.status == expected
     assert result.artifacts["repair_status"] == status.value

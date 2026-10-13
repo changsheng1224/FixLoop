@@ -85,7 +85,7 @@ class TestTryCreateVerifier:
             "src.harness.sandbox_health.probe_sandbox_health",
             lambda **_kwargs: FakeReport(),
         )
-        assert probe_verification_backend(None, workspace, workspace.repo_root) is None
+        assert probe_verification_backend() is None
 
     def test_required_probe_failure_raises(self, monkeypatch, workspace):
         from src.repair.assembly import VerificationEnvironmentError, probe_verification_backend
@@ -99,12 +99,7 @@ class TestTryCreateVerifier:
             lambda **_kwargs: FakeReport(),
         )
         with pytest.raises(VerificationEnvironmentError, match="docker ping: denied"):
-            probe_verification_backend(
-                None,
-                workspace,
-                workspace.repo_root,
-                required=True,
-            )
+            probe_verification_backend(required=True)
 
     def test_creates_verifier_when_probe_ready(self, monkeypatch, workspace):
         from src.repair.assembly import probe_verification_backend
@@ -113,7 +108,8 @@ class TestTryCreateVerifier:
             ready = True
             errors = []
 
-        fake_verifier = object()
+        from src.repair.verification.execution_policy import VerificationBackend
+
         calls: list[dict] = []
 
         def fake_probe(**kwargs):
@@ -124,9 +120,5 @@ class TestTryCreateVerifier:
             "src.harness.sandbox_health.probe_sandbox_health",
             fake_probe,
         )
-        monkeypatch.setattr(
-            "src.repair.assembly.create_verifier",
-            lambda *_a, **_k: fake_verifier,
-        )
-        assert probe_verification_backend(None, workspace, workspace.repo_root) is fake_verifier
+        assert isinstance(probe_verification_backend(), VerificationBackend)
         assert calls == [{"run_smoke": False}]
