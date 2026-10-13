@@ -27,7 +27,6 @@ class RepairControl(BaseModel):
     patcher_write_attempted: bool | None = None
     patcher_write_rejected: bool = False
     patcher_export_failed: bool = False
-    stop_loss_snapshot: dict = Field(default_factory=dict)
     no_progress_warning: dict = Field(default_factory=dict)
     consecutive_env_fails: int = Field(default=0, ge=0)
     verify_env_early_stop: bool = False

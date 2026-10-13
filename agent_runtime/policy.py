@@ -68,7 +68,6 @@ class DeadlinePolicy(BaseModel):
     repair_s: int = Field(default=0, ge=0, le=86_400)
     step_s: int = Field(default=300, ge=0, le=7_200)
     tool_s: int = Field(default=120, ge=0, le=3_600)
-    retry_backoff_cap_s: float = Field(default=120.0, ge=0.0, le=3_600.0)
 
 
 class LatencySLOPolicy(BaseModel):
@@ -78,7 +77,6 @@ class LatencySLOPolicy(BaseModel):
 
     ttft_p95_ms: int = Field(default=0, ge=0, le=3_600_000)
     model_p95_ms: int = Field(default=0, ge=0, le=3_600_000)
-    repair_p95_ms: int = Field(default=0, ge=0, le=86_400_000)
 
 
 class DegradationPolicy(BaseModel):
@@ -89,7 +87,6 @@ class DegradationPolicy(BaseModel):
     enabled: bool = True
     reduce_output_tokens: bool = True
     skip_optional_context: bool = True
-    low_latency_provider: str = ""
     max_output_floor: int = Field(default=512, ge=1, le=8_192)
 
 

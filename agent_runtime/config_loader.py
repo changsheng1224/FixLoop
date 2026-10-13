@@ -73,10 +73,8 @@ _ENV_FIELDS = {
     "deadline.repair_s": int,
     "deadline.step_s": int,
     "deadline.tool_s": int,
-    "deadline.retry_backoff_cap_s": float,
     "slo.ttft_p95_ms": int,
     "slo.model_p95_ms": int,
-    "slo.repair_p95_ms": int,
 }
 
 

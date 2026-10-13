@@ -167,7 +167,6 @@ class RepairCoordinator:
             state.feedback = "补丁生成失败；请基于现有证据直接生成并应用补丁。"
         self.session.evidence.write_feedback_to_blackboard(state.feedback)
         sl = stop_loss.record_empty_patch(apply_failed=bool(apply_err))
-        state.control.stop_loss_snapshot = stop_loss.snapshot()
         state.retry_count += 1
         if sl.stop:
             apply_stop_loss(state, sl)
@@ -483,7 +482,6 @@ class RepairCoordinator:
         )
         self.session.evidence.write_feedback_to_blackboard(state.feedback)
         sl = stop_loss.record_verify_failure(state.verification_result, state.candidate_patches)
-        state.control.stop_loss_snapshot = stop_loss.snapshot()
         if sl.reason == "no_progress" and (not sl.stop):
             state.control.no_progress_warning = dict(sl.meta or {})
             state.agent_errors["no_progress"] = sl.hint
@@ -549,7 +547,6 @@ class RepairCoordinator:
         state.failure_tags = list(checkpoint.get("failure_tags") or [])
         state.agent_errors = dict(checkpoint.get("agent_errors") or {})
         state.blackboard_snapshot = checkpoint.get("blackboard_snapshot", {}) or {}
-        state.degraded_mode = bool(checkpoint.get("degraded_mode", False))
         state.retrieved_context = (
             RetrievedContext.from_dict(checkpoint["retrieved_context"])
             if checkpoint.get("retrieved_context")

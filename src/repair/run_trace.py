@@ -269,9 +269,6 @@ class RepairRunTracer:
         }
         if state.repair_plan is not None:
             report["repair_plan"] = repair_plan_intent_snapshot(state.repair_plan)
-        if state.degraded_mode:
-            report["degraded_mode"] = True
-            report["degraded_trigger"] = state.node_timings.get("degraded_trigger", "")
         self.store.write_report_by_id(self.run_id, report)
         finished_payload = {
             "status": state.status,
