@@ -136,6 +136,66 @@ def test_unified_creation_no_newline_and_delete(tmp_path, backend):
 
 
 @pytest.mark.parametrize("backend", ["host", "sandbox"])
+def test_git_metadata_creation_and_deletion_with_index(tmp_path, backend):
+    """Git orders `diff --git`, the mode line, then `index`; all three must parse."""
+    (tmp_path / "old.txt").write_bytes(b"gone\n")
+    patch = (
+        "diff --git a/new.txt b/new.txt\n"
+        "new file mode 100644\n"
+        "index 0000000..e69de29\n"
+        "--- /dev/null\n"
+        "+++ b/new.txt\n"
+        "@@ -0,0 +1 @@\n"
+        "+created\n"
+        "diff --git a/old.txt b/old.txt\n"
+        "deleted file mode 100644\n"
+        "index e69de29..0000000\n"
+        "--- a/old.txt\n"
+        "+++ /dev/null\n"
+        "@@ -1 +0,0 @@\n"
+        "-gone\n"
+    )
+    result = apply_backend(tmp_path, patch, backend)
+    assert not result.failed, result.content
+    assert (tmp_path / "new.txt").read_bytes() == b"created\n"
+    assert not (tmp_path / "old.txt").exists()
+
+
+def test_git_mode_metadata_must_agree_with_headers():
+    """A creation mode line over an existing-file hunk is still rejected."""
+    from agent_runtime.patch_engine import PatchError, parse_unified_patch
+
+    patch = (
+        "diff --git a/f.txt b/f.txt\n"
+        "new file mode 100644\n"
+        "index 0000000..1111111\n"
+        "--- a/f.txt\n"
+        "+++ b/f.txt\n"
+        "@@ -1 +1 @@\n"
+        "-old\n"
+        "+new\n"
+    )
+    with pytest.raises(PatchError, match="metadata disagrees"):
+        parse_unified_patch(patch)
+
+
+def test_git_duplicate_mode_metadata_is_rejected():
+    from agent_runtime.patch_engine import PatchError, parse_unified_patch
+
+    patch = (
+        "diff --git a/f.txt b/f.txt\n"
+        "new file mode 100644\n"
+        "new file mode 100644\n"
+        "--- /dev/null\n"
+        "+++ b/f.txt\n"
+        "@@ -0,0 +1 @@\n"
+        "+x\n"
+    )
+    with pytest.raises(PatchError, match="duplicate file mode metadata"):
+        parse_unified_patch(patch)
+
+
+@pytest.mark.parametrize("backend", ["host", "sandbox"])
 def test_unicode_line_separator_is_source_content(tmp_path, backend):
     (tmp_path / "a.txt").write_bytes("a\u2028b\n".encode())
     patch = "--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\u2028b\n+c\u2028d\n"
