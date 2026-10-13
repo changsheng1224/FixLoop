@@ -448,9 +448,6 @@ class RepairCoordinator:
                     state.set_status(RepairTerminalStatus.PENDING_VERIFY, "static_check_completed")
                 else:
                     state.set_status(RepairTerminalStatus.FIXED, "verification_passed")
-                cooldown = getattr(self.session, "verify_cooldown", None)
-                if cooldown is not None:
-                    cooldown.record_success()
                 break
             if self.record_verification_failure(state, initial_snapshot, stop_loss):
                 break

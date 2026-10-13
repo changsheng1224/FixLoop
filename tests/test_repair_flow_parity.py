@@ -177,16 +177,6 @@ def test_protected_signature_gate_precedes_verifier(flow, monkeypatch, verify_en
     assert "protected_interface" in result.agent_errors
 
 
-def test_success_resets_cooldown(flow, monkeypatch):
-    orch, run, _ = flow
-    monkeypatch.setattr(orch.verification, "verification_enabled", lambda: True)
-    cooldown = Mock()
-    orch.verify_cooldown = cooldown
-    result = run()
-    assert result.status == "fixed"
-    cooldown.record_success.assert_called_once()
-
-
 def test_partial_patch_timing_uses_elapsed_time(flow, monkeypatch):
     orch, run, _ = flow
     patcher = orch.patcher_execution.run_patcher
