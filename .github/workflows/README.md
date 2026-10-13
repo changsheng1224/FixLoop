@@ -9,7 +9,7 @@ ruff check agent_runtime src tests
 ruff format --check agent_runtime src tests
 pytest tests/ -v --cov=agent_runtime --cov=src
 
-python -m src.eval.runner --ci
+python -m src.eval --ci
 python -m src.eval.regression_check \
   --current eval_results/ci/eval_report.json \
   --baseline src/eval/ci_baseline_report.json

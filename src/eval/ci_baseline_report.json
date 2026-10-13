@@ -1,18 +1,606 @@
 {
   "summary": {
-    "total": 10,
-    "fixed": 10,
+    "total": 2,
+    "fixed": 2,
     "fix_rate": 1.0,
     "first_attempt_rate": 1.0,
     "avg_retries": 0.0,
-    "patch_precision": 0.9333,
-    "avg_duration_ms": 1,
-    "avg_duration_s": 0.0,
+    "patch_precision": 1.0,
+    "avg_duration_ms": 5171,
+    "avg_duration_s": 5.17,
+    "duration_ms_p50": 5171,
+    "duration_ms_p95": 5562,
     "regression_count": 0,
-    "regression_rate": 0.0
+    "regression_rate": 0.0,
+    "status_counts": {
+      "fixed": 2
+    },
+    "failure_tag_counts": {},
+    "failure_reason_counts": {},
+    "fix_rate_ci95": [
+      0.3424,
+      1.0
+    ],
+    "regression_rate_ci95": [
+      0.0,
+      0.6576
+    ],
+    "duration_mean_ci95": [
+      4406.12,
+      5936.88
+    ],
+    "cost_mean_usd": 0.0,
+    "cost_mean_ci95": [
+      0.0,
+      0.0
+    ],
+    "total_tokens": 1959,
+    "avg_total_tokens": 979.5,
+    "token_p50": 979,
+    "token_p95": 984,
+    "equivalence_by_type": {
+      "full": 2,
+      "partial": 0,
+      "none": 0
+    },
+    "avg_equivalence_full_rate": 1.0
+  },
+  "by_type": {
+    "type_error": {
+      "total": 2,
+      "fixed": 2,
+      "fix_rate": 1.0,
+      "first_attempt_rate": 1.0,
+      "avg_retries": 0.0,
+      "patch_precision": 1.0,
+      "avg_duration_ms": 5171,
+      "avg_duration_s": 5.17,
+      "duration_ms_p50": 5171,
+      "duration_ms_p95": 5562,
+      "regression_count": 0,
+      "regression_rate": 0.0,
+      "status_counts": {
+        "fixed": 2
+      },
+      "failure_tag_counts": {},
+      "failure_reason_counts": {},
+      "fix_rate_ci95": [
+        0.3424,
+        1.0
+      ],
+      "regression_rate_ci95": [
+        0.0,
+        0.6576
+      ],
+      "duration_mean_ci95": [
+        4406.12,
+        5936.88
+      ],
+      "cost_mean_usd": 0.0,
+      "cost_mean_ci95": [
+        0.0,
+        0.0
+      ],
+      "total_tokens": 1959,
+      "avg_total_tokens": 979.5,
+      "token_p50": 979,
+      "token_p95": 984,
+      "equivalence_by_type": {
+        "full": 2,
+        "partial": 0,
+        "none": 0
+      },
+      "avg_equivalence_full_rate": 1.0
+    }
+  },
+  "by_difficulty": {
+    "easy": {
+      "total": 1,
+      "fixed": 1,
+      "fix_rate": 1.0,
+      "first_attempt_rate": 1.0,
+      "avg_retries": 0.0,
+      "patch_precision": 1.0,
+      "avg_duration_ms": 5562,
+      "avg_duration_s": 5.56,
+      "duration_ms_p50": 5562,
+      "duration_ms_p95": 5562,
+      "regression_count": 0,
+      "regression_rate": 0.0,
+      "status_counts": {
+        "fixed": 1
+      },
+      "failure_tag_counts": {},
+      "failure_reason_counts": {},
+      "fix_rate_ci95": [
+        0.2065,
+        1.0
+      ],
+      "regression_rate_ci95": [
+        0.0,
+        0.7935
+      ],
+      "duration_mean_ci95": [
+        5562.0,
+        5562.0
+      ],
+      "cost_mean_usd": 0.0,
+      "cost_mean_ci95": [
+        0.0,
+        0.0
+      ],
+      "total_tokens": 984,
+      "avg_total_tokens": 984.0,
+      "token_p50": 984,
+      "token_p95": 984,
+      "equivalence_by_type": {
+        "full": 1,
+        "partial": 0,
+        "none": 0
+      },
+      "avg_equivalence_full_rate": 1.0
+    },
+    "medium": {
+      "total": 1,
+      "fixed": 1,
+      "fix_rate": 1.0,
+      "first_attempt_rate": 1.0,
+      "avg_retries": 0.0,
+      "patch_precision": 1.0,
+      "avg_duration_ms": 4781,
+      "avg_duration_s": 4.78,
+      "duration_ms_p50": 4781,
+      "duration_ms_p95": 4781,
+      "regression_count": 0,
+      "regression_rate": 0.0,
+      "status_counts": {
+        "fixed": 1
+      },
+      "failure_tag_counts": {},
+      "failure_reason_counts": {},
+      "fix_rate_ci95": [
+        0.2065,
+        1.0
+      ],
+      "regression_rate_ci95": [
+        0.0,
+        0.7935
+      ],
+      "duration_mean_ci95": [
+        4781.0,
+        4781.0
+      ],
+      "cost_mean_usd": 0.0,
+      "cost_mean_ci95": [
+        0.0,
+        0.0
+      ],
+      "total_tokens": 975,
+      "avg_total_tokens": 975.0,
+      "token_p50": 975,
+      "token_p95": 975,
+      "equivalence_by_type": {
+        "full": 1,
+        "partial": 0,
+        "none": 0
+      },
+      "avg_equivalence_full_rate": 1.0
+    }
+  },
+  "by_language": {
+    "python": {
+      "total": 2,
+      "fixed": 2,
+      "fix_rate": 1.0,
+      "first_attempt_rate": 1.0,
+      "avg_retries": 0.0,
+      "patch_precision": 1.0,
+      "avg_duration_ms": 5171,
+      "avg_duration_s": 5.17,
+      "duration_ms_p50": 5171,
+      "duration_ms_p95": 5562,
+      "regression_count": 0,
+      "regression_rate": 0.0,
+      "status_counts": {
+        "fixed": 2
+      },
+      "failure_tag_counts": {},
+      "failure_reason_counts": {},
+      "fix_rate_ci95": [
+        0.3424,
+        1.0
+      ],
+      "regression_rate_ci95": [
+        0.0,
+        0.6576
+      ],
+      "duration_mean_ci95": [
+        4406.12,
+        5936.88
+      ],
+      "cost_mean_usd": 0.0,
+      "cost_mean_ci95": [
+        0.0,
+        0.0
+      ],
+      "total_tokens": 1959,
+      "avg_total_tokens": 979.5,
+      "token_p50": 979,
+      "token_p95": 984,
+      "equivalence_by_type": {
+        "full": 2,
+        "partial": 0,
+        "none": 0
+      },
+      "avg_equivalence_full_rate": 1.0
+    }
+  },
+  "by_failure_class": {
+    "none": {
+      "total": 2,
+      "fixed": 2,
+      "fix_rate": 1.0,
+      "first_attempt_rate": 1.0,
+      "avg_retries": 0.0,
+      "patch_precision": 1.0,
+      "avg_duration_ms": 5171,
+      "avg_duration_s": 5.17,
+      "duration_ms_p50": 5171,
+      "duration_ms_p95": 5562,
+      "regression_count": 0,
+      "regression_rate": 0.0,
+      "status_counts": {
+        "fixed": 2
+      },
+      "failure_tag_counts": {},
+      "failure_reason_counts": {},
+      "fix_rate_ci95": [
+        0.3424,
+        1.0
+      ],
+      "regression_rate_ci95": [
+        0.0,
+        0.6576
+      ],
+      "duration_mean_ci95": [
+        4406.12,
+        5936.88
+      ],
+      "cost_mean_usd": 0.0,
+      "cost_mean_ci95": [
+        0.0,
+        0.0
+      ],
+      "total_tokens": 1959,
+      "avg_total_tokens": 979.5,
+      "token_p50": 979,
+      "token_p95": 984,
+      "equivalence_by_type": {
+        "full": 2,
+        "partial": 0,
+        "none": 0
+      },
+      "avg_equivalence_full_rate": 1.0
+    }
+  },
+  "by_permission_profile": {
+    "unknown": {
+      "total": 2,
+      "fixed": 2,
+      "fix_rate": 1.0,
+      "first_attempt_rate": 1.0,
+      "avg_retries": 0.0,
+      "patch_precision": 1.0,
+      "avg_duration_ms": 5171,
+      "avg_duration_s": 5.17,
+      "duration_ms_p50": 5171,
+      "duration_ms_p95": 5562,
+      "regression_count": 0,
+      "regression_rate": 0.0,
+      "status_counts": {
+        "fixed": 2
+      },
+      "failure_tag_counts": {},
+      "failure_reason_counts": {},
+      "fix_rate_ci95": [
+        0.3424,
+        1.0
+      ],
+      "regression_rate_ci95": [
+        0.0,
+        0.6576
+      ],
+      "duration_mean_ci95": [
+        4406.12,
+        5936.88
+      ],
+      "cost_mean_usd": 0.0,
+      "cost_mean_ci95": [
+        0.0,
+        0.0
+      ],
+      "total_tokens": 1959,
+      "avg_total_tokens": 979.5,
+      "token_p50": 979,
+      "token_p95": 984,
+      "equivalence_by_type": {
+        "full": 2,
+        "partial": 0,
+        "none": 0
+      },
+      "avg_equivalence_full_rate": 1.0
+    }
+  },
+  "cases": [
+    {
+      "case_id": "case_001",
+      "issue_type": "type_error",
+      "difficulty": "easy",
+      "fixed": true,
+      "retry_count": 0,
+      "actual_patch": "--- a/pricing.py\n+++ b/pricing.py\n@@ -3,4 +3,4 @@\n \n def line_total(unit_price, count):\n     \"\"\"计算行总价。unit_price 可能来自 JSON 字符串。\"\"\"\n-    return unit_price + count  # BUG: 应为 int(unit_price) * count\n+    return int(unit_price) * count",
+      "actual_lines": 1,
+      "minimal_lines": 1,
+      "duration_ms": 5562,
+      "cost_usd": 0.0,
+      "agent_timings": {
+        "parse_issue_ms": 66,
+        "context_ms": 16,
+        "patch_ms": 1327,
+        "verify_ms": 1065,
+        "repair_total_ms": 4866,
+        "context_tokens": 0,
+        "cache_hit_rate": 0.0,
+        "total_tool_steps": 2
+      },
+      "error": "",
+      "introduced_regression": false,
+      "status": "fixed",
+      "failure_tags": [],
+      "variant": "",
+      "run_index": 0,
+      "total_tokens": 984,
+      "token_usage": {
+        "total_tokens": 984,
+        "input_tokens": 969,
+        "output_tokens": 15,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "cache_hit_rate": 0.0,
+        "api_calls": 1,
+        "estimated_total": 0,
+        "estimated_sections": {},
+        "run_count": 0,
+        "token_usage_by_agent": {
+          "patcher": {
+            "total_tokens": 984,
+            "input_tokens": 969,
+            "output_tokens": 15,
+            "cache_read_tokens": 0,
+            "cache_creation_tokens": 0,
+            "cache_hit_rate": 0.0,
+            "api_calls": 1,
+            "token_usage": {
+              "api_input": 0,
+              "api_output": 0,
+              "budget_request": 964,
+              "budget_state": 898,
+              "budget_system": 322,
+              "budget_skills": 824,
+              "budget_source": 0,
+              "budget_tail": 532,
+              "budget_feedback": 0,
+              "budget_history": 1323,
+              "budget_memory": 55,
+              "budget_knowledge": 0,
+              "budget_workspace": 135,
+              "budget_prefix": 1281
+            },
+            "tool_steps": 2
+          }
+        },
+        "tool_usage_by_agent": {
+          "patcher": 2
+        },
+        "total_tool_steps": 2
+      },
+      "equivalence": "full",
+      "language": "python",
+      "tool_permission_profile": "",
+      "run_id": "repair-0f1440d07fce499eaf1c8b6ede5496f0",
+      "trace_path": "eval_results\\ci\\runs\\case_001\\repair-0f1440d07fce499eaf1c8b6ede5496f0\\trace.jsonl",
+      "manifest_fingerprint": "c643d4363135bb5c9a15",
+      "eval_contract_version": "1.0",
+      "contract_required": true,
+      "baseline_failed": true,
+      "target_passed": true,
+      "regression_passed": true,
+      "environment_ok": true,
+      "failure_class": "none",
+      "failure_code": "none",
+      "bad_case_id": "",
+      "replay": {
+        "available": true,
+        "valid": true,
+        "issues": []
+      },
+      "judge_metadata": {},
+      "eval_run_id": "eval-69a8e5889ce4451e",
+      "expected_skill": "python_type_error_fix",
+      "matched_skill": "python_type_error_fix",
+      "skill_match": true
+    },
+    {
+      "case_id": "case_002",
+      "issue_type": "type_error",
+      "difficulty": "medium",
+      "fixed": true,
+      "retry_count": 0,
+      "actual_patch": "--- a/labels.py\n+++ b/labels.py\n@@ -3,7 +3,7 @@\n \n def user_label(user_id):\n     \"\"\"返回可用于拼接的用户标签片段。\"\"\"\n-    return user_id  # BUG: 应返回 str，否则与字符串拼接时 TypeError\n+    return str(user_id)\n \n \n def greet(user_id):",
+      "actual_lines": 1,
+      "minimal_lines": 1,
+      "duration_ms": 4781,
+      "cost_usd": 0.0,
+      "agent_timings": {
+        "parse_issue_ms": 9,
+        "context_ms": 4,
+        "patch_ms": 1205,
+        "verify_ms": 1131,
+        "repair_total_ms": 4491,
+        "context_tokens": 0,
+        "cache_hit_rate": 0.0,
+        "total_tool_steps": 2
+      },
+      "error": "",
+      "introduced_regression": false,
+      "status": "fixed",
+      "failure_tags": [],
+      "variant": "",
+      "run_index": 0,
+      "total_tokens": 975,
+      "token_usage": {
+        "total_tokens": 975,
+        "input_tokens": 960,
+        "output_tokens": 15,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "cache_hit_rate": 0.0,
+        "api_calls": 1,
+        "estimated_total": 0,
+        "estimated_sections": {},
+        "run_count": 0,
+        "token_usage_by_agent": {
+          "patcher": {
+            "total_tokens": 975,
+            "input_tokens": 960,
+            "output_tokens": 15,
+            "cache_read_tokens": 0,
+            "cache_creation_tokens": 0,
+            "cache_hit_rate": 0.0,
+            "api_calls": 1,
+            "token_usage": {
+              "api_input": 0,
+              "api_output": 0,
+              "budget_request": 962,
+              "budget_state": 848,
+              "budget_system": 322,
+              "budget_skills": 824,
+              "budget_source": 0,
+              "budget_tail": 569,
+              "budget_feedback": 0,
+              "budget_history": 1348,
+              "budget_memory": 55,
+              "budget_knowledge": 0,
+              "budget_workspace": 135,
+              "budget_prefix": 1281
+            },
+            "tool_steps": 2
+          }
+        },
+        "tool_usage_by_agent": {
+          "patcher": 2
+        },
+        "total_tool_steps": 2
+      },
+      "equivalence": "full",
+      "language": "python",
+      "tool_permission_profile": "",
+      "run_id": "repair-a32f36908de4425f8f77adf59ba18c6e",
+      "trace_path": "eval_results\\ci\\runs\\case_002\\repair-a32f36908de4425f8f77adf59ba18c6e\\trace.jsonl",
+      "manifest_fingerprint": "4dedb3ebc0626e2b6ecd",
+      "eval_contract_version": "1.0",
+      "contract_required": true,
+      "baseline_failed": true,
+      "target_passed": true,
+      "regression_passed": true,
+      "environment_ok": true,
+      "failure_class": "none",
+      "failure_code": "none",
+      "bad_case_id": "",
+      "replay": {
+        "available": true,
+        "valid": true,
+        "issues": []
+      },
+      "judge_metadata": {},
+      "eval_run_id": "eval-69a8e5889ce4451e",
+      "expected_skill": "python_type_error_fix",
+      "matched_skill": "python_type_error_fix",
+      "skill_match": true
+    }
+  ],
+  "eval_run_id": "eval-69a8e5889ce4451e",
+  "skill_metrics": {
+    "summary": {
+      "total": 2,
+      "labeled": 2,
+      "correct": 2,
+      "accuracy": 1.0,
+      "macro_recall": 1.0,
+      "no_match_count": 0
+    },
+    "by_skill": {
+      "python_type_error_fix": {
+        "support": 2,
+        "tp": 2,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      }
+    },
+    "cases": [
+      {
+        "case_id": "case_001",
+        "expected_skill": "python_type_error_fix",
+        "matched_skill": "python_type_error_fix",
+        "skill_match": true,
+        "issue_type": "type_error"
+      },
+      {
+        "case_id": "case_002",
+        "expected_skill": "python_type_error_fix",
+        "matched_skill": "python_type_error_fix",
+        "skill_match": true,
+        "issue_type": "type_error"
+      }
+    ],
+    "confusion": {
+      "python_type_error_fix": {
+        "python_type_error_fix": 2
+      }
+    }
+  },
+  "pass_at_k": {
+    "pass@1": 1.0,
+    "pass@1_sample_count": 2,
+    "pass@1_ci95": [
+      0.3424,
+      1.0
+    ],
+    "pass@3": 1.0,
+    "pass@3_sample_count": 2,
+    "pass@3_ci95": [
+      0.3424,
+      1.0
+    ],
+    "definition": "standard_unbiased_when_n_ge_k_else_empirical"
+  },
+  "performance": {
+    "avg_context_tokens": 0.0,
+    "avg_cache_hit_rate": 0.0,
+    "p50_ttft_ms": 0,
+    "avg_tool_steps": 2.0,
+    "avg_repair_retries": 0.0
   },
   "meta": {
-    "description": "CI baseline: fake eval --all --skip-verify on 10 cases",
-    "updated": "2026-07-04"
+    "description": "CI baseline: python -m src.eval --ci (OFFLINE_SMOKE_CASES = case_001, case_002) with the fixture model client and real test verification",
+    "updated": "2026-10-13",
+    "coverage_note": "The regression gate compares summary.fix_rate and summary.regression_rate only, so this two-case baseline can detect a regression that these two cases expose and nothing else. Widen OFFLINE_SMOKE_CASES and regenerate together with src/eval/case_io.py.",
+    "generated_by": "python -m src.eval --ci",
+    "cases": [
+      "case_001",
+      "case_002"
+    ]
   }
 }
