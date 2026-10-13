@@ -68,7 +68,7 @@ def _normalize_path(path: str) -> str:
 
 
 def _repo_root_hint(state: RepairState) -> str:
-    return str(state.node_timings.get("_repo_root_hint") or "").strip()
+    return state.execution.repo_root.strip()
 
 
 def allowed_patch_files(state: RepairState) -> set[str]:
@@ -77,6 +77,9 @@ def allowed_patch_files(state: RepairState) -> set[str]:
     与 bonus §24 faithfulness（patch ⊆ allowed）共用；勿重复实现第二套集合逻辑。
     """
     allowed: set[str] = set()
+    for path in (*state.control.allowed_edit, *state.control.allowed_create,
+                 *state.control.allowed_delete):
+        allowed.add(_normalize_path(path))
     for suspect in state.suspect_locations:
         if suspect.file_path:
             allowed.add(_normalize_path(suspect.file_path))
@@ -89,7 +92,7 @@ def allowed_patch_files(state: RepairState) -> set[str]:
             file_part = test_ref.split("::", 1)[0].strip()
             if file_part.endswith(".py"):
                 allowed.add(_normalize_path(file_part))
-    for extra in state.node_timings.get("allowed_patch_extra") or []:
+    for extra in state.control.allowed_patch_extra:
         if extra:
             allowed.add(_normalize_path(str(extra)))
 
@@ -113,7 +116,7 @@ def promote_paths_to_suspects(
     existing = {
         _normalize_path(s.file_path) for s in (state.suspect_locations or []) if s.file_path
     }
-    extras = list(state.node_timings.get("allowed_patch_extra") or [])
+    extras = list(state.control.allowed_patch_extra)
     promoted: list[str] = []
     for raw in paths:
         rel = resolve_repo_relpath(root, raw)
@@ -137,7 +140,7 @@ def promote_paths_to_suspects(
             extras.append(rel)
         promoted.append(rel)
     if extras:
-        state.node_timings["allowed_patch_extra"] = extras
+        state.control.allowed_patch_extra = extras
     if promoted:
         state.node_timings["faithfulness_promoted"] = promoted
     return promoted

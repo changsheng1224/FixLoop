@@ -92,6 +92,20 @@ def _get_semantic_model(config: EmbeddingConfig):
     with _SEMANTIC_LOCK:
         if key in _SEMANTIC_MODELS:
             return _SEMANTIC_MODELS[key]
+        import importlib.util
+
+        if importlib.util.find_spec("sentence_transformers") is None:
+            if not _SEMANTIC_INIT_LOGGED:
+                import sys
+
+                print(
+                    "[agent_runtime] Semantic dependency unavailable; "
+                    "install agent_runtime[semantic]. "
+                    "Using keyword retrieval.",
+                    file=sys.stderr,
+                )
+                _SEMANTIC_INIT_LOGGED = True
+            return None
         try:
             import sys as _sys
 
@@ -106,7 +120,10 @@ def _get_semantic_model(config: EmbeddingConfig):
             from sentence_transformers import SentenceTransformer
 
             model = SentenceTransformer(
-                config.model_id, revision=config.revision, device="cpu", trust_remote_code=False,
+                config.model_id,
+                revision=config.revision,
+                device="cpu",
+                trust_remote_code=False,
             )
             model.max_seq_length = config.max_seq_length
             _SEMANTIC_MODELS[key] = model
@@ -130,7 +147,13 @@ class ChunkedMemoryNote:
     """
 
     def __init__(
-        self, text: str, note: dict, model, max_chars: int = EMBED_MAX_CHARS, *, encoder=None,
+        self,
+        text: str,
+        note: dict,
+        model,
+        max_chars: int = EMBED_MAX_CHARS,
+        *,
+        encoder=None,
     ):
         self._text = text
         self._note = note
@@ -212,10 +235,15 @@ class SemanticMemory:
                     _embed_cache_misses += 1
             if vector is not None:
                 return vector
-        vector = np.asarray(self.model.encode(
-            text, convert_to_numpy=True, precision="float32",
-            normalize_embeddings=self.config.normalize_embeddings,
-        ), dtype=np.float32)
+        vector = np.asarray(
+            self.model.encode(
+                text,
+                convert_to_numpy=True,
+                precision="float32",
+                normalize_embeddings=self.config.normalize_embeddings,
+            ),
+            dtype=np.float32,
+        )
         if self.cache is not None:
             self.cache.save(text, vector)
         return vector
@@ -254,7 +282,11 @@ class SemanticMemory:
             else:
                 # 长文本：chunk + max-pool
                 cmn = ChunkedMemoryNote(
-                    text, note, self.model, self.config.max_chars, encoder=self.embed,
+                    text,
+                    note,
+                    self.model,
+                    self.config.max_chars,
+                    encoder=self.embed,
                 )
                 self._notes.append(cmn)
         except Exception:
@@ -378,7 +410,10 @@ def recall_with_hyde(
         # 降级：规则版 derive_embed_query
         rewritten = derive_embed_query(query)
         return retrieval_candidates_semantic(
-            state, rewritten, limit=limit, semantic_memory=semantic_memory,
+            state,
+            rewritten,
+            limit=limit,
+            semantic_memory=semantic_memory,
         )
 
     try:
@@ -388,7 +423,10 @@ def recall_with_hyde(
             # 嵌入假设性答案并检索
             rewritten = hypothetical.strip()[:200]
             return retrieval_candidates_semantic(
-                state, rewritten, limit=limit, semantic_memory=semantic_memory,
+                state,
+                rewritten,
+                limit=limit,
+                semantic_memory=semantic_memory,
             )
     except Exception:
         pass
@@ -398,7 +436,11 @@ def recall_with_hyde(
 
 
 def retrieval_candidates_semantic(
-    state: dict, query: str, limit: int = 3, *, semantic_memory: SemanticMemory | None = None,
+    state: dict,
+    query: str,
+    limit: int = 3,
+    *,
+    semantic_memory: SemanticMemory | None = None,
 ) -> list[dict]:
     """合并 keyword 与 semantic 检索结果，按 kind 权重排序后去重。
 

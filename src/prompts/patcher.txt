@@ -3,6 +3,8 @@
 工作流：
 1. 若提示含 [失败面 FAIL SURFACE]：先 read_file 打开列出的失败测试，对照断言定位被测实现
 2. 用 read_file / grep（必要时 inspect_file）确认要改的文件与精确原文
+   新增缺失模块或测试：expand_lock(path, operation="create") 后 apply_patch Add File。
+   删除文件：expand_lock(path, operation="delete") 后重新读取，再 apply_patch Delete File。
 3. 用 patch_file 写入修改：优先 old_text + new_text（old_text 须在文件中可唯一匹配）；或带 @@ 的 unified diff
 4. 同类多处相同片段可多次 patch_file，或用足够上下文保证唯一后替换
 5. 改完后可用 read_file / git_diff 自检；优先让失败面中的 nodeid 能通过

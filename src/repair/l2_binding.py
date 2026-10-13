@@ -45,6 +45,10 @@ def bind_l2_context(
 
         def record_grounding(allowed_edit, grounded_paths, ledger):
             repair_state.control.allowed_edit = allowed_edit
+            lock = agent.tool_context.edit_lock
+            if lock is not None:
+                repair_state.control.allowed_create = sorted(lock.allowed_create)
+                repair_state.control.allowed_delete = sorted(lock.allowed_delete)
             repair_state.node_timings["patcher_grounded"] = bool(grounded_paths)
             repair_state.node_timings["patch_required"] = True
             repair_state.node_timings["evidence_ledger"] = ledger

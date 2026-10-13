@@ -113,7 +113,7 @@ def test_landing_sets_line_from_symbol(tmp_path):
 def test_memory_burn_and_confirm(tmp_path):
     root = _repo(tmp_path)
     state = RepairState(issue_input="x")
-    state.node_timings["failure_ledger"] = {"negated_files": ["pkg/bad.py"]}
+    state.execution.failure_ledger = {"negated_files": ["pkg/bad.py"]}
     remember_negated_files(state)
     sus = [
         SuspectLocation(

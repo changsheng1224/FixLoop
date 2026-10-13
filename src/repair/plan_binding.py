@@ -948,7 +948,7 @@ class RepairPlanBinding:
         def execute(attempt):
             result = callback()
             value.append(result)
-            receipt = self.state.node_timings.get("plan_verification_receipt", {})
+            receipt = self.state.execution.verification_receipt.model_dump()
             return session.verify_result(attempt, result.to_dict(), receipt)
 
         session.run_node(verify.node_id, execute)

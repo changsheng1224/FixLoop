@@ -12,6 +12,7 @@ class ExpandLockArgs:
     """显式扩锁。"""
 
     path: str = ""
+    operation: str = "modify"
 
 
 @dataclass
@@ -25,6 +26,9 @@ class FinishRepairArgs:
 def tool_expand_lock(context, args: dict) -> ToolResult:
     """显式扩锁：将路径加入 allowed_edit（最多 2 次）；扩后须 read 再写。"""
     raw_path = args.get("path", "")
+    operation = args.get("operation", "modify")
+    if operation not in {"modify", "create", "delete"}:
+        return ToolResult.error("Error: invalid edit operation", code="invalid_arguments")
     if not raw_path:
         return ToolResult.error("Error: 缺少必填参数 path", code="tool_execution_failed")
     lock = context.edit_lock
@@ -46,15 +50,21 @@ def tool_expand_lock(context, args: dict) -> ToolResult:
             return rejection
         probe = execute_workspace_tool(
             context,
-            "read_file",
-            {"path": raw_path, "end": 1},
+            "workspace_source_version" if operation == "create" else "read_file",
+            {"path": raw_path, "allow_missing": True}
+            if operation == "create"
+            else {"path": raw_path, "end": 1},
             mark_read=False,
             record_versions=False,
         )
         if not probe.ok:
             permission_service(context).outcome(permission, str(probe.status))
             return probe
-        ok, reason = lock.expand_lock_evidence(raw_path, probe)
+        ok, reason = (
+            lock.expand_lock_evidence(raw_path, probe)
+            if operation == "modify"
+            else lock.expand_operation_evidence(raw_path, probe, operation)
+        )
         permission_service(context).outcome(permission, "success" if ok else "error")
         probe.metadata["sandbox_permission"] = permission
         probe.receipt["permission"] = permission
@@ -63,7 +73,7 @@ def tool_expand_lock(context, args: dict) -> ToolResult:
                 context.sandbox_workspace_versions.pop(raw_path, None)
     else:
         probe = None
-        ok, reason = lock.expand_lock(raw_path)
+        ok, reason = lock.expand_lock(raw_path, operation=operation)
     if not ok:
         return ToolResult.error(
             f"Error: expand_lock failed ({reason})", code="tool_execution_failed"
@@ -73,7 +83,11 @@ def tool_expand_lock(context, args: dict) -> ToolResult:
         receipt=dict(probe.receipt) if probe is not None else {},
         content=f"expand_lock ok: {reason}. "
         f"allowed_edit={sorted(lock.allowed_edit)[:12]}. "
-        "下一步: read_file 该路径后再 apply_patch/patch_file。",
+        + (
+            "下一步: apply_patch Add File。"
+            if operation == "create"
+            else "下一步: read_file 该路径后再 apply_patch/patch_file。"
+        ),
     )
 
 
@@ -122,7 +136,10 @@ def build_repair_control_tools(context):
         "schema": auto_schema(ExpandLockArgs),
         "risky": False,
         "execution_tier": "host",
-        "description": "扩锁：将路径加入 allowed_edit（最多2次），随后须 read 再写。参数: path",
+        "description": (
+            "授权文件操作: path, operation=modify|create|delete。"
+            "修改/删除须重新读取；创建须确认不存在。"
+        ),
         "run": lambda args: tool_expand_lock(context, args),
     }
 

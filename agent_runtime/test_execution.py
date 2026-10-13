@@ -6,6 +6,7 @@ spooled to files so a descendant retaining a pipe cannot strand a reader thread.
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
@@ -82,14 +83,26 @@ def run_command(command, repo, *, cancel_token=None, timeout_s=None):
     """Return (exit code, output) only after the owned process tree has stopped."""
     if cancel_token is not None:
         cancel_token.check()
+    if sys.platform == "linux":
+        return _run_linux(command, repo, cancel_token=cancel_token, timeout_s=timeout_s)
     started = time.monotonic()
     job = WindowsJob() if os.name == "nt" else None
     proc = None
     attached = False
+    popen_command = command
+    if (
+        os.name == "nt"
+        and isinstance(command, (list, tuple))
+        and len(command) == 5
+        and Path(command[0]).name.lower() == "cmd.exe"
+        and list(command[1:4]) == ["/d", "/s", "/c"]
+    ):
+        # cmd /c uses shell quoting, not the escaped quotes used by the CRT.
+        popen_command = subprocess.list2cmdline(command[:4]) + ' "' + command[4] + '"'
     try:
         with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
             proc = subprocess.Popen(
-                command,
+                popen_command,
                 cwd=repo,
                 stdout=stdout,
                 stderr=stderr,
@@ -132,10 +145,77 @@ def run_command(command, repo, *, cancel_token=None, timeout_s=None):
             job.close()
 
 
+def _run_linux(command, repo, *, cancel_token=None, timeout_s=None):
+    started = time.monotonic()
+    with tempfile.TemporaryDirectory(prefix="fixloop-test-") as directory:
+        receipt = Path(directory) / "receipt.json"
+        with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+            proc = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-I",
+                    str(Path(__file__).with_name("linux_test_supervisor.py")),
+                    str(receipt),
+                    *map(str, command),
+                ],
+                cwd=repo,
+                stdin=subprocess.PIPE,
+                stdout=stdout,
+                stderr=stderr,
+                start_new_session=True,
+            )
+            interrupted = None
+            try:
+                while proc.poll() is None:
+                    if cancel_token is not None:
+                        cancel_token.check()
+                    if timeout_s is not None and time.monotonic() - started >= timeout_s:
+                        raise subprocess.TimeoutExpired(command, timeout_s)
+                    time.sleep(0.02)
+            except BaseException as exc:
+                interrupted = exc
+                proc.stdin.close()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired as error:
+                    raise ProcessCleanupUnconfirmedError("Linux supervisor did not stop") from error
+            finally:
+                if not proc.stdin.closed:
+                    proc.stdin.close()
+            try:
+                result = json.loads(receipt.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise ProcessCleanupUnconfirmedError("Linux cleanup receipt unavailable") from exc
+            if result.get("cleanup") != "confirmed":
+                raise ProcessCleanupUnconfirmedError(result.get("error", "cleanup unconfirmed"))
+            if interrupted is not None:
+                raise interrupted
+            if result.get("error") or result.get("exit_code") is None:
+                raise OSError(result.get("error", "command start failed"))
+            if cancel_token is not None:
+                cancel_token.check()
+            stdout.seek(0)
+            stderr.seek(0)
+            return result["exit_code"], (stdout.read() + stderr.read()).decode("utf-8", "replace")
+
+
+def project_python(repo):
+    root = Path(repo)
+    suffix = "Scripts/python.exe" if os.name == "nt" else "bin/python"
+    return next(
+        (
+            str((root / name / suffix).resolve())
+            for name in (".venv", "venv")
+            if (root / name / suffix).is_file()
+        ),
+        sys.executable,
+    )
+
+
 def run_pytest(repo, test_files=None, *, cancel_token=None, timeout_s=None):
     targets = [str(p) for p in (test_files or []) if str(p).strip()]
     return run_command(
-        [sys.executable, "-m", "pytest", "-q", *targets],
+        [project_python(repo), "-m", "pytest", "-q", *targets],
         Path(repo),
         cancel_token=cancel_token,
         timeout_s=timeout_s,

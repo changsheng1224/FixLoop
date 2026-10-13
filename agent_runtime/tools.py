@@ -261,11 +261,11 @@ def _mark_edit_lock_read(context, raw_path: str, *, result=None) -> None:
             lock.mark_read(raw_path)
 
 
-def _reject_if_edit_locked(context, raw_path: str) -> str | None:
+def _reject_if_edit_locked(context, raw_path: str, *, operation="modify") -> str | None:
     lock = _resolve_edit_lock(context)
     if lock is None:
         return None
-    ok, reason = lock.check_write(raw_path)
+    ok, reason = lock.check_write(raw_path, operation=operation)
     if ok:
         return None
     return f"Error: edit_lock rejected write ({reason})"
@@ -467,7 +467,11 @@ def _tool_apply_patch_unchecked(context, args: dict) -> ToolResult:
             return ToolResult.error(
                 sensitive_reject_message(raw_path), code="tool_execution_failed"
             )
-        rejected = _reject_if_edit_locked(context, raw_path)
+        rejected = _reject_if_edit_locked(
+            context,
+            raw_path,
+            operation={"add": "create", "delete": "delete"}.get(op.action, "modify"),
+        )
         if rejected:
             return ToolResult.error(rejected, code="tool_execution_failed")
         try:
@@ -488,6 +492,8 @@ def _tool_apply_patch_unchecked(context, args: dict) -> ToolResult:
             continue
 
         if op.action == "add":
+            if target.exists() or target.is_symlink():
+                return ToolResult.error("Error: create target exists", code="stale_preimage")
             content = op.diff if op.diff.endswith("\n") else op.diff + "\n"
             lint_err = _edit_time_lint_py(raw_path, content)
             if lint_err:
@@ -497,7 +503,7 @@ def _tool_apply_patch_unchecked(context, args: dict) -> ToolResult:
                 return ToolResult.error(f"Error: {lint_err}", code="edit_lint_reject")
             try:
                 target.parent.mkdir(parents=True, exist_ok=True)
-                atomic_write_text(target, content)
+                atomic_write_text(target, content, create_only=True)
             except OSError as e:
                 return ToolResult.error(f"Error: 写入失败: {e}", code="tool_execution_failed")
             summaries.append(f"added {raw_path} ({len(content)} chars)")
@@ -706,10 +712,6 @@ def tool_write_file(context, args: dict) -> ToolResult:
     if serial_err:
         return ToolResult.error(serial_err, code="tool_execution_failed")
 
-    rejected = _reject_if_edit_locked(context, raw_path)
-    if rejected:
-        return ToolResult.error(rejected, code="tool_execution_failed")
-
     try:
         target = context.resolve(raw_path)
     except ValueError as e:
@@ -717,6 +719,11 @@ def tool_write_file(context, args: dict) -> ToolResult:
 
     if is_sensitive_path(target):
         return ToolResult.error(sensitive_reject_message(raw_path), code="tool_execution_failed")
+
+    operation = "modify" if target.exists() or target.is_symlink() else "create"
+    rejected = _reject_if_edit_locked(context, raw_path, operation=operation)
+    if rejected:
+        return ToolResult.error(rejected, code="tool_execution_failed")
 
     from agent_runtime.atomic_io import atomic_write_text
 
@@ -727,7 +734,7 @@ def tool_write_file(context, args: dict) -> ToolResult:
         else:
             payload = content
             mode = "已写入"
-        atomic_write_text(target, payload)
+        atomic_write_text(target, payload, create_only=operation == "create")
     except OSError as e:
         return ToolResult.error(f"Error: 写入文件失败: {e}", code="tool_execution_failed")
 

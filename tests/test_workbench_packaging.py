@@ -96,3 +96,27 @@ print(json.dumps(result))
         path: [hashlib.sha256(read_asset(path)[0]).hexdigest(), ASSETS[path][1]] for path in ASSETS
     }
     assert json.loads(child.stdout) == expected
+
+
+def test_installed_runtime_resources_without_checkout(distribution):
+    root, _, installed = distribution
+    script = """
+import sys
+sys.path.insert(0, sys.argv[1])
+from agent_runtime.intent.embed_index import load_prototypes
+from agent_runtime.token_accounting import estimate_cost, load_pricing_table
+from agent_runtime.tier_policy import load_orchestrator_pin_fields
+assert load_prototypes()
+pricing = load_pricing_table()
+assert pricing
+assert estimate_cost({'input_tokens': 1000000}, model=next(iter(pricing))) > 0
+assert load_orchestrator_pin_fields()
+"""
+    child = subprocess.run(
+        [sys.executable, "-I", "-c", script, str(installed)],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert child.returncode == 0, child.stdout + child.stderr

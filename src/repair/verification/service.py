@@ -22,24 +22,19 @@ from src.state import VerificationResult
 class VerificationService:
     """Resolve auto once; later phases cannot silently change execution layers."""
 
-    def __init__(self, owner):
-        self.owner = owner
+    def __init__(self, *, repo_root, policy, sandbox_context, test_target, cancel_token):
+        self.repo_root = repo_root
+        self.policy = policy
+        self.sandbox_context = sandbox_context
+        self.test_target = test_target
+        self.cancel_token = cancel_token
         self.selected_tier = None
         self.cleanup_confirmed = True
         self.active = threading.Event()
 
     @property
     def requested_tier(self):
-        owner = self.owner
-        if owner._sandbox_context is not None:
-            return "linux_sandbox"
-        if owner.require_sandbox:
-            return "container"
-        if owner.execution_tier:
-            return owner.execution_tier
-        if owner.allow_static_verify_fallback and not owner.use_pytest_verify:
-            return "static" if owner.verifier is None else "auto"
-        return "auto" if owner.verifier is not None else "host"
+        return self.policy.requested_tier
 
     @property
     def mode(self):
@@ -74,38 +69,27 @@ class VerificationService:
             self.active.clear()
 
     def _run(self, state):
-        owner = self.owner
         language = (state.repair_plan.language if state.repair_plan else "python") or "python"
         language = language.lower()
-        token = owner._repair_ctx.cancel_token if owner._repair_ctx else None
-        target = owner._pick_test_path(state)
+        token = self.cancel_token()
+        target = self.test_target(state)
         tier = self.selected_tier or self.requested_tier
         if not self.cleanup_confirmed:
             raise ProcessCleanupUnconfirmedError("previous verification cleanup unconfirmed")
         if tier == "auto":
-            tier = (
-                "container"
-                if owner.verifier is not None and language == "python"
-                else (
-                    "host"
-                    if owner.use_pytest_verify
-                    else "static"
-                    if owner.allow_static_verify_fallback
-                    else "container"
-                )
-            )
+            tier = self.policy.initial_tier(language)
         try:
             if tier == "linux_sandbox":
-                run = BwrapVerifyStrategy(owner._sandbox_context).run(
-                    owner._repo_root, target, cancel_token=token, language=language
+                run = BwrapVerifyStrategy(self.sandbox_context).run(
+                    self.repo_root, target, cancel_token=token, language=language
                 )
             elif tier == "static":
                 run = StaticVerifyStrategy().run(
-                    owner._repo_root, target, cancel_token=token, language=language
+                    self.repo_root, target, cancel_token=token, language=language
                 )
             elif tier == "container":
                 run = (
-                    DockerVerifyStrategy().run(owner._repo_root, target, cancel_token=token)
+                    DockerVerifyStrategy().run(self.repo_root, target, cancel_token=token)
                     if language == "python"
                     else self._unavailable(tier, language)
                 )
@@ -116,9 +100,9 @@ class VerificationService:
                 ):
                     fallback = (
                         "host"
-                        if owner.use_pytest_verify
+                        if self.policy.host_fallback
                         else "static"
-                        if owner.allow_static_verify_fallback
+                        if self.policy.static_fallback
                         else None
                     )
                     if fallback:
@@ -126,10 +110,10 @@ class VerificationService:
                         return self._run(state)
             elif tier == "host":
                 run = (
-                    PytestVerifyStrategy().run(owner._repo_root, target, cancel_token=token)
+                    PytestVerifyStrategy().run(self.repo_root, target, cancel_token=token)
                     if language == "python"
                     else ProfileVerifyStrategy().run(
-                        owner._repo_root, target, cancel_token=token, language=language
+                        self.repo_root, target, cancel_token=token, language=language
                     )
                 )
             else:
@@ -192,7 +176,13 @@ class VerificationMixin:
 
     def _verification_service(self):
         if getattr(self, "_verify_service", None) is None:
-            self._verify_service = VerificationService(self)
+            self._verify_service = VerificationService(
+                repo_root=self._repo_root,
+                policy=self.execution_policy,
+                sandbox_context=self._sandbox_context,
+                test_target=self._pick_test_path,
+                cancel_token=lambda: self._repair_ctx.cancel_token if self._repair_ctx else None,
+            )
         return self._verify_service
 
     def _run_verifier(self, state):

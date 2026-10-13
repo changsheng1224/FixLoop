@@ -90,7 +90,7 @@ class TestFailureTagUsesEnvBucket:
 
 class TestBuildFeedbackBuckets:
     def test_feedback_includes_bucket_and_env_title(self):
-        orch = Orchestrator.__new__(Orchestrator)
+        orch = Orchestrator(None)
         result = VerificationResult(
             all_passed=False,
             total_tests=0,
@@ -104,7 +104,7 @@ class TestBuildFeedbackBuckets:
         assert state.control.verify_bucket == "env"
 
     def test_logic_feedback_points_to_read_file(self):
-        orch = Orchestrator.__new__(Orchestrator)
+        orch = Orchestrator(None)
         result = VerificationResult(
             all_passed=False,
             failed=1,

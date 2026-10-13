@@ -44,7 +44,7 @@ class CriticVerdict:
 
 
 def resolve_critic_mode(env: dict[str, str] | None = None) -> str:
-    """返回 rules_first | llm | off。
+    """返回 rules_first | off；拒绝未实现或未知模式。
 
     默认 ``rules_first``；可用 ``FIXLOOP_CRITIC_MODE`` 覆盖。
     """
@@ -53,13 +53,16 @@ def resolve_critic_mode(env: dict[str, str] | None = None) -> str:
     if raw is not None and raw.strip() != "":
         if raw.strip().lower() in ("0", "false", "off", "no"):
             return "off"
-        mode = (e.get("FIXLOOP_CRITIC_MODE") or "rules_first").strip().lower()
-        if mode in ("llm", "rules_first", "off"):
-            return mode
-        return "rules_first"
-
     mode = (e.get("FIXLOOP_CRITIC_MODE") or "rules_first").strip().lower()
-    return mode if mode in ("llm", "rules_first", "off") else "rules_first"
+    return _validate_mode(mode)
+
+
+def _validate_mode(mode: str) -> str:
+    if mode == "llm":
+        raise ValueError("critic llm mode is not implemented; use rules_first or off")
+    if mode not in {"rules_first", "off"}:
+        raise ValueError(f"unknown critic mode: {mode}")
+    return mode
 
 
 def _norm_path(p: str) -> str:
@@ -153,17 +156,9 @@ def review_patch(
     rules_first：空 / 仅改测试 / 新增相邻重复语句 → reject。
     越锁仍交给写时 edit_lock。
     """
-    resolved = (mode or resolve_critic_mode()).strip().lower()
+    resolved = _validate_mode((mode or resolve_critic_mode()).strip().lower())
     if resolved == "off":
-        return CriticVerdict(accepted=True, reason="critic_off", mode="off")
-
-    if resolved == "llm":
-        return CriticVerdict(
-            accepted=True,
-            reason="critic_skipped",
-            mode="llm",
-            skipped=True,
-        )
+        return CriticVerdict(accepted=False, reason="critic_off", mode="off", skipped=True)
 
     patches = list(patches or [])
     if not patches or not _has_nonempty_change(patches):

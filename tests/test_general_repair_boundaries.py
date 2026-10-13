@@ -6,6 +6,7 @@ import pytest
 
 from src.orchestrator import Orchestrator
 from src.repair.failure_tags import allowed_patch_files
+from src.repair.verification.verify import VerifyRun
 from src.state import RepairState
 
 
@@ -54,11 +55,15 @@ def test_verifier_does_not_apply_hidden_patch_from_private_context(tmp_path, mon
     )
     from src.state import VerificationResult
 
-    def verify(state, **kwargs):
+    def verify(state):
         assert target.read_text(encoding="utf-8") == original
-        return VerificationResult(all_passed=True, total_tests=1, passed=1)
+        return VerifyRun(
+            result=VerificationResult(all_passed=True, total_tests=1, passed=1),
+            elapsed_ms=0,
+            internal={"completed": True, "cleanup": "confirmed", "actual_tier": "host"},
+        )
 
-    monkeypatch.setattr(orch, "_run_verifier_python", verify)
+    monkeypatch.setattr(orch._verification_service(), "run", verify)
     assert orch._run_verifier_impl(RepairState(issue_input="public report")).all_passed
     assert target.read_text(encoding="utf-8") == original
 

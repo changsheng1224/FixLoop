@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 
@@ -34,14 +34,15 @@ _PROFILES = (
         "javascript",
         "npm",
         ("package.json",),
-        static_steps=(VerificationStep("node_check", ("node", "--check"), "static"),),
         test_steps=(VerificationStep("npm_test", ("npm", "test", "--"), "target_tests"),),
     ),
     VerificationProfile(
         "typescript",
         "npm",
         ("package.json", "tsconfig.json"),
-        static_steps=(VerificationStep("tsc", ("tsc", "--noEmit"), "static"),),
+        static_steps=(
+            VerificationStep("tsc", ("tsc", "--noEmit", "--pretty", "false", "-p", "."), "static"),
+        ),
         test_steps=(VerificationStep("npm_test", ("npm", "test", "--"), "target_tests"),),
     ),
     VerificationProfile(
@@ -79,7 +80,16 @@ def select_verification_profile(
     root = Path(repo_root)
     normalized = (language or "python").lower()
     candidates = [p for p in _PROFILES if p.language == normalized]
-    for profile in candidates:
-        if any((root / manifest).is_file() for manifest in profile.manifests):
-            return profile
-    return candidates[0] if candidates else None
+    profile = next(
+        (p for p in candidates if any((root / m).is_file() for m in p.manifests)),
+        candidates[0] if candidates else None,
+    )
+    if profile and normalized == "javascript":
+        from src.repair.language_capabilities import source_files
+
+        checks = tuple(
+            VerificationStep("node_check", ("node", "--check", str(p.resolve())), "static")
+            for p in source_files(root, (".js", ".mjs", ".cjs"))
+        )
+        profile = replace(profile, static_steps=checks)
+    return profile

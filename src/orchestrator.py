@@ -3,32 +3,22 @@
 工作流：Issue 解析与规则种子 → Patcher 工具环 → Critic → Verifier 回灌。
 """
 
-import hashlib
-import re
 import threading
 import time
-from collections import namedtuple
 from pathlib import Path
 
 from agent_runtime.logging_setup import get_logger
 from src.prompts.loader import load_role_prompt
 from src.prompts.patcher_task_builder import assemble_patcher_variables
-from src.prompts.repair_tasks import (
-    build_verifier_variables,
-    render_repair_task,
-)
+from src.prompts.repair_tasks import render_repair_task
 from src.repair.execution.lifecycle import ExecutionLifecycleMixin
 from src.repair.execution.patch_applier import apply_patch_to_text
 from src.repair.execution.transaction import PatchTransactionMixin
-from src.repair.language_detect import detect_repair_language
 from src.repair.output_parsers import (
     parse_verification,
 )
 from src.repair.pipeline import RepairPipelineMixin
 from src.repair.prompt_router import (
-    ROUTED_ISSUE_TYPES,
-    classify_exception,
-    fallback_suspect_uses_import_line,
     patcher_variant_for,
 )
 from src.repair.run_context import RepairRunContext
@@ -47,108 +37,6 @@ log = get_logger("orchestrator")
 __all__ = ["Orchestrator", "apply_patch_to_text"]
 
 DEFAULT_REPAIR_TIMEOUT_S = 180
-
-# issue_type 分类规则链（按序匹配，首次命中即返回）
-_IssueTypeRule = namedtuple("_IssueTypeRule", ["name", "pattern", "issue_type"])
-
-# 反馈环结构化 section（V1.4-Bonus8a）
-_FeedbackSection = namedtuple("_FeedbackSection", ["title", "content", "priority", "max_len"])
-_MAX_PATCH_DIFF_CHARS = 600
-_MAX_FAILURE_LOG_CHARS = 300
-_MAX_BUILD_LOG_CHARS = 300
-_MAX_FAILURE_TARGET_CHARS = 500
-
-_ISSUE_TYPE_RULES: list[_IssueTypeRule] = [
-    # test_failure 必须在 explicit_exception 之前：
-    # "FAILED test_app.py::test_add - AssertionError" 应识别为 test_failure 而非 type_error
-    _IssueTypeRule(
-        "test_failure",
-        r"(?i)(FAILED\s+\S*test|AssertionError|assert\s+\S+\s*[=!<>])",
-        "test_failure",
-    ),
-    _IssueTypeRule("explicit_exception", r"\w+(?:Error|Exception|Warning)", None),
-    _IssueTypeRule("composite_keyword", r"(?i)composite", "composite"),
-    _IssueTypeRule("config_error", r"(?i)pyproject\.toml|\[tool\.", "config_error"),
-    _IssueTypeRule(
-        "logic_error",
-        r"(?i)(wrong\s+(result|output|return|value)|"
-        r"incorrect\s+(result|output|behavio)|"
-        r"should\s+(return|be|have)|"
-        r"expected\s+\S+\s+but|"
-        r"unexpected\s+(result|behavio)|"
-        r"\bbug\b.*\b(function|logic|code)\b)",
-        "logic_error",
-    ),
-]
-
-
-def _summarize_failure_targets(failure_logs: list[str]) -> str:
-    if not failure_logs:
-        return ""
-    test_ids: list[str] = []
-    files: list[str] = []
-    assertions: list[str] = []
-
-    def add_unique(items: list[str], value: str) -> None:
-        value = value.strip()
-        if value and value not in items:
-            items.append(value)
-
-    for raw in failure_logs[:5]:
-        line = str(raw)
-        for match in re.finditer(r"\b(?:FAILED\s+)?([A-Za-z0-9_./\\-]+\.py::[^\s:]+)", line):
-            add_unique(test_ids, match.group(1).replace("\\", "/"))
-        for match in re.finditer(r'File\s+"([^"]+\.py)"', line):
-            add_unique(files, Path(match.group(1)).name)
-        for match in re.finditer(r"\b([A-Za-z0-9_./\\-]+\.py)\b", line):
-            add_unique(files, Path(match.group(1)).name)
-        if any(key in line for key in ("assert", "AssertionError", "ValueError", "TypeError")):
-            add_unique(assertions, line[:160])
-
-    parts: list[str] = []
-    if test_ids:
-        parts.append("失败用例: " + ", ".join(test_ids[:3]))
-    if files:
-        parts.append("相关文件: " + ", ".join(files[:5]))
-    if assertions:
-        parts.append("关键断言/异常: " + " | ".join(assertions[:2]))
-    return "\n".join(parts)
-
-
-def _patch_retry_fingerprint(patch: CandidatePatch) -> str:
-    body = "\n".join(
-        [
-            patch.file_path or "",
-            patch.diff or "",
-            patch.original_lines or "",
-            patch.patched_lines or "",
-        ]
-    )
-    return hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
-
-
-def _record_patch_retry_fingerprints(state: RepairState) -> str:
-    raw_counts = state.control.patch_retry_fingerprints
-    if not isinstance(raw_counts, dict):
-        raw_counts = {}
-        state.control.patch_retry_fingerprints = raw_counts
-
-    repeated_files: list[str] = []
-    for patch in state.candidate_patches:
-        fp = _patch_retry_fingerprint(patch)
-        count = int(raw_counts.get(fp, 0) or 0) + 1
-        raw_counts[fp] = count
-        if count >= 2:
-            repeated_files.append(patch.file_path)
-
-    if not repeated_files:
-        return ""
-    files = ", ".join(sorted(set(repeated_files))[:5])
-    return (
-        f"检测到重复补丁文件: {files}。\n"
-        "不要重复生成上轮相同 diff；请基于失败测试换策略，"
-        "优先修改仍失败断言直接相关的表达式或边界处理。"
-    )
 
 
 class Orchestrator(
@@ -196,6 +84,19 @@ class Orchestrator(
         self.sandbox_policy = configured_policy
         self.require_sandbox = bool(require_sandbox or configured_policy == "required")
         self.allow_static_verify_fallback = allow_static_verify_fallback
+        from src.repair.critic import resolve_critic_mode
+        from src.repair.verification.execution_policy import resolve_execution_policy
+
+        self.critic_mode = resolve_critic_mode()
+        self.execution_policy = resolve_execution_policy(
+            sandbox_policy=configured_policy,
+            execution_tier=execution_tier,
+            require_sandbox=require_sandbox,
+            sandbox=sandbox_context is not None,
+            verifier=verifier,
+            host=use_pytest_verify,
+            static=allow_static_verify_fallback,
+        )
         if sandbox_context is not None and (
             verifier is not None
             or use_pytest_verify
@@ -260,7 +161,7 @@ class Orchestrator(
     @property
     def _active_agents(self) -> tuple:
         """Return configured repair agents without repeating null filtering."""
-        return tuple(agent for agent in (self.patcher, self.verifier) if agent is not None)
+        return (self.patcher,) if self.patcher is not None else ()
 
     @staticmethod
     def _collect_repair_gateways(*agents) -> tuple:
@@ -401,37 +302,32 @@ class Orchestrator(
         if tracer is not None:
             tracer.emit("harness", "harness_event", event, status=event.get("status") or None)
 
-    def _parse_issue(self, issue: str) -> RepairPlan:
-        """经 IntentRouter（repair 通道）折叠后构建 RepairPlan。
+    def _issue_preparation(self):
+        from src.repair.issue_preparation import IssuePreparationService
 
-        分类优先级（_ISSUE_TYPE_RULES 规则链，由 IssueIntentAdapter 调用）：
-        1. explicit_exception → classify_exception 归一化
-        2. test_failure → pytest 断言失败
-        3. composite_keyword → 多错误组合
-        4. config_error → pyproject.toml 配置
-        5. logic_error → 无异常名的错误行为描述
-        6. unknown → LLM fallback
-        """
+        return IssuePreparationService(
+            self._repo_root,
+            read_source=lambda path: self._read_line_range(path, 1, 10000),
+            parse_line=self._parse_file_line,
+            patcher=self.patcher,
+            classify=self._classify_issue_type,
+            light_client=getattr(self, "_light_client", None),
+        )
+
+    def _parse_issue(self, issue):
         from agent_runtime.intent.models import RouteContext
-        from agent_runtime.intent.router import IntentRouter
-        from src.repair.intent_adapter import IssueIntentAdapter
 
-        tracer = None
-        repair_ctx = getattr(self, "_repair_ctx", None)
-        if repair_ctx is not None:
-            tracer = getattr(repair_ctx, "repair_tracer", None)
-
-        def _emit(name: str, payload: dict) -> None:
-            if tracer is not None:
-                tracer.emit("orchestrator", name, payload)
-
-        result = IntentRouter().route(
+        ctx = self._repair_ctx
+        tracer = ctx.repair_tracer if ctx else None
+        plan, self._last_intent_result = self._issue_preparation().prepare(
             issue,
             RouteContext(
                 channel="repair",
                 light_client=getattr(self, "_light_client", None),
-                emit=_emit,
-                cancel_token=getattr(repair_ctx, "cancel_token", None),
+                emit=lambda name, payload: (
+                    tracer.emit("orchestrator", name, payload) if tracer else None
+                ),
+                cancel_token=ctx.cancel_token if ctx else None,
                 budget=getattr(self, "_model_budget", None),
                 deadline=getattr(self, "_model_deadline", None),
                 model_input_limit=self.patcher.config.input_window(384)
@@ -439,103 +335,28 @@ class Orchestrator(
                 else None,
             ),
         )
-        self._last_intent_result = result
-
-        adapter = IssueIntentAdapter(
-            classify_issue_type=self._classify_issue_type,
-            parse_file_line=self._parse_file_line,
-            detect_language=detect_repair_language,
-            llm_classify=self._llm_classify_issue,
-            repo_root=self._repo_root,
-        )
-        return adapter.to_repair_plan(result, issue)
+        return plan
 
     @staticmethod
-    def _classify_issue_type(issue: str) -> tuple[str, str]:
-        """规则链分类：依次匹配 _ISSUE_TYPE_RULES，首次命中返回 (issue_type, rule_name)。
+    def _classify_issue_type(issue):
+        from src.repair.issue_preparation import IssuePreparationService
 
-        explicit_exception 命中时调用 classify_exception 归一化异常类名。
-        """
-        for rule in _ISSUE_TYPE_RULES:
-            m = re.search(rule.pattern, issue)
-            if not m:
-                continue
-            if rule.name == "explicit_exception":
-                return classify_exception(m.group(0)), rule.name
-            return rule.issue_type, rule.name
-        return "unknown", "none"
+        return IssuePreparationService._classify_issue_type(issue)
 
-    def _llm_classify_issue(self, issue: str) -> str | None:
-        """用 light_client 将歧义 issue 分类为已知 issue_type。"""
-        light = getattr(self, "_light_client", None)
-        if light is None:
-            return None
-        types = ", ".join(ROUTED_ISSUE_TYPES)
-        prompt = (
-            f"Classify this software issue into exactly one category: {types}.\n"
-            f"Reply with ONLY the category name.\n\n{issue[:800]}"
-        )
-        try:
-            from agent_runtime.model_call_budget import complete_text
+    def _llm_classify_issue(self, issue):
+        return self._issue_preparation().classify_with_model(issue)
 
-            raw = complete_text(self.patcher, light, prompt, max_output_tokens=32, purpose="repair")
-            for word in raw.strip().split():
-                word = word.strip(".,;:\"'").lower()
-                if word in ROUTED_ISSUE_TYPES:
-                    return word
-        except Exception:
-            pass
-        return None
+    @staticmethod
+    def _parse_file_line(issue, file_path):
+        from src.repair.issue_preparation import IssuePreparationService
 
-    def _parse_file_line(self, issue: str, file_path: str) -> int:
-        """从 issue 文本提取行号（支持 file.py:42 或 line 42）。"""
-        if file_path:
-            m = re.search(rf"{re.escape(file_path)}:(\d+)", issue)
-            if m:
-                return int(m.group(1))
-        m = re.search(r"line (\d+)", issue, re.IGNORECASE)
-        if m:
-            return int(m.group(1))
-        return 0
+        return IssuePreparationService._parse_file_line(issue, file_path)
 
-    def _fallback_suspects_from_plan(
-        self,
-        plan: RepairPlan,
-        issue: str,
-    ) -> list[SuspectLocation]:
-        """Localizer 无输出时，从 RepairPlan 生成粗粒度嫌疑位置。"""
-        if not plan.suspect_files:
-            return []
-        suspects: list[SuspectLocation] = []
-        for file_path in plan.suspect_files:
-            line = self._parse_file_line(issue, file_path) or 1
-            reason = "RepairPlan 降级定位"
-            if fallback_suspect_uses_import_line(plan.issue_type):
-                import_line = self._find_import_line_number(file_path)
-                if import_line:
-                    line = import_line
-                reason = "import 语句"
-            suspects.append(
-                SuspectLocation(
-                    file_path=file_path,
-                    start_line=line,
-                    end_line=line,
-                    reason=reason,
-                    confidence=0.7,
-                )
-            )
-        return suspects
+    def _fallback_suspects_from_plan(self, plan, issue):
+        return self._issue_preparation()._fallback_suspects_from_plan(plan, issue)
 
-    def _find_import_line_number(self, file_path: str) -> int | None:
-        """定位文件中第一条 import/from 语句行号。"""
-        path = Path(self._repo_root) / file_path
-        if not path.is_file():
-            return None
-        for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            stripped = line.strip()
-            if stripped.startswith(("from ", "import ")):
-                return i
-        return None
+    def _find_import_line_number(self, file_path):
+        return self._issue_preparation()._find_import_line_number(file_path)
 
     def _match_skill(self, issue: str, *, language: str = "python"):
         """从 YAML Skill 文件中匹配 Issue 对应的修复策略。"""
@@ -544,12 +365,7 @@ class Orchestrator(
         return match_skill_semantic(issue, language=language)
 
     def _verification_enabled(self) -> bool:
-        return (
-            self._sandbox_context is not None
-            or self.verifier is not None
-            or self.use_pytest_verify
-            or self.allow_static_verify_fallback
-        )
+        return self.execution_policy.enabled
 
     @staticmethod
     def _patcher_system_prompt(plan: RepairPlan | None) -> str:
@@ -690,101 +506,21 @@ class Orchestrator(
             heartbeat_stop.set()
             heartbeat_worker.join(timeout=1)
 
-    def _initialize_repair_trace(self, state: RepairState) -> None:
-        from agent_runtime.log_context import bind_run_id
-        from agent_runtime.tokenizers import resolve_tokenizer_spec
-        from src.repair.run_trace import RepairRunTracer
+    def _telemetry(self):
+        from src.repair.telemetry_service import RepairTelemetryService
 
-        tracer = RepairRunTracer(
+        return RepairTelemetryService(
             self._repo_root,
-            state_root=str(
-                getattr(getattr(self.patcher, "tool_context", None), "state_root", "") or ""
-            ),
-        )
-        l1_meta = {}
-        if self.l1_prompt_cache_key:
-            l1_meta["l1_prompt_cache_key"] = self.l1_prompt_cache_key
-            ref = self.patcher or self.verifier
-            prefix = getattr(ref, "_prefix", None) if ref is not None else None
-            if prefix is not None:
-                if prefix.tool_signature:
-                    l1_meta["tool_signature"] = prefix.tool_signature
-                if prefix.workspace_fingerprint:
-                    l1_meta["workspace_fingerprint"] = prefix.workspace_fingerprint
-        phase_cfg = self._repair_ctx.phase_timeout_config if self._repair_ctx else None
-        if phase_cfg is not None and phase_cfg.any_enabled():
-            l1_meta["phase_timeout_budgets"] = phase_cfg.budget_dict()
-        run_id = tracer.begin(state.issue_input, run_id=state.repair_run_id, **l1_meta)
-        from agent_runtime.harness_engineering import (
-            ExecutionContract,
-            HarnessControlPlane,
-            build_harness_manifest,
-            stable_fingerprint,
-        )
-
-        def _harness_sink(event: dict) -> None:
-            self._on_harness_event(state, event)
-
-        harness = HarnessControlPlane(
-            run_id,
-            max_attempts=max(1, int(state.max_retries or 0) + 1),
-            budget_limits={
-                str(key): float(value)
-                for key, value in (state.tool_budget or {}).items()
-                if isinstance(value, int | float) and float(value) >= 0
-            },
-            event_sink=_harness_sink,
-        )
-        self._repair_ctx.harness_control = harness
-        model = ""
-        provider = ""
-        for agent in self._active_agents:
-            config = getattr(agent, "config", None)
-            if config is not None:
-                model = model or str(getattr(config, "model", "") or "")
-                provider = provider or str(getattr(config, "provider", "") or "")
-        registry = getattr(self.patcher, "tool_registry", None)
-        tool_names = registry.names() if registry is not None and hasattr(registry, "names") else ()
-        manifest = build_harness_manifest(
-            self._repo_root,
-            run_id=run_id,
-            model=model,
-            provider=provider,
-            tool_schema_hash=stable_fingerprint(tool_names),
-            config={"max_retries": state.max_retries, "tool_budget": dict(state.tool_budget)},
-        )
-        state.harness_manifest = manifest
-        contract = ExecutionContract(
-            run_id=run_id,
-            attempt=1,
-            state_revision=int(getattr(state, "state_revision", 0) or 0),
-            phase=str(getattr(state, "phase", "") or ""),
-            budget={
-                key: float(value)
-                for key, value in (state.tool_budget or {}).items()
-                if isinstance(value, int | float)
-            },
-            manifest_fingerprint=manifest["manifest_fingerprint"],
-        )
-        harness.start(contract)
-        state.harness_control = {
-            key: value
-            for key, value in harness.snapshot().items()
-            if key not in {"events", "metrics"}
-        }
-        state.harness_metrics = harness.metrics.snapshot()
-        state.human_control = {
-            **dict(getattr(state, "human_control", {}) or {}),
-            "mode": harness.control_mode.value,
-        }
-        tracer.emit("harness", "harness_manifest", manifest, status="ok")
-        tracer.bind_agents(
+            self._repair_ctx,
             self.patcher,
-            self.verifier,
+            self._active_agents,
+            self.l1_prompt_cache_key,
+            self._on_harness_event,
         )
-        if self._repair_ctx is not None:
-            self._repair_ctx.repair_tracer = tracer
-        state.repair_run_id = run_id
+
+    def _initialize_repair_trace(self, state):
+        self._telemetry().initialize(state)
+        run_id = state.repair_run_id
         try:
             from src.collaboration.repair_runtime import RepairCollaborationRuntime
 
@@ -799,26 +535,6 @@ class Orchestrator(
         except Exception as exc:
             self._collaboration_runtime = None
             state.agent_errors.setdefault("collaboration_runtime", str(exc)[:500])
-        if self._repair_ctx is not None:
-            self._repair_ctx.log_run_id_token = bind_run_id(run_id)
-
-        tokenizer_by_agent: dict[str, dict] = {}
-        for name, agent in (("patcher", self.patcher), ("verifier", self.verifier)):
-            if agent is None:
-                continue
-            config = getattr(agent, "config", None)
-            spec = resolve_tokenizer_spec(
-                getattr(config, "model", ""),
-                getattr(config, "provider", ""),
-            )
-            tokenizer_by_agent[name] = {
-                "rule_id": spec.rule_id,
-                "tokenizer_fallback": spec.fallback,
-                "tokenizer_id": spec.tokenizer_id,
-            }
-        if tokenizer_by_agent:
-            state.node_timings["tokenizer_by_agent"] = tokenizer_by_agent
-
         if self._repair_ctx is not None and self._repair_ctx.worktree_handle is not None:
             self._repair_ctx.worktree_initial_snapshot = self._snapshot_repo()
         from src.repair.plan_binding import RepairPlanBinding
@@ -826,8 +542,6 @@ class Orchestrator(
         self._plan_binding = RepairPlanBinding(self, state, defer_plan=True)
 
     def _end_repair_trace(self, state: RepairState) -> None:
-        from agent_runtime.log_context import reset_run_id
-
         ctx = self._repair_ctx
         binding = getattr(self, "_plan_binding", None)
         coordinator = getattr(binding, "coordinator", None)
@@ -872,152 +586,26 @@ class Orchestrator(
         if state.control.coordination_status != "recovery_required":
             self._maybe_leave_worktree(cancelled=False)
         elif ctx is not None and ctx.worktree_handle is not None:
-            state.node_timings["worktree_recovery"] = ctx.worktree_handle.as_dict()
+            state.execution.worktree_recovery = ctx.worktree_handle.as_dict()
+            state.node_timings["worktree_recovery"] = state.execution.model_dump()[
+                "worktree_recovery"
+            ]
         runtime = getattr(self, "_collaboration_runtime", None)
         if runtime is not None and hasattr(runtime, "close"):
             try:
                 runtime.close()
             except Exception as exc:
                 state.agent_errors.setdefault("collaboration_runtime_close", str(exc)[:500])
-        tracer = ctx.repair_tracer if ctx is not None else None
-        if tracer is None:
-            return
-        harness = getattr(ctx, "harness_control", None) if ctx is not None else None
-        if harness is not None and not harness.terminal:
-            from agent_runtime.harness_engineering import (
-                BadCaseStore,
-                HarnessFailureCode,
-                HarnessStatus,
-                attribute_harness_failure,
-                extract_bad_case,
-            )
+        self._telemetry().finalize(state)
 
-            status = str(getattr(state, "status", "") or "").lower()
-            if status == "fixed":
-                target = HarnessStatus.COMPLETED
-                attribution = None
-            elif status in {"timeout", "timed_out"}:
-                target = HarnessStatus.TIMED_OUT
-                attribution = attribute_harness_failure(
-                    code=HarnessFailureCode.TIMEOUT,
-                    evidence_refs=[f"trace:{state.repair_run_id}"],
-                )
-            elif status == "user_cancel" or state.control.user_cancel:
-                target = HarnessStatus.CANCELLED
-                attribution = attribute_harness_failure(
-                    code=HarnessFailureCode.CANCELLED,
-                    evidence_refs=[f"trace:{state.repair_run_id}"],
-                )
-            else:
-                target = HarnessStatus.FAILED
-                attribution = attribute_harness_failure(
-                    code=(
-                        HarnessFailureCode.VERIFICATION_FAILED
-                        if state.verification_result and not state.verification_result.all_passed
-                        else HarnessFailureCode.UNKNOWN
-                    ),
-                    contributing_causes=list(state.failure_tags),
-                    evidence_refs=[f"trace:{state.repair_run_id}"],
-                )
-            harness.finish(target, reason=status or target.value, attribution=attribution)
-            snapshot = harness.snapshot()
-            snapshot["manifest_fingerprint"] = state.harness_manifest.get(
-                "manifest_fingerprint", ""
-            )
-            state.harness_control = {
-                key: value for key, value in snapshot.items() if key not in {"events", "metrics"}
-            }
-            state.harness_events = list(snapshot.get("events") or [])
-            state.harness_metrics = dict(snapshot.get("metrics") or {})
-            state.harness_attribution = attribution.to_dict() if attribution else {}
-            state.human_control = {
-                **dict(getattr(state, "human_control", {}) or {}),
-                "mode": snapshot.get("control_mode", "auto"),
-            }
-            if target != HarnessStatus.COMPLETED:
-                record = extract_bad_case(snapshot)
-                if record is not None:
-                    state.bad_cases.append(record.to_dict())
-                    try:
-                        BadCaseStore(self._repo_root).append(record)
-                    except OSError:
-                        pass
-        token_summary = state.node_timings.get("token_usage") or {}
-        tracer.finalize(state, token_summary)
-        tracer.unbind_agents(
-            self.patcher,
-            self.verifier,
-        )
-        if ctx is not None:
-            ctx.repair_tracer = None
-        token = ctx.log_run_id_token if ctx is not None else None
-        if token is not None:
-            reset_run_id(token)
-            if ctx is not None:
-                ctx.log_run_id_token = None
+    def _reset_token_tracking(self):
+        self._telemetry()._reset_token_tracking()
 
-    def _reset_token_tracking(self) -> None:
-        from src.eval.token_usage import reset_clients_session_usage
+    def _attach_token_usage(self, state):
+        self._telemetry()._attach_token_usage(state)
 
-        reset_clients_session_usage(*self._active_agents)
-
-    def _attach_token_usage(self, state: RepairState) -> None:
-        from src.eval.token_usage import build_repair_token_usage, resolve_model_clients
-
-        clients = resolve_model_clients(*self._active_agents)
-        if not clients:
-            return
-        summary = build_repair_token_usage(
-            clients,
-            Path(self._repo_root),
-            since_ts=self._repair_ctx.repair_started_at if self._repair_ctx else None,
-            repair_run_id=state.repair_run_id or None,
-        )
-        state.node_timings["total_tokens"] = summary["total_tokens"]
-        state.node_timings["token_usage"] = summary
-        if summary.get("token_usage_by_agent"):
-            state.node_timings["token_usage_by_agent"] = summary["token_usage_by_agent"]
-        if summary.get("tool_usage_by_agent"):
-            state.node_timings["tool_usage_by_agent"] = summary["tool_usage_by_agent"]
-        if summary.get("total_tool_steps") is not None:
-            state.node_timings["total_tool_steps"] = summary["total_tool_steps"]
-        # 分 Agent latency
-        latency_by_agent: dict[str, dict] = {}
-        for agent in self._active_agents:
-            client = getattr(agent, "model_client", None)
-            name = getattr(agent, "_agent_name", "") or "agent"
-            if client and hasattr(client, "latency_stats"):
-                latency_by_agent[name] = client.latency_stats()
-        if latency_by_agent:
-            state.node_timings["latency_by_agent"] = latency_by_agent
-
-    def _attach_rejection_stats(self, state: RepairState) -> None:
-        from src.repair.rejection_aggregate import (
-            apply_gateway_denials_to_agent_errors,
-            summarize_repair_rejections,
-        )
-
-        run_id = state.repair_run_id or ""
-        if not run_id:
-            return
-        from agent_runtime.state_root import state_root_for
-
-        run_dir = (
-            state_root_for(
-                self._repo_root,
-                getattr(getattr(self.patcher, "tool_context", None), "state_root", ""),
-            )
-            / ".agent"
-            / "runs"
-            / run_id
-        )
-        summary = summarize_repair_rejections(run_dir)
-        for key, value in summary.items():
-            state.node_timings[key] = value
-        apply_gateway_denials_to_agent_errors(
-            state.agent_errors,
-            summary.get("permission_denied_by_agent"),
-        )
+    def _attach_rejection_stats(self, state):
+        self._telemetry()._attach_rejection_stats(state)
 
     def _run_patcher(self, state: RepairState) -> tuple[list[CandidatePatch], dict]:
         """Run the sole patch path: governed tools mutate disk, Runtime snapshots the diff."""
@@ -1075,6 +663,8 @@ class Orchestrator(
             "【repair runtime】read → apply_patch"
             "（*** Begin/End Patch，Update 须含 - 上下文）→ quick_test。",
             "可 expand_lock；不要用 run_shell/sandbox_test（无权限）。真源=磁盘 diff。",
+            "expand_lock operation=modify|create|delete；新增文件用 create 授权后 Add File，"
+            "修改和删除须重新读取。",
         ]
         if allowed:
             runtime_bits.append("allowed_edit: " + ", ".join(allowed[:12]))
@@ -1331,235 +921,14 @@ class Orchestrator(
             targets = normalize_related_test_refs(candidates, self._repo_root or None)
         return targets[0] if targets else ""
 
-    def _build_feedback(
-        self, result: "VerificationResult", *, state: RepairState | None = None
-    ) -> str:
-        """构建结构化反馈文本（V1.4-Bonus8a）。
+    def _build_feedback(self, result, *, state=None):
+        from src.repair.feedback_service import RepairFeedbackService
 
-        Sections（按优先级排列）:
-        1. regression_hint — 上轮引入回归时的回滚提示
-        2. previous_patches — 上轮失败的 patch diff
-        3. failure_logs — 失败测试日志
-        4. build_log — 构建日志
-        5. guidance — 后续操作指导
-        """
-        sections: list[_FeedbackSection] = []
-
-        # 1. regression hint
-        if state is not None:
-            from src.repair.verification.termination import introduced_regression
-
-            if introduced_regression(state):
-                sections.append(
-                    _FeedbackSection(
-                        "回滚提示",
-                        "上轮补丁引入了回归（原本通过的测试现在失败）。"
-                        "请先还原受影响的无关文件，只修改 suspect 范围内的文件。",
-                        10,
-                        200,
-                    )
-                )
-
-        # E6a: apply 失败细节写入 feedback，供下一轮 patcher 使用
-        if state is not None and state.agent_errors.get("patcher_apply"):
-            sections.append(
-                _FeedbackSection(
-                    "Apply 失败",
-                    str(state.agent_errors["patcher_apply"])[:500],
-                    18,
-                    500,
-                )
-            )
-        if state is not None and state.agent_errors.get("incomplete_sibling_pattern"):
-            sections.append(
-                _FeedbackSection(
-                    "Sibling 模式",
-                    str(state.agent_errors["incomplete_sibling_pattern"])[:400],
-                    19,
-                    400,
-                )
-            )
-
-        # 2. previous patches
-        if state is not None and state.candidate_patches:
-            patch_lines: list[str] = []
-            for i, p in enumerate(state.candidate_patches[:2], 1):
-                diff = p.diff[:_MAX_PATCH_DIFF_CHARS] if p.diff else "(空)"
-                patch_lines.append(f"补丁{i} ({p.file_path}):\n{diff}")
-            if patch_lines:
-                sections.append(
-                    _FeedbackSection(
-                        "上轮改动",
-                        "\n\n".join(patch_lines),
-                        20,
-                        _MAX_PATCH_DIFF_CHARS * 2,
-                    )
-                )
-
-            repeat_feedback = _record_patch_retry_fingerprints(state)
-            if repeat_feedback:
-                sections.append(_FeedbackSection("重复补丁", repeat_feedback, 22, 500))
-
-        from src.repair.verification.verify_diagnose import VerifyBucket, diagnose_verification
-
-        diagnosis = diagnose_verification(result)
-        if state is not None:
-            state.control.verify_bucket = diagnosis.bucket.value
-            state.node_timings["verify_bucket_reason"] = diagnosis.reason
-            if diagnosis.failed_nodeids:
-                state.control.verify_failed_nodeids = list(diagnosis.failed_nodeids)
-            from src.repair.verification.failure_decision import (
-                apply_failure_decision,
-                decide_verification_failure,
-                render_failure_decision,
-            )
-
-            failure_decision = decide_verification_failure(result, state=state)
-            apply_failure_decision(state, failure_decision)
-            ctx = getattr(self, "_repair_ctx", None)
-            if ctx and ctx.repair_tracer:
-                ctx.repair_tracer.emit(
-                    "orchestrator",
-                    "repair_failure_decision",
-                    failure_decision.to_dict(),
-                    status="error",
-                )
-            sections.append(
-                _FeedbackSection(
-                    "修复决策",
-                    render_failure_decision(failure_decision),
-                    11,
-                    700,
-                )
-            )
-            from src.repair.verification.fail_surface import (
-                apply_verify_feedback_to_state,
-                build_verify_feedback_payload,
-                render_verify_feedback_block,
-            )
-
-            verify_payload = build_verify_feedback_payload(
-                state,
-                repo_root=getattr(self, "_repo_root", "") or "",
-                result=result,
-                sandbox_context=getattr(self, "_sandbox_context", None),
-            )
-            apply_verify_feedback_to_state(state, verify_payload)
-            structured_block = render_verify_feedback_block(verify_payload)
-            if structured_block:
-                sections.append(_FeedbackSection("结构化反馈", structured_block, 13, 1800))
-
-        sections.append(
-            _FeedbackSection(
-                "验证分桶",
-                f"bucket={diagnosis.bucket.value}; reason={diagnosis.reason}",
-                12,
-                200,
-            )
-        )
-        if diagnosis.failed_nodeids:
-            sections.append(
-                _FeedbackSection(
-                    "失败用例",
-                    "\n".join(f"  - {n}" for n in diagnosis.failed_nodeids[:5]),
-                    23,
-                    400,
-                )
-            )
-
-        # 失败面：断言 + 测试原文摘要（供下一轮 toolized patcher）
-        if state is not None:
-            from src.repair.verification.fail_surface import (
-                build_fail_surface,
-                build_fail_surface_prompt_block,
-            )
-
-            surface = build_fail_surface(
-                state,
-                repo_root=getattr(self, "_repo_root", "") or "",
-                result=result,
-                sandbox_context=getattr(self, "_sandbox_context", None),
-            )
-            fail_block = build_fail_surface_prompt_block(
-                surface,
-                max_chars=2500,
-                bucket=diagnosis.bucket.value,
-            )
-            if fail_block:
-                sections.append(_FeedbackSection("失败面", fail_block, 27, 2500))
-
-            from src.repair.failure_ledger import build_ledger_prompt_block, load_ledger_from_state
-
-            ledger_block = build_ledger_prompt_block(load_ledger_from_state(state))
-            if ledger_block:
-                sections.append(_FeedbackSection("失败账本", ledger_block, 28, 2200))
-
-        target_feedback = _summarize_failure_targets(result.failure_logs)
-        if target_feedback:
-            sections.append(
-                _FeedbackSection(
-                    "失败定位",
-                    target_feedback,
-                    24,
-                    _MAX_FAILURE_TARGET_CHARS,
-                )
-            )
-
-        # 3. failure logs
-        if result.failure_logs:
-            logs = "\n".join(
-                f"  - {log[:_MAX_FAILURE_LOG_CHARS]}" for log in result.failure_logs[:5]
-            )
-            title = "失败测试"
-            if diagnosis.bucket == VerifyBucket.ENV:
-                title = "验证环境"
-            elif diagnosis.bucket == VerifyBucket.COLLECT:
-                title = "收集失败"
-            elif "verify_config:" in "\n".join(str(x) for x in result.failure_logs):
-                title = "验证配置"
-            sections.append(_FeedbackSection(title, logs, 30, _MAX_FAILURE_LOG_CHARS * 5))
-
-        # 4. build log
-        if result.build_log:
-            sections.append(
-                _FeedbackSection(
-                    "构建日志",
-                    result.build_log[:_MAX_BUILD_LOG_CHARS],
-                    25,
-                    _MAX_BUILD_LOG_CHARS,
-                )
-            )
-
-        # 按 priority 排序后组装
-        sections.sort(key=lambda s: s.priority)
-        lines = ["补丁验证失败。"]
-        for sec in sections:
-            text = sec.content[: sec.max_len] if sec.content else ""
-            if text:
-                lines.append(f"\n[{sec.title}]\n{text}")
-
-        # 5. guidance（按分桶给出可执行下一步）
-        guide_parts: list[str] = []
-        if diagnosis.guidance:
-            guide_parts.append(diagnosis.guidance)
-        if diagnosis.bucket == VerifyBucket.LOGIC:
-            guide_parts.append(
-                "使用 read_file / apply_patch 先读失败测试再改实现，完成后简短说明。"
-            )
-        elif diagnosis.bucket == VerifyBucket.ENV:
-            guide_parts.append(
-                "环境未就绪时停止堆叠同类业务补丁；若仍重试，只允许修正测试入口或导入路径相关改动。"
-            )
-        if state is not None and state.retry_count > 0:
-            guide_parts.append(
-                f"已尝试 {state.retry_count + 1} 次。不要重复上轮相同 diff；只改失败相关文件。"
-            )
-        elif not guide_parts:
-            guide_parts.append(
-                "请根据以上日志修改补丁。使用 apply_patch 直接修改文件，完成后简短说明。"
-            )
-        lines.append("\n[指导]\n" + " ".join(guide_parts))
-        return "\n".join(lines)
+        ctx = self._repair_ctx
+        tracer = ctx.repair_tracer if ctx else None
+        return RepairFeedbackService(
+            self._repo_root, self._sandbox_context, tracer.emit if tracer else None
+        ).build(result, state=state)
 
     # ---- Prompt 构建 ----
 
@@ -1622,185 +991,36 @@ class Orchestrator(
         self._emit_skill_hint_trace("patcher", render)
         return render_repair_task("patcher", variables)
 
-    def _read_code_snippet(self, file_path: str, start_line: int, end_line: int) -> str:
-        """预读嫌疑文件上下文。"""
-        path = Path(file_path)
-        if not path.is_absolute():
-            path = Path(self._repo_root) / path
-        if not path.is_file():
-            return ""
-        lines = path.read_text(encoding="utf-8").split("\n")
-        ctx_start = max(0, start_line - 3)
-        ctx_end = min(len(lines), end_line + 3)
-        block = ["    ```python"]
-        for i in range(ctx_start, ctx_end):
-            marker = ">>>" if start_line - 1 <= i < end_line else "   "
-            block.append(f"    {marker} {lines[i]}")
-        block.append("    ```")
-        return "\n".join(block)
+    def _context_reader(self):
+        from src.repair.context_reader import RepairContextReader
 
-    def _read_line_range(self, file_path: str, start_line: int, end_line: int) -> str:
-        """读取文件的原始行（无 markdown 包装），供 diff-only 上下文使用。"""
-        path = Path(file_path)
-        if not path.is_absolute():
-            path = Path(self._repo_root) / path
-        if not path.is_file():
-            return ""
-        lines = path.read_text(encoding="utf-8").split("\n")
-        ctx_start = max(0, start_line - 1)
-        ctx_end = min(len(lines), end_line)
-        return "\n".join(lines[ctx_start:ctx_end])
+        return RepairContextReader(self._repo_root)
 
-    def _read_test_context(
-        self,
-        context: RetrievedContext | None,
-        suspects: list[SuspectLocation],
-        plan: RepairPlan | None = None,
-    ) -> list[str]:
-        """预读相关测试的定向片段，避免把整个测试文件塞进 Patcher prompt。"""
-        max_total_chars = 12_000
-        max_file_chars = 5_000
-        max_excerpt_lines = 90
-        test_paths: list[Path] = []
-        target_names: dict[Path, set[str]] = {}
+    def _read_code_snippet(self, file_path, start_line, end_line):
+        return self._context_reader()._read_code_snippet(file_path, start_line, end_line)
 
-        if context and context.related_tests:
-            for item in context.related_tests:
-                ref = str(item)
-                path = self._resolve_test_path(ref)
-                if path and path not in test_paths:
-                    test_paths.append(path)
-                if path and "::" in ref:
-                    target_names.setdefault(path, set()).update(
-                        part for part in ref.split("::")[1:] if part
-                    )
+    def _read_line_range(self, file_path, start_line, end_line):
+        return self._context_reader()._read_line_range(file_path, start_line, end_line)
 
-        for s in suspects:
-            guessed = self._guess_test_file(s.file_path, s.function_name or "")
-            if guessed and guessed not in test_paths:
-                test_paths.append(guessed)
-            if guessed and s.function_name:
-                target_names.setdefault(guessed, set()).add(s.function_name)
-
-        if not test_paths:
-            test_paths = self._discover_repo_test_files()
-
-        blocks: list[str] = []
-        used_chars = 0
-        for path in test_paths:
-            try:
-                content = path.read_text(encoding="utf-8")
-            except OSError:
-                continue
-            excerpt = self._select_test_excerpt(
-                content,
-                target_names.get(path, set()),
-                max_chars=max_file_chars,
-                max_lines=max_excerpt_lines,
-            )
-            if not excerpt:
-                continue
-            remaining = max_total_chars - used_chars
-            if remaining <= 0:
-                break
-            if len(excerpt) > remaining:
-                excerpt = excerpt[:remaining].rstrip() + "\n# ... excerpt truncated ..."
-            rel = path.name
-            blocks.append(f"  {rel}:")
-            blocks.append("  ```python")
-            blocks.append(excerpt)
-            blocks.append("  ```")
-            used_chars += len(excerpt)
-        return blocks
+    def _read_test_context(self, context, suspects, plan=None):
+        return self._context_reader()._read_test_context(context, suspects, plan)
 
     @staticmethod
-    def _select_test_excerpt(
-        content: str,
-        target_names: set[str],
-        *,
-        max_chars: int,
-        max_lines: int,
-    ) -> str:
-        """Keep the relevant test definition, with a bounded head/tail fallback."""
-        lines = content.splitlines()
-        if not lines:
-            return ""
-        starts: list[int] = []
-        for index, line in enumerate(lines):
-            stripped = line.strip()
-            if not target_names:
-                continue
-            for name in target_names:
-                if stripped.startswith((f"def {name}", f"class {name}")):
-                    starts.append(index)
-                    break
-        if starts:
-            center = starts[0]
-            begin = max(0, center - 8)
-            end = min(len(lines), center + max_lines - 8)
-            selected = lines[begin:end]
-        elif len(lines) <= max_lines:
-            selected = lines
-        else:
-            head = max_lines // 2
-            selected = (
-                lines[:head]
-                + ["# ... middle of test file omitted ..."]
-                + lines[-(max_lines - head) :]
-            )
-        excerpt = "\n".join(selected).rstrip()
-        if len(excerpt) > max_chars:
-            excerpt = excerpt[:max_chars].rstrip() + "\n# ... excerpt truncated ..."
-        return excerpt
+    def _select_test_excerpt(content, target_names, *, max_chars, max_lines):
+        from src.repair.context_reader import RepairContextReader
 
-    def _resolve_test_path(self, ref: str) -> Path | None:
-        """从 pytest nodeid 或路径解析测试文件。"""
-        file_part = ref.split("::", 1)[0].strip()
-        if not file_part:
-            return None
-        candidates = [
-            Path(self._repo_root) / file_part,
-            Path(self._repo_root) / "tests" / file_part,
-        ]
-        for path in candidates:
-            if path.is_file():
-                return path
-        return None
+        return RepairContextReader._select_test_excerpt(
+            content, target_names, max_chars=max_chars, max_lines=max_lines
+        )
 
-    def _guess_test_file(self, source_file: str, function_name: str) -> Path | None:
-        """按约定猜测 test_<module>.py。"""
-        stem = Path(source_file).stem
-        names = [f"test_{stem}.py", f"{stem}_test.py", "test_app.py"]
-        for name in names:
-            for base in (Path(self._repo_root), Path(self._repo_root) / "tests"):
-                path = base / name
-                if not path.is_file():
-                    continue
-                if not function_name:
-                    return path
-                text = path.read_text(encoding="utf-8")
-                if function_name in text:
-                    return path
-        return None
+    def _resolve_test_path(self, ref):
+        return self._context_reader()._resolve_test_path(ref)
 
-    def _discover_repo_test_files(self) -> list[Path]:
-        """扫描 repo 根目录下的 test_*.py。"""
-        root = Path(self._repo_root)
-        found: list[Path] = []
-        for pattern in ("test_*.py",):
-            found.extend(root.glob(pattern))
-            tests_dir = root / "tests"
-            if tests_dir.is_dir():
-                found.extend(tests_dir.glob(pattern))
-        return sorted({p.resolve() for p in found})
+    def _guess_test_file(self, source_file, function_name):
+        return self._context_reader()._guess_test_file(source_file, function_name)
 
-    # ---- 解析 Agent 输出 ----
-
-    def _verifier_prompt(self, patches: list[CandidatePatch], plan: RepairPlan | None) -> str:
-        variables, render = build_verifier_variables(patches, self._repo_root, plan=plan)
-        self._emit_skill_hint_trace("verifier", render)
-        text, _ = render_repair_task("verifier", variables)
-        return text
+    def _discover_repo_test_files(self):
+        return self._context_reader()._discover_repo_test_files()
 
     def _parse_verification(self, answer: str) -> "VerificationResult":
         return parse_verification(answer)

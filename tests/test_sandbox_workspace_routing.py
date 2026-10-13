@@ -207,6 +207,31 @@ def test_edit_lock_requires_evidence_and_reread_after_expand(context):
     )
 
 
+def test_create_scope_uses_sandbox_absence_evidence(context):
+    lock = context.edit_lock = EditLockState(repo_root=context.root, sandbox_only=True)
+    context.sandbox_approval_policy = "auto"
+    context.sandbox_approval_callback = lambda _: True
+
+    def absence(request):
+        response = context.sandbox_backend.reply(request)
+        result = ToolResult(
+            "absence checked", metadata={"workspace_versions": {"pkg/new.ts": None}}
+        )
+        return replace(response, tool_result=tool_result_to_wire(result))
+
+    context.sandbox_backend.handler = absence
+    assert tool_expand_lock(context, {"path": "pkg/new.ts", "operation": "create"}).ok
+    assert lock.allowed_create == {"pkg/new.ts"}
+    probe = context.sandbox_backend.calls[-1]
+    assert probe.tool_name == "workspace_source_version"
+    assert probe.tool_args == {"path": "pkg/new.ts", "allow_missing": True}
+    assert execute_workspace_tool(
+        context, "write_file", {"path": "pkg/new.ts", "content": "export const x = 1;\n"}
+    ).ok
+    assert context.sandbox_backend.calls[-1].base_versions == {"pkg/new.ts": None}
+    assert not lock.check_write("pkg/new.ts", operation="delete")[0]
+
+
 def test_backend_exception_finalizes_coordinator_resource(context):
     transitions = []
     context.run_coordinator = SimpleNamespace(

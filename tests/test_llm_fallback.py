@@ -1,5 +1,15 @@
 """歧义 LLM fallback 单测：unknown→LLM 分类 / 失败保持 unknown。"""
 
+from types import SimpleNamespace
+
+from agent_runtime.config import AgentConfig
+
+
+def make_orchestrator():
+    from src.orchestrator import Orchestrator
+
+    return Orchestrator(SimpleNamespace(config=AgentConfig(), session={}))
+
 
 class TestLLMClassifyIssue:
     def test_unknown_triggers_llm_classify(self):
@@ -8,7 +18,7 @@ class TestLLMClassifyIssue:
 
         from src.orchestrator import Orchestrator
 
-        orch = Orchestrator.__new__(Orchestrator)
+        orch = make_orchestrator()
         orch._light_client = MagicMock()
         orch._light_client.complete.return_value = "type_error"
 
@@ -18,9 +28,8 @@ class TestLLMClassifyIssue:
 
     def test_no_light_client_returns_none(self):
         """无 light_client 时返回 None → 保持 unknown。"""
-        from src.orchestrator import Orchestrator
 
-        orch = Orchestrator.__new__(Orchestrator)
+        orch = make_orchestrator()
         orch._light_client = None
 
         result = orch._llm_classify_issue("error")
@@ -30,9 +39,7 @@ class TestLLMClassifyIssue:
         """LLM 返回非法类型 → None → 保持 unknown。"""
         from unittest.mock import MagicMock
 
-        from src.orchestrator import Orchestrator
-
-        orch = Orchestrator.__new__(Orchestrator)
+        orch = make_orchestrator()
         orch._light_client = MagicMock()
         orch._light_client.complete.return_value = "not_a_valid_type"
 
@@ -43,9 +50,7 @@ class TestLLMClassifyIssue:
         """LLM 调用异常 → None → 不阻塞主路径。"""
         from unittest.mock import MagicMock
 
-        from src.orchestrator import Orchestrator
-
-        orch = Orchestrator.__new__(Orchestrator)
+        orch = make_orchestrator()
         orch._light_client = MagicMock()
         orch._light_client.complete.side_effect = RuntimeError("API error")
 
@@ -56,9 +61,9 @@ class TestLLMClassifyIssue:
         """分类 prompt 包含所有 ROUTED_ISSUE_TYPES。"""
         from unittest.mock import MagicMock
 
-        from src.orchestrator import ROUTED_ISSUE_TYPES, Orchestrator
+        from src.repair.prompt_router import ROUTED_ISSUE_TYPES
 
-        orch = Orchestrator.__new__(Orchestrator)
+        orch = make_orchestrator()
         orch._light_client = MagicMock()
         orch._light_client.complete.return_value = "type_error"
 
@@ -73,9 +78,7 @@ class TestParseIssueFallback:
         """_parse_issue: unknown → LLM 分类成功 → intent_parser='llm'。"""
         from unittest.mock import MagicMock, patch
 
-        from src.orchestrator import Orchestrator
-
-        orch = Orchestrator.__new__(Orchestrator)
+        orch = make_orchestrator()
         orch._light_client = MagicMock()
         orch._light_client.complete.return_value = "type_error"
 
@@ -93,9 +96,7 @@ class TestParseIssueFallback:
         """_parse_issue: unknown + 无 light_client → intent_parser='rule'。"""
         from unittest.mock import patch
 
-        from src.orchestrator import Orchestrator
-
-        orch = Orchestrator.__new__(Orchestrator)
+        orch = make_orchestrator()
         orch._light_client = None
         orch._classify_issue_type = lambda i: ("unknown", "none")
         orch._repo_root = "."
@@ -110,9 +111,7 @@ class TestParseIssueFallback:
         """_parse_issue: 规则匹配到已知类型 → 不调 LLM。"""
         from unittest.mock import MagicMock, patch
 
-        from src.orchestrator import Orchestrator
-
-        orch = Orchestrator.__new__(Orchestrator)
+        orch = make_orchestrator()
         orch._light_client = MagicMock()
         orch._classify_issue_type = lambda i: ("type_error", "explicit_exception")
         orch._repo_root = "."

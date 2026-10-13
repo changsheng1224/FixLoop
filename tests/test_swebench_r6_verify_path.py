@@ -129,7 +129,7 @@ class TestE14PatchBudget:
 
 
 class TestE6aCollapsedWhitespaceApply:
-    def test_internal_whitespace_mismatch_still_applies(self):
+    def test_internal_whitespace_mismatch_is_rejected(self):
         text = "    regex = r'^[\\w.@+-]+$'\n"
         patch = CandidatePatch(
             file_path="v.py",
@@ -137,8 +137,7 @@ class TestE6aCollapsedWhitespaceApply:
             patched_lines="    regex = r'^[\\w.@+-]+\\Z'",
         )
         out = apply_patch_to_text(text, patch)
-        assert out is not None
-        assert "\\Z" in out
+        assert out is None
 
     def test_hunk_mismatch_includes_near_lines(self, tmp_path: Path):
         from src.repair.execution.patch_applier import describe_hunk_mismatch

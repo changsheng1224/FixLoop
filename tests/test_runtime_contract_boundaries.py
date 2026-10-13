@@ -70,7 +70,7 @@ def test_policy_failure_cannot_allow_a_write(tmp_path):
     class BrokenPolicy:
         write_serial = False
 
-        def check_write(self, path):
+        def check_write(self, path, *, operation="modify"):
             raise RuntimeError("policy unavailable")
 
     context = ToolContext(str(tmp_path), edit_lock=BrokenPolicy())
