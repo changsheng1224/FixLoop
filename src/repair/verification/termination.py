@@ -49,10 +49,15 @@ def has_actionable_patch(state: RepairState) -> bool:
     }
 
 
-def mark_pending_verify(state: RepairState) -> None:
-    """记录已生成补丁但尚未验证，不把它计作修复成功。"""
-    state.set_status(RepairTerminalStatus.PENDING_VERIFY, "verify_skipped")
+def mark_pending_verify(state: RepairState, reason: str = "verification_disabled") -> None:
+    """记录已生成补丁但尚未验证，不把它计作修复成功。
+
+    ``verify_skipped_reason`` 由本函数写入，也是 ``validate_invariants`` 与报告
+    读取的那一份；此前它只有读取方而没有写入方。
+    """
+    state.set_status(RepairTerminalStatus.PENDING_VERIFY, reason)
     state.control.verify_skipped = True
+    state.control.verify_skipped_reason = reason
 
 
 def has_repair_timeout(state: RepairState) -> bool:
