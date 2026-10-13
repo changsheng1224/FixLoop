@@ -493,7 +493,6 @@ class RepairState:
     repair_run_id: str = ""
     agent_asks: list[AgentAskRef] = field(default_factory=list)
     blackboard_snapshot: dict = field(default_factory=dict)
-    degraded_mode: bool = False
     schema_version: str = CURRENT_STATE_SCHEMA_VERSION
     state_revision: int = 0
     attempt: int = 0
@@ -704,7 +703,6 @@ class RepairState:
             "repair_run_id": self.repair_run_id,
             "agent_asks": [ref.to_dict() for ref in self.agent_asks],
             "blackboard_snapshot": dict(self.blackboard_snapshot),
-            "degraded_mode": self.degraded_mode,
             "schema_version": self.schema_version,
             "state_revision": self.state_revision,
             "attempt": self.attempt,
@@ -776,7 +774,6 @@ class RepairState:
             repair_run_id=data.get("repair_run_id", ""),
             agent_asks=[AgentAskRef.from_dict(item) for item in data.get("agent_asks", [])],
             blackboard_snapshot=dict(data.get("blackboard_snapshot") or {}),
-            degraded_mode=data.get("degraded_mode", False),
             schema_version=data.get("schema_version", CURRENT_STATE_SCHEMA_VERSION),
             state_revision=int(data.get("state_revision", 0) or 0),
             attempt=int(data.get("attempt", 0) or 0),
