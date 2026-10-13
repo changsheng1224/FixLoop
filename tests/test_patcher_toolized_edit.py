@@ -9,9 +9,9 @@ from pathlib import Path
 from agent_runtime.providers.clients import FakeModelClient
 from agent_runtime.workspace import WorkspaceContext
 from src.agents.factory import create_repair_agent
-from src.orchestrator import Orchestrator
 from src.repair.execution.edit_from_disk import patches_from_snapshot_diff
 from src.repair.run_context import RepairRunContext
+from src.repair.session import ExecutionSession
 from src.state import RepairPlan, RepairState, SuspectLocation
 
 
@@ -47,7 +47,6 @@ class TestPatcherToolizedOrchestrator:
         repo.mkdir()
         target = repo / "v.py"
         target.write_bytes(b"value = 1\n")
-
         client = FakeModelClient(
             [
                 '{"conclusion":"v.py initializes value to 1; change it to 2."}',
@@ -67,10 +66,9 @@ class TestPatcherToolizedOrchestrator:
             "patcher", client, WorkspaceContext.build(str(repo)), cwd=str(repo)
         )
         agent.config.auto_context_extraction = False
-        orch = Orchestrator(agent, verifier=None, sandbox_policy="disabled")
-        orch._repair_ctx = RepairRunContext(repair_started_at=time.time())
-        orch._merge_blackboard_for_patch = lambda state: None
-
+        orch = ExecutionSession(agent, verification_backend=None, sandbox_policy="disabled")
+        orch.repair_ctx = RepairRunContext(repair_started_at=time.time())
+        orch.evidence.merge_blackboard_for_patch = lambda state: None
         state = RepairState(
             issue_input="Change the initial value in v.py from 1 to 2.",
             repair_run_id="toolized-disk-diff-run",
@@ -81,7 +79,9 @@ class TestPatcherToolizedOrchestrator:
         )
         agent.shared_run_id = state.repair_run_id
         try:
-            applied, meta = orch._run_patcher_toolized(state, state.issue_input, {})
+            applied, meta = orch.patcher_execution.run_patcher_toolized(
+                state, state.issue_input, {}
+            )
             assert len(applied) == 1, (meta, state.agent_errors)
             assert applied[0].file_path == "v.py"
             assert applied[0].original_lines == "value = 1\n"
@@ -91,7 +91,7 @@ class TestPatcherToolizedOrchestrator:
             assert meta.get("edit_mode") == "tools"
             assert state.node_timings.get("patcher_edit_mode") == "tools"
             assert state.control.patcher_write_attempted
-            session = orch._plan_binding.session
+            session = orch.plan_binding.session
             assert session.plan.node("edit").status == "succeeded"
             writes = [
                 op
@@ -100,5 +100,5 @@ class TestPatcherToolizedOrchestrator:
             ]
             assert len(writes) == 1 and writes[0]["status"] == "success"
         finally:
-            if orch._plan_binding:
-                orch._plan_binding.close()
+            if orch.plan_binding:
+                orch.plan_binding.close()

@@ -72,8 +72,13 @@ def recheck_read(result: ToolResult, context=None):
             return stale_read(result)
         path = version["path"]
         expected = result.metadata.get("workspace_versions", {}).get(path)
-        probe = execute_workspace_tool(context, "workspace_source_version", {"path": path},
-                                       mark_read=False, record_versions=False)
+        probe = execute_workspace_tool(
+            context,
+            "workspace_source_version",
+            {"path": path},
+            mark_read=False,
+            record_versions=False,
+        )
         observed = probe.metadata.get("workspace_versions", {}).get(path)
         # FUSE inode/dev values belong to a single mounted view. Only a content
         # hash can establish freshness across separately mounted calls.

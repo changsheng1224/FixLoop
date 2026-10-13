@@ -25,9 +25,10 @@ from agent_runtime.worktree import (
     remove_worktree,
     retain_worktree,
 )
-from src.orchestrator import Orchestrator
 from src.repair.checkpoint_load import save_repair_checkpoint
 from src.repair.run_context import RepairRunContext
+from src.repair.service import RepairRequest, RepairService
+from src.repair.session import ExecutionSession
 from src.state import RepairState
 
 
@@ -43,13 +44,27 @@ def spec(tmp_path):
 
 def orchestrator(repo, spec, factory=None, *, workspace_policy="provided"):
     context = ToolContext(str(repo))
-    agent = SimpleNamespace(tool_context=context, _cwd=str(repo), state_root="")
-    return Orchestrator(
+    agent = SimpleNamespace(tool_context=context, cwd=str(repo), state_root="")
+
+    def bind_workspace(root, state_root, project_root, task_id):
+        agent.cwd = str(root)
+        agent.state_root = str(state_root)
+        context.root = str(root)
+        context.state_root = str(state_root)
+
+    agent.bind_workspace = bind_workspace
+
+    def make_backend(binding):
+        backend = SimpleNamespace(task_binding=binding, _closed=False)
+        backend.close = lambda: setattr(backend, "_closed", True)
+        return backend
+
+    return ExecutionSession(
         agent,
         workspace_policy=workspace_policy,
         sandbox_context=context,
         sandbox_task_spec=spec,
-        sandbox_backend_factory=factory or (lambda binding: SimpleNamespace(task_binding=binding)),
+        sandbox_backend_factory=factory or make_backend,
     )
 
 
@@ -122,16 +137,16 @@ def metadata_backend(binding):
 
 
 def test_windows_mapping_preserves_unicode_and_spaces():
-    assert windows_to_wsl(r"C:\项目 空间\仓库") == "/mnt/c/项目 空间/仓库"
+    assert windows_to_wsl("C:\\项目 空间\\仓库") == "/mnt/c/项目 空间/仓库"
 
 
 @pytest.mark.parametrize(
     "raw",
     [
-        r"C:repo",
-        r"\\server\share\repo",
-        r"C:\repo\..\other",
-        r"C:\repo\a:stream",
+        "C:repo",
+        "\\\\server\\share\\repo",
+        "C:\\repo\\..\\other",
+        "C:\\repo\\a:stream",
         "C:\\repo.\\x",
         "C:\\repo \\x",
     ],
@@ -141,7 +156,7 @@ def test_windows_mapping_rejects_ambiguous_paths(raw):
         windows_to_wsl(raw)
 
 
-@pytest.mark.parametrize("raw", ["../a", "/etc/passwd", r"C:\a", r"a\..\b", "a:stream"])
+@pytest.mark.parametrize("raw", ["../a", "/etc/passwd", "C:\\a", "a\\..\\b", "a:stream"])
 def test_target_mapping_cannot_escape(temp_workspace, raw):
     mapping = WorkspaceMapping.create(temp_workspace)
     with pytest.raises(ValueError, match="workspace_mapping_rejected"):
@@ -158,8 +173,8 @@ def test_managed_default_is_external_and_workspace_specific(tmp_path, monkeypatc
     second = tmp_path / "repo-b"
     first.mkdir()
     second.mkdir()
-    one, two = managed_state_base(first), managed_state_base(second)
-    assert one != two and not one.is_relative_to(first) and not two.is_relative_to(second)
+    one, two = (managed_state_base(first), managed_state_base(second))
+    assert one != two and (not one.is_relative_to(first)) and (not two.is_relative_to(second))
 
 
 def test_external_sessions_observations_and_collaboration(temp_workspace, spec):
@@ -252,23 +267,26 @@ def test_worktree_binding_precedes_snapshot_and_trace(temp_workspace, spec, monk
         temp_workspace,
         spec,
         lambda binding: (
-            roots.append(binding.mapping.host_root) or SimpleNamespace(task_binding=binding)
+            roots.append(binding.mapping.host_root)
+            or SimpleNamespace(task_binding=binding, _closed=False, close=lambda: None)
         ),
         workspace_policy="worktree",
     )
-    monkeypatch.setattr(orch, "_snapshot_repo", lambda: roots.append(orch._repo_root) or {})
+    monkeypatch.setattr(
+        orch.transaction, "snapshot_repo", lambda: roots.append(orch.repo_root) or {}
+    )
 
     def impl(state, initial_snapshot):
         assert state.node_timings["sandbox_task_binding"]["workspace_ownership"] == "task"
         assert orch.patcher.state_root == orch.patcher.tool_context.state_root
-        orch._maybe_leave_worktree()
+        orch.lifecycle.maybe_leave_worktree()
         return state
 
-    monkeypatch.setattr(orch, "_repair_impl", impl)
-    result = orch.repair("fix", run_id="task-1", repair_timeout_s=0)
+    monkeypatch.setattr(orch.coordinator, "repair_impl", impl)
+    result = RepairService(orch).run(RepairRequest("fix", run_id="task-1", timeout_s=0))
     target = Path(roots[0])
     assert roots == [str(target), str(target)] and target != temp_workspace
-    assert target.exists() and not (target / ".agent").exists()
+    assert target.exists() and (not (target / ".agent").exists())
     assert result.node_timings["sandbox_task_binding"]["mapping"]["host_root"] == str(target)
     assert not (temp_workspace / ".agent").exists()
 
@@ -277,12 +295,15 @@ def test_worktree_creation_failure_never_runs_original_repo(temp_workspace, spec
     monkeypatch.setenv("FIXLOOP_USE_WORKTREE", "1")
     (temp_workspace / "README.md").write_text("user edit")
     called = []
-    orch = orchestrator(temp_workspace, spec, lambda binding: called.append(binding), workspace_policy="worktree")
-    monkeypatch.setattr(
-        orch, "_snapshot_repo", lambda: pytest.fail("snapshot after failed creation")
+    orch = orchestrator(
+        temp_workspace, spec, lambda binding: called.append(binding), workspace_policy="worktree"
     )
-    with pytest.raises(WorktreeError, match="user changes"):
-        orch.repair("fix", run_id="task-1", repair_timeout_s=0)
+    monkeypatch.setattr(
+        orch.transaction, "snapshot_repo", lambda: pytest.fail("snapshot after failed creation")
+    )
+    result = RepairService(orch).run(RepairRequest("fix", run_id="task-1", timeout_s=0))
+    assert result.status == "failed"
+    assert "user changes" in result.agent_errors["runtime"]
     assert called == [] and (temp_workspace / "README.md").read_text() == "user edit"
 
 
@@ -290,25 +311,26 @@ def test_resume_reuses_retained_worktree_and_checks_checkpoint(temp_workspace, s
     monkeypatch.setenv("FIXLOOP_USE_WORKTREE", "1")
     first = orchestrator(temp_workspace, spec, workspace_policy="worktree")
     state = RepairState(issue_input="fix", repair_run_id="task-1")
-    first._prepare_sandbox_task(state, resume=False)
-    root = Path(first._repo_root)
+    first.lifecycle.prepare_sandbox_task(state, resume=False)
+    root = Path(first.repo_root)
     (root / "README.md").write_text("retained result")
-    retain_worktree(first._sandbox_worktree_handle)
-    save_repair_checkpoint(state, str(root), state_root=first._sandbox_context.state_root)
+    retain_worktree(first.sandbox_worktree_handle)
+    save_repair_checkpoint(state, str(root), state_root=first.sandbox_context.state_root)
     second = orchestrator(temp_workspace, spec, workspace_policy="worktree")
-    monkeypatch.setattr(second, "_snapshot_repo", lambda: {})
-    monkeypatch.setattr(second, "_repair_impl", lambda state, initial_snapshot: state)
-    restored = second.repair("fix", resume_run_id="task-1", repair_timeout_s=0)
+    monkeypatch.setattr(second.transaction, "snapshot_repo", lambda: {})
+    monkeypatch.setattr(second.coordinator, "repair_impl", lambda state, initial_snapshot: state)
+    restored = RepairService(second).run(RepairRequest("fix", resume_run_id="task-1", timeout_s=0))
     assert restored.status != "recovery_required"
-    assert Path(second._repo_root) == root and (root / "README.md").read_text() == "retained result"
-    # A valid checkpoint for this run with the wrong task binding must still fail closed.
-    state.node_timings["sandbox_task_binding"]["policy_version"] = "other"
-    save_repair_checkpoint(state, str(root), state_root=first._sandbox_context.state_root)
+    assert Path(second.repo_root) == root and (root / "README.md").read_text() == "retained result"
+    state.execution.sandbox_task_binding["policy_version"] = "other"
+    save_repair_checkpoint(state, str(root), state_root=first.sandbox_context.state_root)
     third = orchestrator(temp_workspace, spec, workspace_policy="worktree")
     monkeypatch.setattr(
-        third, "_snapshot_repo", lambda: pytest.fail("snapshot after mismatched checkpoint")
+        third.transaction,
+        "snapshot_repo",
+        lambda: pytest.fail("snapshot after mismatched checkpoint"),
     )
-    rejected = third.repair("fix", resume_run_id="task-1", repair_timeout_s=0)
+    rejected = RepairService(third).run(RepairRequest("fix", resume_run_id="task-1", timeout_s=0))
     assert rejected.status == "recovery_required"
 
 
@@ -317,8 +339,8 @@ def test_existing_workspace_preserves_dirty_files(temp_workspace, spec, monkeypa
     (temp_workspace / "README.md").write_text("user edit")
     orch = orchestrator(temp_workspace, spec)
     state = RepairState(issue_input="fix", repair_run_id="task-1")
-    orch._prepare_sandbox_task(state, resume=False)
-    assert orch._repo_root == str(temp_workspace)
+    orch.lifecycle.prepare_sandbox_task(state, resume=False)
+    assert orch.repo_root == str(temp_workspace)
     assert (temp_workspace / "README.md").read_text() == "user edit"
     assert state.node_timings["sandbox_task_binding"]["workspace_ownership"] == "user"
 
@@ -329,9 +351,9 @@ def test_existing_user_worktree_is_never_managed_deleted(temp_workspace, spec, m
     monkeypatch.delenv("FIXLOOP_USE_WORKTREE", raising=False)
     orch = orchestrator(handle.path, spec)
     state = RepairState(issue_input="fix", repair_run_id="task-1")
-    orch._prepare_sandbox_task(state, resume=False)
-    orch._repair_ctx = RepairRunContext(worktree_handle=user)
-    orch._maybe_leave_worktree(cancelled=True)
+    orch.lifecycle.prepare_sandbox_task(state, resume=False)
+    orch.repair_ctx = RepairRunContext(worktree_handle=user)
+    orch.lifecycle.maybe_leave_worktree(cancelled=True)
     assert handle.path.exists() and user.ownership == "user"
 
 
@@ -339,18 +361,22 @@ def test_legacy_creation_failure_also_stops(temp_workspace, spec, monkeypatch):
     monkeypatch.setenv("FIXLOOP_USE_WORKTREE", "1")
     monkeypatch.setenv("FIXLOOP_STATE_ROOT", spec.state_base)
     (temp_workspace / "README.md").write_text("user edit")
-    agent = SimpleNamespace(tool_context=ToolContext(str(temp_workspace)), _cwd=str(temp_workspace))
-    orch = Orchestrator(agent, workspace_policy="worktree", workspace_state_base=spec.state_base)
-    orch._repair_ctx = RepairRunContext()
+    agent = SimpleNamespace(tool_context=ToolContext(str(temp_workspace)), cwd=str(temp_workspace))
+    orch = ExecutionSession(
+        agent, workspace_policy="worktree", workspace_state_base=spec.state_base
+    )
+    orch.repair_ctx = RepairRunContext()
     with pytest.raises(WorktreeError, match="user changes"):
-        orch._prepare_host_worktree(RepairState(issue_input="fix", repair_run_id="task-1"), resume=False)
+        orch.lifecycle.prepare_host_worktree(
+            RepairState(issue_input="fix", repair_run_id="task-1"), resume=False
+        )
 
 
 def test_backend_cannot_ignore_final_binding(temp_workspace, spec, monkeypatch):
     monkeypatch.delenv("FIXLOOP_USE_WORKTREE", raising=False)
     orch = orchestrator(temp_workspace, spec, lambda _: SimpleNamespace())
     with pytest.raises(ValueError, match="backend_binding_mismatch"):
-        orch._prepare_sandbox_task(
+        orch.lifecycle.prepare_sandbox_task(
             RepairState(issue_input="fix", repair_run_id="task-1"), resume=False
         )
 
@@ -437,7 +463,6 @@ def test_replaced_worktree_cannot_be_removed(temp_workspace, spec):
     retained = handle.path.with_name("retained-original")
     handle.path.rename(retained)
     handle.path.mkdir()
-    # Even a replacement presenting the same Git identity is not the owned directory.
     (handle.path / ".git").write_bytes((retained / ".git").read_bytes())
     (handle.path / "valuable.txt").write_text("keep")
     with pytest.raises(WorktreeError, match="identity changed"):
@@ -463,7 +488,6 @@ def test_git_administration_never_runs_hooks_filters_or_inherited_git_env(
             f"from pathlib import Path; Path({sentinel.as_posix()!r}).write_text('unsafe')",
         )
     )
-    # Make attributes tracked before configuring an executable filter driver.
     (temp_workspace / ".gitattributes").write_text("README.md filter=host_attack\n")
     _git(temp_workspace, "add", ".gitattributes")
     _git(
@@ -484,11 +508,11 @@ def test_git_administration_never_runs_hooks_filters_or_inherited_git_env(
     hook = hooks / "post-checkout"
     hook.write_text("#!/bin/sh\n" + command + "\n", encoding="utf-8")
     if os.name != "nt":
-        hook.chmod(0o755)
+        hook.chmod(493)
     monkeypatch.setenv("GIT_DIR", str(temp_workspace / "absent"))
     monkeypatch.setenv("GIT_INDEX_FILE", str(sentinel))
     handle = create_worktree(temp_workspace, "task-1", state_base=spec.state_base)
-    assert handle.path.is_dir() and not sentinel.exists()
+    assert handle.path.is_dir() and (not sentinel.exists())
 
 
 def test_dispatch_rejects_backend_and_coordinator_binding_drift(temp_workspace, spec):
@@ -521,7 +545,7 @@ def test_real_agent_fixed_workspace_and_external_runtime_state(temp_workspace, s
         WorkspaceContext.build(str(temp_workspace)),
         tool_context=context,
     )
-    orch = Orchestrator(
+    orch = ExecutionSession(
         agent,
         sandbox_context=context,
         sandbox_task_spec=spec,
@@ -529,8 +553,8 @@ def test_real_agent_fixed_workspace_and_external_runtime_state(temp_workspace, s
         workspace_policy="worktree",
     )
     state = RepairState(issue_input="fix", repair_run_id="task-1")
-    orch._prepare_sandbox_task(state, resume=False)
-    root = Path(orch._repo_root)
+    orch.lifecycle.prepare_sandbox_task(state, resume=False)
+    root = Path(orch.repo_root)
     binding = context.sandbox_task_binding
     assert root != temp_workspace and agent.workspace.repo_root == str(root)
     assert agent.session["session_scope"]["workspace_id"] == binding.mapping.workspace_id
@@ -544,31 +568,55 @@ def test_real_agent_fixed_workspace_and_external_runtime_state(temp_workspace, s
     agent.record({"role": "user", "content": "external history"})
     assert agent.read_history()[0]["content"] == "external history"
     SessionStore(str(root), state_root=context.state_root).save(agent.session)
-    orch._repair_ctx = RepairRunContext(worktree_handle=orch._sandbox_worktree_handle)
+    orch.repair_ctx = RepairRunContext(worktree_handle=orch.sandbox_worktree_handle)
     try:
-        orch._begin_repair_trace(state)
-        assert orch._plan_binding.session.workspace == str(root)
-        assert orch._collaboration_runtime.store.path.is_relative_to(Path(context.state_root))
-        assert orch._plan_binding.coordinator.store.workspace == str(root)
+        orch.events.begin_repair_trace(state)
+        assert orch.plan_binding.session.workspace == str(root)
+        assert orch.collaboration_runtime.store.path.is_relative_to(Path(context.state_root))
+        assert orch.plan_binding.coordinator.store.workspace == str(root)
         save_repair_checkpoint(state, str(root), state_root=context.state_root)
     finally:
-        if orch._plan_binding is not None:
-            orch._plan_binding.close()
-        orch._maybe_leave_worktree()
+        if orch.plan_binding is not None:
+            orch.plan_binding.close()
+        orch.lifecycle.maybe_leave_worktree()
     assert (Path(context.state_root) / ".agent" / "history.jsonl").is_file()
-    assert not (root / ".agent").exists() and not (temp_workspace / ".agent").exists()
+    assert not (root / ".agent").exists() and (not (temp_workspace / ".agent").exists())
 
 
 def test_backend_startup_failure_retains_worktree(temp_workspace, spec, monkeypatch):
     monkeypatch.setenv("FIXLOOP_USE_WORKTREE", "1")
-    orch = orchestrator(temp_workspace, spec, lambda _: SimpleNamespace(), workspace_policy="worktree")
-    with pytest.raises(ValueError, match="backend_binding_mismatch"):
-        orch.repair("fix", run_id="task-1", repair_timeout_s=0)
-    handle = orch._sandbox_worktree_handle
-    assert handle.path.exists() and orch._repo_root == str(temp_workspace)
+
+    def mismatched_backend(_):
+        backend = SimpleNamespace(task_binding=None, _closed=False)
+        backend.close = lambda: setattr(backend, "_closed", True)
+        return backend
+
+    orch = orchestrator(temp_workspace, spec, mismatched_backend, workspace_policy="worktree")
+    result = RepairService(orch).run(RepairRequest("fix", run_id="task-1", timeout_s=0))
+    assert result.status == "failed"
+    assert "backend_binding_mismatch" in result.agent_errors["runtime"]
+    handle = orch.sandbox_worktree_handle
+    assert handle.path.exists() and orch.repo_root == str(temp_workspace)
     lease = managed_state_base(temp_workspace, spec.state_base) / "worktree-leases" / "task-1.json"
     assert json.loads(lease.read_text())["status"] == "retained"
     assert json.loads(lease.read_text())["reason"] == "startup_failed"
+
+
+def test_backend_close_failure_during_startup_requires_recovery(temp_workspace, spec):
+    calls = []
+
+    def mismatched_backend(_):
+        def close():
+            calls.append("close")
+            raise OSError("backend is still active")
+
+        return SimpleNamespace(task_binding=None, close=close)
+
+    orch = orchestrator(temp_workspace, spec, mismatched_backend)
+    result = RepairService(orch).run(RepairRequest("fix", run_id="startup", timeout_s=0))
+    assert result.status == "recovery_required"
+    assert "backend is still active" in result.agent_errors["sandbox_cleanup"]
+    assert calls == ["close"]
 
 
 def test_binding_requires_fresh_agent_and_cannot_be_retargeted(temp_workspace, spec):
@@ -595,7 +643,6 @@ def test_long_external_plan_blob_can_be_read_and_replaced(tmp_path):
 
     from agent_runtime.plan_runtime.journal import PlanStore
 
-    # The directory fits MAX_PATH while the content-addressed filename exceeds it.
     root = tmp_path / ("state-" + "x" * max(1, 207 - len(str(tmp_path))))
     store = PlanStore(root, {"task_id": "task-1"})
     try:

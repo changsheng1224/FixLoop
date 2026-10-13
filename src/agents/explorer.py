@@ -10,20 +10,15 @@ from types import SimpleNamespace
 
 from agent_runtime.budget_manager import BudgetManager
 from agent_runtime.cancellation import CancellationToken, CancelledError
-from agent_runtime.canonical_protocol import parse_model_response
-from agent_runtime.config import AgentConfig
-from agent_runtime.context_manager import TokenBudget
 from agent_runtime.context_runtime import ObservationStore
-from agent_runtime.model_call_budget import ModelBudgetExceededError, invoke_model_call
-from agent_runtime.model_turn import FinishKind, ModelTurnRequest, ModelTurnResult, ToolCall
+from agent_runtime.isolated_context import IsolatedContextManager
+from agent_runtime.model_call_budget import ModelBudgetExceededError
 from agent_runtime.plan_runtime.models import digest
 from agent_runtime.repair_runtime import ExecutionDeadline
 from agent_runtime.runtime import Agent
-from agent_runtime.tool_batch import ToolBatchProtocolError, ToolCallBatch, validate_native_content
+from agent_runtime.tool_batch import ToolBatchProtocolError
 from agent_runtime.tool_context import ToolContext
-from agent_runtime.tool_executor import QuotaEnforcer
 from agent_runtime.tool_result import ToolResult
-from agent_runtime.tool_schema import schema_to_json
 from agent_runtime.tools import build_tool_registry
 from src.collaboration.exploration_contracts import READ_TOOLS, in_scope, safe_path
 from src.collaboration.exploration_results import exploration_error_code, structured_result
@@ -38,7 +33,7 @@ Finish with JSON: {"summary":"...","findings":[{"claim_key":"...","statement":".
 "path":"relative path","range":null,"observation_id":"OBS-..."}],"unknowns":["..."]}.
 Copy path and range exactly from an observed hit. File versions are runtime-owned.
 Claims are candidates. Do not claim absence beyond scanned scope or test execution/coverage.
-You have at most three model turns and four read calls; return limitations explicitly."""
+Return limitations explicitly when an execution limit is reached."""
 
 
 class ExplorerToken(CancellationToken):
@@ -73,6 +68,8 @@ class ExplorerAgent(Agent):
         versions = data["workspace_revision"]
         state = {
             "id": data["attempt_id"],
+            "history": [],
+            "memory": self.session["memory"],
             "run_id": task.run_id,
             "session_scope": {
                 "workspace_id": data["workspace_id"],
@@ -81,154 +78,95 @@ class ExplorerAgent(Agent):
         }
         self.session = state
         self.tool_context.observation_state = state
-        store = ObservationStore(state, self._cwd, self.state_root)
+        store = ObservationStore(state, self.cwd, self.state_root)
         observations, coverage = {}, []
         messages = [{"role": "user", "content": json.dumps(projection, ensure_ascii=False)}]
-        used, calls, turns = 0, 0, 0
-        budget = BudgetManager({"total_tokens": limits.tokens, "llm_calls": limits.model_turns})
+        calls = 0
+        budget = BudgetManager(
+            {
+                "total_tokens": limits.tokens,
+                "llm_calls": limits.model_turns,
+                "tool_calls": limits.tool_calls,
+            }
+        )
         deadline = ExecutionDeadline.from_remaining(max(0, task.deadline_at - time.time()))
-        counter = TokenBudget(model=self.config.model, provider=self.config.provider)
         result = {"summary": "", "findings": [], "unknowns": []}
         status, error = "partial", "model_turn_limit"
         try:
-            for _ in range(limits.model_turns):
-                self.cancel_token.check()
-                tools = [
-                    {
-                        "name": n,
-                        "description": s["description"],
-                        "input_schema": schema_to_json(s["schema"]),
-                    }
-                    for n, s in self.tools.items()
-                ]
-                input_bound = counter.count(SYSTEM + json.dumps(messages) + json.dumps(tools)) + 32
-                output_limit = min(1024, limits.tokens - used - input_bound)
-                if output_limit <= 0:
-                    error = "token_budget_exhausted"
-                    break
-                request = ModelTurnRequest(
-                    SYSTEM,
-                    messages,
-                    tools,
-                    max_output_tokens=output_limit,
-                    deadline=time.monotonic() + max(0, task.deadline_at - time.time()),
-                )
-                turns += 1
-                event("subagent_model_started", model_turn=turns)
-                turn = invoke_model_call(
-                    lambda: self._turn(request),
-                    budget=budget,
-                    client=self.model_client,
-                    input_tokens=input_bound,
-                    output_tokens=output_limit,
-                    purpose="exploration",
-                    cancel_token=self.cancel_token,
-                    deadline=deadline,
-                    input_limit=self.config.input_window(output_limit),
-                )
-                used = int(budget.summary()["total_tokens"]["used"])
-                event("subagent_model_completed", model_turn=turns)
-                self.cancel_token.check()
-                if used > limits.tokens or turn.finish.kind == FinishKind.MAX_OUTPUT_TOKENS:
-                    error = "token_budget_exhausted_or_truncated_output"
-                    break
-                validate_native_content(turn.tool_calls, turn.content)
-                if not turn.tool_calls:
-                    raw = json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", turn.text.strip()))
-                    result = structured_result(raw, task, observations)
-                    status, error = "completed", ""
-                    break
-                batch = ToolCallBatch.create(
-                    turn.tool_calls,
-                    run_id=task.run_id,
-                    turn_id=f"{data['attempt_id']}:{turns}",
-                    context=self.tool_context,
-                    registry=self.tools,
-                    native_content=turn.content,
-                )
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": turn.content
-                        or [
-                            {
-                                "type": "tool_use",
-                                "id": c.call_id,
-                                "name": c.name,
-                                "input": c.arguments,
-                            }
-                            for c in turn.tool_calls
-                        ],
-                    }
-                )
-                replies = []
-                for call in batch.calls:
-                    self.cancel_token.check()
-                    if calls >= limits.tool_calls:
-                        raise ValueError("tool_call_budget_exhausted")
-                    calls += 1  # Denied calls also consume the child's fixed budget.
-                    event("subagent_tool_started", tool_call=calls)
-                    output = call.argument_rejection() or self.execute_tool(
-                        call.tool_name, call.arguments
-                    )
-                    retrieval = output.metadata.get("retrieval_result", {})
-                    hits = retrieval.get("hits", [])
-                    file_versions = {
-                        h["path"]: versions[h["path"]] for h in hits if h["path"] in versions
-                    }
-                    observation = store.put(
-                        call.tool_name,
-                        call.arguments,
-                        output.content,
-                        summary=f"{call.tool_name}: {len(hits)} observed candidates",
-                        source_version=digest(file_versions),
-                        provenance={
-                            "task_id": task.task_id,
-                            "attempt_id": data["attempt_id"],
-                            "file_versions": file_versions,
-                            "retrieval": retrieval,
-                            "complete": len(output.content) <= 2000
-                            and output.ok
-                            and retrieval.get("completeness") == "complete_in_scope",
-                        },
-                        status="ok" if output.ok else "error",
-                        source_dependencies=file_versions,
-                    )
-                    saved = {
-                        "observation_id": observation.observation_id,
-                        "checksum": observation.checksum,
-                        "tool": call.tool_name,
+
+            def record_tool(call, output):
+                retrieval = output.metadata.get("retrieval_result", {})
+                hits = retrieval.get("hits", [])
+                file_versions = {
+                    h["path"]: versions[h["path"]] for h in hits if h["path"] in versions
+                }
+                observation = store.put(
+                    call.tool_name,
+                    call.arguments,
+                    output.content,
+                    summary=f"{call.tool_name}: {len(hits)} observed candidates",
+                    source_version=digest(file_versions),
+                    provenance={
+                        "task_id": task.task_id,
                         "attempt_id": data["attempt_id"],
                         "file_versions": file_versions,
-                        "hits": hits if output.ok else [],
-                        "complete": observation.provenance["complete"],
-                    }
-                    observations[observation.observation_id] = saved
-                    coverage.append(
-                        {
-                            "tool": call.tool_name,
-                            "scope": retrieval.get("scanned_scope", {}),
-                            "completeness": retrieval.get("completeness", "unknown"),
-                            "truncation": retrieval.get("truncation_reasons", []),
-                            "observation_id": observation.observation_id,
-                        }
-                    )
-                    event("subagent_tool_completed", tool_call=calls)
-                    visible = {
+                        "retrieval": retrieval,
+                        "complete": len(output.content) <= 2000
+                        and output.ok
+                        and retrieval.get("completeness") == "complete_in_scope",
+                    },
+                    status="ok" if output.ok else "error",
+                    source_dependencies=file_versions,
+                )
+                saved = {
+                    "observation_id": observation.observation_id,
+                    "checksum": observation.checksum,
+                    "tool": call.tool_name,
+                    "attempt_id": data["attempt_id"],
+                    "file_versions": file_versions,
+                    "hits": hits if output.ok else [],
+                    "complete": observation.provenance["complete"],
+                }
+                observations[observation.observation_id] = saved
+                coverage.append(
+                    {
+                        "tool": call.tool_name,
+                        "scope": retrieval.get("scanned_scope", {}),
+                        "completeness": retrieval.get("completeness", "unknown"),
+                        "truncation": retrieval.get("truncation_reasons", []),
                         "observation_id": observation.observation_id,
-                        "hits": hits[:32],
-                        "content": store.expand(observation.observation_id)[:2000],
-                        "complete": saved["complete"],
-                        "error_code": output.error_code,
                     }
-                    replies.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": call.call_id,
-                            "content": json.dumps(visible),
-                        }
-                    )
-                messages.append({"role": "user", "content": replies})
+                )
+                visible = {
+                    "observation_id": observation.observation_id,
+                    "hits": hits[:32],
+                    "content": store.expand(observation.observation_id)[:2000],
+                    "complete": saved["complete"],
+                    "error_code": output.error_code,
+                }
+                return visible
+
+            from agent_runtime.model_tool_runtime import ModelToolRuntime
+
+            outcome = ModelToolRuntime().run(
+                agent=self,
+                messages=messages,
+                budget=budget,
+                deadline=deadline,
+                run_id=task.run_id,
+                on_tool=record_tool,
+                event=event,
+            )
+            calls = outcome.tool_calls
+            error = outcome.stop_reason
+            if outcome.stop_reason in {"user_cancel", "cancelled"}:
+                status = "timed_out" if self.cancel_token.reason == "deadline" else "cancelled"
+            elif outcome.stop_reason in {"api_error", "runtime_failed"}:
+                status = "failed"
+            if outcome.stop_reason == "completed":
+                raw = json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", outcome.text.strip()))
+                result = structured_result(raw, task, observations)
+                status, error = "completed", ""
             if status == "completed" and any(not o["complete"] for o in observations.values()):
                 status = "partial"
                 error = "retrieval_incomplete_or_rejected"
@@ -242,8 +180,10 @@ class ExplorerAgent(Agent):
             status, error = "partial", "token_budget_exhausted"
         except (ValueError, TypeError, KeyError) as exc:
             status, error = "partial", exploration_error_code(exc)
-        except Exception:
+            result["unknowns"].append(str(exc))
+        except Exception as exc:
             status, error = "failed", "exploration_provider_or_runtime_failed"
+            result["unknowns"].append(str(exc))
         finally:
             store.close()
         accounting = budget.summary()
@@ -283,35 +223,6 @@ class ExplorerAgent(Agent):
             "ended_at": time.time(),
             "error_code": error,
         }
-
-    def _turn(self, request):
-        if callable(getattr(self.model_client, "complete_turn", None)):
-            return self.model_client.complete_turn(request)
-        prompt = (
-            SYSTEM + "\nTools: " + json.dumps(request.tools) + "\n" + json.dumps(request.messages)
-        )
-        before = dict(getattr(self.model_client, "session_usage", {}) or {})
-        text = self.model_client.complete(prompt, max_new_tokens=request.max_output_tokens)
-        after = dict(getattr(self.model_client, "session_usage", {}) or {})
-        usage = (
-            {key: after[key] - before.get(key, 0) for key in ("input_tokens", "output_tokens")}
-            if after.get("calls", 0) > before.get("calls", 0)
-            else {}
-        )
-        response = parse_model_response(text)
-        if response.response_kind == "tool_call":
-            call = response.payload["call"]
-            return ModelTurnResult(
-                usage=usage,
-                tool_calls=[
-                    ToolCall(
-                        call.name, call.arguments, call.call_id or f"xml-{len(request.messages)}"
-                    )
-                ],
-            )
-        if response.response_kind == "final":
-            text = response.payload["text"]
-        return ModelTurnResult(text=text, usage=usage)
 
 
 def create_explorer_agent(
@@ -364,15 +275,15 @@ def create_explorer_agent(
         token.check()
         return execute()
 
+    from src.repair.policy import isolated_explorer_policy
+
+    policy = isolated_explorer_policy(
+        limits,
+        model_context_window=model_context_window,
+        context_safety_margin=context_safety_margin,
+    )
     agent = ExplorerAgent(
-        AgentConfig(
-            approval="auto",
-            max_steps=limits.model_turns,
-            max_new_tokens=1024,
-            prompt_budget=4000,
-            model_context_window=model_context_window,
-            context_safety_margin=context_safety_margin,
-        ),
+        policy,
         model_client,
         SimpleNamespace(repo_root=root),
         cwd=root,
@@ -381,12 +292,8 @@ def create_explorer_agent(
         agent_name="explorer",
         tool_dispatch=dispatch,
         tool_context=context,
+        context_factory=IsolatedContextManager,
+        isolated_context=True,
     )
     agent.cancel_token = token
-    agent.quota = QuotaEnforcer(
-        max_total=limits.tool_calls,
-        max_writes=0,
-        max_shell=0,
-        group_limits={"read": limits.tool_calls, "write": 0, "verify": 0},
-    )
     return agent

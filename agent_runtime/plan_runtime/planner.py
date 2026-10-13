@@ -71,7 +71,7 @@ def grounded_plan(
         PlanNode(
             "verify",
             "verify",
-            "Run the existing final verifier against the applied patch",
+            "Run the requested validation commands against the current workspace",
             depends_on=("edit",),
             side_effect="verify",
             completion=(

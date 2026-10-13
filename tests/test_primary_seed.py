@@ -2,16 +2,16 @@
 
 from unittest.mock import MagicMock
 
-from src.orchestrator import Orchestrator
 from src.repair.execution.edit_lock import EditLockState
+from src.repair.session import ExecutionSession
 from src.state import RepairState, SuspectLocation
 
 
 def test_primary_seed_uses_public_suspects_and_dedupes(monkeypatch, tmp_path):
     (tmp_path / "impl.py").write_text("value = 1\n", encoding="utf-8")
-    orch = Orchestrator(None)
-    orch._repo_root = str(tmp_path)
-    orch._progress = MagicMock()
+    orch = ExecutionSession(None)
+    orch.repo_root = str(tmp_path)
+    orch.progress = MagicMock()
 
     def seed(state, root, **kwargs):
         state.suspect_locations = [
@@ -22,7 +22,7 @@ def test_primary_seed_uses_public_suspects_and_dedupes(monkeypatch, tmp_path):
 
     monkeypatch.setattr("src.repair.localization.localize_fastpath.seed_rule_first_suspects", seed)
     state = RepairState(issue_input="public issue")
-    orch._seed_patcher_primary(state)
+    orch.exploration.seed_patcher_primary(state)
     assert state.control.allowed_edit == ["impl.py"]
     assert not any("f2p" in key for key in state.node_timings)
 

@@ -209,8 +209,14 @@ def _owned_record(handle: WorktreeHandle) -> tuple[Path, dict]:
         if not isinstance(raw, dict):
             raise WorktreeError("worktree ownership unavailable")
         for key in (
-            "project_id", "workspace_id", "run_id", "repo_root", "path", "branch",
-            "state_base", "ownership",
+            "project_id",
+            "workspace_id",
+            "run_id",
+            "repo_root",
+            "path",
+            "branch",
+            "state_base",
+            "ownership",
         ):
             if raw.get(key) != handle.as_dict()[key]:
                 raise WorktreeError("worktree ownership mismatch")
@@ -272,8 +278,12 @@ def adopt_worktree(
         if branch and actual != branch:
             raise WorktreeError("worktree branch changed")
         handle = WorktreeHandle(
-            _safe_run_id(run_id), root, wt, actual,
-            managed_storage_root(root, state_base), ownership,
+            _safe_run_id(run_id),
+            root,
+            wt,
+            actual,
+            managed_storage_root(root, state_base),
+            ownership,
         )
         stat = wt.stat()
         handle.directory_identity = (stat.st_dev, stat.st_ino)

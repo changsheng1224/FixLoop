@@ -7,7 +7,7 @@ from agent_runtime.prefix_stable import hash_stable_prefix
 from agent_runtime.providers.clients import FakeModelClient, FakeNativeToolClient
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.workspace import WorkspaceContext
-from src.agents.factory import create_patcher, create_verifier
+from src.agents.factory import create_patcher
 from src.tools.composite import (
     REPAIR_CANONICAL_TOOL_NAMES,
     build_repair_agent_tools,
@@ -30,12 +30,11 @@ class TestRepairCanonicalTools:
         assert tuple(sorted(tools.keys())) == REPAIR_CANONICAL_TOOL_NAMES
         assert is_repair_canonical_registry(tools)
 
-    def test_all_repair_roles_share_same_tool_registry(self, ctx):
-        roles = ("patcher", "verifier")
-        registries = [build_repair_agent_tools(ctx, role) for role in roles]
-        keys = [tuple(sorted(r.keys())) for r in registries]
-        assert len(set(keys)) == 1
-        assert keys[0] == REPAIR_CANONICAL_TOOL_NAMES
+    def test_only_patcher_model_role_is_supported(self, ctx):
+        tools = build_repair_agent_tools(ctx, "patcher")
+        assert tuple(sorted(tools)) == REPAIR_CANONICAL_TOOL_NAMES
+        with pytest.raises(ValueError, match="unsupported repair agent role"):
+            build_repair_agent_tools(ctx, "verifier")
 
 
 class TestRepairPrefixHash:
@@ -47,20 +46,11 @@ class TestRepairPrefixHash:
         client = FakeModelClient(["<final>ok</final>"])
         agents = [
             create_patcher(client, ws, cwd=str(ws.repo_root)),
-            create_verifier(client, ws, cwd=str(ws.repo_root)),
+            create_patcher(client, ws, cwd=str(ws.repo_root)),
         ]
         hashes = [a._prefix.hash for a in agents]
         assert len(set(hashes)) == 1
         assert all(len(h) == 64 for h in hashes)
-
-    def test_repair_agents_differ_in_role_text_not_stable(self, ws):
-        loc = create_verifier(FakeModelClient(["<final>ok</final>"]), ws)
-        pat = create_patcher(FakeModelClient(["<final>ok</final>"]), ws)
-        assert loc._prefix.hash == pat._prefix.hash
-        assert loc._prefix.stable_text == pat._prefix.stable_text
-        assert loc._prefix.role_text != pat._prefix.role_text
-        assert "可用工具" in loc._prefix.stable_text
-        assert loc._prefix.role_text not in loc._prefix.stable_text
 
     def test_tool_names_tuple_sorted(self, ws):
         agent = create_patcher(FakeModelClient(["<final>ok</final>"]), ws)
@@ -68,8 +58,6 @@ class TestRepairPrefixHash:
         assert agent._tool_names == tuple(
             sorted((*REPAIR_CANONICAL_TOOL_NAMES, "delegate_exploration", "collect_exploration"))
         )
-        verifier = create_verifier(FakeModelClient([]), ws)
-        assert verifier._tool_names == REPAIR_CANONICAL_TOOL_NAMES
         assert "delegate_exploration" not in agent._prefix.stable_tools_text
         assert "delegate_exploration" in agent._prefix.role_text
 
@@ -77,21 +65,10 @@ class TestRepairPrefixHash:
         from agent_runtime.prompt_prefix import cache_stable_text
 
         agent = create_patcher(FakeModelClient(["<final>ok</final>"]), ws)
-        cache = cache_stable_text(
-            agent._prefix.stable_system_text,
-            agent._prefix.stable_tools_text,
-        )
+        cache = cache_stable_text(agent._prefix.stable_system_text, agent._prefix.stable_tools_text)
         assert agent._prefix.hash == hash_stable_prefix(cache)
         assert "list_files" in agent._prefix.stable_tools_text
         assert agent._prefix.role_text[:20] in agent._prefix.text
-
-
-class TestRepairGatewayStillRestricts:
-    def test_verifier_cannot_write_via_gateway(self, temp_workspace):
-        ws = WorkspaceContext.build(str(temp_workspace))
-        agent = create_verifier(FakeModelClient(["<final>ok</final>"]), ws)
-        result = agent.execute_tool("write_file", {"path": "x.py", "content": "bad"})
-        assert "不可用" in result.content or "permission" in result.content.lower()
 
 
 class TestRepairNativePromptSplit:
@@ -104,17 +81,14 @@ class TestRepairNativePromptSplit:
             client,
             ws,
             cwd=str(temp_workspace),
-            budget=TokenBudget(model="deepseek-v4-pro", provider="deepseek", total_limit=50_000),
+            budget=TokenBudget(model="deepseek-v4-pro", provider="deepseek", total_limit=50000),
         )
-        agent.config.prompt_budget = 100_000
-        agent.config.hard_cap = 100_000
+        agent.config.prompt_budget = 100000
+        agent.config.hard_cap = 100000
         role_snippet = agent._prefix.role_text[:30]
         agent.ask("fix bug")
         first = client.prompts[0]
-        cache = cache_stable_text(
-            agent._prefix.stable_system_text,
-            agent._prefix.stable_tools_text,
-        )
+        cache = cache_stable_text(agent._prefix.stable_system_text, agent._prefix.stable_tools_text)
         assert "仅通过接口提供的 tools / tool_use" in first
         assert role_snippet in first
         assert role_snippet not in cache

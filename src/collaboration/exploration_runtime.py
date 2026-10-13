@@ -51,11 +51,11 @@ class ExplorationRuntime:
         self.plan_session, self.coordinator = plan_session, coordinator
         self.limits = limits or ExplorationLimits()
         self.store = store or ExplorationStore(self.root, state_root=agent.state_root)
-        self.budget = getattr(agent, "_run_budget_manager", None) or BudgetManager.from_config(
+        self.budget = getattr(agent, "budget_manager", None) or BudgetManager.from_config(
             agent.config
         )
-        agent._run_budget_manager = self.budget
-        agent._standalone_model_budget = False
+        agent.budget_manager = self.budget
+        agent.standalone_model_budget = False
         self.event_sink = event_sink
         self.store.exploration_event_sink = event_sink
         self.client_factory = client_factory or self._client
@@ -77,8 +77,8 @@ class ExplorationRuntime:
         for name, value in vars(client).items():
             if isinstance(value, dict | list | set):
                 setattr(client, name, copy.deepcopy(value))
-        if hasattr(client, "_init_usage_tracking"):
-            client._init_usage_tracking()
+        if hasattr(client, "reset_session_usage"):
+            client.reset_session_usage()
         if hasattr(client, "timeout"):
             client.timeout = min(client.timeout, self.limits.deadline_s)
         return client
@@ -194,7 +194,7 @@ class ExplorationRuntime:
                             "batch_id": batch,
                             "turn_id": str(
                                 getattr(
-                                    getattr(self.agent, "_turn_event_emitter", None), "turn_id", ""
+                                    getattr(self.agent, "turn_event_emitter", None), "turn_id", ""
                                 )
                                 or f"exploration-{self.run_id}-"
                                 f"{self.agent.session.get('_turn_counter', 0)}"

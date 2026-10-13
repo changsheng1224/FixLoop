@@ -1,10 +1,7 @@
-"""Repair workspace, cancellation and execution resource lifecycle."""
-
 from __future__ import annotations
 
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FuturesTimeoutError
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -14,11 +11,15 @@ from src.repair.run_context import RepairRunContext
 from src.state import RepairState
 
 log = get_logger("repair.lifecycle")
+
 DEFAULT_REPAIR_TIMEOUT_S = 180
 
 
-class ExecutionLifecycleMixin:
-    def repair(
+class ExecutionLifecycle:
+    def __init__(self, session):
+        self.session = session
+
+    def execute(
         self,
         issue: str,
         max_retries: int = 3,
@@ -50,78 +51,85 @@ class ExecutionLifecycleMixin:
         if run_id and resume_run_id:
             raise ValueError("run_id and resume_run_id are mutually exclusive")
         if (
-            self._sandbox_task_spec is None
-            and self._sandbox_context is not None
-            and not getattr(getattr(self.patcher, "tool_context", None), "state_root", "")
+            self.session.sandbox_task_spec is None
+            and self.session.sandbox_context is not None
+            and (not getattr(getattr(self.session.patcher, "tool_context", None), "state_root", ""))
         ):
             raise ValueError("wsl_bwrap repair requires P3 external state_root isolation")
-
         if phase_timeouts is None:
             phase_timeouts = PhaseTimeoutConfig.for_patcher_primary(repair_timeout_s)
-
         state = RepairState(
             issue_input=issue,
             max_retries=max_retries,
             repair_run_id=resume_run_id or run_id or "",
             active_roles=[
-                role
-                for role, agent in (("patcher", self.patcher), ("verifier", self.verifier))
-                if agent is not None
+                role for role, agent in (("patcher", self.session.patcher),) if agent is not None
             ],
             field_owners={
                 "phase": "runtime",
                 "status": "runtime",
                 "changed_files": "patch_runtime",
-                "verification_result": "verifier",
+                "verification_result": "verification_service",
                 "tool_budget": "runtime",
             },
         )
+        self.session.current_state = state
         state.intent = {"mode": "repair", "verification_required": True}
         state.role_lifecycle = {
             role: {"status": "active", "reason": "initial repair roles"}
             for role in state.active_roles
         }
-        previous = getattr(self, "_verify_service", None)
+        previous = getattr(self.session, "verify_service", None)
         if previous is not None and (previous.active.is_set() or not previous.cleanup_confirmed):
-            self._block_unconfirmed_verification(state, "previous verification cleanup unconfirmed")
+            self.session.verification.block_unconfirmed_verification(
+                state, "previous verification cleanup unconfirmed"
+            )
             return state
-        self._verify_service = None
+        self.session.verify_service = None
         sandbox_prepared = False
         sandbox_pipeline_started = False
-        if self._sandbox_task_spec is not None:
-            import uuid
-
-            state.repair_run_id = state.repair_run_id or "repair-" + uuid.uuid4().hex
-            self._prepare_sandbox_task(state, resume=bool(resume_run_id))
-            sandbox_prepared = True
         from src.repair.checkpoint_load import RepairCheckpointError, load_repair_checkpoint
         from src.repair.recovery_outcome import publish_recovery_outcome
 
         try:
-            if self._sandbox_task_spec is None and self._workspace_policy == "worktree":
-                self._prepare_host_worktree(state, resume=bool(resume_run_id))
-            entry = self._workspace_entry()
+            if self.session.sandbox_task_spec is not None:
+                import uuid
+
+                state.repair_run_id = state.repair_run_id or "repair-" + uuid.uuid4().hex
+                self.prepare_sandbox_task(state, resume=bool(resume_run_id))
+                sandbox_prepared = True
+            if (
+                self.session.sandbox_task_spec is None
+                and self.session.workspace_policy == "worktree"
+            ):
+                self.prepare_host_worktree(state, resume=bool(resume_run_id))
+            entry = self.workspace_entry()
             state.execution.run_entry = entry
-            state.execution.repo_root = self._repo_root
+            state.execution.repo_root = self.session.repo_root
             state.node_timings["run_entry"] = state.execution.model_dump()["run_entry"]
             checkpoint = None
             if workspace_ready is not None:
-                workspace_ready(self._repo_root)
+                workspace_ready(self.session.repo_root)
             if resume_run_id:
                 try:
                     checkpoint = load_repair_checkpoint(
-                        self._repo_root,
+                        self.session.repo_root,
                         resume_run_id,
                         state_root=str(
-                            getattr(getattr(self.patcher, "tool_context", None), "state_root", "")
+                            getattr(
+                                getattr(self.session.patcher, "tool_context", None),
+                                "state_root",
+                                "",
+                            )
                             or ""
                         ),
                         require_valid=True,
                         issue=issue,
                     )
-                    binding = getattr(self._sandbox_context, "sandbox_task_binding", None)
-                    if binding is not None and (
-                        checkpoint.get("execution", {}).get("sandbox_task_binding")
+                    binding = getattr(self.session.sandbox_context, "sandbox_task_binding", None)
+                    if (
+                        binding is not None
+                        and checkpoint.get("execution", {}).get("sandbox_task_binding")
                         != binding.to_wire()
                     ):
                         raise RepairCheckpointError("sandbox_task_identity_mismatch")
@@ -135,21 +143,20 @@ class ExecutionLifecycleMixin:
                         {"run_id": resume_run_id, "status": "recovery_required"},
                         stage="checkpoint",
                         reason_code=exc.code,
-                        emitter=self._progress_emitter(),
+                        emitter=self.session.events.progress_emitter(),
                     )
                     return state
             token = cancel_token or CancellationToken()
-            initial_snapshot = self._snapshot_repo()
-
-            self._repair_ctx = RepairRunContext(
+            initial_snapshot = self.session.transaction.snapshot_repo()
+            self.session.repair_ctx = RepairRunContext(
                 phase_timeout_config=phase_timeouts,
                 cancel_token=token,
                 resume_checkpoint=checkpoint,
-                worktree_handle=self._sandbox_worktree_handle,
+                worktree_handle=self.session.sandbox_worktree_handle,
             )
-            self._initialize_model_budget(checkpoint, repair_timeout_s)
-            self._set_collaboration_context(state)
-            if token.is_cancelled and not resume_run_id:
+            self.initialize_model_budget(checkpoint, repair_timeout_s)
+            self.session.coordination.set_collaboration_context(state)
+            if token.is_cancelled and (not resume_run_id):
                 state.control.user_cancel = True
                 state.set_status("user_cancel", "cancelled_before_execution")
                 publish_recovery_outcome(
@@ -161,95 +168,98 @@ class ExecutionLifecycleMixin:
                     },
                     stage="cancel",
                     reason_code="cancelled_before_execution",
-                    emitter=self._progress_emitter(),
+                    emitter=self.session.events.progress_emitter(),
                 )
                 return state
-            with self._repair_cancel_scope(token):
+            with self.repair_cancel_scope(token):
                 if repair_timeout_s <= 0:
                     sandbox_pipeline_started = True
-                    return self._repair_impl(state, initial_snapshot=initial_snapshot)
+                    return self.session.coordinator.repair_impl(
+                        state, initial_snapshot=initial_snapshot
+                    )
+                expired = threading.Event()
 
-                # Phase C：勿用 with ThreadPoolExecutor（退出时 wait=True 会拖尾）
-                pool = ThreadPoolExecutor(max_workers=1)
+                def expire():
+                    expired.set()
+                    token.cancel("timeout")
+
+                timer = threading.Timer(repair_timeout_s, expire)
+                timer.daemon = True
+                timer.start()
                 wall_started = time.monotonic()
-                fut = pool.submit(self._repair_impl, state, initial_snapshot)
                 sandbox_pipeline_started = True
                 try:
-                    return fut.result(timeout=repair_timeout_s)
-                except FuturesTimeoutError:
-                    from src.repair.verification.repair_timeout import handle_repair_wall_timeout
-
-                    handle_repair_wall_timeout(
-                        self,
-                        state,
-                        initial_snapshot=initial_snapshot,
-                        repair_timeout_s=repair_timeout_s,
-                        cancel_token=token,
-                        wall_started=wall_started,
-                    )
-                    return state
+                    result = self.session.coordinator.repair_impl(state, initial_snapshot)
+                    if expired.is_set() and result.status != "recovery_required":
+                        result.control.user_cancel = False
+                        result.control.repair_timeout = repair_timeout_s
+                        result.set_status("timeout", "execution_deadline_exceeded")
+                        result.node_timings["repair_wall_overshoot_s"] = max(
+                            0, time.monotonic() - wall_started - repair_timeout_s
+                        )
+                    return result
                 finally:
-                    pool.shutdown(wait=False, cancel_futures=True)
+                    timer.cancel()
         finally:
-            self._release_model_budget(state)
-            self._repair_ctx = None
-            if sandbox_prepared and not sandbox_pipeline_started:
-                self._cleanup_sandbox_startup_failure(state)
+            self.release_model_budget(state)
+            self.session.repair_ctx = None
+            if sandbox_prepared and (not sandbox_pipeline_started):
+                self.cleanup_sandbox_startup_failure(state)
             elif (
-                self._sandbox_task_spec is None
-                and self._sandbox_worktree_handle is not None
-                and not sandbox_pipeline_started
+                self.session.sandbox_task_spec is None
+                and self.session.sandbox_worktree_handle is not None
+                and (not sandbox_pipeline_started)
             ):
                 from agent_runtime.worktree import WorktreeError, retain_worktree
 
                 try:
-                    retain_worktree(self._sandbox_worktree_handle, reason="startup_stopped")
+                    retain_worktree(self.session.sandbox_worktree_handle, reason="startup_stopped")
                 except (WorktreeError, OSError) as exc:
                     state.agent_errors.setdefault("worktree_retention", str(exc)[:500])
 
-    def _initialize_model_budget(self, checkpoint, timeout_s):
+    def initialize_model_budget(self, checkpoint, timeout_s):
         from agent_runtime.budget_manager import BudgetManager
         from agent_runtime.repair_runtime import ExecutionDeadline
 
-        config = getattr(self.patcher, "config", None)
+        config = getattr(self.session.patcher, "config", None)
         if config is None or not hasattr(config, "effective_budget"):
             return
-        self._model_budget = BudgetManager.from_config(config)
+        self.session.model_budget = BudgetManager.from_config(config)
         saved = (checkpoint or {}).get("execution", {})
         if saved.get("model_budget"):
-            self._model_budget.restore(saved["model_budget"])
+            self.session.model_budget.restore(saved["model_budget"])
         limits = [s for s in (timeout_s, config.deadline.repair_s) if s > 0]
-        self._model_deadline = ExecutionDeadline(min(limits) if limits else 0)
+        self.session.model_deadline = ExecutionDeadline(min(limits) if limits else 0)
         if saved.get("model_deadline"):
             remaining = saved["model_deadline"].get("remaining_s")
-            current = self._model_deadline.remaining_s()
+            current = self.session.model_deadline.remaining_s()
             if remaining is not None:
-                self._model_deadline = ExecutionDeadline.from_remaining(
+                self.session.model_deadline = ExecutionDeadline.from_remaining(
                     min(remaining, current) if current is not None else remaining
                 )
-        for agent in self._active_agents:
-            agent._model_budget_run_bound = True
-            agent._standalone_model_budget = False
-            agent._run_budget_manager = self._model_budget
-            agent._repair_deadline = self._model_deadline
+        for agent in self.session.active_agents:
+            agent.budget_run_bound = True
+            agent.standalone_model_budget = False
+            agent.budget_manager = self.session.model_budget
+            agent.execution_deadline = self.session.model_deadline
 
-    def _release_model_budget(self, state):
-        budget = getattr(self, "_model_budget", None)
+    def release_model_budget(self, state):
+        budget = getattr(self.session, "model_budget", None)
         if budget is None:
             return
         state.execution.model_budget = budget.snapshot()
-        state.execution.model_deadline = self._model_deadline.snapshot()
+        state.execution.model_deadline = self.session.model_deadline.snapshot()
         state.node_timings["model_budget"] = state.execution.model_dump()["model_budget"]
         state.node_timings["model_deadline"] = state.execution.model_dump()["model_deadline"]
-        for agent in self._active_agents:
-            if getattr(agent, "_run_budget_manager", None) is budget:
-                agent._run_budget_manager = None
-                agent._repair_deadline = None
-                agent._model_budget_run_bound = False
-        self._model_budget = None
-        self._model_deadline = None
+        for agent in self.session.active_agents:
+            if getattr(agent, "budget_manager", None) is budget:
+                agent.budget_manager = None
+                agent.execution_deadline = None
+                agent.budget_run_bound = False
+        self.session.model_budget = None
+        self.session.model_deadline = None
 
-    def _workspace_entry(self) -> dict:
+    def workspace_entry(self) -> dict:
         """Trusted entry decisions; checkpoint recovery must reproduce them exactly."""
 
         def directory(root):
@@ -258,29 +268,32 @@ class ExecutionLifecycleMixin:
             return {"root": str(path), "identity": [stat.st_dev, stat.st_ino]}
 
         return {
-            "workspace_policy": self._workspace_policy,
-            "execution_profile": self._execution_profile,
-            "sandbox_policy": self.sandbox_policy,
-            "project": directory(self._project_root or self._sandbox_repository_root),
-            "workspace": directory(self._repo_root),
+            "workspace_policy": self.session.workspace_policy,
+            "execution_profile": self.session.execution_profile,
+            "sandbox_policy": self.session.sandbox_policy,
+            "project": directory(self.session.project_root or self.session.sandbox_repository_root),
+            "workspace": directory(self.session.repo_root),
         }
 
-    def _prepare_host_worktree(self, state: RepairState, *, resume: bool) -> None:
+    def prepare_host_worktree(self, state: RepairState, *, resume: bool) -> None:
         """Pin the final host checkout before snapshots, checkpoints and coordination."""
         import uuid
 
         from agent_runtime.state_root import managed_state_base, trusted_state_root
         from agent_runtime.worktree import adopt_worktree, create_worktree, default_worktree_path
 
-        repository = self._sandbox_repository_root
-        if self._project_root and Path(self._project_root).resolve() != Path(repository).resolve():
+        repository = self.session.sandbox_repository_root
+        if (
+            self.session.project_root
+            and Path(self.session.project_root).resolve() != Path(repository).resolve()
+        ):
             raise ValueError("worktree source must be the registered project root")
-        if self._sandbox_context is not None:
+        if self.session.sandbox_context is not None:
             raise ValueError("prebound sandbox cannot change workspace; use sandbox_task_spec")
-        if self._sandbox_worktree_handle is not None:
+        if self.session.sandbox_worktree_handle is not None:
             raise ValueError("workspace_already_bound: use a fresh orchestrator")
         state.repair_run_id = state.repair_run_id or "repair-" + uuid.uuid4().hex
-        base = self._workspace_state_base or None
+        base = self.session.workspace_state_base or None
         if resume:
             handle = adopt_worktree(
                 repository,
@@ -292,60 +305,55 @@ class ExecutionLifecycleMixin:
             )
         else:
             handle = create_worktree(repository, state.repair_run_id, state_base=base)
-        self._sandbox_worktree_handle = handle
-        self._repo_root = str(handle.path)
+        self.session.sandbox_worktree_handle = handle
+        self.session.repo_root = str(handle.path)
         state_root = str(
             trusted_state_root(
                 handle.path, managed_state_base(repository, base) / "tasks" / state.repair_run_id
             )
         )
-        for agent in self._active_agents:
-            binder = getattr(agent, "bind_repair_workspace", None)
-            if callable(binder):
-                binder(self._repo_root, state_root, repository, state.repair_run_id)
-            else:
-                tc = getattr(agent, "tool_context", None)
-                if tc is not None:
-                    tc.root, tc.state_root = self._repo_root, state_root
-                agent._cwd, agent.state_root = self._repo_root, state_root
-        self.l1_prompt_cache_key = self._resolve_l1_prompt_cache_key()
+        for agent in self.session.active_agents:
+            agent.bind_workspace(
+                self.session.repo_root, state_root, repository, state.repair_run_id
+            )
+        self.session.l1_prompt_cache_key = self.session.resolve_l1_prompt_cache_key()
 
     @contextmanager
-    def _repair_cancel_scope(self, token):
+    def repair_cancel_scope(self, token):
         """绑定 cancel token 到子 Agent，退出时解绑。"""
-        ctx = self._repair_ctx
+        ctx = self.session.repair_ctx
         if ctx is not None:
             ctx.cancel_token = token
-        self._bind_cancel_token(token)
+        self.bind_cancel_token(token)
         try:
             yield
         finally:
-            self._unbind_cancel_token()
+            self.unbind_cancel_token()
 
-    def _abort_repair_if_cancelled(self, state: RepairState) -> bool:
+    def abort_repair_if_cancelled(self, state: RepairState) -> bool:
         """若用户已 cancel 则返回 True（由 pipeline finally 负责 restore）。"""
         return (
-            self._is_repair_cancelled() or state.control.coordination_status == "recovery_required"
+            self.is_repair_cancelled() or state.control.coordination_status == "recovery_required"
         )
 
-    def _bind_cancel_token(self, token) -> None:
-        for agent in self._active_agents:
+    def bind_cancel_token(self, token) -> None:
+        for agent in self.session.active_agents:
             agent.cancel_token = token
 
-    def _unbind_cancel_token(self) -> None:
-        for agent in self._active_agents:
+    def unbind_cancel_token(self) -> None:
+        for agent in self.session.active_agents:
             agent.cancel_token = None
 
-    def _is_repair_cancelled(self) -> bool:
-        ctx = self._repair_ctx
+    def is_repair_cancelled(self) -> bool:
+        ctx = self.session.repair_ctx
         token = ctx.cancel_token if ctx is not None else None
         return token is not None and token.is_cancelled
 
-    def _emit_repair_cancelled(self, state: RepairState) -> None:
-        ctx = self._repair_ctx
+    def emit_repair_cancelled(self, state: RepairState) -> None:
+        ctx = self.session.repair_ctx
         confirmed = state.control.coordination_status != "recovery_required"
         if confirmed:
-            self._maybe_leave_worktree(cancelled=True)
+            self.maybe_leave_worktree(cancelled=True)
         harness = getattr(ctx, "harness_control", None) if ctx is not None else None
         if harness is not None and confirmed:
             harness.request_control("cancel", reason="repair cancelled")
@@ -357,62 +365,54 @@ class ExecutionLifecycleMixin:
         tracer.emit(
             "orchestrator",
             "repair_cancelled",
-            {
-                "status": state.status,
-                "repo_restored": confirmed,
-            },
+            {"status": state.status, "repo_restored": confirmed},
             status="cancelled" if confirmed else "recovery_required",
         )
         tracer.end_root_span()
 
-    def _prepare_sandbox_task(self, state: RepairState, *, resume: bool) -> None:
+    def prepare_sandbox_task(self, state: RepairState, *, resume: bool) -> None:
         """Resolve the actual checkout before creating any backend or runtime state."""
-        from agent_runtime.worktree import WorktreeError, retain_worktree
-
-        if getattr(self._sandbox_context, "sandbox_task_binding", None) is not None:
+        if getattr(self.session.sandbox_context, "sandbox_task_binding", None) is not None:
             raise ValueError("sandbox_task_already_bound: use a fresh task context")
         try:
-            self._bind_sandbox_task(state, resume=resume)
+            self.bind_sandbox_task(state, resume=resume)
         except BaseException as exc:
-            if not resume and self._sandbox_worktree_handle is not None:
-                try:
-                    retain_worktree(self._sandbox_worktree_handle, reason="startup_failed")
-                except (WorktreeError, OSError) as retention_error:
-                    exc.add_note(f"worktree retention metadata unavailable: {retention_error}")
+            self.cleanup_sandbox_startup_failure(state)
+            if state.status == "recovery_required":
+                exc.add_note("sandbox startup cleanup or workspace retention is unconfirmed")
             raise
 
-    def _cleanup_sandbox_startup_failure(self, state: RepairState) -> None:
+    def cleanup_sandbox_startup_failure(self, state: RepairState) -> None:
         """Release a task bound before the repair pipeline acquired its owner."""
         from agent_runtime.worktree import WorktreeError, retain_worktree
 
         try:
-            self._close_sandbox_backend_before_binding_close(state)
+            self.close_sandbox_backend_before_binding_close(state)
         except Exception as exc:
-            # Startup has no plan coordinator yet. Keep the original failure and
-            # surface cleanup uncertainty on the returned state where possible.
             state.agent_errors.setdefault("sandbox_cleanup", str(exc)[:500])
             state.set_status("recovery_required", "sandbox_cleanup_unconfirmed")
-        handle = self._sandbox_worktree_handle
+        handle = self.session.sandbox_worktree_handle
         if handle is None:
             return
         try:
             retain_worktree(handle, reason="startup_failed")
         except (WorktreeError, OSError) as exc:
             state.agent_errors.setdefault("worktree_retention", str(exc)[:500])
+            state.set_status("recovery_required", "worktree_retention_unconfirmed")
 
-    def _bind_sandbox_task(self, state: RepairState, *, resume: bool) -> None:
+    def bind_sandbox_task(self, state: RepairState, *, resume: bool) -> None:
         from agent_runtime.linux_sandbox.task_context import SandboxTaskBinding
         from agent_runtime.worktree import adopt_worktree, create_worktree
 
-        spec = self._sandbox_task_spec
-        repository = self._sandbox_repository_root
+        spec = self.session.sandbox_task_spec
+        repository = self.session.sandbox_repository_root
         if resume:
             binding = SandboxTaskBinding.load(repository, state.repair_run_id, spec)
-            expected = "task" if self._workspace_policy == "worktree" else "user"
+            expected = "task" if self.session.workspace_policy == "worktree" else "user"
             if binding.workspace_ownership != expected:
                 raise ValueError("resume_workspace_policy_mismatch")
             if binding.workspace_ownership == "task":
-                self._sandbox_worktree_handle = adopt_worktree(
+                self.session.sandbox_worktree_handle = adopt_worktree(
                     repository,
                     binding.mapping.host_root,
                     binding.task_id,
@@ -422,77 +422,72 @@ class ExecutionLifecycleMixin:
                 )
         else:
             workspace = repository
-            ownership, branch = "user", ""
-            if self._workspace_policy == "worktree":
+            ownership, branch = ("user", "")
+            if self.session.workspace_policy == "worktree":
                 handle = create_worktree(
                     repository, state.repair_run_id, state_base=spec.state_base or None
                 )
-                self._sandbox_worktree_handle = handle
-                workspace, ownership, branch = handle.path, "task", handle.branch
+                self.session.sandbox_worktree_handle = handle
+                workspace, ownership, branch = (handle.path, "task", handle.branch)
             binding = SandboxTaskBinding.create(
                 repository, workspace, state.repair_run_id, spec, ownership=ownership, branch=branch
             )
             binding.save()
-        # The factory receives the immutable final mapping, never the source repo.
-        backend = self._sandbox_backend_factory(binding)
+        backend = self.session.sandbox_backend_factory(binding)
+        self.session.sandbox_backend = backend
         if backend is None:
             raise ValueError("sandbox_backend_binding_mismatch")
         if getattr(backend, "task_binding", None) != binding:
-            try:
-                backend.close()
-            except Exception:
-                pass
             raise ValueError("sandbox_backend_binding_mismatch")
-        self._sandbox_backend_close_attempted = False
-        self._repo_root = binding.mapping.host_root
+        self.session.sandbox_backend_close_attempted = False
+        self.session.repo_root = binding.mapping.host_root
         try:
-            for agent in self._active_agents:
+            for agent in self.session.active_agents:
                 binder = getattr(agent, "bind_sandbox_task", None)
                 if callable(binder):
                     binder(binding, backend)
                     continue
                 tc = getattr(agent, "tool_context", None)
                 if tc is not None:
-                    tc.root = self._repo_root
+                    tc.root = self.session.repo_root
                     binding.attach(tc)
                     tc.sandbox_backend = backend
-                if hasattr(agent, "_cwd"):
-                    agent._cwd = self._repo_root
+                agent.bind_workspace(
+                    self.session.repo_root,
+                    binding.state_root,
+                    self.session.project_root or self.session.repo_root,
+                    state.repair_run_id,
+                )
                 if hasattr(agent, "state_root"):
                     agent.state_root = binding.state_root
         except BaseException as exc:
-            # Backend construction pins the environment before Agent binding.
-            # If binding fails, close that pin before propagating the startup
-            # error; no coordinator exists yet to perform this cleanup later.
-            try:
-                backend.close()
-            except Exception as cleanup_error:
-                exc.add_note(f"sandbox startup cleanup unconfirmed: {cleanup_error}")
+            exc.add_note("sandbox backend cleanup is owned by the execution session")
             raise
         state.execution.sandbox_task_binding = binding.to_wire()
-        state.execution.run_entry = self._workspace_entry()
+        state.execution.run_entry = self.workspace_entry()
         state.node_timings["sandbox_task_binding"] = state.execution.model_dump()[
             "sandbox_task_binding"
         ]
         state.node_timings["run_entry"] = state.execution.model_dump()["run_entry"]
 
-    def _close_sandbox_backend_before_binding_close(self, state: RepairState) -> None:
+    def close_sandbox_backend_before_binding_close(self, state: RepairState) -> None:
         """Close sandbox admission before an exceptional plan-binding teardown."""
-        context = getattr(self, "_sandbox_context", None)
-        backend = getattr(context, "sandbox_backend", None)
+        context = getattr(self.session, "sandbox_context", None)
+        backend = self.session.sandbox_backend or getattr(context, "sandbox_backend", None)
         if (
             backend is None
             or getattr(backend, "_closed", False)
-            or self._sandbox_backend_close_attempted
+            or self.session.sandbox_backend_close_attempted
         ):
             return
-        self._sandbox_backend_close_attempted = True
+        self.session.sandbox_backend_close_attempted = True
         try:
             backend.close()
+            self.session.sandbox_backend = None
         except Exception as exc:
             state.agent_errors.setdefault("sandbox_cleanup", str(exc)[:500])
             state.set_status("recovery_required", "sandbox_cleanup_unconfirmed")
-            binding = getattr(self, "_plan_binding", None)
+            binding = getattr(self.session, "plan_binding", None)
             coordinator = getattr(binding, "coordinator", None)
             lease = getattr(coordinator, "lease", None)
             if coordinator is not None and lease is not None:
@@ -506,11 +501,11 @@ class ExecutionLifecycleMixin:
                         "coordination_finalize", str(coordination_error)[:500]
                     )
 
-    def _maybe_leave_worktree(self, *, cancelled: bool = False) -> None:
+    def maybe_leave_worktree(self, *, cancelled: bool = False) -> None:
         """保留任务 checkout；固定绑定的工作区不随任务结束而切换。"""
         from agent_runtime.worktree import retain_worktree
 
-        ctx = self._repair_ctx
+        ctx = self.session.repair_ctx
         if ctx is None:
             return
         handle = getattr(ctx, "worktree_handle", None)
@@ -524,17 +519,19 @@ class ExecutionLifecycleMixin:
                     status="ok",
                 )
 
-    def _cancel_run_resources(
+    def cancel_run_resources(
         self, state: RepairState, *, phase_returned: bool = True, finalize: bool = False
     ) -> bool:
-        service = getattr(self, "_verify_service", None)
+        service = getattr(self.session, "verify_service", None)
         if service is not None and (service.active.is_set() or not service.cleanup_confirmed):
-            self._block_unconfirmed_verification(state, "verification process tree not stopped")
+            self.session.verification.block_unconfirmed_verification(
+                state, "verification process tree not stopped"
+            )
             return False
-        binding = getattr(self, "_plan_binding", None)
+        binding = getattr(self.session, "plan_binding", None)
         if binding is None:
-            coordinator = getattr(self, "_entry_coordinator", None)
-            if not phase_returned and coordinator is not None and coordinator.lease is not None:
+            coordinator = getattr(self.session, "entry_coordinator", None)
+            if not phase_returned and coordinator is not None and (coordinator.lease is not None):
                 coordinator.store.mark_recovery_required(
                     coordinator.lease, error_code="repair_worker_unconfirmed"
                 )
@@ -547,11 +544,11 @@ class ExecutionLifecycleMixin:
                     coordinator.store.snapshot(state.repair_run_id).to_dict(),
                     stage="cancel",
                     reason_code="repair_worker_unconfirmed",
-                    emitter=self._progress_emitter(),
+                    emitter=self.session.events.progress_emitter(),
                 )
                 return False
             return state.control.coordination_status != "recovery_required"
-        runtime = getattr(self, "_collaboration_runtime", None)
+        runtime = getattr(self.session, "collaboration_runtime", None)
         if runtime is not None and phase_returned:
             try:
                 runtime.finish_cancelled(state)

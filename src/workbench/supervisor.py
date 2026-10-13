@@ -34,14 +34,12 @@ def reconcile_sandbox(resource):
         source = resource["project_path"]
         pid = project_id(source)
         run_id = checked_id(resource["run_id"])
-        if (
-            resource["project_id"] != pid
-            or resource["workspace_id"] != workspace_id(resource["workspace"])
+        if resource["project_id"] != pid or resource["workspace_id"] != workspace_id(
+            resource["workspace"]
         ):
             return False
         path = (
-            Path(resource["state_root"]) / "projects" / pid / "tasks"
-            / run_id / "sandbox-task.json"
+            Path(resource["state_root"]) / "projects" / pid / "tasks" / run_id / "sandbox-task.json"
         )
     except (KeyError, TypeError, ValueError, OSError):
         return False

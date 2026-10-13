@@ -18,9 +18,9 @@ from agent_runtime.tool_context import ToolContext
 from agent_runtime.tool_result import ToolResult
 from agent_runtime.tools import GrepArgs, ListFilesArgs, ReadFileArgs
 from agent_runtime.workspace import DOC_NAMES, WorkspaceContext
-from src.orchestrator import Orchestrator
+from src.repair.assembly import create_repair_service
 from src.repair.progress import ProgressEmitter
-from src.repair_factory import wire_orchestrator
+from src.repair.service import RepairRequest
 from src.state import RepairStatus
 from src.workbench.files import managed
 
@@ -179,7 +179,16 @@ class ProjectExecutor:
             )
 
     def __call__(
-        self, *, mode, files, messages, token, on_chunk, publish, run_id, state_root,
+        self,
+        *,
+        mode,
+        files,
+        messages,
+        token,
+        on_chunk,
+        publish,
+        run_id,
+        state_root,
         project_root=None,
     ):
         self.check_mode(mode)
@@ -213,12 +222,15 @@ class ProjectExecutor:
             with BlockingScope() as scope:
                 if mode == "project_chat":
                     context = ToolContext(
-                        root=root, state_root=str(state_root), cancel_token=token,
-                        project_root=source_project, embedding_state_base=embedding_state_base,
+                        root=root,
+                        state_root=str(state_root),
+                        cancel_token=token,
+                        project_root=source_project,
+                        embedding_state_base=embedding_state_base,
                     )
                     config = AgentConfig(
                         provider=self.provider,
-                        model=self.model or "",
+                        model=self.model or "deepseek-v4-pro",
                         approval="never",
                         max_steps=16,
                         max_new_tokens=self.max_output_tokens,
@@ -235,13 +247,13 @@ class ProjectExecutor:
                     )
                     agents.append(agent)
                     agent._memory_task_id = run_id
-                    agent._workspace_pinned = True
+                    agent.workspace_pinned = True
                     agent.cancel_token = token
                     self._fence(agent, token, scope)
                     token.check()
                     answer = agent.ask(request, callback=_Progress(publish), skip_plan=True)
                     token.check()
-                    stop = getattr(agent._last_task_state, "stop_reason", "")
+                    stop = getattr(agent.last_task_state, "stop_reason", "")
                     # Runtime guard answers (budget/approval/protocol errors) are not success.
                     if stop != "final":
                         return ProjectResult(
@@ -252,7 +264,6 @@ class ProjectExecutor:
                 if mode != "repair":
                     raise ValueError("unknown project mode")
                 kwargs = dict(
-                    orch_class=Orchestrator,
                     workspace_context=workspace,
                     state_root=str(state_root),
                     project_root=str(project_root or files.root),
@@ -269,24 +280,33 @@ class ProjectExecutor:
                 )
                 if self.model:
                     kwargs["runtime_overrides"]["model"] = self.model
-                factory = self.repair_factory or wire_orchestrator
+                factory = self.repair_factory or create_repair_service
                 orch = factory(self.client_factory(), root, **kwargs)
-                agents.extend(orch._active_agents)
+                agents.extend(orch.session.active_agents)
                 for agent in agents:
-                    agent._workspace_pinned = True
+                    agent.workspace_pinned = True
                     self._fence(agent, token, scope)
-                orch._progress = ProgressEmitter(
+                orch.session.progress = ProgressEmitter(
                     quiet=True,
                     record=lambda event: publish("project.progress", {"stage": event.event}),
                 )
                 token.check()
-                state = orch.repair(request, repair_timeout_s=0, cancel_token=token, run_id=run_id)
+                state = orch.run(
+                    RepairRequest(request, timeout_s=0, cancel_token=token, run_id=run_id)
+                )
                 status = RepairStatus(state.status)
                 verification = state.verification_result
                 report = {
                     "mode": mode,
                     "repair_status": status.value,
-                    "verified": bool(verification and verification.all_passed),
+                    "errors": dict(state.agent_errors),
+                    "recovery": state.recovery_outcome,
+                    "verified": bool(
+                        verification
+                        and verification.execution_status == "passed"
+                        and verification.all_passed
+                        and verification.total_tests >= 1
+                    ),
                     "verification": (
                         {
                             key: getattr(verification, key)
@@ -318,10 +338,10 @@ class ProjectExecutor:
 
     @staticmethod
     def _fence(agent, token, scope):
-        dispatch = agent._tool_dispatch
+        dispatch = agent.tool_dispatch
 
         def guarded(role, name, execute):
             token.check()
             return scope.call(lambda: dispatch(role, name, execute) if dispatch else execute())
 
-        agent._tool_dispatch = guarded
+        agent.set_tool_dispatch(guarded)

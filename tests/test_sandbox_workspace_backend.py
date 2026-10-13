@@ -77,8 +77,11 @@ def transport(tmp_path, monkeypatch):
         monkeypatch.setattr(
             backend, "_argv", lambda: [sys.executable, "-I", "-B", str(script), str(payload), mode]
         )
-        backend.permissions.authorize(request, input_versions=backend.permission_inputs(request),
-                                      restore_owned=request.base_versions)
+        backend.permissions.authorize(
+            request,
+            input_versions=backend.permission_inputs(request),
+            restore_owned=request.base_versions,
+        )
         return request
 
     return SimpleNamespace(

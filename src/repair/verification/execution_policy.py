@@ -35,15 +35,15 @@ def resolve_execution_policy(
     execution_tier="",
     require_sandbox=False,
     sandbox=False,
-    verifier=None,
+    verification_backend=None,
     host=False,
     static=False,
 ):
     tier = execution_tier or (
         "static"
-        if static and not host and verifier is None
+        if static and not host and verification_backend is None
         else "auto"
-        if verifier is not None
+        if verification_backend is not None
         else "host"
     )
     if tier not in {"auto", "host", "container", "static"}:
@@ -63,8 +63,8 @@ def resolve_execution_policy(
         tier = "static" if static and not host else "host"
     return ExecutionPolicy(
         tier,
-        bool(sandbox or required or verifier is not None or host or static),
+        bool(sandbox or required or verification_backend is not None or host or static),
         bool(host and not required),
         bool(static and not required),
-        bool(verifier is not None and sandbox_policy != "disabled"),
+        bool(verification_backend is not None and sandbox_policy != "disabled"),
     )

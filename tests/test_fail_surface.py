@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.orchestrator import Orchestrator
+from src.repair.session import ExecutionSession
 from src.repair.verification.fail_surface import (
     FailSurface,
     apply_verify_feedback_to_state,
@@ -79,8 +79,7 @@ class TestBuildFailSurface:
 
     def test_env_bucket_skips_read_test_call_to_action(self):
         surface = FailSurface(
-            assertions=["sandbox upload did not complete"],
-            nodeids=["tests/x.py::test_y"],
+            assertions=["sandbox upload did not complete"], nodeids=["tests/x.py::test_y"]
         )
         block = build_fail_surface_prompt_block(surface, bucket="env")
         assert "ENV" in block
@@ -106,13 +105,13 @@ class TestPrioritizeAndPick:
     def test_pick_test_path_prefers_failed_nodeid(self, tmp_path: Path):
         rel = _write_test(tmp_path)
         nodeid = f"{rel}::test_add"
-        orch = Orchestrator.__new__(Orchestrator)
-        orch._repo_root = str(tmp_path)
-        orch._repair_ctx = None
+        orch = ExecutionSession(None)
+        orch.repo_root = str(tmp_path)
+        orch.repair_ctx = None
         state = RepairState(issue_input="x")
         state.control.verify_failed_nodeids = [nodeid]
         state.retrieved_context = RetrievedContext(related_tests=["does/not/exist.py"])
-        picked = orch._pick_test_path(state)
+        picked = orch.verification.pick_test_path(state)
         assert picked == nodeid
 
 
@@ -120,8 +119,8 @@ class TestFeedbackIncludesFailSurface:
     def test_build_feedback_has_fail_surface_section(self, tmp_path: Path):
         rel = _write_test(tmp_path)
         nodeid = f"{rel}::test_add"
-        orch = Orchestrator.__new__(Orchestrator)
-        orch._repo_root = str(tmp_path)
+        orch = ExecutionSession(None)
+        orch.repo_root = str(tmp_path)
         result = VerificationResult(
             all_passed=False,
             total_tests=1,
@@ -132,7 +131,7 @@ class TestFeedbackIncludesFailSurface:
         state.candidate_patches = [
             CandidatePatch(file_path="a.py", diff="+x", original_lines="a", patched_lines="b")
         ]
-        feedback = orch._build_feedback(result, state=state)
+        feedback = orch.patcher_execution.build_feedback(result, state=state)
         assert "失败面" in feedback or "FAIL SURFACE" in feedback
         assert "test_add" in feedback
 
@@ -147,15 +146,9 @@ class TestFeedbackIncludesFailSurface:
             failed=1,
             failure_logs=[f"FAILED {nodeid} - AssertionError: assert 4 == 3"],
         )
-
-        payload = build_verify_feedback_payload(
-            state,
-            repo_root=str(tmp_path),
-            result=result,
-        )
+        payload = build_verify_feedback_payload(state, repo_root=str(tmp_path), result=result)
         apply_verify_feedback_to_state(state, payload)
         block = render_verify_feedback_block(payload)
-
         assert payload.verify_target == nodeid
         assert payload.patch_files == ["pkg/mod.py"]
         assert "read_failed_test" in payload.next_action
@@ -182,8 +175,7 @@ class TestFailureDecision:
         from src.repair.verification.failure_decision import decide_verification_failure
 
         result = VerificationResult(
-            all_passed=False,
-            failure_logs=["sandbox pip install failed: network unavailable"],
+            all_passed=False, failure_logs=["sandbox pip install failed: network unavailable"]
         )
         decision = decide_verification_failure(result)
         assert decision.failure_class == "verify_environment"

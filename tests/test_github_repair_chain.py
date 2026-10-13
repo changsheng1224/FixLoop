@@ -57,7 +57,7 @@ def inject_model(monkeypatch, client):
     def create(model_client=None, **kwargs):
         return model_client if model_client is not None else client
 
-    monkeypatch.setattr("src.repair_factory.create_model_client", create)
+    monkeypatch.setattr("src.repair.assembly.create_model_client", create)
 
 
 @pytest.mark.parametrize("native", [False, True], ids=["xml", "native"])

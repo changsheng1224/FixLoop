@@ -410,9 +410,9 @@ def _repl_dispatch_intent(agent: Agent, user_input: str, args) -> bool:
             emit=emit,
             history=hist_for_resolve,
             dialogue=proj,
-            candidate_root=str(agent._cwd),
+            candidate_root=str(agent.cwd),
             cancel_token=getattr(agent, "cancel_token", None),
-            deadline=getattr(agent, "_repair_deadline", None),
+            deadline=getattr(agent, "execution_deadline", None),
             budget=getattr(agent, "_budget_manager", None),
         ),
     )
@@ -430,7 +430,7 @@ def _repl_dispatch_intent(agent: Agent, user_input: str, args) -> bool:
         # User proxies → candidate store
         from agent_runtime.intent.candidates import CandidateStore, collect_user_feedback
 
-        store = CandidateStore(agent._cwd)
+        store = CandidateStore(agent.cwd)
         if ana.get("outcome") == "clarify_resume":
             store.append(
                 collect_user_feedback(
@@ -489,7 +489,7 @@ def _repl_dispatch_intent(agent: Agent, user_input: str, args) -> bool:
         try:
             from agent_runtime.intent.candidates import CandidateStore, collect_user_feedback
 
-            CandidateStore(agent._cwd).append(
+            CandidateStore(agent.cwd).append(
                 collect_user_feedback(
                     kind="cancel",
                     text=user_input,
@@ -541,7 +541,7 @@ def _repl_dispatch_intent(agent: Agent, user_input: str, args) -> bool:
         from agent_runtime.features.memory.durable import promote_durable_memory
 
         text = node.text or exec_text
-        ok = promote_durable_memory(text, f"Preference: {text}", root=str(agent._cwd))
+        ok = promote_durable_memory(text, f"Preference: {text}", root=str(agent.cwd))
         print("已尝试写入 durable memory。" if ok else "未提取到可保存条目（已记录意图）。")
         return ok
 
@@ -704,21 +704,21 @@ def _handle_command(cmd: str, agent: Agent) -> str:
 
             name = time.strftime("session_%Y%m%d_%H%M%S")
         agent.session["id"] = name
-        SessionStore(agent._cwd).save(agent.session)
+        SessionStore(agent.cwd).save(agent.session)
         print(f"会话已保存: {name}", file=sys.stderr)
     elif name == "/load":
         name = parts[1] if len(parts) > 1 else None
         if not name:
             print("用法: /load <session_name>", file=sys.stderr)
         else:
-            loaded = SessionStore(agent._cwd).load(name)
+            loaded = SessionStore(agent.cwd).load(name)
             if loaded:
                 agent.session = loaded
                 print(f"会话已恢复: {name}", file=sys.stderr)
             else:
                 print(f"会话不存在: {name}", file=sys.stderr)
     elif name == "/sessions":
-        store = SessionStore(agent._cwd)
+        store = SessionStore(agent.cwd)
         names = store.list_all()
         if names:
             for n in names:
@@ -728,7 +728,7 @@ def _handle_command(cmd: str, agent: Agent) -> str:
     elif name == "/candidates":
         from agent_runtime.intent.candidates import CandidateStore, aggregate_cards
 
-        events = CandidateStore(agent._cwd).load()
+        events = CandidateStore(agent.cwd).load()
         cards = aggregate_cards(events, min_count=1)
         print(f"候选事件 {len(events)} 条 → 聚合卡 {len(cards)} 张")
         for c in cards[:30]:
@@ -744,7 +744,7 @@ def _handle_command(cmd: str, agent: Agent) -> str:
         from agent_runtime.replay import trace_tree_summary
         from agent_runtime.run_store import RunStore
 
-        store = RunStore(agent._cwd)
+        store = RunStore(agent.cwd)
         rid = parts[1] if len(parts) > 1 else None
         if rid is None:
             # 找最近的 run
@@ -762,7 +762,7 @@ def _handle_command(cmd: str, agent: Agent) -> str:
     elif name == "/prompt":
         from agent_runtime.run_store import RunStore
 
-        store = RunStore(agent._cwd)
+        store = RunStore(agent.cwd)
         latest = store.runs_dir
         if latest.exists():
             traces = sorted(latest.iterdir(), key=lambda p: p.stat().st_mtime_ns, reverse=True)

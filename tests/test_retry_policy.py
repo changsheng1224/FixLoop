@@ -52,13 +52,13 @@ class TestJitter:
 
 
 class TestComputeRateLimitDelay:
-    def test_uses_retry_after_with_equal_jitter(self, monkeypatch):
+    def test_retry_after_is_minimum(self, monkeypatch):
         monkeypatch.setattr(
             "agent_runtime.providers.retry_policy.random.uniform",
             lambda a, b: a,
         )
         delay = compute_rate_limit_delay(0, 60.0)
-        assert delay == 30.0
+        assert delay == 60.0
 
     def test_exponential_when_no_retry_after(self, monkeypatch):
         monkeypatch.setattr(
@@ -72,7 +72,7 @@ class TestComputeRateLimitDelay:
             "agent_runtime.providers.retry_policy.random.uniform",
             lambda a, b: a,
         )
-        assert compute_rate_limit_delay(0, 500.0, cap=120.0) == 60.0
+        assert compute_rate_limit_delay(0, 500.0, cap=120.0) == 500.0
 
 
 class TestComputeServerErrorDelay:

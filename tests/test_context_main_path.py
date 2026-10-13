@@ -45,7 +45,7 @@ def test_compressed_repair_requests_and_restart_share_authority_and_budget(
     orch, state, client, candidates = automatic_fixture(tmp_path, native=native)
     agent = orch.patcher
     configure(agent)
-    orch._initialize_model_budget(None, 0)
+    orch.lifecycle.initialize_model_budget(None, 0)
     summary_prompts = []
 
     class SummaryClient:
@@ -89,25 +89,27 @@ def test_compressed_repair_requests_and_restart_share_authority_and_budget(
     monkeypatch.setattr(ContextManager, "validate_prepared_request", capture)
     original_tests = (tmp_path / "test_value.py").read_bytes()
     try:
-        patches, meta = orch._run_patcher_toolized(state, "Read and fix value.py", {})
+        patches, meta = orch.patcher_execution.run_patcher_toolized(
+            state, "Read and fix value.py", {}
+        )
         assert patches, (meta, state.agent_errors)
-        binding = orch._plan_binding
-        assert orch._run_verifier(state).all_passed
-        assert captured and summary_prompts and len(candidates) == 2
-        assert any(m["context_manifest"]["decision_refs"] for _, m in captured)
-        assert any(m["context_manifest"]["evidence_consumption"] for _, m in captured)
-        assert any(m["compression_pipeline"].get("l5") for _, m in captured)
+        binding = orch.plan_binding
+        assert orch.verification.run_verifier(state).all_passed
+        assert captured and summary_prompts and (len(candidates) == 2)
+        assert any((m["context_manifest"]["decision_refs"] for _, m in captured))
+        assert any((m["context_manifest"]["evidence_consumption"] for _, m in captured))
+        assert any((m["compression_pipeline"].get("l5") for _, m in captured))
         if native:
             assert [r for r, _ in captured] == client.requests
         else:
-            assert all(r.messages[0]["content"] in client.prompts for r, _ in captured)
+            assert all((r.messages[0]["content"] in client.prompts for r, _ in captured))
         checkpoint = create_checkpoint(agent, TaskState.create(user_request="continue"), "continue")
         for field in ("constraint_refs", "decision_refs", "model_limits", "history_compression"):
             assert checkpoint["context_manifest"][field] == agent.session["context_manifest"][field]
         authoritative = deepcopy(binding.session.long_task_state.to_dict())
         writes = len(binding.session.store.latest("operation", "operation_id"))
         attempts = len(binding.session.store.latest("attempt", "attempt_id"))
-        orch._release_model_budget(state)
+        orch.lifecycle.release_model_budget(state)
         saved_budget = deepcopy(state.node_timings["model_budget"])
         assert {c["purpose"] for c in saved_budget["model_calls"].values()} >= {
             "extraction",
@@ -117,11 +119,10 @@ def test_compressed_repair_requests_and_restart_share_authority_and_budget(
         }
         saved_state = state.to_dict()
     finally:
-        if orch._plan_binding:
-            orch._plan_binding.close()
-        if orch._model_budget is not None:
-            orch._release_model_budget(state)
-
+        if orch.plan_binding:
+            orch.plan_binding.close()
+        if orch.model_budget is not None:
+            orch.lifecycle.release_model_budget(state)
     resumed, _, resumed_client, resumed_candidates = automatic_fixture(
         tmp_path, native=native, resume=True
     )
@@ -129,12 +130,12 @@ def test_compressed_repair_requests_and_restart_share_authority_and_budget(
     restored = RepairState.from_dict(saved_state)
     restored.hard_constraints = ["Wrong checkpoint mirror: edit tests"]
     resumed.patcher.session["long_task_context"] = {"original_request": "wrong cached goal"}
-    resumed._initialize_model_budget(saved_state, 0)
+    resumed.lifecycle.initialize_model_budget(saved_state, 0)
     try:
-        patches, meta = resumed._run_patcher_toolized(restored, "continue", {})
+        patches, meta = resumed.patcher_execution.run_patcher_toolized(restored, "continue", {})
         assert patches and meta["edit_mode"] == "plan_resume_adopted"
-        assert resumed._run_verifier(restored).all_passed
-        binding = resumed._plan_binding
+        assert resumed.verification.run_verifier(restored).all_passed
+        binding = resumed.plan_binding
         current = binding.session.long_task_state.to_dict()
         for field in (
             "original_request",
@@ -147,16 +148,17 @@ def test_compressed_repair_requests_and_restart_share_authority_and_budget(
         assert len(binding.session.store.latest("operation", "operation_id")) == writes
         assert len(binding.session.store.latest("attempt", "attempt_id")) == attempts
         assert resumed._model_budget.snapshot() == saved_budget
-        assert not resumed_client.prompts and not resumed_candidates
+        assert not resumed_client.prompts and (not resumed_candidates)
         assert (tmp_path / "test_value.py").read_bytes() == original_tests
         assert (tmp_path / "value.py").read_text() == "def answer():\n    return 2\n"
     finally:
-        if resumed._plan_binding:
-            resumed._plan_binding.close()
-        resumed._release_model_budget(restored)
+        if resumed.plan_binding:
+            resumed.plan_binding.close()
+        resumed.lifecycle.release_model_budget(restored)
 
 
 def test_host_add_and_revoke_invalidate_completed_children_without_reexecution(tmp_path):
+
     def respond(data, call):
         message = data["source"]["message_id"]
         if message == "original-request":
@@ -206,9 +208,9 @@ def test_host_add_and_revoke_invalidate_completed_children_without_reexecution(t
         children.append(child)
         return child
 
-    orch.patcher._exploration_client_factory = child_factory
+    orch.exploration_client_factory = child_factory
     binding = RepairPlanBinding(orch, state)
-    orch._plan_binding = binding
+    orch.plan_binding = binding
     runtime = binding.exploration
     try:
         node = binding.session.plan.nodes[0]
@@ -265,6 +267,7 @@ def test_host_add_and_revoke_invalidate_completed_children_without_reexecution(t
 
 
 def test_host_constraint_mirror_updates_even_when_followup_resolution_blocks(tmp_path, monkeypatch):
+
     def respond(data, call):
         statement = "Keep tests" if call == 1 else "Preserve API"
         return output([rule(data, statement)])
@@ -320,7 +323,7 @@ def test_sealed_history_refs_require_matching_projection_then_include_new_tail(
         },
     }
     agent.record({"role": "user", "content": "new tail", "observation_id": "tail-ref"})
-    manager, metadata = ContextManager(agent), {}
+    manager, metadata = (ContextManager(agent), {})
     text = manager._get_compressed_history(metadata)
     manager._fit_history_text(text, 6000, metadata)
     assert metadata["_observation_refs"] == (

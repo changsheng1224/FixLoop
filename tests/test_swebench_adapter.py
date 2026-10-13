@@ -15,7 +15,7 @@ from src.benchmark.swebench.classify import classify_failure
 from src.benchmark.swebench.convert import instance_to_issue
 from src.benchmark.swebench.dataset import filter_instances, load_instances_from_jsonl
 from src.benchmark.swebench.dev_instances import DEV_INSTANCE_IDS
-from src.benchmark.swebench.fake import FakeGoldPatchOrchestrator
+from src.benchmark.swebench.fake import offline_service_factory
 from src.benchmark.swebench.manifest import build_manifest, write_manifest
 from src.benchmark.swebench.predictions import (
     read_predictions_jsonl,
@@ -257,7 +257,7 @@ class TestAdapterFakeE2E:
         assert result["baseline_preflight"]["ok"] is False
         assert "dirty_worktree" in result["baseline_preflight"]["reasons"]
 
-    def test_fake_skip_clone_produces_patches(self, work_dir):
+    def test_offline_smoke_uses_service_and_reports_unverified(self, work_dir):
         out = work_dir / "out"
         work = work_dir / "work"
         rows = []
@@ -286,10 +286,8 @@ class TestAdapterFakeE2E:
             encoding="utf-8",
         )
 
-        gold = "diff --git a/pkg.py b/pkg.py\n--- a/pkg.py\n+++ b/pkg.py\n@@ -1 +1 @@\n-old\n+new\n"
-
         def factory(repo: str):
-            return FakeGoldPatchOrchestrator(repo, gold_patch=gold)
+            return offline_service_factory(repo)
 
         cfg = AdapterConfig(
             output_dir=out,
@@ -299,19 +297,18 @@ class TestAdapterFakeE2E:
             skip_clone=True,
             dry_run=False,
             run_harness=False,
-            allow_gold_patch_injection=True,
         )
         report = SweBenchAdapter(cfg, orchestrator_factory=factory).run()
         assert report["ok"] is True
         preds = read_predictions_jsonl(out / "predictions.jsonl")
         assert len(preds) == 5
-        assert all(p.get("model_patch") for p in preds)
-        assert report["failure_summary"].get(FailureClass.NONE.value) == 5
-        assert all(result["verifier"]["all_passed"] for result in report["results"])
+        assert all(not p.get("model_patch") for p in preds)
+        assert len(report["results"]) == 5
+        assert all(not result["verified"] for result in report["results"])
         manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
-        assert manifest["extra"]["gold_patch_visibility"] == "assisted"
+        assert manifest["extra"]["gold_patch_visibility"] == "strict"
         for iid in DEV_INSTANCE_IDS:
-            assert (out / "instances" / iid / "model_patch.diff").is_file()
+            assert not (out / "instances" / iid / "model_patch.diff").exists()
 
 
 class TestSwebenchCliDefaults:

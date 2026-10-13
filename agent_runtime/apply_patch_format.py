@@ -1,4 +1,4 @@
-"""Codex 风格 apply_patch 文本解析（lenient）。"""
+"""Explicit patch envelopes adapted to the unique text patch core."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ __all__ = [
     "ApplyPatchOp",
     "parse_apply_patch_text",
     "strip_fences",
-    "update_diff_has_preimage",
 ]
 
 
@@ -18,34 +17,25 @@ class ApplyPatchOp:
     action: str  # update | add | delete
     path: str
     diff: str = ""
+    plan: object = None
 
 
 _FENCE_RE = re.compile(r"^```(?:\w+)?\s*\n([\s\S]*?)\n```\s*$", re.MULTILINE)
 
 
-def update_diff_has_preimage(diff: str) -> bool:
-    """Update hunk 须含删除行或上下文行，禁止仅有 + 的空 preimage。"""
-    for ln in (diff or "").splitlines():
-        if ln.startswith("---") or ln.startswith("+++"):
-            continue
-        if ln.startswith("-"):
-            return True
-        if ln.startswith(" ") and ln.strip() != "":
-            return True
-    return False
-
-
 def strip_fences(text: str) -> str:
     """剥 markdown / heredoc 围栏，便于模型 freeform 输出。"""
-    raw = (text or "").strip()
+    raw = (text or "").strip("\r\n")
     if not raw:
         return ""
+    if not raw.startswith(("```", "<<")):
+        return raw
     # 整段围栏
     m = _FENCE_RE.match(raw)
     if m:
-        return m.group(1).strip()
+        return m.group(1).strip("\r\n")
     # 去首尾 ``` 行
-    lines = raw.splitlines()
+    lines = raw.replace("\r\n", "\n").split("\n")
     if lines and lines[0].strip().startswith("```"):
         lines = lines[1:]
     if lines and lines[-1].strip() == "```":
@@ -55,81 +45,51 @@ def strip_fences(text: str) -> str:
         lines = lines[1:]
         if lines and lines[-1].strip() in (".", "EOF", "PATCH"):
             lines = lines[:-1]
-    return "\n".join(lines).strip()
+    return "\n".join(lines).strip("\r\n")
 
 
 def parse_apply_patch_text(text: str) -> list[ApplyPatchOp]:
-    """解析 *** Begin/End Patch 块；失败抛 ValueError（语法级）。"""
+    """Parse the explicit envelope; preserve every hunk content line."""
     body = strip_fences(text)
-    if not body:
-        raise ValueError("apply_patch: empty input")
+    if body.startswith(("--- ", "diff --git ")):
+        from agent_runtime.patch_engine import parse_unified_patch
 
-    # 无 Begin 标记时：若像 unified diff 且带 --- a/ 则拒（需 path）；允许裸 Update
-    if "*** Begin Patch" not in body and "*** Update File:" not in body:
-        if body.lstrip().startswith("@@") or "--- " in body[:80]:
-            raise ValueError("apply_patch: missing *** Begin Patch / *** Update File: path header")
+        return [
+            ApplyPatchOp(file.action, file.path, plan=file.plan)
+            for file in parse_unified_patch(body)
+        ]
+    from agent_runtime.patch_engine import _lines
+
+    lines = _lines(body)
+    if not lines or lines[0] != "*** Begin Patch" or lines[-1] != "*** End Patch":
         raise ValueError("apply_patch: expected *** Begin Patch ... *** End Patch")
-
-    # 取 Begin..End 之间；若无 End 则用全文
-    start = body.find("*** Begin Patch")
-    if start >= 0:
-        body = body[start + len("*** Begin Patch") :]
-    end = body.find("*** End Patch")
-    if end >= 0:
-        body = body[:end]
-    body = body.strip()
-
-    ops: list[ApplyPatchOp] = []
-    lines = body.splitlines()
-    i = 0
-    while i < len(lines):
-        line = lines[i].strip()
-        if line.startswith("*** Update File:"):
-            path = line.split(":", 1)[1].strip().replace("\\", "/")
-            i += 1
-            diff_lines: list[str] = []
-            while i < len(lines) and not lines[i].strip().startswith("*** "):
-                diff_lines.append(lines[i])
-                i += 1
-            diff_body = "\n".join(diff_lines).strip()
-            if not diff_body:
-                raise ValueError(
-                    f"apply_patch: empty Update File body for {path} "
-                    "(need @@ hunk with -/+ context; read file first)"
-                )
-            if not update_diff_has_preimage(diff_body):
-                raise ValueError(
-                    f"apply_patch: Update File {path} missing preimage "
-                    "(- or context lines); refuse empty_original"
-                )
-            ops.append(ApplyPatchOp(action="update", path=path, diff=diff_body))
-            continue
-        if line.startswith("*** Add File:"):
-            path = line.split(":", 1)[1].strip().replace("\\", "/")
-            i += 1
-            content_lines: list[str] = []
-            while i < len(lines) and not lines[i].strip().startswith("*** "):
-                raw_l = lines[i]
-                if raw_l.startswith("+"):
-                    content_lines.append(raw_l[1:])
-                else:
-                    content_lines.append(raw_l)
-                i += 1
-            ops.append(
-                ApplyPatchOp(
-                    action="add",
-                    path=path,
-                    diff="\n".join(content_lines),
-                )
-            )
-            continue
-        if line.startswith("*** Delete File:"):
-            path = line.split(":", 1)[1].strip().replace("\\", "/")
-            ops.append(ApplyPatchOp(action="delete", path=path))
-            i += 1
-            continue
+    ops, seen, i = [], set(), 1
+    while i < len(lines) - 1:
+        header = re.fullmatch(r"\*\*\* (Update|Add|Delete) File: (.+)", lines[i])
+        if not header:
+            raise ValueError("apply_patch: unexpected content or unsupported operation")
+        action = {"Update": "update", "Add": "add", "Delete": "delete"}[header[1]]
+        path = header[2].replace("\\", "/")
+        if path.casefold() in seen:
+            raise ValueError("apply_patch: duplicate file path")
+        seen.add(path.casefold())
         i += 1
-
+        content = []
+        while i < len(lines) - 1 and not lines[i].startswith("*** "):
+            content.append(lines[i])
+            i += 1
+        if action == "delete" and content:
+            raise ValueError("apply_patch: Delete File has unexpected content")
+        if action == "update" and not content:
+            raise ValueError("apply_patch: empty Update File body")
+        if action == "add":
+            if any(not line.startswith("+") for line in content):
+                raise ValueError(
+                    "apply_patch: Add File lines must begin with +; "
+                    "use unified diff for no-final-newline creation"
+                )
+            content = [line[1:] for line in content]
+        ops.append(ApplyPatchOp(action, path, "\n".join(content) + ("\n" if content else "")))
     if not ops:
-        raise ValueError("apply_patch: no Update/Add/Delete File ops found")
+        raise ValueError("apply_patch: empty input")
     return ops

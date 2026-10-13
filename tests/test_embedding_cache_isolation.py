@@ -61,14 +61,22 @@ def test_project_partition_and_cwd_independence(tmp_path, monkeypatch, encoder):
     assert len(encoder[2].calls) == 1
     assert roots[0] != roots[1]
     assert project_id(source_a) in roots[0].parts
-    assert not (source_a / ".agent").exists() and not (source_b / ".agent").exists()
+    assert not (source_a / ".agent").exists() and (not (source_b / ".agent").exists())
 
 
-@pytest.mark.parametrize("changes", [
-    {"model_id": "another/model"}, {"revision": "b" * 40}, {"dimensions": 16},
-    {"normalize_embeddings": True}, {"max_seq_length": 128}, {"max_chars": 400},
-    {"encoder_version": "new-library"}, {"text_version": "chunk-v2"},
-])
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"model_id": "another/model"},
+        {"revision": "b" * 40},
+        {"dimensions": 16},
+        {"normalize_embeddings": True},
+        {"max_seq_length": 128},
+        {"max_chars": 400},
+        {"encoder_version": "new-library"},
+        {"text_version": "chunk-v2"},
+    ],
+)
 def test_encoding_changes_miss_instead_of_reusing_old_vector(tmp_path, encoder, changes):
     original = EmbeddingConfig()
     first = semantic.SemanticMemory(cache_root=tmp_path, config=original)
@@ -93,14 +101,18 @@ def test_actual_encoded_text_and_chunk_query_share_encoder(tmp_path, encoder):
     memory.search("repeated text")
     memory.search("repeated text")
     assert len(encoder[0].calls) == calls_before
-    assert all(kwargs == {
-        "convert_to_numpy": True, "precision": "float32", "normalize_embeddings": False,
-    } for _, kwargs in encoder[0].calls)
+    assert all(
+        (
+            kwargs
+            == {"convert_to_numpy": True, "precision": "float32", "normalize_embeddings": False}
+            for _, kwargs in encoder[0].calls
+        )
+    )
 
 
-@pytest.mark.parametrize("damage", [
-    "truncated", "archive", "object", "dimension", "nan", "zero", "dtype",
-])
+@pytest.mark.parametrize(
+    "damage", ["truncated", "archive", "object", "dimension", "nan", "zero", "dtype"]
+)
 def test_corruption_is_recomputed_and_replaced(tmp_path, encoder, damage):
     memory = semantic.SemanticMemory(cache_root=tmp_path)
     expected = memory.embed("recoverable")
@@ -142,7 +154,6 @@ def test_failed_write_preserves_published_file_and_cleans_temporary(tmp_path, mo
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows path spelling")
 def test_cache_adapts_long_temporary_path_independently(tmp_path):
-    # Target is below the extended-path threshold; its UUID temporary is above it.
     root = tmp_path / ("c" * (225 - len(str(tmp_path)) - 70))
     cache = EmbeddingCache(root, EmbeddingConfig())
     assert 215 <= len(str(cache.path("text"))) < 248
@@ -161,7 +172,7 @@ def test_created_storage_does_not_persist_transient_extended_spelling(tmp_path, 
     seen = []
 
     def raced(path, *args, **kwargs):
-        if path == storage and not seen:
+        if path == storage and (not seen):
             seen.append(path)
             return Path("\\\\?\\" + str(storage))
         return resolve(path, *args, **kwargs)
@@ -174,24 +185,16 @@ def test_created_storage_does_not_persist_transient_extended_spelling(tmp_path, 
 def test_parallel_process_publication_never_returns_partial_vectors(tmp_path):
     cache = EmbeddingCache(tmp_path, EmbeddingConfig())
     cache.save("concurrent", np.ones(384, dtype=np.float32))
-    code = """
-import sys, numpy as np
-from agent_runtime.features.memory.embedding_cache import EmbeddingCache, EmbeddingConfig
-cache = EmbeddingCache(sys.argv[1], EmbeddingConfig())
-vector = np.full(384, float(sys.argv[2]), dtype=np.float32)
-for _ in range(30):
-    cache.save('concurrent', vector)
-    result = cache.load('concurrent')
-    # Windows may temporarily deny opens during replace; this is a cache miss.
-    if result is not None:
-        assert result.shape == (384,) and (result == result[0]).all()
-"""
+    code = "\nimport sys, numpy as np\nfrom agent_runtime.features.memory.embedding_cache import EmbeddingCache, EmbeddingConfig\ncache = EmbeddingCache(sys.argv[1], EmbeddingConfig())\nvector = np.full(384, float(sys.argv[2]), dtype=np.float32)\nfor _ in range(30):\n    cache.save('concurrent', vector)\n    result = cache.load('concurrent')\n    # Windows may temporarily deny opens during replace; this is a cache miss.\n    if result is not None:\n        assert result.shape == (384,) and (result == result[0]).all()\n"
     env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
 
     def write(value):
         return subprocess.run(
             [sys.executable, "-c", code, str(tmp_path), str(value)],
-            env=env, capture_output=True, text=True, timeout=30,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -222,7 +225,9 @@ def test_retrieval_corpus_is_rebuilt_without_carrying_other_turns(tmp_path, enco
     memory = semantic.SemanticMemory(cache_root=tmp_path)
     memory.add({"text": "previous turn only", "memory_id": "old"})
     state = {"episodic_notes": [{"text": "current evidence", "memory_id": "current"}]}
-    results = semantic.retrieval_candidates_semantic(state, "current evidence", semantic_memory=memory)
+    results = semantic.retrieval_candidates_semantic(
+        state, "current evidence", semantic_memory=memory
+    )
     assert {result["memory_id"] for result in results} <= {"current"}
     assert memory._notes[0]["memory_id"] == "old" and len(memory._notes) == 1
 
@@ -236,7 +241,9 @@ def test_model_loader_pins_revision_and_separates_profiles(monkeypatch):
         calls.append((args, kwargs))
         return SimpleNamespace(max_seq_length=None)
 
-    monkeypatch.setitem(sys.modules, "sentence_transformers", SimpleNamespace(SentenceTransformer=model))
+    monkeypatch.setitem(
+        sys.modules, "sentence_transformers", SimpleNamespace(SentenceTransformer=model)
+    )
     config = EmbeddingConfig()
     first = semantic._get_semantic_model(config)
     assert semantic._get_semantic_model(config) is first
@@ -276,15 +283,15 @@ def test_agents_in_copies_share_source_cache_but_not_corpus(tmp_path, monkeypatc
         root = tmp_path / name
         root.mkdir()
         return Agent(
-            AgentConfig(provider="fake"), FakeModelClient([]),
+            AgentConfig(provider="fake"),
+            FakeModelClient([]),
             WorkspaceContext(cwd=str(root), repo_root=str(root), doc_contents={}),
             tool_context=ToolContext(
-                root=str(root), project_root=str(project), embedding_state_base=str(storage),
+                root=str(root), project_root=str(project), embedding_state_base=str(storage)
             ),
         )
 
-    first, second, third = agent("run-a", source), agent("run-b", source), agent("run-c", other)
-    # The storage selection is frozen before lazy access, even when env/cwd changes.
+    first, second, third = (agent("run-a", source), agent("run-b", source), agent("run-c", other))
     monkeypatch.setenv("FIXLOOP_STATE_ROOT", str(tmp_path / "another-state"))
     monkeypatch.chdir(other)
     first.semantic_memory.add({"text": "same project data"})
@@ -292,7 +299,7 @@ def test_agents_in_copies_share_source_cache_but_not_corpus(tmp_path, monkeypatc
     third.semantic_memory.add({"text": "same project data"})
     assert first.semantic_memory.cache.root == second.semantic_memory.cache.root
     assert first.semantic_memory.cache.root != third.semantic_memory.cache.root
-    assert len(encoder[0].calls) == 1 and not encoder[1].calls and len(encoder[2].calls) == 1
+    assert len(encoder[0].calls) == 1 and (not encoder[1].calls) and (len(encoder[2].calls) == 1)
     assert first.semantic_memory._notes is not second.semantic_memory._notes
     assert not (other / ".agent").exists()
 
@@ -303,7 +310,7 @@ def test_interactive_project_switch_resets_corpus_and_changes_cache(tmp_path, mo
     from agent_runtime.runtime import Agent
     from agent_runtime.workspace import WorkspaceContext
 
-    first, second = tmp_path / "first", tmp_path / "second"
+    first, second = (tmp_path / "first", tmp_path / "second")
     first.mkdir()
     second.mkdir()
     monkeypatch.setenv("FIXLOOP_STATE_ROOT", str(tmp_path / "storage"))
@@ -315,7 +322,7 @@ def test_interactive_project_switch_resets_corpus_and_changes_cache(tmp_path, mo
     monkeypatch.chdir(second)
     agent._detect_workspace_switch()
     current = agent.semantic_memory
-    assert current is not previous and not current._notes
+    assert current is not previous and (not current._notes)
     assert current.cache.root != previous.cache.root
     assert project_id(second) in current.cache.root.parts
     current.embed("first project data")
@@ -326,19 +333,19 @@ def test_host_worktree_rebind_keeps_shared_cache_and_resets_corpus(
     temp_workspace, tmp_path, encoder
 ):
     from agent_runtime.providers.clients import FakeModelClient
-    from src.repair_factory import wire_orchestrator
+    from src.repair.assembly import create_repair_service
     from src.state import RepairState
 
     storage = tmp_path / "storage"
-    orch = wire_orchestrator(
-        FakeModelClient([]), str(temp_workspace), skip_verify=True, state_root=str(storage),
-    )
+    orch = create_repair_service(
+        FakeModelClient([]), str(temp_workspace), skip_verify=True, state_root=str(storage)
+    ).session
     original = orch.patcher.semantic_memory
     original.add({"text": "candidate text"})
     state = RepairState(issue_input="fix", repair_run_id="cache-bind")
-    orch._prepare_host_worktree(state, resume=False)
+    orch.lifecycle.prepare_host_worktree(state, resume=False)
     rebound = orch.patcher.semantic_memory
-    assert rebound is not original and not rebound._notes
+    assert rebound is not original and (not rebound._notes)
     assert rebound.cache.root == original.cache.root
     assert not rebound.cache.root.is_relative_to(Path(orch.patcher.state_root))
     rebound.add({"text": "candidate text"})
@@ -359,17 +366,15 @@ def test_sandbox_binding_and_resume_preserve_source_cache(temp_workspace, tmp_pa
     copy = tmp_path / "copy"
     copy.mkdir()
     spec = SandboxTaskSpec(
-        _prepared_environment().identity, "cache-v1", "a" * 64,
-        str(storage), str(temp_workspace),
+        _prepared_environment().identity, "cache-v1", "a" * 64, str(storage), str(temp_workspace)
     )
     binding = SandboxTaskBinding.create(copy, copy, "task", spec)
     binding.save()
     for current in (binding, SandboxTaskBinding.load(copy, "task", spec)):
-        context = ToolContext(
-            root=str(copy), sandbox_mode=True, embedding_state_base=str(storage),
-        )
+        context = ToolContext(root=str(copy), sandbox_mode=True, embedding_state_base=str(storage))
         agent = Agent(
-            AgentConfig(provider="fake"), FakeModelClient([]),
+            AgentConfig(provider="fake"),
+            FakeModelClient([]),
             WorkspaceContext(cwd=str(copy), repo_root=str(copy), doc_contents={}),
             tool_context=context,
         )
@@ -378,7 +383,7 @@ def test_sandbox_binding_and_resume_preserve_source_cache(temp_workspace, tmp_pa
         assert project_id(temp_workspace) in agent.semantic_memory.cache.root.parts
         assert not agent.semantic_memory.cache.root.is_relative_to(Path(binding.state_root))
         agent.semantic_memory.embed("restored input")
-    assert len(encoder[0].calls) == 1 and not encoder[1].calls
+    assert len(encoder[0].calls) == 1 and (not encoder[1].calls)
 
 
 def test_project_cache_write_failure_keeps_semantic_retrieval(tmp_path, monkeypatch, encoder):
@@ -400,12 +405,12 @@ def test_workbench_copies_use_source_cache_outside_run_state(tmp_path, monkeypat
     from agent_runtime.cancellation import CancellationToken
     from agent_runtime.providers.clients import FakeModelClient
     from agent_runtime.runtime import Agent
-    from src.repair_factory import wire_orchestrator
+    from src.repair.assembly import create_repair_service
     from src.state import RepairState, VerificationResult
     from src.workbench.files import ProjectFiles
     from src.workbench.project import ProjectExecutor
 
-    source, storage = tmp_path / "source", tmp_path / "storage"
+    source, storage = (tmp_path / "source", tmp_path / "storage")
     source.mkdir()
     monkeypatch.setenv("FIXLOOP_STATE_ROOT", str(storage))
     memories = []
@@ -416,38 +421,45 @@ def test_workbench_copies_use_source_cache_outside_run_state(tmp_path, monkeypat
 
     def ask(agent, *args, **kwargs):
         encode(agent)
-        agent._last_task_state = SimpleNamespace(stop_reason="final")
+        agent.last_task_state = SimpleNamespace(stop_reason="final")
         return "done"
 
     monkeypatch.setattr(Agent, "ask", ask)
 
     def factory(client, root, **kwargs):
-        orch = wire_orchestrator(client, root, skip_verify=True, **kwargs)
+        orch = create_repair_service(client, root, skip_verify=True, **kwargs).session
 
         def repair(*args, **kwargs):
             encode(orch.patcher)
             return RepairState(
-                issue_input="fix", status="fixed",
+                issue_input="fix",
+                status="fixed",
                 verification_result=VerificationResult(all_passed=True),
             )
 
-        orch.repair = repair
+        orch.lifecycle.execute = repair
         return orch
 
     executor = ProjectExecutor(
-        lambda: FakeModelClient([]), provider="fake", execution_tier="host", repair_factory=factory,
+        lambda: FakeModelClient([]), provider="fake", execution_tier="host", repair_factory=factory
     )
     for run_id in ("first", "second"):
-        copy, state = tmp_path / run_id, tmp_path / "runs" / run_id
+        copy, state = (tmp_path / run_id, tmp_path / "runs" / run_id)
         copy.mkdir()
         with closing(ProjectFiles(copy)) as files:
             result = executor(
-                mode=mode, files=files, messages=[{"role": "user", "content": "question"}],
-                token=CancellationToken(), on_chunk=lambda _: None, publish=lambda *a: None,
-                run_id=run_id, state_root=state, project_root=str(source),
+                mode=mode,
+                files=files,
+                messages=[{"role": "user", "content": "question"}],
+                token=CancellationToken(),
+                on_chunk=lambda _: None,
+                publish=lambda *a: None,
+                run_id=run_id,
+                state_root=state,
+                project_root=str(source),
             )
         assert result.status == "succeeded"
         assert not memories[-1].cache.root.is_relative_to(state)
         assert memories[-1].cache.root == project_embedding_cache_root(source, storage)
     assert memories[0] is not memories[1]
-    assert len(encoder[0].calls) == 1 and not encoder[1].calls
+    assert len(encoder[0].calls) == 1 and (not encoder[1].calls)

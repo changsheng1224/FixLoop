@@ -49,7 +49,7 @@ class TestCliRepair:
             return shared
 
         monkeypatch.setattr("agent_runtime.bootstrap.create_model_client", _fake_create)
-        monkeypatch.setattr("src.repair_factory.create_model_client", _fake_create)
+        monkeypatch.setattr("src.repair.assembly.create_model_client", _fake_create)
         monkeypatch.setattr(
             sys,
             "argv",
@@ -125,7 +125,8 @@ class TestCliRepair:
         captured = {}
 
         class _FailOrch:
-            def repair(self, issue, **kwargs):
+            def run(self, request):
+                issue = request.issue
                 return RepairState(issue_input=issue, status="failed")
 
             verifier = None
@@ -138,7 +139,7 @@ class TestCliRepair:
 
             return factory
 
-        monkeypatch.setattr("src.cli.make_orchestrator_factory", _fake_factory)
+        monkeypatch.setattr("src.cli.repair_service_factory", _fake_factory)
         monkeypatch.setattr(
             sys,
             "argv",
@@ -166,7 +167,8 @@ class TestCliRepair:
         monkeypatch.chdir(temp_workspace)
 
         class _TimeoutOrch:
-            def repair(self, issue, **kwargs):
+            def run(self, request):
+                issue = request.issue
                 state = RepairState(issue_input=issue, status="failed")
                 state.control.repair_timeout = 180
                 state.agent_errors["orchestrator"] = "repair timeout (180s)"
@@ -180,7 +182,7 @@ class TestCliRepair:
 
             return factory
 
-        monkeypatch.setattr("src.cli.make_orchestrator_factory", _fake_factory)
+        monkeypatch.setattr("src.cli.repair_service_factory", _fake_factory)
         monkeypatch.setattr(
             sys,
             "argv",

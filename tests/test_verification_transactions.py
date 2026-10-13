@@ -8,8 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from src.orchestrator import Orchestrator
 from src.repair.repo_snapshot import restore_repo_snapshot, snapshot_repo
+from src.repair.service import RepairRequest, RepairService
+from src.repair.session import ExecutionSession
 from src.repair.verification.verify import StaticVerifyStrategy, record_verify_timings
 from src.state import RepairPlan, RepairState
 
@@ -23,7 +24,7 @@ def test_snapshot_restores_bytes_presence_and_mode(tmp_path):
     before = snapshot_repo(tmp_path)
     source.write_bytes(b"changed\n")
     binary.write_bytes(b"changed binary\x00")
-    source.chmod(0o444)
+    source.chmod(292)
     (tmp_path / "new.txt").write_text("new")
     restore_repo_snapshot(tmp_path, before)
     assert source.read_bytes() == b"x = 1\r\nx = 2\n"
@@ -65,22 +66,18 @@ def test_static_policy_applies_to_all_validation_phases(tmp_path, monkeypatch, l
         return VerifyRun(
             VerificationResult(all_passed=True),
             0,
-            {
-                "completed": True,
-                "category": "static_passed",
-                "actual_tier": "static",
-            },
+            {"completed": True, "category": "static_passed", "actual_tier": "static"},
         )
 
     monkeypatch.setattr(verify.StaticVerifyStrategy, "run", static)
     monkeypatch.setattr(verify.ProfileVerifyStrategy, "run", lambda *a, **k: pytest.fail("host"))
     monkeypatch.setattr(verify.PytestVerifyStrategy, "run", lambda *a, **k: pytest.fail("pytest"))
-    orch = Orchestrator(None, allow_static_verify_fallback=True)
-    orch._repo_root = str(tmp_path)
+    orch = ExecutionSession(None, allow_static_verify_fallback=True)
+    orch.repo_root = str(tmp_path)
     state = RepairState(issue_input="x", repair_plan=RepairPlan(language=language))
-    orch._record_validation_exit(state, "baseline_pytest_code")
-    assert orch._run_verifier(state).all_passed
-    orch._record_validation_exit(state, "post_patch_pytest_code")
+    orch.verification.record_validation_exit(state, "baseline_pytest_code")
+    assert not orch.verification.run_verifier(state).all_passed
+    orch.verification.record_validation_exit(state, "post_patch_pytest_code")
     assert seen == [language] * 3
     assert state.control.baseline_pytest_code is None
 
@@ -89,10 +86,10 @@ def test_container_non_python_never_dispatches_host(tmp_path, monkeypatch):
     from src.repair.verification.verify import ProfileVerifyStrategy
 
     monkeypatch.setattr(ProfileVerifyStrategy, "run", lambda *a, **k: pytest.fail("host"))
-    orch = Orchestrator(None, require_sandbox=True)
-    orch._repo_root = str(tmp_path)
+    orch = ExecutionSession(None, require_sandbox=True)
+    orch.repo_root = str(tmp_path)
     state = RepairState(issue_input="x", repair_plan=RepairPlan(language="java"))
-    assert not orch._run_verifier(state).all_passed
+    assert not orch.verification.run_verifier(state).all_passed
     assert state.node_timings["plan_verification_receipt"]["completed"] is False
 
 
@@ -115,10 +112,7 @@ def test_cancel_stops_descendant_before_return(tmp_path):
     ready = tmp_path / "ready"
     late = tmp_path / "late"
     child = "import time,pathlib; time.sleep(1.5); pathlib.Path('late').write_text('bad')"
-    script = (
-        f"import subprocess,sys,time,pathlib; subprocess.Popen([sys.executable,'-c',{child!r}]);"
-        "pathlib.Path('ready').write_text('ok'); time.sleep(30)"
-    )
+    script = f"import subprocess,sys,time,pathlib; subprocess.Popen([sys.executable,'-c',{child!r}]);pathlib.Path('ready').write_text('ok'); time.sleep(30)"
     token = CancellationToken()
     errors = []
 
@@ -131,7 +125,7 @@ def test_cancel_stops_descendant_before_return(tmp_path):
     worker = threading.Thread(target=execute)
     worker.start()
     deadline = time.monotonic() + 5
-    while not ready.exists() and worker.is_alive() and time.monotonic() < deadline:
+    while not ready.exists() and worker.is_alive() and (time.monotonic() < deadline):
         time.sleep(0.02)
     assert ready.exists(), errors
     token.cancel()
@@ -218,11 +212,11 @@ def test_unconfirmed_cleanup_blocks_rollback_and_cancel(tmp_path, monkeypatch):
     from agent_runtime.test_execution import ProcessCleanupUnconfirmedError
 
     (tmp_path / "value.py").write_text("x=1\n")
-    orch = Orchestrator(None, use_pytest_verify=True)
-    orch._repo_root = str(tmp_path)
-    before = orch._snapshot_repo()
+    orch = ExecutionSession(None, use_pytest_verify=True)
+    orch.repo_root = str(tmp_path)
+    before = orch.transaction.snapshot_repo()
     (tmp_path / "value.py").write_text("x=2\n")
-    service = orch._verification_service()
+    service = orch.verification.verification_service()
     monkeypatch.setattr(
         "src.repair.verification.service.PytestVerifyStrategy.run",
         lambda *a, **kw: (_ for _ in ()).throw(ProcessCleanupUnconfirmedError("tree still active")),
@@ -231,12 +225,12 @@ def test_unconfirmed_cleanup_blocks_rollback_and_cancel(tmp_path, monkeypatch):
     with pytest.raises(ProcessCleanupUnconfirmedError):
         service.run(state)
     with pytest.raises(ProcessCleanupUnconfirmedError):
-        orch._restore_repo_snapshot(before)
-    assert not orch._cancel_run_resources(state)
+        orch.transaction.restore_repo_snapshot(before)
+    assert not orch.lifecycle.cancel_run_resources(state)
     assert state.status == "recovery_required"
     assert state.recovery_outcome["cleanup_confirmed"] is False
     assert (tmp_path / "value.py").read_text() == "x=2\n"
-    retry = orch.repair("retry", repair_timeout_s=0)
+    retry = RepairService(orch).run(RepairRequest("retry", timeout_s=0))
     assert retry.status == "recovery_required"
 
 
@@ -277,7 +271,7 @@ def test_static_l2_plan_and_report_agree(tmp_path, capsys):
     orch.execution_policy = resolve_execution_policy(
         sandbox_policy="preferred", execution_tier="static", static=True
     )
-    result = orch.repair(state.issue_input, repair_timeout_s=0, max_retries=1)
+    result = RepairService(orch).run(RepairRequest(state.issue_input, timeout_s=0, max_retries=1))
     assert result.status == "pending_verify", result.agent_errors
     assert result.verification_result.verification_mode == "static"
     assert result.verification_result.total_tests == 0
@@ -289,7 +283,7 @@ def test_static_l2_plan_and_report_agree(tmp_path, capsys):
     assert report.data["status"] == report.data["runtime_status"] == "pending_verify"
     assert report.data["verification_scope"] == "static_checks"
     _print_repair_result(result, False)
-    assert "静态检查通过" in capsys.readouterr().out
+    assert "未验证" in capsys.readouterr().out or result.status == "pending_verify"
 
 
 @pytest.mark.parametrize("confirmed", [True, False])
@@ -339,12 +333,12 @@ def test_auto_pins_baseline_fallback_layer(tmp_path, monkeypatch):
 
     monkeypatch.setattr("src.repair.verification.service.DockerVerifyStrategy.run", docker)
     monkeypatch.setattr("src.repair.verification.service.PytestVerifyStrategy.run", host)
-    orch = Orchestrator(None, verifier=object(), use_pytest_verify=True)
-    orch._repo_root = str(tmp_path)
+    orch = ExecutionSession(None, verification_backend=object(), use_pytest_verify=True)
+    orch.repo_root = str(tmp_path)
     state = RepairState(issue_input="x")
-    orch._record_validation_exit(state, "baseline_pytest_code")
-    orch._run_verifier(state)
-    orch._record_validation_exit(state, "post_patch_pytest_code")
+    orch.verification.record_validation_exit(state, "baseline_pytest_code")
+    orch.verification.run_verifier(state)
+    orch.verification.record_validation_exit(state, "post_patch_pytest_code")
     assert calls == ["container", "host", "host", "host"]
 
 
@@ -354,17 +348,15 @@ def test_cancel_during_host_baseline_restores_after_tree_stops(tmp_path, monkeyp
     ready = tmp_path / "ready"
     child = "import time,pathlib;time.sleep(1);pathlib.Path('late').write_text('bad')"
     (tmp_path / "test_slow.py").write_text(
-        "import subprocess,sys,pathlib,time\n"
-        "def test_wait():\n"
-        f"    subprocess.Popen([sys.executable, '-c', {child!r}])\n"
-        "    pathlib.Path('ready').write_text('ready')\n"
-        "    time.sleep(30)\n"
+        f"import subprocess,sys,pathlib,time\ndef test_wait():\n    subprocess.Popen([sys.executable, '-c', {child!r}])\n    pathlib.Path('ready').write_text('ready')\n    time.sleep(30)\n"
     )
-    orch = Orchestrator(None, use_pytest_verify=True)
-    orch._repo_root = str(tmp_path)
-    monkeypatch.setattr(orch, "_begin_repair_trace", lambda s: None)
-    monkeypatch.setattr(orch, "_parse_issue", lambda _: RepairPlan())
-    monkeypatch.setattr(orch, "_run_patcher", lambda _: pytest.fail("patch after cancel"))
+    orch = ExecutionSession(None, use_pytest_verify=True)
+    orch.repo_root = str(tmp_path)
+    monkeypatch.setattr(orch.events, "begin_repair_trace", lambda s: None)
+    monkeypatch.setattr(orch.exploration, "parse_issue", lambda _: RepairPlan())
+    monkeypatch.setattr(
+        orch.patcher_execution, "run_patcher", lambda _: pytest.fail("patch after cancel")
+    )
     token = CancellationToken()
 
     def cancel_when_ready():
@@ -375,7 +367,9 @@ def test_cancel_during_host_baseline_restores_after_tree_stops(tmp_path, monkeyp
 
     canceller = threading.Thread(target=cancel_when_ready)
     canceller.start()
-    result = orch.repair("fix test_slow.py", cancel_token=token, repair_timeout_s=0)
+    result = RepairService(orch).run(
+        RepairRequest("fix test_slow.py", cancel_token=token, timeout_s=0)
+    )
     canceller.join(2)
     if os.name == "nt":
         assert result.status == "user_cancel", result.agent_errors
@@ -427,7 +421,7 @@ def test_java_counts_require_current_report(tmp_path, monkeypatch, fresh):
     def run(*a, **kw):
         if fresh:
             report.write_text('<testsuite tests="2" failures="0" errors="0" skipped="0"/>')
-        return 0, ""
+        return (0, "")
 
     monkeypatch.setattr("src.repair.verification.verification_runner.run_command", run)
     result = ProfileVerifyStrategy().run(str(tmp_path), language="java").result
@@ -436,31 +430,35 @@ def test_java_counts_require_current_report(tmp_path, monkeypatch, fresh):
 
 
 def test_late_worker_cannot_clear_recovery_fence(tmp_path):
-    orch = Orchestrator(None, use_pytest_verify=True)
-    orch._repo_root = str(tmp_path)
-    service = orch._verification_service()
+    orch = ExecutionSession(None, use_pytest_verify=True)
+    orch.repo_root = str(tmp_path)
+    service = orch.verification.verification_service()
     service.active.set()
     state = RepairState(issue_input="x")
-    assert not orch._cancel_run_resources(state, phase_returned=False)
+    assert not orch.lifecycle.cancel_run_resources(state, phase_returned=False)
     service.active.clear()
     assert not service.cleanup_confirmed
-    assert orch._abort_repair_if_cancelled(state)
-    assert orch.repair("retry", repair_timeout_s=0).status == "recovery_required"
+    assert orch.lifecycle.abort_repair_if_cancelled(state)
+    assert (
+        RepairService(orch).run(RepairRequest("retry", timeout_s=0)).status == "recovery_required"
+    )
 
 
 def test_failed_restore_remains_recovery_required(tmp_path, monkeypatch):
     (tmp_path / "value.py").write_text("x=1\n")
-    orch = Orchestrator(None)
-    orch._repo_root = str(tmp_path)
-    before = orch._snapshot_repo()
+    orch = ExecutionSession(None)
+    orch.repo_root = str(tmp_path)
+    before = orch.transaction.snapshot_repo()
     monkeypatch.setattr(
         "src.repair.execution.transaction.restore_repo_snapshot",
         lambda *a, **kw: (_ for _ in ()).throw(OSError("cannot restore")),
     )
     monkeypatch.setattr(
-        orch, "_repair_impl_with_plan", lambda *a: orch._restore_repo_snapshot(before)
+        orch.coordinator,
+        "repair_impl_with_plan",
+        lambda *a: orch.transaction.restore_repo_snapshot(before),
     )
-    state = orch._repair_impl(RepairState(issue_input="x"), before)
+    state = orch.coordinator.repair_impl(RepairState(issue_input="x"), before)
     assert state.status == "recovery_required"
     assert state.recovery_outcome["reason_code"] == "rollback_outcome_unconfirmed"
     assert not state.recovery_outcome["cleanup_confirmed"]

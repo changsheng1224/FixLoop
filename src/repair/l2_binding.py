@@ -35,12 +35,14 @@ def bind_l2_context(
 ) -> str:
     """在 Agent.ask 前写入 L2 上下文，返回 task_id。"""
     task_id = make_repair_task_id(repair_run_id, agent_name, attempt)
-    agent._l2_repair_run_id = repair_run_id
-    agent._l2_agent = agent_name
-    agent._l2_phase = phase
-    agent._l2_attempt = int(attempt)
-    agent._l2_task_id = task_id
-    agent._l2_ask_started_ms = int(started_ms)
+    agent.correlation = {
+        "repair_run_id": repair_run_id,
+        "role": agent_name,
+        "phase": phase,
+        "attempt": int(attempt),
+        "task_id": task_id,
+        "started_ms": int(started_ms),
+    }
     if repair_state is not None:
 
         def record_grounding(allowed_edit, grounded_paths, ledger):
@@ -64,13 +66,4 @@ def clear_l2_context(agent) -> None:
     context = getattr(agent, "tool_context", None)
     if context is not None:
         context.grounding_sink = None
-    for attr in (
-        "_l2_repair_run_id",
-        "_l2_agent",
-        "_l2_phase",
-        "_l2_attempt",
-        "_l2_task_id",
-        "_l2_ask_started_ms",
-    ):
-        if hasattr(agent, attr):
-            delattr(agent, attr)
+    agent.correlation = {}

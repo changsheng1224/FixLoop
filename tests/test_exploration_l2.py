@@ -45,10 +45,7 @@ class OwnerClient(FakeModelClient):
                 + json.dumps(
                     {
                         "name": "collect_exploration",
-                        "args": {
-                            "handles": [t.task_id for t in tasks],
-                            "wait_ms": 1000,
-                        },
+                        "args": {"handles": [t.task_id for t in tasks], "wait_ms": 1000},
                     }
                 )
                 + "</tool>"
@@ -68,12 +65,11 @@ class NativeOwnerClient(OwnerClient):
 @pytest.mark.parametrize("native", [False, True], ids=["text", "native"])
 def test_owner_delegates_collects_reviews_updates_plan_and_alone_edits(tmp_path, native):
     orch, state, _ = repair_fixture(tmp_path)
-    # Delegation exposes a wider native schema catalog than the basic patch
-    # fixture. Reserve room for its full protocol and protected task state.
     if native:
+        orch.patcher.config.hard_cap = 6000
         orch.patcher.config.prompt_budget = 6000
         orch.patcher.config.hard_cap = 6000
-    barrier, clients = threading.Barrier(2), []
+    barrier, clients = (threading.Barrier(2), [])
     owner = NativeOwnerClient(tmp_path) if native else OwnerClient(tmp_path)
     orch.patcher.model_client = owner
 
@@ -82,13 +78,13 @@ def test_owner_delegates_collects_reviews_updates_plan_and_alone_edits(tmp_path,
         clients.append(child)
         return child
 
-    orch.patcher._exploration_client_factory = factory
+    orch.exploration_client_factory = factory
     try:
-        patches, meta = orch._run_patcher_toolized(
+        patches, meta = orch.patcher_execution.run_patcher_toolized(
             state, "Delegate source and test discovery, then fix answer()", {}
         )
         assert patches, (meta, state.agent_errors, state.node_timings)
-        binding = orch._plan_binding
+        binding = orch.plan_binding
         assert binding.session.plan.node("edit").status == "succeeded"
         assert len(clients) == 2 and all(len(c.requests) == 2 for c in clients)
         tasks = binding.exploration.tasks()
@@ -118,7 +114,7 @@ def test_owner_delegates_collects_reviews_updates_plan_and_alone_edits(tmp_path,
         )
         operations = binding.session.store.latest("operation", "operation_id").values()
         assert len([o for o in operations if o["effect"] == "write"]) == 1
-        result = orch._run_verifier(state)
+        result = orch.verification.run_verifier(state)
         assert result.all_passed and result.total_tests == 1, result.failure_logs
         assert binding.session.plan.status == "completed"
         assert (tmp_path / "value.py").read_text() == "def answer():\n    return 2\n"
@@ -140,8 +136,8 @@ def test_owner_delegates_collects_reviews_updates_plan_and_alone_edits(tmp_path,
             json.dumps(manifest, indent=2)
         )
     finally:
-        if orch._plan_binding:
-            orch._plan_binding.close()
+        if orch.plan_binding:
+            orch.plan_binding.close()
 
 
 def test_owner_lease_is_kept_alive_during_exploration_binding_initialization(tmp_path, monkeypatch):
@@ -153,11 +149,11 @@ def test_owner_lease_is_kept_alive_during_exploration_binding_initialization(tmp
         str(tmp_path), state.repair_run_id, state.repair_run_id, lease_seconds=0.3
     )
     coordinator.acquire()
-    orch._entry_coordinator = coordinator
+    orch.entry_coordinator = coordinator
     original = RepairPlanBinding._open
 
     def slow_open(self, context, *, defer_plan):
-        time.sleep(0.4)  # Longer than the original owner lease, before first dispatch.
+        time.sleep(0.4)
         original(self, context, defer_plan=defer_plan)
 
     monkeypatch.setattr(RepairPlanBinding, "_open", slow_open)

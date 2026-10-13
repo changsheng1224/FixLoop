@@ -32,7 +32,7 @@ class TestCheckpoint:
     def test_create_checkpoint(self, agent):
         ts = TaskState.create(user_request="fix bug")
         cp = create_checkpoint(agent, ts, "fix bug")
-        assert cp["schema_version"] == "1.0"
+        assert cp["schema_version"] == "3.0"
         assert cp["current_goal"] == "fix bug"
         assert "key_files" in cp
 

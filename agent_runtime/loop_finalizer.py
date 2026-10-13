@@ -21,7 +21,7 @@ def finalize_agent_run(loop, ts) -> None:
             session_usage, loop._protocol_state.last_token_meta
         )
         report_latency = build_report_latency_fields(loop._call_timings)
-        agent._last_run_node_timings = dict(ts.node_timings)
+        agent.last_run_node_timings = dict(ts.node_timings)
         agent._last_call_timings = list(loop._call_timings)
         _feedback_recalled_memories(agent, ts)
         if report_token.get("prompt_budget") is None:
@@ -58,7 +58,7 @@ def finalize_agent_run(loop, ts) -> None:
                 if hasattr(agent, "provider_capabilities")
                 else {}
             ),
-            "prompt_cache_key": getattr(agent._prefix, "hash", ""),
+            "prompt_cache_key": getattr(agent.prefix, "hash", ""),
             "node_timings": ts.node_timings,
             "tier_summary": {
                 "host_calls": loop._tier_counts.get("host", 0),
@@ -109,7 +109,7 @@ def finalize_agent_run(loop, ts) -> None:
                     "l2_attempt": ts.l2_attempt,
                 }
             )
-        agent._last_task_state = ts
+        agent.last_task_state = ts
         if shared:
             store.write_task_state_named(shared, f"task_state.{agent_name}.json", ts)
             store.write_agent_report(shared, agent_name, report_body)
@@ -136,7 +136,7 @@ def finalize_agent_run(loop, ts) -> None:
             store.write_report(ts, report_body)
         _promote_memory_candidates(agent, ts)
         SessionStore(
-            root=agent._cwd,
+            root=agent.cwd,
             trace=loop._emit,
             state_root=str(getattr(agent.tool_context, "state_root", "") or ""),
         ).save(agent.session)

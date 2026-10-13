@@ -52,10 +52,10 @@ class IssuePreparationService:
     ):
         self.repo_root = repo_root
         self.read_source = read_source
-        self.parse_line = parse_line or self._parse_file_line
+        self.parse_line = parse_line or self.parse_file_line
         self.patcher = patcher
         self.light_client = light_client
-        self.classify = classify or self._classify_issue_type
+        self.classify = classify or self.classify_issue_type
 
     def prepare(self, issue, route_context):
         from agent_runtime.intent.router import IntentRouter
@@ -72,7 +72,7 @@ class IssuePreparationService:
         return adapter.to_repair_plan(result, issue), result
 
     @staticmethod
-    def _classify_issue_type(issue: str) -> tuple[str, str]:
+    def classify_issue_type(issue: str) -> tuple[str, str]:
         """规则链分类：依次匹配 _ISSUE_TYPE_RULES，首次命中返回 (issue_type, rule_name)。
 
         explicit_exception 命中时调用 classify_exception 归一化异常类名。
@@ -109,7 +109,7 @@ class IssuePreparationService:
         return None
 
     @staticmethod
-    def _parse_file_line(issue: str, file_path: str) -> int:
+    def parse_file_line(issue: str, file_path: str) -> int:
         """从 issue 文本提取行号（支持 file.py:42 或 line 42）。"""
         if file_path:
             m = re.search(rf"{re.escape(file_path)}:(\d+)", issue)
@@ -120,7 +120,7 @@ class IssuePreparationService:
             return int(m.group(1))
         return 0
 
-    def _fallback_suspects_from_plan(
+    def fallback_suspects_from_plan(
         self,
         plan: RepairPlan,
         issue: str,
@@ -133,7 +133,7 @@ class IssuePreparationService:
             line = self.parse_line(issue, file_path) or 1
             reason = "RepairPlan 降级定位"
             if fallback_suspect_uses_import_line(plan.issue_type):
-                import_line = self._find_import_line_number(file_path)
+                import_line = self.find_import_line_number(file_path)
                 if import_line:
                     line = import_line
                 reason = "import 语句"
@@ -148,7 +148,7 @@ class IssuePreparationService:
             )
         return suspects
 
-    def _find_import_line_number(self, file_path: str) -> int | None:
+    def find_import_line_number(self, file_path: str) -> int | None:
         """定位文件中第一条 import/from 语句行号。"""
         for i, line in enumerate(self.read_source(file_path).splitlines(), 1):
             stripped = line.strip()

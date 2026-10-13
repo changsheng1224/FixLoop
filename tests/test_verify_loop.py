@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from src.orchestrator import Orchestrator
 from src.repair.failure_tags import FailureTag, classify_failure_tags
+from src.repair.session import ExecutionSession
 from src.repair.verification.verify_diagnose import (
     VerifyBucket,
     diagnose_verification,
@@ -26,9 +26,7 @@ class TestDiagnoseVerification:
 
     def test_sandbox_upload_incomplete_is_env(self):
         result = VerificationResult(
-            all_passed=False,
-            total_tests=0,
-            failure_logs=["sandbox upload did not complete"],
+            all_passed=False, total_tests=0, failure_logs=["sandbox upload did not complete"]
         )
         diag = diagnose_verification(result)
         assert diag.bucket == VerifyBucket.ENV
@@ -39,8 +37,7 @@ class TestDiagnoseVerification:
             all_passed=False,
             total_tests=0,
             failure_logs=[
-                "django.core.exceptions.ImproperlyConfigured: "
-                "Requested setting INSTALLED_APPS, but settings are not configured."
+                "django.core.exceptions.ImproperlyConfigured: Requested setting INSTALLED_APPS, but settings are not configured."
             ],
         )
         diag = diagnose_verification(result)
@@ -62,9 +59,7 @@ class TestDiagnoseVerification:
 
     def test_collect_error(self):
         result = VerificationResult(
-            all_passed=False,
-            total_tests=0,
-            failure_logs=["ERROR collecting tests/test_x.py"],
+            all_passed=False, total_tests=0, failure_logs=["ERROR collecting tests/test_x.py"]
         )
         diag = diagnose_verification(result)
         assert diag.bucket == VerifyBucket.COLLECT
@@ -90,28 +85,28 @@ class TestFailureTagUsesEnvBucket:
 
 class TestBuildFeedbackBuckets:
     def test_feedback_includes_bucket_and_env_title(self):
-        orch = Orchestrator(None)
+        orch = ExecutionSession(None)
         result = VerificationResult(
             all_passed=False,
             total_tests=0,
             failure_logs=["ModuleNotFoundError: No module named 'foo'"],
         )
         state = RepairState(issue_input="bug")
-        feedback = orch._build_feedback(result, state=state)
+        feedback = orch.patcher_execution.build_feedback(result, state=state)
         assert "[验证分桶]" in feedback
         assert "bucket=env" in feedback
         assert "验证环境" in feedback
         assert state.control.verify_bucket == "env"
 
     def test_logic_feedback_points_to_read_file(self):
-        orch = Orchestrator(None)
+        orch = ExecutionSession(None)
         result = VerificationResult(
             all_passed=False,
             failed=1,
             total_tests=1,
             failure_logs=["FAILED pkg/tests/test_a.py::test_b - AssertionError"],
         )
-        feedback = orch._build_feedback(result)
+        feedback = orch.patcher_execution.build_feedback(result)
         assert "bucket=logic" in feedback
         assert "失败用例" in feedback
         assert "read_file" in feedback
@@ -120,9 +115,7 @@ class TestBuildFeedbackBuckets:
 class TestEnrichRelatedTests:
     def test_merges_nodeids(self):
         state = RepairState(issue_input="x")
-        state.retrieved_context = RetrievedContext(
-            related_tests=["already.py::t"],
-        )
+        state.retrieved_context = RetrievedContext(related_tests=["already.py::t"])
         diag = diagnose_verification(
             VerificationResult(
                 all_passed=False,

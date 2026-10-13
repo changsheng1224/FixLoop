@@ -87,7 +87,9 @@ def test_restart_with_commit_intent_remains_blocked_and_preserves_evidence(backe
 
 
 @pytest.mark.parametrize("mutations", [False, True])
-def test_terminal_transport_failure_can_confirm_cleanup_without_erasing_evidence(backend, mutations):
+def test_terminal_transport_failure_can_confirm_cleanup_without_erasing_evidence(
+    backend, mutations
+):
     abandoned(backend, mutations=mutations)
     original = SandboxResult("uncertain", cleanup="unverified", mutation_status="unknown").to_wire()
     backend.store.transition("old-call", "terminal", result=original)

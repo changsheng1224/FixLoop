@@ -6,20 +6,8 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from agent_runtime.context_manager import TokenBudget
-
 CONTEXT_SCHEMA_VERSION = 1
-
-EIGHT_SECTIONS = (
-    "system",
-    "task",
-    "state",
-    "knowledge",
-    "tools",
-    "skills",
-    "memory",
-    "history",
-)
-
+EIGHT_SECTIONS = ("system", "task", "state", "knowledge", "tools", "skills", "memory", "history")
 TOOLS_MARKER = "## 可用工具"
 EXAMPLES_MARKER = "## 调用示例"
 
@@ -34,17 +22,14 @@ def split_stable_text(stable_text: str) -> tuple[str, str, str]:
     text = stable_text or ""
     tools_idx = text.find(TOOLS_MARKER)
     examples_idx = text.find(EXAMPLES_MARKER)
-
     if tools_idx == -1:
         if examples_idx == -1:
-            return text.strip(), "", ""
-        return text[:examples_idx].strip(), "", text[examples_idx:].strip()
-
+            return (text.strip(), "", "")
+        return (text[:examples_idx].strip(), "", text[examples_idx:].strip())
     core = text[:tools_idx].strip()
     if examples_idx == -1 or examples_idx < tools_idx:
-        return core, text[tools_idx:].strip(), ""
-
-    return core, text[tools_idx:examples_idx].strip(), text[examples_idx:].strip()
+        return (core, text[tools_idx:].strip(), "")
+    return (core, text[tools_idx:examples_idx].strip(), text[examples_idx:].strip())
 
 
 def _count_text(budget: TokenBudget | Any, text: str) -> int:
@@ -53,40 +38,25 @@ def _count_text(budget: TokenBudget | Any, text: str) -> int:
     return budget.count(text)
 
 
-_STATUS_ICON = {
-    "done": "+",
-    "in_progress": ">",
-    "pending": "-",
-    "blocked": "!",
-    "cancelled": "x",
-}
+_STATUS_ICON = {"done": "+", "in_progress": ">", "pending": "-", "blocked": "!", "cancelled": "x"}
 
 
-def format_state_text(
-    session: dict,
-    agent=None,
-) -> str:
+def format_state_text(session: dict, agent=None) -> str:
     """构建 state section 文本（task_summary + phase + plan_todos 前 3 条）。
 
     ContextManager._get_state() 与 count_state_section() 共用此函数，
     保证格式一致。
     """
     parts: list[str] = []
-
-    # task_summary
     mem = session.get("memory", {})
     working = mem.get("working", {})
     task_summary = (working.get("task_summary", "") or "").strip()
     if task_summary:
         parts.append(f"任务: {task_summary}")
-
-    # L2 phase
     if agent is not None:
-        l2_phase = (getattr(agent, "_l2_phase", "") or "").strip()
+        l2_phase = (getattr(agent, "correlation", {}).get("phase", "") or "").strip()
         if l2_phase:
             parts.append(f"阶段: {l2_phase}")
-
-    # plan_todos 前 3 条
     todos = session.get("plan_todos", [])
     if todos:
         total = len(todos)
@@ -97,7 +67,6 @@ def format_state_text(
             content = (t.get("content", "") or "").strip()
             if content:
                 parts.append(f"  {icon} {content}")
-
     return "\n".join(parts) if parts else ""
 
 
@@ -111,15 +80,11 @@ def count_state_section(agent, budget: TokenBudget | Any) -> int:
 
 
 def build_context_sections(
-    implementation_sections: dict[str, int],
-    *,
-    agent,
-    budget: TokenBudget | Any,
+    implementation_sections: dict[str, int], *, agent, budget: TokenBudget | Any
 ) -> dict[str, int]:
     """五/六 section 实现层 → 八段语义投影（仅用 impl 计数，无 marker 回退）。"""
     ctx = empty_context_sections()
     impl = implementation_sections or {}
-
     ctx["system"] = int(impl.get("system", 0) or 0) + int(impl.get("workspace", 0) or 0)
     ctx["tools"] = int(impl.get("tools", 0) or 0)
     ctx["skills"] = int(impl.get("skills", 0) or 0)
@@ -140,12 +105,7 @@ def build_context_sections_from_fit(sections: dict[str, int]) -> dict[str, int]:
     return ctx
 
 
-def attach_context_projection(
-    metadata: dict,
-    *,
-    agent,
-    budget: TokenBudget | Any,
-) -> None:
+def attach_context_projection(metadata: dict, *, agent, budget: TokenBudget | Any) -> None:
     """写入 metadata.context_sections（由 metadata.sections 派生）。"""
     impl = metadata.get("sections") or {}
     ctx = build_context_sections(impl, agent=agent, budget=budget)

@@ -9,7 +9,7 @@ class RepairContextReader:
     def __init__(self, repo_root):
         self._repo_root = repo_root
 
-    def _read_code_snippet(self, file_path: str, start_line: int, end_line: int) -> str:
+    def read_code_snippet(self, file_path: str, start_line: int, end_line: int) -> str:
         """预读嫌疑文件上下文。"""
         path = Path(file_path)
         if not path.is_absolute():
@@ -26,7 +26,7 @@ class RepairContextReader:
         block.append("    ```")
         return "\n".join(block)
 
-    def _read_line_range(self, file_path: str, start_line: int, end_line: int) -> str:
+    def read_line_range(self, file_path: str, start_line: int, end_line: int) -> str:
         """读取文件的原始行（无 markdown 包装），供 diff-only 上下文使用。"""
         path = Path(file_path)
         if not path.is_absolute():
@@ -38,7 +38,7 @@ class RepairContextReader:
         ctx_end = min(len(lines), end_line)
         return "\n".join(lines[ctx_start:ctx_end])
 
-    def _read_test_context(
+    def read_test_context(
         self,
         context: RetrievedContext | None,
         suspects: list[SuspectLocation],
@@ -54,7 +54,7 @@ class RepairContextReader:
         if context and context.related_tests:
             for item in context.related_tests:
                 ref = str(item)
-                path = self._resolve_test_path(ref)
+                path = self.resolve_test_path(ref)
                 if path and path not in test_paths:
                     test_paths.append(path)
                 if path and "::" in ref:
@@ -63,14 +63,14 @@ class RepairContextReader:
                     )
 
         for s in suspects:
-            guessed = self._guess_test_file(s.file_path, s.function_name or "")
+            guessed = self.guess_test_file(s.file_path, s.function_name or "")
             if guessed and guessed not in test_paths:
                 test_paths.append(guessed)
             if guessed and s.function_name:
                 target_names.setdefault(guessed, set()).add(s.function_name)
 
         if not test_paths:
-            test_paths = self._discover_repo_test_files()
+            test_paths = self.discover_repo_test_files()
 
         blocks: list[str] = []
         used_chars = 0
@@ -79,7 +79,7 @@ class RepairContextReader:
                 content = path.read_text(encoding="utf-8")
             except OSError:
                 continue
-            excerpt = self._select_test_excerpt(
+            excerpt = self.select_test_excerpt(
                 content,
                 target_names.get(path, set()),
                 max_chars=max_file_chars,
@@ -101,7 +101,7 @@ class RepairContextReader:
         return blocks
 
     @staticmethod
-    def _select_test_excerpt(
+    def select_test_excerpt(
         content: str,
         target_names: set[str],
         *,
@@ -140,7 +140,7 @@ class RepairContextReader:
             excerpt = excerpt[:max_chars].rstrip() + "\n# ... excerpt truncated ..."
         return excerpt
 
-    def _resolve_test_path(self, ref: str) -> Path | None:
+    def resolve_test_path(self, ref: str) -> Path | None:
         """从 pytest nodeid 或路径解析测试文件。"""
         file_part = ref.split("::", 1)[0].strip()
         if not file_part:
@@ -154,7 +154,7 @@ class RepairContextReader:
                 return path
         return None
 
-    def _guess_test_file(self, source_file: str, function_name: str) -> Path | None:
+    def guess_test_file(self, source_file: str, function_name: str) -> Path | None:
         """按约定猜测 test_<module>.py。"""
         stem = Path(source_file).stem
         names = [f"test_{stem}.py", f"{stem}_test.py", "test_app.py"]
@@ -170,7 +170,7 @@ class RepairContextReader:
                     return path
         return None
 
-    def _discover_repo_test_files(self) -> list[Path]:
+    def discover_repo_test_files(self) -> list[Path]:
         """扫描 repo 根目录下的 test_*.py。"""
         root = Path(self._repo_root)
         found: list[Path] = []

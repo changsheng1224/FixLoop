@@ -235,8 +235,14 @@ def deliverable_path(name: str) -> bool:
 class GitSnapshot:
     """Use a separate index to export final files, without staging user changes."""
 
-    def __init__(self, repo: Path, output: Path, *, token: CancellationToken | None = None,
-                 sandbox: bool = False):
+    def __init__(
+        self,
+        repo: Path,
+        output: Path,
+        *,
+        token: CancellationToken | None = None,
+        sandbox: bool = False,
+    ):
         self.repo = repo
         self.sandbox = sandbox
         self.token = token

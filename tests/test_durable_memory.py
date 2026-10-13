@@ -298,8 +298,8 @@ class TestSourceToAuthority:
     def test_known_source_maps_correctly(self):
         from agent_runtime.features.memory.durable import source_to_authority
 
-        assert source_to_authority("patcher") == "agent"
-        assert source_to_authority("patcher") == "agent"
+        assert source_to_authority("agent") == "agent"
+        assert source_to_authority("patcher") == "auto"
         assert source_to_authority("user") == "user"
         assert source_to_authority("stack_parse") == "agent"
 
@@ -312,7 +312,7 @@ class TestSourceToAuthority:
     def test_partial_match_works(self):
         from agent_runtime.features.memory.durable import source_to_authority
 
-        assert source_to_authority("tool:patcher") == "agent"
+        assert source_to_authority("tool:agent") == "agent"
 
 
 class TestUpsertEntryAuthority:

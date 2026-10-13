@@ -1,0 +1,178 @@
+from __future__ import annotations
+
+import time
+
+from src.repair.l2_binding import bind_l2_context, clear_l2_context, make_repair_task_id
+from src.repair.run_context import RepairRunContext
+from src.state import AgentAskRef, RepairState
+
+
+class AgentCalls:
+    def __init__(self, session):
+        self.session = session
+
+    def active_repair_ctx(self) -> RepairRunContext:
+        ctx = getattr(self.session, "repair_ctx", None)
+        if ctx is None:
+            raise RuntimeError("repair run context is not active")
+        return ctx
+
+    def l2_elapsed_ms(self) -> int:
+        started = self.active_repair_ctx().repair_started_at
+        if started is None:
+            return 0
+        return int((time.time() - started) * 1000)
+
+    def begin_l2_agent_ask(
+        self, state: RepairState, agent, *, agent_name: str, phase: str, attempt: int
+    ) -> str:
+        repair_run_id = state.repair_run_id
+        if not repair_run_id or agent is None:
+            return ""
+        started_ms = self.l2_elapsed_ms()
+        task_id = bind_l2_context(
+            agent,
+            repair_run_id=repair_run_id,
+            agent_name=agent_name,
+            phase=phase,
+            attempt=attempt,
+            started_ms=started_ms,
+            repair_state=state,
+        )
+        tracer = self.active_repair_ctx().repair_tracer
+        if tracer is not None:
+            from agent_runtime.canonical_trace import TraceSpanContext
+
+            TraceSpanContext.push(f"ask:{agent_name}:{phase}")
+            tracer.emit(
+                agent_name,
+                "agent_ask_started",
+                {
+                    "task_id": task_id,
+                    "repair_run_id": repair_run_id,
+                    "l2_agent": agent_name,
+                    "l2_phase": phase,
+                    "l2_attempt": attempt,
+                    "started_ms": started_ms,
+                },
+                status="ok",
+            )
+        return task_id
+
+    def finish_l2_agent_ask(
+        self,
+        state: RepairState,
+        agent,
+        *,
+        agent_name: str,
+        phase: str,
+        attempt: int,
+        task_id: str,
+        elapsed_ms: int,
+        stop_reason: str = "",
+        tool_steps: int = 0,
+    ) -> None:
+        lock = getattr(getattr(agent, "tool_context", None), "edit_lock", None)
+        if lock is not None:
+            state.control.allowed_edit = sorted(lock.allowed_edit)
+            state.control.allowed_create = sorted(lock.allowed_create)
+            state.control.allowed_delete = sorted(lock.allowed_delete)
+        if not task_id or not state.repair_run_id:
+            clear_l2_context(agent)
+            return
+        finished_ms = self.l2_elapsed_ms()
+        started_ms = int(
+            getattr(agent, "correlation", {}).get("started_ms", finished_ms - elapsed_ms)
+        )
+        ref = AgentAskRef(
+            agent=agent_name,
+            phase=phase,
+            attempt=int(attempt),
+            task_id=task_id,
+            run_id=state.repair_run_id,
+            started_ms=started_ms,
+            finished_ms=finished_ms,
+            stop_reason=stop_reason,
+            tool_steps=int(tool_steps),
+        )
+        state.agent_asks.append(ref)
+        tracer = self.active_repair_ctx().repair_tracer
+        if tracer is not None:
+            from agent_runtime.canonical_trace import STATUS_ERROR, STATUS_OK, TraceSpanContext
+
+            ask_status = (
+                STATUS_ERROR
+                if stop_reason in ("error", "failed", "exception", "timeout")
+                else STATUS_OK
+            )
+            tracer.emit(
+                agent_name,
+                "agent_ask_finished",
+                {**ref.to_dict(), "elapsed_ms": elapsed_ms},
+                status=ask_status,
+            )
+            cur = TraceSpanContext.current()
+            if cur is not None and cur.name.startswith("ask:"):
+                TraceSpanContext.pop()
+        clear_l2_context(agent)
+
+    def record_l2_synthetic_ask(
+        self,
+        state: RepairState,
+        *,
+        agent_name: str,
+        phase: str,
+        attempt: int,
+        elapsed_ms: int,
+        stop_reason: str = "",
+        tool_steps: int = 0,
+    ) -> str:
+        """Patcher complete_once / Verifier 等非 AgentLoop 路径。"""
+        repair_run_id = state.repair_run_id
+        if not repair_run_id:
+            return ""
+        task_id = make_repair_task_id(repair_run_id, agent_name, attempt)
+        finished_ms = self.l2_elapsed_ms()
+        started_ms = max(0, finished_ms - int(elapsed_ms))
+        ref = AgentAskRef(
+            agent=agent_name,
+            phase=phase,
+            attempt=int(attempt),
+            task_id=task_id,
+            run_id=repair_run_id,
+            started_ms=started_ms,
+            finished_ms=finished_ms,
+            stop_reason=stop_reason,
+            tool_steps=int(tool_steps),
+        )
+        tracer = self.active_repair_ctx().repair_tracer
+        if tracer is not None:
+            from agent_runtime.canonical_trace import STATUS_ERROR, STATUS_OK, TraceSpanContext
+
+            TraceSpanContext.push(f"ask:{agent_name}:{phase}")
+            payload = {
+                "task_id": task_id,
+                "repair_run_id": repair_run_id,
+                "l2_agent": agent_name,
+                "l2_phase": phase,
+                "l2_attempt": attempt,
+                "started_ms": started_ms,
+                "synthetic": True,
+            }
+            tracer.emit(agent_name, "agent_ask_started", payload, status="ok")
+            ask_status = (
+                STATUS_ERROR
+                if stop_reason in ("error", "failed", "exception", "timeout")
+                else STATUS_OK
+            )
+            tracer.emit(
+                agent_name,
+                "agent_ask_finished",
+                {**ref.to_dict(), "elapsed_ms": elapsed_ms, "synthetic": True},
+                status=ask_status,
+            )
+            cur = TraceSpanContext.current()
+            if cur is not None and cur.name.startswith("ask:"):
+                TraceSpanContext.pop()
+        state.agent_asks.append(ref)
+        return task_id

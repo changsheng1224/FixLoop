@@ -90,6 +90,7 @@ class WorkbenchService:
             )
             self.workspaces = ExecutionWorkspaces(self.state_dir, self.restoration.repository)
             self.terminals = TerminalRecovery(self.store, self.state_dir / "pending-terminals")
+            self.terminals.capture = self.workspaces.capture
             self._recover()
             self.restoration.reconcile_committed()
         except BaseException:

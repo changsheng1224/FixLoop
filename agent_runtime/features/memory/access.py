@@ -16,10 +16,16 @@ class MemoryAccessContext:
     shared_read: bool = False
 
     def allows(
-        self, record: dict, *, write: bool = False, version: str = "", check_version: bool = True,
+        self,
+        record: dict,
+        *,
+        write: bool = False,
+        version: str = "",
+        check_version: bool = True,
     ) -> bool:
         if (
-            not self.project_id or not self.user_id
+            not self.project_id
+            or not self.user_id
             or record.get("project_id") != self.project_id
             or record.get("user_id") != self.user_id
             or (write and self.shared_read)
@@ -43,27 +49,38 @@ class MemoryAccessContext:
 
     def memory_id(self, original: str, scope: str) -> str:
         task = self.task_id if scope in {"run", "task"} else ""
-        return "M-" + hashlib.sha256(
-            f"{self.project_id}|{self.user_id}|{task}|{scope}|{original}".encode()
-        ).hexdigest()[:24]
+        return (
+            "M-"
+            + hashlib.sha256(
+                f"{self.project_id}|{self.user_id}|{task}|{scope}|{original}".encode()
+            ).hexdigest()[:24]
+        )
 
 
 def agent_access_context(agent, *, shared_read: bool = False) -> MemoryAccessContext:
     """Session/model claims never select the project or caller principal."""
     context = agent.tool_context
-    source = context.project_root or agent._cwd
+    source = context.project_root or agent.cwd
     binding = context.sandbox_task_binding
     if binding:
         binding.assert_context(context)
-    task = binding.task_id if binding else (
-        agent._memory_task_id or getattr(agent, "shared_run_id", None) or agent._memory_session_id
+    task = (
+        binding.task_id
+        if binding
+        else (
+            agent._memory_task_id
+            or getattr(agent, "shared_run_id", None)
+            or agent._memory_session_id
+        )
     )
     from agent_runtime.linux_sandbox.task_context import checked_id
 
     checked_id(task)
     access = MemoryAccessContext(project_id(source), task, shared_read=shared_read)
     agent.session.setdefault("memory", {})["memory_identity"] = {
-        "project_id": access.project_id, "user_id": access.user_id, "task_id": access.task_id,
+        "project_id": access.project_id,
+        "user_id": access.user_id,
+        "task_id": access.task_id,
     }
     return access
 
@@ -76,13 +93,19 @@ def agent_governance(agent, *, shared_read: bool = False):
     access = agent_access_context(agent, shared_read=shared_read)
     context = agent.tool_context
     project_base = Path(context.embedding_state_base) / "projects" / access.project_id
-    root = project_base / "knowledge" if shared_read else trusted_state_root(
-        agent._cwd, context.state_root or project_base / "tasks" / access.task_id,
-        create=False,
+    root = (
+        project_base / "knowledge"
+        if shared_read
+        else trusted_state_root(
+            agent.cwd,
+            context.state_root or project_base / "tasks" / access.task_id,
+            create=False,
+        )
     )
     return MemoryGovernanceService(
         {} if shared_read else agent.session.setdefault("memory", {}),
-        repo_root=str(root), access_context=access,
+        repo_root=str(root),
+        access_context=access,
         version_provider=lambda: _content_version(agent),
     )
 
@@ -99,7 +122,7 @@ def _content_version(agent) -> str:
 
             versions = workspace_versions(agent.tool_context)
         else:
-            versions = inventory(Path(agent._cwd))
+            versions = inventory(Path(agent.cwd))
         return content_version(versions)
     except (OSError, ValueError):
         return ""  # Unknown versions cannot admit version-bound facts.
@@ -126,7 +149,9 @@ def publish_project_memory(agent, memory_id: str, *, user_confirmed: bool = Fals
     context = agent.tool_context
     root = managed_state_base(context.project_root, context.embedding_state_base) / "knowledge"
     writer = MemoryGovernanceService(
-        {}, repo_root=str(root), access_context=local.access,
+        {},
+        repo_root=str(root),
+        access_context=local.access,
         version_provider=lambda: _content_version(agent),
     )
     if writer.store is None:

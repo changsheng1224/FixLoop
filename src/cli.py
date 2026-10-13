@@ -15,8 +15,9 @@ from src.eval.cli_helpers import (
     run_skill_eval_cmd,
 )
 from src.eval.runner import DEFAULT_CASES_DIR
+from src.repair.assembly import repair_service_factory
+from src.repair.service import RepairRequest
 from src.repair.verification.termination import has_actionable_patch
-from src.repair_factory import make_orchestrator_factory
 
 
 def _add_eval_run_args(parser: argparse.ArgumentParser) -> None:
@@ -28,17 +29,12 @@ def _add_eval_run_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--fake",
         action="store_true",
-        help="Fake Orchestrator（应用 expected_patch，无需 API）",
+        help="离线固定模型响应，经正式修复服务修改并验证内置 Case",
     )
     parser.add_argument(
         "--skip-verify",
         action="store_true",
-        help="禁用 Verifier 重试（默认启用 pytest/Docker 验证）",
-    )
-    parser.add_argument(
-        "--with-verify",
-        action="store_true",
-        help="（已默认启用）显式开启 Verifier 重试",
+        help="跳过真实验证；结果不可标记 fixed",
     )
     parser.add_argument(
         "--markdown",
@@ -125,16 +121,6 @@ def main() -> int:
         help="legacy=宿主工具（验证层单独配置）；wsl_bwrap=WSL2/bwrap 工具沙箱",
     )
     p_repair.add_argument(
-        "--fast-retrieve",
-        action="store_true",
-        help="规则检索（跳过 Retriever LLM，直接 grep）",
-    )
-    p_repair.add_argument(
-        "--no-degrade",
-        action="store_true",
-        help="禁用 verify 耗尽后的 Single-Agent 最后一搏",
-    )
-    p_repair.add_argument(
         "--resume-repair",
         default=None,
         help="从指定 run_id 的 repair checkpoint 续跑",
@@ -181,17 +167,12 @@ def main() -> int:
     p_ablation.add_argument(
         "--fake",
         action="store_true",
-        help="Fake Orchestrator（应用 expected_patch，无需 API）",
+        help="离线固定模型响应，经正式修复服务修改并验证内置 Case",
     )
     p_ablation.add_argument(
         "--skip-verify",
         action="store_true",
-        help="禁用 Verifier 重试（默认启用 pytest/Docker 验证）",
-    )
-    p_ablation.add_argument(
-        "--with-verify",
-        action="store_true",
-        help="（已默认启用）显式开启 Verifier 重试",
+        help="跳过真实验证；结果不可标记 fixed",
     )
     p_ablation.add_argument(
         "--repetitions",
@@ -203,7 +184,7 @@ def main() -> int:
         "--variant",
         action="append",
         dest="variants",
-        choices=["runtime", "naive"],
+        choices=["runtime"],
         help="指定变体（可多次指定；默认全部）",
     )
     p_ablation.add_argument(
@@ -282,7 +263,7 @@ def _execute_repair(args, repo: str, cancel_token, workspace_ready=None):
     from src.repair_workspace import RepairInputError
 
     try:
-        factory = make_orchestrator_factory(
+        factory = repair_service_factory(
             skip_verify=args.skip_verify,
             dry_run=args.dry_run,
             execution_tier=args.execution_tier,
@@ -294,9 +275,9 @@ def _execute_repair(args, repo: str, cancel_token, workspace_ready=None):
         )
         orch = factory(repo)
     except Exception as exc:
-        from src.repair_factory import RequiredVerifierError
+        from src.repair.assembly import VerificationEnvironmentError
 
-        if isinstance(exc, RequiredVerifierError):
+        if isinstance(exc, VerificationEnvironmentError):
             raise
         raise RepairInputError("configuration_failed", f"配置/初始化失败: {exc}") from exc
 
@@ -307,17 +288,12 @@ def _execute_repair(args, repo: str, cancel_token, workspace_ready=None):
         start_metrics_server(port)
         print(f"[metrics] Prometheus /metrics → http://127.0.0.1:{port}/metrics", file=sys.stderr)
 
-    if args.fast_retrieve:
-        orch._fast_retrieve_enabled = True
-        if args.verbose:
-            print("[Orchestrator] Retriever 使用规则检索（grep），跳过 LLM", file=sys.stderr)
-
     if args.dry_run:
         print("⚠ DRY-RUN MODE", file=sys.stderr)
     if args.verbose:
         if getattr(args, "execution_backend", "legacy") == "wsl_bwrap" and not args.skip_verify:
             print("[Orchestrator] Verifier 使用任务绑定的 WSL2/bwrap 沙箱", file=sys.stderr)
-        elif orch.verifier:
+        elif orch.session.verification_backend:
             print("[Orchestrator] Verifier 已接入 (Docker)", file=sys.stderr)
         elif args.execution_tier == "host" and not args.skip_verify:
             print("[Orchestrator] Verifier 使用本地 pytest（无 sandbox 隔离）", file=sys.stderr)
@@ -327,11 +303,13 @@ def _execute_repair(args, repo: str, cancel_token, workspace_ready=None):
             print("[Orchestrator] Docker 不可用，跳过验证", file=sys.stderr)
         print("[Orchestrator] 开始修复...", file=sys.stderr)
 
-    state = orch.repair(
-        args.issue,
-        cancel_token=cancel_token,
-        resume_run_id=getattr(args, "resume_repair", None) or "",
-        workspace_ready=workspace_ready,
+    state = orch.run(
+        RepairRequest(
+            args.issue,
+            cancel_token=cancel_token,
+            resume_run_id=getattr(args, "resume_repair", None) or "",
+            workspace_ready=workspace_ready,
+        )
     )
 
     return state
@@ -499,14 +477,14 @@ def _print_repair_result(state, verbose: bool, *, dry_run: bool = False) -> None
             vr
             and vr.all_passed
             and vr.total_tests > 0
-            and vr.execution_status == "completed"
+            and vr.execution_status == "passed"
             and not dry_run
         )
         pending = state.status == "pending_verify" or not verified
         suffix = " (未验证)" if pending else ""
         emoji = "⚠" if pending else "✅"
         label = "补丁已生成，等待验证" if pending else "修复完成"
-        if vr and vr.verification_mode == "static" and vr.execution_status == "completed":
+        if vr and vr.verification_mode == "static" and vr.execution_status == "unverified":
             label = "静态检查通过，补丁等待测试验证"
         print(f"\n{emoji} {label}! 状态={state.status}{suffix}")
         for patch in state.candidate_patches:

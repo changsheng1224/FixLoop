@@ -97,7 +97,15 @@ def resolve_terminal_status(state: RepairState) -> RepairStatus:
     if has_repair_timeout(state):
         return RepairTerminalStatus.TIMEOUT
     if state.status == RepairTerminalStatus.FIXED:
-        return RepairTerminalStatus.FIXED
+        verification = state.verification_result
+        if (
+            verification
+            and verification.execution_status == "passed"
+            and verification.all_passed
+            and verification.total_tests > 0
+        ):
+            return RepairTerminalStatus.FIXED
+        return RepairTerminalStatus.PENDING_VERIFY
     if introduced_regression(state):
         return RepairTerminalStatus.REGRESSION
     from src.repair.stop_loss import has_stop_loss

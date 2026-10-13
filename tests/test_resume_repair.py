@@ -4,10 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from src.repair.checkpoint_load import (
-    load_repair_checkpoint,
-    save_repair_checkpoint,
-)
+from src.repair.checkpoint_load import load_repair_checkpoint, save_repair_checkpoint
+from src.repair.service import RepairRequest, RepairService
 from src.state import RepairPlan, RepairState, SuspectLocation
 
 
@@ -23,12 +21,9 @@ class TestSaveLoadCheckpoint:
             SuspectLocation(file_path="calc.py", start_line=42, end_line=44, confidence=0.9)
         ]
         state.blackboard_snapshot = {"entries": {"key": "val"}}
-
         repo = str(tmp_path)
-        # 手动创建 runs dir
         (Path(repo) / ".agent" / "runs" / "test-run-001").mkdir(parents=True)
         save_repair_checkpoint(state, repo)
-
         loaded = load_repair_checkpoint(repo, "test-run-001")
         assert loaded is not None
         assert loaded["retry_count"] == 2
@@ -64,39 +59,40 @@ class TestSaveCheckpointValidatesType:
 class TestResumeSkipsParse:
     def test_orchestrator_repair_passes_resume_run_id_to_state(self, tmp_path):
         """Orchestrator.repair 应将 resume_run_id 写入 RepairState。"""
-        from src.orchestrator import Orchestrator
+        from src.repair.session import ExecutionSession
 
-        class CaptureResumeOrchestrator(Orchestrator):
-            def _snapshot_repo(self):
+        class CaptureResumeOrchestrator(ExecutionSession):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.transaction.snapshot_repo = self.snapshot_repo
+                self.transaction.restore_repo_snapshot = self.restore_repo_snapshot
+                self.coordinator.repair_impl = self.repair_impl
+
+            def snapshot_repo(self):
                 return {}
 
-            def _restore_repo_snapshot(self, snapshot):
+            def restore_repo_snapshot(self, snapshot):
                 return None
 
-            def _repair_impl(self, state, initial_snapshot=None):
+            def repair_impl(self, state, initial_snapshot=None):
                 return state
 
         orch = CaptureResumeOrchestrator(None)
-        orch._repo_root = str(tmp_path)
+        orch.repo_root = str(tmp_path)
         seed = RepairState(issue_input="test issue", repair_run_id="resume-001")
-        seed.execution.run_entry = orch._workspace_entry()
+        seed.execution.run_entry = orch.lifecycle.workspace_entry()
         save_repair_checkpoint(seed, str(tmp_path))
-
-        result = orch.repair(
-            "test issue",
-            repair_timeout_s=0,
-            resume_run_id="resume-001",
+        result = RepairService(orch).run(
+            RepairRequest("test issue", timeout_s=0, resume_run_id="resume-001")
         )
-
         assert result.repair_run_id == "resume-001"
 
     def test_resume_repair_skips_parse(self, tmp_path):
         """checkpoint 字段恢复保留 retry/phase/suspects 等关键状态。"""
-        from src.repair.pipeline import RepairPipelineMixin
+        from src.repair.session import ExecutionSession
         from src.state import RepairState, SuspectLocation
 
         repo = str(tmp_path)
-        # 保存 checkpoint
         state = RepairState(issue_input="test issue")
         state.repair_run_id = "resume-001"
         state.retry_count = 1
@@ -107,17 +103,13 @@ class TestResumeSkipsParse:
         state.repair_plan = RepairPlan(issue_type="type_error")
         (Path(repo) / ".agent" / "runs" / "resume-001").mkdir(parents=True)
         save_repair_checkpoint(state, repo)
-
-        # 创建新的 state（模拟重启）并恢复 checkpoint 字段
         new_state = RepairState(issue_input="test issue")
         new_state.repair_run_id = "resume-001"
-
-        mixin = RepairPipelineMixin()
+        mixin = ExecutionSession(None)
+        mixin.repo_root = repo
         checkpoint = load_repair_checkpoint(repo, "resume-001")
         assert checkpoint is not None
-
-        mixin._restore_state_from_repair_checkpoint(new_state, checkpoint)
-
+        mixin.coordinator.restore_state_from_repair_checkpoint(new_state, checkpoint)
         assert new_state.retry_count == 1
         assert new_state.phase == "patch"
         assert len(new_state.suspect_locations) == 1
@@ -126,8 +118,8 @@ class TestResumeSkipsParse:
 
     def test_resume_repair_reenters_patch_loop(self, tmp_path, monkeypatch):
         """有效 checkpoint 应跳过 parse/localize，并继续执行 patch loop。"""
-        from src.orchestrator import Orchestrator
         from src.repair.checkpoint_load import save_repair_checkpoint
+        from src.repair.session import ExecutionSession
         from src.state import CandidatePatch, RepairPlan, RepairState, SuspectLocation
 
         repo = str(tmp_path)
@@ -144,52 +136,48 @@ class TestResumeSkipsParse:
         (Path(repo) / ".agent" / "runs" / "resume-002").mkdir(parents=True)
         save_repair_checkpoint(state, repo)
 
-        class ResumeOrchestrator(Orchestrator):
+        class ResumeOrchestrator(ExecutionSession):
             def __init__(self):
                 super().__init__(None, use_pytest_verify=False)
-                self._repo_root = repo
+                self.repo_root = repo
                 self.patch_calls = 0
+                self.transaction.snapshot_repo = self.snapshot_repo
+                self.transaction.restore_repo_snapshot = self.restore_repo_snapshot
+                self.exploration.parse_issue = self.parse_issue
+                self.patcher_execution.run_patcher = self.run_patcher
 
-            def _snapshot_repo(self):
+            def snapshot_repo(self):
                 return {}
 
-            def _restore_repo_snapshot(self, snapshot):
+            def restore_repo_snapshot(self, snapshot):
                 return None
 
-            def _parse_issue(self, issue):
+            def parse_issue(self, issue):
                 raise AssertionError("resume path should skip parse")
 
-            def _run_patcher(self, state):
+            def run_patcher(self, state):
                 self.patch_calls += 1
                 assert state.feedback == "previous verifier feedback"
                 assert state.suspect_locations
-                return [
-                    CandidatePatch(
-                        file_path="a.py",
-                        original_lines="old",
-                        patched_lines="new",
-                    )
-                ], {
-                    "total_ms": 1,
-                    "model_call_ms": 0,
-                    "parse_apply_ms": 1,
-                }
+                return (
+                    [CandidatePatch(file_path="a.py", original_lines="old", patched_lines="new")],
+                    {"total_ms": 1, "model_call_ms": 0, "parse_apply_ms": 1},
+                )
 
         orch = ResumeOrchestrator()
-        state.execution.run_entry = orch._workspace_entry()
+        state.execution.run_entry = orch.lifecycle.workspace_entry()
         save_repair_checkpoint(state, repo)
-        # This unit double has no Agent or execution registry. Real owner/Plan
-        # initialization is covered by the public L2 process tests.
-        monkeypatch.setattr(orch, "_begin_repair_trace", lambda _: None)
-        result = orch.repair("test issue", repair_timeout_s=0, resume_run_id="resume-002")
-
+        monkeypatch.setattr(orch.events, "begin_repair_trace", lambda _: None)
+        result = RepairService(orch).run(
+            RepairRequest("test issue", timeout_s=0, resume_run_id="resume-002")
+        )
         assert orch.patch_calls == 1
         assert result.status == "pending_verify"
         assert result.control.verify_skipped is True
 
     def test_skip_verify_retries_empty_truncated_patch(self, tmp_path, monkeypatch):
         """关闭 Verifier 也必须消费空补丁重试，而不是第一次就退出。"""
-        from src.orchestrator import Orchestrator
+        from src.repair.session import ExecutionSession
         from src.state import CandidatePatch
 
         repo = str(tmp_path)
@@ -199,46 +187,47 @@ class TestResumeSkipsParse:
         (Path(repo) / ".agent" / "runs" / state.repair_run_id).mkdir(parents=True)
         save_repair_checkpoint(state, repo)
 
-        class ResumeOrchestrator(Orchestrator):
+        class ResumeOrchestrator(ExecutionSession):
             def __init__(self):
                 super().__init__(None, use_pytest_verify=False)
-                self._repo_root = repo
+                self.repo_root = repo
                 self.patch_calls = 0
+                self.transaction.snapshot_repo = self.snapshot_repo
+                self.transaction.restore_repo_snapshot = self.restore_repo_snapshot
+                self.patcher_execution.run_patcher = self.run_patcher
 
-            def _snapshot_repo(self):
+            def snapshot_repo(self):
                 return {}
 
-            def _restore_repo_snapshot(self, snapshot):
+            def restore_repo_snapshot(self, snapshot):
                 return None
 
-            def _run_patcher(self, repair_state):
+            def run_patcher(self, repair_state):
                 self.patch_calls += 1
                 timing = {"total_ms": 1, "model_call_ms": 1, "parse_apply_ms": 0}
                 if self.patch_calls == 1:
                     repair_state.control.patcher_terminal_status = "model_output_truncated"
-                    return [], timing
+                    return ([], timing)
                 repair_state.control.patcher_terminal_status = "patch_produced"
-                return [
-                    CandidatePatch(
-                        file_path="a.py",
-                        original_lines="old",
-                        patched_lines="new",
-                    )
-                ], timing
+                return (
+                    [CandidatePatch(file_path="a.py", original_lines="old", patched_lines="new")],
+                    timing,
+                )
 
         orch = ResumeOrchestrator()
-        state.execution.run_entry = orch._workspace_entry()
+        state.execution.run_entry = orch.lifecycle.workspace_entry()
         save_repair_checkpoint(state, repo)
-        monkeypatch.setattr(orch, "_begin_repair_trace", lambda _: None)
-        result = orch.repair("test issue", repair_timeout_s=0, resume_run_id="resume-empty")
-
+        monkeypatch.setattr(orch.events, "begin_repair_trace", lambda _: None)
+        result = RepairService(orch).run(
+            RepairRequest("test issue", timeout_s=0, resume_run_id="resume-empty")
+        )
         assert orch.patch_calls == 2
         assert result.retry_count == 1
         assert result.status == "pending_verify"
         assert "直接调用一次 apply_patch" in result.feedback
 
     def test_skip_verify_still_runs_critic_and_retries(self, tmp_path, monkeypatch):
-        from src.orchestrator import Orchestrator
+        from src.repair.session import ExecutionSession
         from src.state import CandidatePatch
 
         repo = str(tmp_path)
@@ -248,41 +237,46 @@ class TestResumeSkipsParse:
         (Path(repo) / ".agent" / "runs" / state.repair_run_id).mkdir(parents=True)
         save_repair_checkpoint(state, repo)
 
-        class ResumeOrchestrator(Orchestrator):
+        class ResumeOrchestrator(ExecutionSession):
             def __init__(self):
                 super().__init__(None, use_pytest_verify=False)
-                self._repo_root = repo
+                self.repo_root = repo
                 self.patch_calls = 0
                 self.restore_calls = 0
+                self.transaction.snapshot_repo = self.snapshot_repo
+                self.transaction.restore_repo_snapshot = self.restore_repo_snapshot
+                self.patcher_execution.run_patcher = self.run_patcher
 
-            def _snapshot_repo(self):
+            def snapshot_repo(self):
                 return {"a.py": "value = 1\n"}
 
-            def _restore_repo_snapshot(self, snapshot):
+            def restore_repo_snapshot(self, snapshot):
                 self.restore_calls += 1
 
-            def _run_patcher(self, repair_state):
+            def run_patcher(self, repair_state):
                 self.patch_calls += 1
                 duplicate = self.patch_calls == 1
                 added = "value = 2\nvalue = 2" if duplicate else "value = 2"
-                return [
-                    CandidatePatch(
-                        file_path="a.py",
-                        original_lines="value = 1",
-                        patched_lines=added,
-                        diff=(
-                            "--- a/a.py\n+++ b/a.py\n@@ -1 +1,2 @@\n"
-                            "-value = 1\n+value = 2\n" + ("+value = 2\n" if duplicate else "")
-                        ),
-                    )
-                ], {"total_ms": 1, "model_call_ms": 1, "parse_apply_ms": 0}
+                return (
+                    [
+                        CandidatePatch(
+                            file_path="a.py",
+                            original_lines="value = 1",
+                            patched_lines=added,
+                            diff="--- a/a.py\n+++ b/a.py\n@@ -1 +1,2 @@\n-value = 1\n+value = 2\n"
+                            + ("+value = 2\n" if duplicate else ""),
+                        )
+                    ],
+                    {"total_ms": 1, "model_call_ms": 1, "parse_apply_ms": 0},
+                )
 
         orch = ResumeOrchestrator()
-        state.execution.run_entry = orch._workspace_entry()
+        state.execution.run_entry = orch.lifecycle.workspace_entry()
         save_repair_checkpoint(state, repo)
-        monkeypatch.setattr(orch, "_begin_repair_trace", lambda _: None)
-        result = orch.repair("test issue", repair_timeout_s=0, resume_run_id="resume-critic")
-
+        monkeypatch.setattr(orch.events, "begin_repair_trace", lambda _: None)
+        result = RepairService(orch).run(
+            RepairRequest("test issue", timeout_s=0, resume_run_id="resume-critic")
+        )
         assert orch.patch_calls == 2
         assert orch.restore_calls >= 1
         assert result.node_timings["critic_rejected_count"] == 1

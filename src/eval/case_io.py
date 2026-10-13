@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from importlib.resources import files
 from pathlib import Path
 
 import yaml
 
-DEFAULT_CASES_DIR = Path(__file__).resolve().parent / "cases"
+DEFAULT_CASES_DIR = files("src.eval").joinpath("cases")
+OFFLINE_SMOKE_CASES = ("case_001", "case_002")
 
 
 def load_case_metadata(case_dir: Path) -> dict:
@@ -25,3 +27,10 @@ def build_case_issue(case_dir: Path, *, metadata: dict | None = None) -> str:
     if source_files:
         issue = f"{issue}\n\nCandidate source files: {', '.join(source_files)}"
     return issue
+
+
+def read_expected_patch(case_dir) -> str:
+    resource = case_dir.joinpath("expected_patch.diff")
+    if not resource.is_file():
+        raise FileNotFoundError(f"required evaluation resource missing: {resource}")
+    return resource.read_text(encoding="utf-8")

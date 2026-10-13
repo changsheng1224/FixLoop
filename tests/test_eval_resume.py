@@ -10,9 +10,9 @@ from src.eval.runner import DEFAULT_CASES_DIR, EvalRunner
 
 def _fake_factory(repo_path: str):
     """返回一个不执行 repair 的假 Orchestrator。"""
-    from src.eval.fake_runner import FakePatchOrchestrator
+    from src.eval.fake_runner import fixture_repair_service_factory
 
-    return FakePatchOrchestrator(repo_path, cases_dir=DEFAULT_CASES_DIR)
+    return fixture_repair_service_factory(DEFAULT_CASES_DIR)(repo_path)
 
 
 def _make_runner(output_dir: Path) -> EvalRunner:

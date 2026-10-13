@@ -14,7 +14,6 @@ from src.repair.verification.verify import (
     StaticVerifyStrategy,
     VerifyRun,
     _verify_cancelled_run,
-    record_verify_timings,
 )
 from src.state import VerificationResult
 
@@ -62,9 +61,40 @@ class VerificationService:
         started = time.time()
         self.active.set()
         try:
-            return self._run(state)
+            run = self._run(state)
+            category = str(run.internal.get("category", ""))
+            if run.error in {"user_cancel", "cancelled"} or category in {
+                "cancelled",
+                "user_cancel",
+                "interrupted",
+            }:
+                outcome = "cancelled"
+            elif "timeout" in category or "timeout" in str(run.error):
+                outcome = "timed_out"
+            elif run.internal.get("not_started") or category in {
+                "verification_environment_failed",
+                "sandbox_unavailable",
+                "environment",
+            }:
+                outcome = "environment_unavailable"
+            elif category == "no-tests":
+                outcome = "unverified"
+            elif (
+                run.internal.get("actual_tier") == "static"
+                or run.internal.get("completed") is not True
+            ):
+                outcome = "unverified"
+            elif run.result.all_passed and run.result.total_tests > 0:
+                outcome = "passed"
+            else:
+                outcome = "failed"
+            run.result.execution_status = outcome
+            run.result.all_passed = outcome == "passed"
+            return run
         except CancelledError:
-            return _verify_cancelled_run(started)
+            run = _verify_cancelled_run(started)
+            run.result.execution_status = "cancelled"
+            return run
         finally:
             self.active.clear()
 
@@ -96,7 +126,7 @@ class VerificationService:
                 if (
                     run.error == "sandbox_unavailable"
                     and self.selected_tier is None
-                    and self.requested_tier == "auto"
+                    and (self.requested_tier == "auto")
                 ):
                     fallback = (
                         "host"
@@ -124,96 +154,5 @@ class VerificationService:
         if run.internal.get("cleanup") in {"unverified", "unknown"}:
             self.cleanup_confirmed = False
             raise ProcessCleanupUnconfirmedError("verification process tree cleanup unconfirmed")
-        # Pin even an unavailable layer: future phases must use the same policy.
         self.selected_tier = tier
         return run
-
-
-class VerificationMixin:
-    def _block_unconfirmed_verification(self, state, reason):
-        from src.repair.recovery_outcome import publish_recovery_outcome
-
-        service = getattr(self, "_verify_service", None)
-        if service is not None:
-            service.cleanup_confirmed = (
-                False  # A later worker return cannot erase the recovery fence.
-            )
-        state.control.coordination_status = "recovery_required"
-        state.set_status("recovery_required", "verification_cleanup_unconfirmed")
-        state.agent_errors["verification_cleanup"] = reason
-        context = getattr(self.patcher, "tool_context", None)
-        if context is not None:
-            context.execution_uncertain = True
-        binding = getattr(self, "_plan_binding", None)
-        coordinator = getattr(binding, "coordinator", None) or getattr(
-            self, "_entry_coordinator", None
-        )
-        if coordinator is not None and coordinator.lease is not None:
-            current = coordinator.store.snapshot(coordinator.lease.run_id)
-            if current.owner_token == coordinator.lease.owner_token:
-                coordinator.store.mark_recovery_required(
-                    coordinator.lease, error_code="verification_cleanup_unconfirmed"
-                )
-        publish_recovery_outcome(
-            state,
-            {
-                "run_id": state.repair_run_id,
-                "status": "recovery_required",
-                "resources": [
-                    {
-                        "resource_id": "host_verification",
-                        "kind": "test_process",
-                        "status": "unknown",
-                        "cleanup": "unverified",
-                        "error_code": "verification_cleanup_unconfirmed",
-                    }
-                ],
-            },
-            stage="cancel",
-            reason_code="verification_cleanup_unconfirmed",
-            emitter=self._progress_emitter(),
-        )
-
-    def _verification_service(self):
-        if getattr(self, "_verify_service", None) is None:
-            self._verify_service = VerificationService(
-                repo_root=self._repo_root,
-                policy=self.execution_policy,
-                sandbox_context=self._sandbox_context,
-                test_target=self._pick_test_path,
-                cancel_token=lambda: self._repair_ctx.cancel_token if self._repair_ctx else None,
-            )
-        return self._verify_service
-
-    def _run_verifier(self, state):
-        if self._plan_binding is not None:
-            return self._plan_binding.run_verifier(lambda: self._run_verifier_impl(state))
-        return self._run_verifier_impl(state)
-
-    def _run_verifier_impl(self, state):
-        from src.collaboration.isolation import role_projection
-
-        state.node_timings["verifier_input_projection"] = role_projection(state, "verifier")
-        run = self._verification_service().run(state)
-        if run.result.all_passed and run.internal.get("completed") is not True:
-            run.result.all_passed = False
-            run.result.failure_logs.append("verification_execution_unconfirmed")
-        if (
-            run.result.all_passed
-            and run.result.verification_mode == "tests"
-            and run.result.total_tests <= 0
-        ):
-            run.result.all_passed = False
-            run.result.failure_logs.append("verification_empty_collection")
-        record_verify_timings(state, run)
-        return run.result
-
-    def _record_validation_exit(self, state, key):
-        run = self._verification_service().run(state)
-        code = run.internal.get("exit_code", run.internal.get("pytest_exit_code"))
-        if run.internal.get("actual_tier") == "static":
-            code = None  # Static success is not a green test baseline.
-        setattr(state.control, key, code)
-        state.node_timings[key + "_category"] = run.internal.get("category", "unknown")
-        state.node_timings[key + "_receipt_id"] = run.internal.get("receipt_id", "")
-        state.node_timings[key + "_receipt"] = dict(run.internal)

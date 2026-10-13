@@ -14,6 +14,17 @@ ACTIVE = frozenset({"queued", "running", "worker_lost"})
 TERMINAL = frozenset({"completed", "partial", "failed", "cancelled", "timed_out", "stale"})
 
 
+EXPLORATION_SAFETY_LIMITS = {
+    "model_turns": 3,
+    "tool_calls": 4,
+    "tokens": 24000,
+    "run_tokens": 96000,
+    "deadline_s": 60,
+    "cleanup_s": 2,
+    "max_wait_ms": 1000,
+}
+
+
 @dataclass(frozen=True)
 class ExplorationLimits:
     model_turns: int = 3
@@ -25,13 +36,19 @@ class ExplorationLimits:
     max_wait_ms: int = 1000
 
     def __post_init__(self):
-        if not (1 <= self.model_turns <= 3 and 1 <= self.tool_calls <= 4):
+        caps = EXPLORATION_SAFETY_LIMITS
+        if not (
+            1 <= self.model_turns <= caps["model_turns"]
+            and 1 <= self.tool_calls <= caps["tool_calls"]
+        ):
             raise ValueError("exploration_limits_may_only_lower_turn_and_tool_caps")
-        if not (0 < self.tokens <= 24000 and 0 < self.run_tokens <= 96000):
+        if not (0 < self.tokens <= caps["tokens"] and 0 < self.run_tokens <= caps["run_tokens"]):
             raise ValueError("invalid_exploration_token_budget")
-        if not (0 < self.deadline_s <= 60 and 0 <= self.cleanup_s <= 2):
+        if not (
+            0 < self.deadline_s <= caps["deadline_s"] and 0 <= self.cleanup_s <= caps["cleanup_s"]
+        ):
             raise ValueError("invalid_exploration_deadline")
-        if not (0 <= self.max_wait_ms <= 1000):
+        if not (0 <= self.max_wait_ms <= caps["max_wait_ms"]):
             raise ValueError("invalid_exploration_wait_limit")
 
 

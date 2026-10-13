@@ -38,7 +38,7 @@ def test_incurred_usage_is_recorded_even_above_limit():
 
 
 def test_durable_reservation_callback_runs_before_provider_dispatch():
-    budget, events = BudgetManager(), []
+    budget, events = (BudgetManager(), [])
 
     def reserved(snapshot):
         assert snapshot["used"]["llm_calls"] == 1
@@ -50,7 +50,7 @@ def test_durable_reservation_callback_runs_before_provider_dispatch():
 
 
 def test_failed_reservation_persistence_prevents_dispatch_and_keeps_debt():
-    budget, dispatched = BudgetManager(), []
+    budget, dispatched = (BudgetManager(), [])
 
     def fail(snapshot):
         raise ValueError("owner_lost")
@@ -125,8 +125,8 @@ def test_cancelled_or_expired_before_call_consumes_nothing():
 
 @pytest.mark.parametrize("cancel", [True, False])
 def test_interrupted_call_and_late_result_cannot_refund_reservation(cancel):
-    entered, release, done = threading.Event(), threading.Event(), threading.Event()
-    budget, token = BudgetManager(), CancellationToken()
+    entered, release, done = (threading.Event(), threading.Event(), threading.Event())
+    budget, token = (BudgetManager(), CancellationToken())
 
     def provider():
         entered.set()
@@ -188,7 +188,7 @@ def test_auxiliary_call_uses_same_ledger_and_output_limit():
 
     budget = BudgetManager({"output_tokens": 9})
     client = FakeModelClient(["should not dispatch"])
-    agent = SimpleNamespace(config=AgentConfig(), session={}, _run_budget_manager=budget)
+    agent = SimpleNamespace(config=AgentConfig(), session={}, budget_manager=budget)
     with pytest.raises(ModelBudgetExceededError):
         complete_text(agent, client, "summarize", max_output_tokens=10, purpose="summary")
     assert not client.prompts
@@ -200,7 +200,7 @@ def test_input_window_is_independent_of_cumulative_budget():
 
     config = AgentConfig(model_context_window=4096, context_safety_margin=128)
     assert config.input_window(1024) == 2944
-    assert config.effective_budget()["prompt_tokens"] == 100_000
+    assert config.effective_budget()["prompt_tokens"] == 100000
     with pytest.raises(ValueError, match="model_context_window_exhausted"):
         config.input_window(4096)
 
@@ -256,28 +256,31 @@ def test_exploration_receipts_settle_input_and_output_separately(tmp_path):
 
 def test_repair_roles_and_resume_share_budget_and_deadline():
     from agent_runtime.config import AgentConfig
-    from src.orchestrator import Orchestrator
+    from src.repair.session import ExecutionSession
     from src.state import RepairState
 
-    owner = object.__new__(Orchestrator)
+    owner = object.__new__(ExecutionSession)
     owner.patcher = SimpleNamespace(config=AgentConfig())
+    from src.repair.execution.lifecycle import ExecutionLifecycle
+
+    owner.lifecycle = ExecutionLifecycle(owner)
     from src.repair.verification.execution_policy import VerificationBackend
 
-    owner.verifier = VerificationBackend()
-    owner._initialize_model_budget(None, 60)
-    assert owner.patcher._run_budget_manager is owner._model_budget
-    assert owner.patcher._repair_deadline is owner._model_deadline
-    call(owner._model_budget, "unknown", purpose="planning")
+    owner.verification_backend = VerificationBackend()
+    owner.lifecycle.initialize_model_budget(None, 60)
+    assert owner.patcher.budget_manager is owner.model_budget
+    assert owner.patcher.execution_deadline is owner.model_deadline
+    call(owner.model_budget, "unknown", purpose="planning")
     state = RepairState(issue_input="repair")
-    owner._release_model_budget(state)
-    assert owner.patcher._run_budget_manager is None
-    owner._initialize_model_budget(state.to_dict(), 90)
+    owner.lifecycle.release_model_budget(state)
+    assert owner.patcher.budget_manager is None
+    owner.lifecycle.initialize_model_budget(state.to_dict(), 90)
     try:
-        assert owner._model_budget.summary()["total_tokens"]["used"] == 30
-        assert owner._model_deadline.remaining_s() <= 60
-        assert not hasattr(owner.verifier, "_run_budget_manager")
+        assert owner.model_budget.summary()["total_tokens"]["used"] == 30
+        assert owner.model_deadline.remaining_s() <= 60
+        assert not hasattr(owner.verification_backend, "budget_manager")
     finally:
-        owner._release_model_budget(state)
+        owner.lifecycle.release_model_budget(state)
 
 
 def test_intent_retries_consume_shared_budget():
@@ -290,7 +293,7 @@ def test_intent_retries_consume_shared_budget():
             self.calls += 1
             raise RuntimeError("provider unavailable")
 
-    client, budget = FailingClient(), BudgetManager({"llm_calls": 1})
+    client, budget = (FailingClient(), BudgetManager({"llm_calls": 1}))
     result = IntentLlmRuntime(IntentLlmPolicy(max_retries=2, retry_backoff_s=0)).complete(
         client, "classify", budget=budget
     )
@@ -305,7 +308,7 @@ def test_auxiliary_expired_deadline_prevents_dispatch():
 
     client = FakeModelClient(["should not dispatch"])
     agent = SimpleNamespace(
-        config=AgentConfig(), session={}, _repair_deadline=ExecutionDeadline.from_remaining(0)
+        config=AgentConfig(), session={}, execution_deadline=ExecutionDeadline.from_remaining(0)
     )
     with pytest.raises(TimeoutError):
         complete_text(agent, client, "summarize", max_output_tokens=10, purpose="summary")
@@ -367,9 +370,9 @@ def test_explicit_parent_budget_is_not_reset_by_ask(tmp_path):
     )
     budget = BudgetManager({"llm_calls": 1})
     budget.reserve("llm_calls")
-    agent._run_budget_manager = budget
+    agent.budget_manager = budget
     assert "预算已耗尽" in agent.ask("inspect", skip_plan=True)
-    assert agent._run_budget_manager is budget
+    assert agent.budget_manager is budget
     assert not client.prompts
 
 
@@ -403,13 +406,13 @@ def test_role_checkpoint_cannot_refund_newer_run_budget_or_extend_deadline(tmp_p
     budget = BudgetManager()
     older = budget.snapshot()
     call(budget, "unknown", purpose="planning")
-    agent._run_budget_manager = budget
-    agent._repair_deadline = ExecutionDeadline(20)
-    agent._model_budget_run_bound = True
+    agent.budget_manager = budget
+    agent.execution_deadline = ExecutionDeadline(20)
+    agent.budget_run_bound = True
     loop = AgentLoop(agent)
     loop._restore_runtime_control({"budget_manager": older, "deadline": {"remaining_s": None}})
     assert budget.summary()["total_tokens"]["used"] == 30
-    assert agent._repair_deadline.remaining_s() <= 20
+    assert agent.execution_deadline.remaining_s() <= 20
 
 
 def test_native_provider_missing_usage_keeps_reservation(monkeypatch):

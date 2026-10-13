@@ -38,8 +38,8 @@ def _agent(root, session, *, native=False, budget=6000):
         workspace=WorkspaceContext.build(str(root)),
         cwd=str(root),
     )
-    agent._plan_session = session
-    return agent, client
+    agent.plan_session = session
+    return (agent, client)
 
 
 @pytest.mark.parametrize("native", [False, True])
@@ -192,7 +192,7 @@ def test_edit_missing_required_evidence_reports_retrieval_without_call(tmp_path,
         agent, client = _agent(tmp_path, session, native=native)
         try:
             answer = agent.ask("edit", skip_plan=True)
-            assert "needs_retrieval" in answer and not client.prompts
+            assert "needs_retrieval" in answer and (not client.prompts)
             assert (tmp_path / "value.py").read_text() == "external = 9\n"
         finally:
             session.local.attempt = None
@@ -273,15 +273,15 @@ def test_l2_constraints_are_persisted_and_survive_real_patch_and_host_pytest(tmp
     assert restored.hard_constraints == state.hard_constraints
     original_test = (tmp_path / "test_value.py").read_bytes()
     try:
-        patches, metadata = orch._run_patcher_toolized(state, "repair", {})
+        patches, metadata = orch.patcher_execution.run_patcher_toolized(state, "repair", {})
         assert patches, (metadata, state.agent_errors)
-        assert orch._run_verifier(state).all_passed
+        assert orch.verification.run_verifier(state).all_passed
         assert (tmp_path / "test_value.py").read_bytes() == original_test
         assert any(state.hard_constraints[0] in prompt for prompt in client.prompts)
-        assert orch._plan_binding.session.long_task_state.hard_constraints == state.hard_constraints
+        assert orch.plan_binding.session.long_task_state.hard_constraints == state.hard_constraints
     finally:
-        if orch._plan_binding:
-            orch._plan_binding.close()
+        if orch.plan_binding:
+            orch.plan_binding.close()
 
 
 @pytest.mark.parametrize("native", [False, True])
@@ -335,9 +335,9 @@ def test_resume_requires_plan_authority_then_fresh_current_inputs(tmp_path):
         agent, client = _agent(tmp_path, session)
         ContextManager(agent).build("continue")
         create_checkpoint(agent, TaskState.create(user_request="continue"), "continue")
-        agent._plan_session = None
+        agent.plan_session = None
         assert evaluate_resume_state(agent)["status"] == "plan-resume-required"
-        agent._plan_session = session
+        agent.plan_session = session
         (tmp_path / "value.py").write_text("value = 9\n")
         result = evaluate_resume_state(agent)
         assert result["status"] == "partial-stale"
@@ -377,32 +377,34 @@ def test_l2_context_pressure_patch_restore_and_verify_do_not_repeat_write(tmp_pa
     init_run_projection(orch.patcher.session, "pressure")
     seal_history_at_build(orch.patcher.session, 1, "wrong summary: change the test instead")
     try:
-        patches, meta = orch._run_patcher_toolized(state, "repair", {})
+        patches, meta = orch.patcher_execution.run_patcher_toolized(state, "repair", {})
         assert patches, (meta, state.agent_errors)
         assert any(state.hard_constraints[0] in prompt for prompt in client.prompts)
         assert orch.patcher.session["context_manifest"]["required_sections"]["state"] > 200
     finally:
-        if orch._plan_binding:
-            orch._plan_binding.close()
+        if orch.plan_binding:
+            orch.plan_binding.close()
     restored, recovered_state, resumed_client = repair_fixture(tmp_path, resume=True)
     recovered_state.hard_constraints = state.hard_constraints
     try:
-        patches, meta = restored._run_patcher_toolized(recovered_state, "continue", {})
+        patches, meta = restored.patcher_execution.run_patcher_toolized(
+            recovered_state, "continue", {}
+        )
         assert patches and meta["edit_mode"] == "plan_resume_adopted"
         assert not resumed_client.prompts
-        session = restored._plan_binding.session
+        session = restored.plan_binding.session
         context = session.build_required_context()
         assert context["current_node"]["node_id"] == "verify"
         assert context["hard_constraints"] == state.hard_constraints
-        assert restored._run_verifier(recovered_state).all_passed
+        assert restored.verification.run_verifier(recovered_state).all_passed
         operations = session.store.latest("operation", "operation_id").values()
         assert sum(op["effect"] == "write" for op in operations) == 1
         attempts = session.store.latest("attempt", "attempt_id").values()
         assert sum(attempt["kind"] == "verify" for attempt in attempts) == 1
         assert (tmp_path / "test_value.py").read_bytes() == original_test
     finally:
-        if restored._plan_binding:
-            restored._plan_binding.close()
+        if restored.plan_binding:
+            restored.plan_binding.close()
 
 
 def test_native_output_recovery_retains_required_task_and_constraints(tmp_path):
@@ -448,7 +450,7 @@ def test_public_entry_owner_is_renewed_during_slow_initialization(tmp_path, monk
         return real_coordinator(*args, **kwargs, lease_seconds=0.6)
 
     def slow_initialize(_state):
-        coordinator = orch._entry_coordinator
+        coordinator = orch.entry_coordinator
         initial_expiry = coordinator.lease.lease_expires_at
         deadline = time.monotonic() + 3
         while coordinator.lease.lease_expires_at <= initial_expiry + 0.6:
@@ -462,17 +464,17 @@ def test_public_entry_owner_is_renewed_during_slow_initialization(tmp_path, monk
             coordinator.assert_can_dispatch()
 
     monkeypatch.setattr(run_coordination, "RunCoordinator", short_lease)
-    monkeypatch.setattr(orch, "_initialize_repair_trace", slow_initialize)
+    monkeypatch.setattr(orch.events, "initialize_repair_trace", slow_initialize)
     try:
-        orch._begin_repair_trace(state)
+        orch.events.begin_repair_trace(state)
         assert not client.prompts
         assert not any(
             worker.name == "fixloop-entry-owner" and worker.is_alive()
             for worker in threading.enumerate()
         )
     finally:
-        if getattr(orch, "_entry_coordinator", None):
-            coordinator = orch._entry_coordinator
+        if getattr(orch, "entry_coordinator", None):
+            coordinator = orch.entry_coordinator
             snapshot = coordinator.store.snapshot(state.repair_run_id)
             if snapshot.owner_token == coordinator.lease.owner_token:
                 coordinator.finish("released")

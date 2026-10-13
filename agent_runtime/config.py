@@ -26,42 +26,11 @@ class AgentConfig(RuntimePolicy):
         default=True, description="Plan repair 路径自动提取可信来源中的明确约束和节点决策"
     )
 
-    provider: str = Field(
-        default="deepseek", description="模型 Provider: deepseek / openai / ollama"
-    )
-    model: str = Field(default="deepseek-v4-pro", description="模型名称")
-    max_steps: int = Field(default=6, ge=1, le=50, description="最大工具调用步数")
-    max_new_tokens: int = Field(
-        default=2048, ge=1, le=8192, description="每次 LLM 调用的最大输出 token 数"
-    )
-    prompt_budget: int = Field(
-        default=100_000,
-        ge=512,
-        le=2_000_000,
-        description="单次 prompt 总 token 预算（system + user / 五 section 合计）",
-    )
     tail_protect_tokens: int = Field(
         default=20_000,
         ge=0,
         le=100_000,
         description="history 尾部保护区 token 数（L2–L4 豁免 assistant/tool 所在 turn）",
-    )
-    approval: Literal["auto", "ask", "never"] = Field(
-        default="ask", description="高风险工具审批策略: auto / ask / never"
-    )
-    temperature: float = Field(default=0.2, ge=0.0, le=2.0, description="模型温度")
-    json_mode: bool = Field(default=False, description="启用 JSON 输出引导（repair agent 专用）")
-    hard_cap: int = Field(
-        default=8000,
-        ge=0,
-        le=200_000,
-        description="Prompt 上下文硬顶 token 数。超出时拒绝 ask，不静默裁剪。",
-    )
-    loop_detect_threshold: int = Field(
-        default=3,
-        ge=0,
-        le=10,
-        description="死循环检测阈值：滑动窗口内同一 (tool, args_hash) 次数≥K 时触发。0=禁用",
     )
     final_schema: dict[str, str] | None = Field(
         default=None,
@@ -70,10 +39,4 @@ class AgentConfig(RuntimePolicy):
             "类型: str/int/float/bool/list/dict。仅 json_mode=True 时生效。"
             "校验失败 → recovery prompt + 回到 Acting（最多 2 次重试）。"
         ),
-    )
-    max_json_retries: int = Field(
-        default=2,
-        ge=0,
-        le=5,
-        description="json_mode final answer 校验失败后的格式修复重试次数。",
     )

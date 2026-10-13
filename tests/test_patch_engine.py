@@ -1,7 +1,10 @@
 """patch_engine 单测。"""
 
+import pytest
+
 from agent_runtime.patch_engine import (
-    apply_plan,
+    PatchError,
+    apply_text,
     build_preview,
     format_preview_text,
     parse_patch_input,
@@ -12,7 +15,7 @@ from agent_runtime.patch_engine import (
 class TestParsePatchInput:
     def test_legacy_mode(self):
         plan = parse_patch_input({"old_text": "a", "new_text": "b"})
-        assert plan.mode == "legacy"
+        assert plan.mode == "replacement"
         assert plan.old_text == "a"
 
     def test_diff_mode(self):
@@ -32,17 +35,18 @@ class TestParsePatchInput:
 class TestApplyPlan:
     def test_legacy_single_replace(self):
         plan = parse_patch_input({"old_text": "old", "new_text": "new"})
-        assert apply_plan("old text", plan) == "new text"
+        assert apply_text("old text", plan) == "new text"
 
     def test_legacy_zero_matches(self):
         plan = parse_patch_input({"old_text": "missing", "new_text": "x"})
-        assert apply_plan("hello", plan) is None
+        with pytest.raises(PatchError, match="0 次"):
+            apply_text("hello", plan)
 
     def test_multi_hunk_diff(self):
         text = "line1\nold\nline3\nfoo\n"
         diff = "@@ -1,3 +1,3 @@\n line1\n-old\n+new\n line3\n@@ -4,1 +4,2 @@\n foo\n+bar\n"
         plan = parse_patch_input({"diff": diff})
-        result = apply_plan(text, plan)
+        result = apply_text(text, plan)
         assert result == "line1\nnew\nline3\nfoo\nbar\n"
 
 

@@ -1,6 +1,6 @@
 # FixLoop Plan 与轻量 DAG
 
-实现入口：`src/cli.py repair`。Repair 强制使用证据驱动的 Plan DAG；旧的无 Plan repair 流程已移除。L1 通用模块位于 `agent_runtime/plan_runtime/`，不依赖 `src`；L2 `RepairPlanBinding` 将同一个 PlanSession 绑定到 Patcher、Orchestrator 的回滚/重试和最终 Verifier。
+正式修复入口是 `RepairService.run(RepairRequest)`；CLI、Workbench 和评测调用同一服务。服务按准备工作区 → 探索 → Patcher 修改 → 实际验证 → 输出结果推进。修复阶段使用证据驱动的 Plan DAG；L1 通用模块位于 `agent_runtime/plan_runtime/`，不依赖 `src`；L2 `RepairPlanBinding` 将同一个 PlanSession 绑定到 Patcher、阶段协调、回滚/重试和 `VerificationService`。
 
 ```bash
 python -m src.cli repair --repo ./repo --issue "问题描述" --execution-tier host
@@ -21,7 +21,7 @@ python -m src.cli repair --repo ./repo --issue "相同问题描述" --execution-
 
 `plan_version` 只在图更新时递增，`state_revision` 表示状态快照。reducer 是节点状态修改入口，拒收旧版本/旧 attempt 的结果。失败和不确定向下游传播 blocked。写入使旧探索/分析证据 stale，但已经发生的、收据支持的 edit 不因此重新派发。最终叶节点成功可以结束计划，历史前置读证据仍保留 stale 状态。
 
-Orchestrator 原有重试控制器保留。验证失败后的回滚也先记意图、再记录实际后态；确认回滚后才能提交新图，并把之前 edit 的操作历史保留在旧版本中。未确认的回滚和活动/uncertain 节点阻止重规划。新图提交是原子的，不允许通过修改稳定 node ID 偷换语义。
+阶段协调服务统一处理重试。验证失败后的回滚先记意图、再记录实际后态；确认回滚后才能提交新图，并把之前 edit 的操作历史保留在旧版本中。未确认的回滚和活动/uncertain 节点阻止重规划。新图提交是原子的，不允许通过修改稳定 node ID 偷换语义。验证结论只由 `VerificationService` 执行真实命令后产生。
 
 ## 持久化与恢复
 

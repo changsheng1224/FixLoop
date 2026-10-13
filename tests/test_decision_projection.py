@@ -285,7 +285,7 @@ def test_resume_rebuilds_latest_decision_after_checkpoint_and_ignores_cache(tmp_
         create_checkpoint(agent, TaskState.create(user_request="continue"), "continue")
         _replace(session, old)
     with session_for(tmp_path) as restored:
-        agent._plan_session = restored
+        agent.plan_session = restored
         agent.session["long_task_context"] = {"decisions": [{"statement": "WRONG_CACHE"}]}
         result = evaluate_resume_state(agent)
         assert result["status"] == "full-valid", result

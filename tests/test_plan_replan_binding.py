@@ -17,29 +17,26 @@ def failed_binding(tmp_path, request):
     orch, state, client = repair_fixture(tmp_path)
     events = []
     output = io.StringIO()
-    orch._progress = ProgressEmitter(text_sink=output, record=events.append)
-    before = orch._snapshot_repo()
-    patches, meta = orch._run_patcher_toolized(state, "repair", {})
+    orch.progress = ProgressEmitter(text_sink=output, record=events.append)
+    before = orch.transaction.snapshot_repo()
+    patches, meta = orch.patcher_execution.run_patcher_toolized(state, "repair", {})
     assert patches, (meta, state.agent_errors)
-    binding = orch._plan_binding
+    binding = orch.plan_binding
     from src.repair.execution_state import VerificationReceipt
 
     state.execution.verification_receipt = VerificationReceipt.model_validate(
-        {
-            "command": ["controlled-verifier"],
-            "completed": True,
-        }
+        {"command": ["controlled-verifier"], "completed": True}
     )
     failure = getattr(request, "param", None) or VerificationResult(
         total_tests=1, failed=1, failure_logs=["AssertionError: actual output mismatch"]
     )
     binding.run_verifier(lambda: failure)
-    orch._restore_repo_snapshot(before)
+    orch.transaction.restore_repo_snapshot(before)
     state.retry_count = 1
     client._outputs.append(
         '{"conclusion":"Revise the hypothesis using the failure and current source."}'
     )
-    yield binding, client, events, output
+    yield (binding, client, events, output)
     if not binding._closed:
         binding.close()
 
@@ -83,7 +80,7 @@ def test_replan_prompt_progress_and_duplicate_commit(failed_binding):
     view = binding.session.plan_view()
     assert progress["state_revision"] == view["state_revision"]
     assert progress["plan_checksum"] == view["plan_checksum"]
-    assert all({k: n[k] for k in v} == v for n, v in zip(progress["nodes"], view["nodes"]))
+    assert all(({k: n[k] for k in v} == v for n, v in zip(progress["nodes"], view["nodes"])))
     starts = [
         e for e in events if e.extras.get("phase") == "replan" and "replan_started" in e.summary
     ]
@@ -192,7 +189,7 @@ def test_gates_block_before_model(failed_binding, mode, reason):
     else:
         from agent_runtime.repair_runtime import ExecutionDeadline
 
-        binding.agent._repair_deadline = ExecutionDeadline.from_remaining(0)
+        binding.agent.execution_deadline = ExecutionDeadline.from_remaining(0)
     old = binding.session.plan
     calls = client.session_usage["calls"]
     with pytest.raises(ValueError, match=reason):
@@ -301,7 +298,7 @@ def test_commit_before_trace_is_reconciled_from_saved_plan(failed_binding):
                     for e in resumed.session.store.events()
                     if e["kind"] == "trace"
                     and e["payload"].get("event") == "replan_committed"
-                    and e["payload"].get("trigger_ref") == trigger
+                    and (e["payload"].get("trigger_ref") == trigger)
                 ]
             )
             == 1

@@ -75,7 +75,7 @@ class TestProbeSandboxHealth:
 
 class TestTryCreateVerifier:
     def test_returns_none_when_probe_not_ready(self, monkeypatch, workspace):
-        from src.repair_factory import try_create_verifier
+        from src.repair.assembly import probe_verification_backend
 
         class FakeReport:
             ready = False
@@ -85,10 +85,10 @@ class TestTryCreateVerifier:
             "src.harness.sandbox_health.probe_sandbox_health",
             lambda **_kwargs: FakeReport(),
         )
-        assert try_create_verifier(None, workspace, workspace.repo_root) is None
+        assert probe_verification_backend(None, workspace, workspace.repo_root) is None
 
     def test_required_probe_failure_raises(self, monkeypatch, workspace):
-        from src.repair_factory import RequiredVerifierError, try_create_verifier
+        from src.repair.assembly import VerificationEnvironmentError, probe_verification_backend
 
         class FakeReport:
             ready = False
@@ -98,8 +98,8 @@ class TestTryCreateVerifier:
             "src.harness.sandbox_health.probe_sandbox_health",
             lambda **_kwargs: FakeReport(),
         )
-        with pytest.raises(RequiredVerifierError, match="docker ping: denied"):
-            try_create_verifier(
+        with pytest.raises(VerificationEnvironmentError, match="docker ping: denied"):
+            probe_verification_backend(
                 None,
                 workspace,
                 workspace.repo_root,
@@ -107,7 +107,7 @@ class TestTryCreateVerifier:
             )
 
     def test_creates_verifier_when_probe_ready(self, monkeypatch, workspace):
-        from src.repair_factory import try_create_verifier
+        from src.repair.assembly import probe_verification_backend
 
         class FakeReport:
             ready = True
@@ -125,8 +125,8 @@ class TestTryCreateVerifier:
             fake_probe,
         )
         monkeypatch.setattr(
-            "src.repair_factory.create_verifier",
+            "src.repair.assembly.create_verifier",
             lambda *_a, **_k: fake_verifier,
         )
-        assert try_create_verifier(None, workspace, workspace.repo_root) is fake_verifier
+        assert probe_verification_backend(None, workspace, workspace.repo_root) is fake_verifier
         assert calls == [{"run_smoke": False}]

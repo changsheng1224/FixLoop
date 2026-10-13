@@ -26,7 +26,9 @@ def candidate(value="pytest private fact", *, memory_id=""):
 
 def service(state, project="project-a", task="run-a", user="local", **kwargs):
     return MemoryGovernanceService(
-        state, access_context=MemoryAccessContext(project, task, user), **kwargs,
+        state,
+        access_context=MemoryAccessContext(project, task, user),
+        **kwargs,
     )
 
 
@@ -37,8 +39,10 @@ def test_foreign_owner_cannot_read_mutate_or_maintain(scope, other):
     owner = service(state, repo_fingerprint="version-a")
     memory = owner.ingest(candidate(), scope=scope)
     reader = service(
-        state, project="project-b" if other == "project" else "project-a",
-        user="bob" if other == "user" else "local", repo_fingerprint="version-a",
+        state,
+        project="project-b" if other == "project" else "project-a",
+        user="bob" if other == "user" else "local",
+        repo_fingerprint="version-a",
     )
     original = copy.deepcopy(state["governed_memories"])
     assert reader.recall("pytest") == []
@@ -109,14 +113,17 @@ def make_agent(tmp_path, monkeypatch):
         root.mkdir()
         source.mkdir(exist_ok=True)
         agent = Agent(
-            AgentConfig(provider="fake"), FakeModelClient(["<final>done</final>"]),
+            AgentConfig(provider="fake"),
+            FakeModelClient(["<final>done</final>"]),
             WorkspaceContext(cwd=str(root), repo_root=str(root), doc_contents={}),
             tool_context=ToolContext(
-                root=str(root), project_root=str(source), state_root=str(tmp_path / "runs" / name),
+                root=str(root),
+                project_root=str(source),
+                state_root=str(tmp_path / "runs" / name),
             ),
         )
         agent._memory_task_id = name
-        agent._workspace_pinned = True
+        agent.workspace_pinned = True
         return agent
 
     return make
@@ -126,13 +133,16 @@ def test_runtime_ignores_spoofed_session_identity(make_agent, tmp_path):
     agent = make_agent("run-a", tmp_path / "source")
     trusted = agent_access_context(agent)
     agent.session["memory"]["memory_identity"] = {
-        "project_id": "other", "task_id": "other", "user_id": "admin",
+        "project_id": "other",
+        "task_id": "other",
+        "user_id": "admin",
     }
     assert agent_access_context(agent) == trusted
 
 
 def test_confirmed_publication_shares_project_knowledge_but_not_run_candidates(
-    make_agent, tmp_path,
+    make_agent,
+    tmp_path,
 ):
     source = tmp_path / "source"
     first, second = make_agent("run-a", source), make_agent("run-b", source)
@@ -184,7 +194,8 @@ def test_finalization_does_not_publish_project_memory(make_agent, tmp_path):
 
 
 def test_wrong_project_cannot_restore_session_even_with_shared_state(
-    make_agent, tmp_path,
+    make_agent,
+    tmp_path,
 ):
     from agent_runtime.session_store import SessionStore
 
@@ -194,13 +205,18 @@ def test_wrong_project_cannot_restore_session_even_with_shared_state(
     second = make_agent("run-b", tmp_path / "other")
     with pytest.raises(ValueError, match="workspace_mismatch"):
         Agent.from_session(
-            FakeModelClient([]), second.workspace, store, first.session["id"],
-            config=AgentConfig(provider="fake"), tool_context=second.tool_context,
+            FakeModelClient([]),
+            second.workspace,
+            store,
+            first.session["id"],
+            config=AgentConfig(provider="fake"),
+            tool_context=second.tool_context,
         )
 
 
 def test_versioned_publication_uses_content_not_copy_path_and_rejects_changes(
-    make_agent, tmp_path,
+    make_agent,
+    tmp_path,
 ):
     from pathlib import Path
 
@@ -238,7 +254,10 @@ def test_precedents_enforce_owner_before_semantic_ranking(tmp_path):
     owner = MemoryAccessContext("project-a", "run-a")
     store = RepairPrecedentStore(str(root), state_root=str(storage), access_context=owner)
     store.upsert("type_error", "pytest private precedent")
-    for context in (MemoryAccessContext("project-b", "run-a"), MemoryAccessContext("project-a", "")):
+    for context in (
+        MemoryAccessContext("project-b", "run-a"),
+        MemoryAccessContext("project-a", ""),
+    ):
         other = RepairPrecedentStore(str(root), state_root=str(storage), access_context=context)
         assert other.load_all() == []
         assert other.load_similar("type_error", query="pytest") == []
@@ -248,7 +267,9 @@ def test_precedents_enforce_owner_before_semantic_ranking(tmp_path):
 
 
 def test_unwritable_memory_stays_local_and_publication_reports_failure(
-    make_agent, tmp_path, monkeypatch,
+    make_agent,
+    tmp_path,
+    monkeypatch,
 ):
     from pathlib import Path
 
@@ -267,7 +288,8 @@ def test_unwritable_memory_stays_local_and_publication_reports_failure(
 
 
 def test_same_session_resume_keeps_owned_memory_and_new_session_cannot_read_it(
-    make_agent, tmp_path,
+    make_agent,
+    tmp_path,
 ):
     from agent_runtime.session_store import SessionStore
 
@@ -277,12 +299,18 @@ def test_same_session_resume_keeps_owned_memory_and_new_session_cannot_read_it(
     store = SessionStore(first._cwd, state_root=first.state_root)
     store.save(first.session)
     restored = Agent.from_session(
-        FakeModelClient([]), first.workspace, store, first.session["id"],
-        config=AgentConfig(provider="fake"), tool_context=first.tool_context,
+        FakeModelClient([]),
+        first.workspace,
+        store,
+        first.session["id"],
+        config=AgentConfig(provider="fake"),
+        tool_context=first.tool_context,
     )
     assert agent_governance(restored).inspect(owned.memory_id)
     fresh = Agent(
-        AgentConfig(provider="fake"), FakeModelClient([]), first.workspace,
+        AgentConfig(provider="fake"),
+        FakeModelClient([]),
+        first.workspace,
         tool_context=first.tool_context,
     )
     assert agent_governance(fresh).recall("pytest") == []
@@ -296,18 +324,23 @@ def test_sandbox_resume_uses_binding_identity_for_memory(temp_workspace, tmp_pat
     copy_root = tmp_path / "copy"
     copy_root.mkdir()
     spec = SandboxTaskSpec(
-        _prepared_environment().identity, "memory-v1", "a" * 64,
-        str(tmp_path / "storage"), str(temp_workspace),
+        _prepared_environment().identity,
+        "memory-v1",
+        "a" * 64,
+        str(tmp_path / "storage"),
+        str(temp_workspace),
     )
     binding = SandboxTaskBinding.create(copy_root, copy_root, "task-a", spec)
     binding.save()
     memory_id = ""
     for current in (binding, SandboxTaskBinding.load(copy_root, "task-a", spec)):
         agent = Agent(
-            AgentConfig(provider="fake"), FakeModelClient([]),
+            AgentConfig(provider="fake"),
+            FakeModelClient([]),
             WorkspaceContext(cwd=str(copy_root), repo_root=str(copy_root), doc_contents={}),
             tool_context=ToolContext(
-                root=str(copy_root), sandbox_mode=True,
+                root=str(copy_root),
+                sandbox_mode=True,
                 embedding_state_base=str(tmp_path / "storage"),
             ),
         )

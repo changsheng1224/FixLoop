@@ -65,11 +65,16 @@ def recover(session, *, stopped_probe=None) -> dict:
             raise ValueError("resume_attempt_identity_mismatch")
         operations = session.operations(attempt["attempt_id"])
         if attempt.get("waiting_approval"):
-            if (attempt.get("workspace_after") == current and operations
-                    and operations[-1].get("not_started")
-                    and operations[-1].get("approval_id")
-                    and all(o["phase"] == "result_recorded" and o.get("execution_stopped")
-                            for o in operations)):
+            if (
+                attempt.get("workspace_after") == current
+                and operations
+                and operations[-1].get("not_started")
+                and operations[-1].get("approval_id")
+                and all(
+                    o["phase"] == "result_recorded" and o.get("execution_stopped")
+                    for o in operations
+                )
+            ):
                 report["waiting_approval"].append(node.node_id)
                 continue
         prepared = attempt["phase"] == "prepared" and not operations

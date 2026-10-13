@@ -5,7 +5,7 @@
 - 分词器预热与模块级缓存
 - Agent warm_context 参数（向后兼容）
 - 并行 Agent 构建（ThreadPoolExecutor）
-- wire_orchestrator 预热路径
+- create_repair_service 预热路径
 """
 
 from __future__ import annotations
@@ -20,10 +20,6 @@ from agent_runtime.runtime import Agent
 from agent_runtime.tokenizers import clear_token_counter_cache, resolve_token_counter
 from agent_runtime.warm_context import WarmContext, create_warm_context
 from agent_runtime.workspace import WorkspaceContext
-
-# ---------------------------------------------------------------------------
-# WarmContext 基本功能
-# ---------------------------------------------------------------------------
 
 
 class TestWarmContextBasic:
@@ -59,11 +55,8 @@ class TestWarmContextTokenizer:
         """预热后 tokenizer 命中模块级缓存。"""
         wc = WarmContext(model="deepseek-v4-pro", provider="deepseek")
         assert wc._tokenizer_warmed is False
-
         wc.warm_tokenizer()
-
         assert wc._tokenizer_warmed is True
-        # 验证已加载到模块级缓存
         counter = resolve_token_counter("deepseek-v4-pro", "deepseek")
         assert counter is not None
         assert counter.backend != ""
@@ -73,8 +66,6 @@ class TestWarmContextTokenizer:
         wc = WarmContext(model="deepseek-v4-pro", provider="deepseek")
         wc.warm_tokenizer()
         assert wc._tokenizer_warmed is True
-
-        # 第二次调用：幂等
         wc.warm_tokenizer()
         assert wc._tokenizer_warmed is True
 
@@ -88,10 +79,9 @@ class TestWarmContextTokenizer:
         """预热后 resolve_token_counter 返回同一实例。"""
         wc = WarmContext(model="deepseek-v4-pro", provider="deepseek")
         wc.warm_tokenizer()
-
         c1 = resolve_token_counter("deepseek-v4-pro", "deepseek")
         c2 = resolve_token_counter("deepseek-v4-pro", "deepseek")
-        assert c1 is c2  # 模块级缓存：同一实例
+        assert c1 is c2
 
 
 class TestCreateWarmContext:
@@ -119,11 +109,6 @@ class TestCreateWarmContext:
         assert wc._tokenizer_warmed is True
 
 
-# ---------------------------------------------------------------------------
-# Agent warm_context 参数（向后兼容）
-# ---------------------------------------------------------------------------
-
-
 class TestAgentWarmContext:
     """Agent 构造器 warm_context 参数。"""
 
@@ -144,7 +129,6 @@ class TestAgentWarmContext:
                 cwd=tmp,
             )
             assert agent._warm_context is None
-            # 基本功能正常
             assert agent._prefix is not None
 
     def test_agent_with_warm_context(self):
@@ -178,11 +162,6 @@ class TestAgentWarmContext:
             assert agent._warm_context is wc
 
 
-# ---------------------------------------------------------------------------
-# 并行 Agent 构建（ThreadPoolExecutor）
-# ---------------------------------------------------------------------------
-
-
 class TestParallelAgentCreation:
     """ThreadPoolExecutor 并行创建 Agent。"""
 
@@ -213,10 +192,8 @@ class TestParallelAgentCreation:
                 fut_b = pool.submit(build_agent, "agent-b")
                 agent_a = fut_a.result()
                 agent_b = fut_b.result()
-
             assert agent_a._agent_name == "agent-a"
             assert agent_b._agent_name == "agent-b"
-            # 两者共享同一个 warm_context
             assert agent_a._warm_context is agent_b._warm_context
 
     def test_parallel_agents_have_independent_sessions(self):
@@ -240,8 +217,6 @@ class TestParallelAgentCreation:
                 fut_b = pool.submit(build_agent, "b")
                 agent_a = fut_a.result()
                 agent_b = fut_b.result()
-
-            # session ID 不同
             assert agent_a.session["id"] != agent_b.session["id"]
 
     def test_parallel_tokenizer_is_cache_safe(self):
@@ -259,18 +234,11 @@ class TestParallelAgentCreation:
             f2 = pool.submit(get_counter)
             f1.result()
             f2.result()
-
-        # 所有线程命中同一缓存实例
         assert len(set(results)) == 1
 
 
-# ---------------------------------------------------------------------------
-# wire_orchestrator 预热路径（集成测试）
-# ---------------------------------------------------------------------------
-
-
 class TestWireOrchestratorWarmContext:
-    """repair_factory.wire_orchestrator 预热集成。"""
+    """repair_factory.create_repair_service 预热集成。"""
 
     def setup_method(self):
         clear_token_counter_cache()
@@ -278,31 +246,30 @@ class TestWireOrchestratorWarmContext:
     def teardown_method(self):
         clear_token_counter_cache()
 
-    def test_wire_orchestrator_creates_with_warm_context(self, tmp_path: Path):
-        """wire_orchestrator 使用 WarmContext 并行创建 Agent。"""
-        from src.orchestrator import Orchestrator
-        from src.repair_factory import wire_orchestrator
+    def test_create_repair_service_creates_with_warm_context(self, tmp_path: Path):
+        """create_repair_service 使用 WarmContext 并行创建 Agent。"""
+        from src.repair.assembly import create_repair_service
+        from src.repair.session import ExecutionSession
 
-        orch = wire_orchestrator(
+        orch = create_repair_service(
             FakeModelClient(outputs=["<final>ok</final>"]),
             str(tmp_path),
             skip_verify=True,
             dry_run=True,
-        )
-        assert isinstance(orch, Orchestrator)
+        ).session
+        assert isinstance(orch, ExecutionSession)
         assert orch.patcher is not None
         assert orch.patcher._warm_context is not None
 
-    def test_wire_orchestrator_no_warm_context_leak(self, tmp_path: Path):
+    def test_create_repair_service_no_warm_context_leak(self, tmp_path: Path):
         """warm_context 不在 session 中持久化（不污染序列化）。"""
-        from src.repair_factory import wire_orchestrator
+        from src.repair.assembly import create_repair_service
 
-        orch = wire_orchestrator(
+        orch = create_repair_service(
             FakeModelClient(outputs=["<final>ok</final>"]),
             str(tmp_path),
             skip_verify=True,
             dry_run=True,
-        )
-        # warm_context 不影响 session 序列化
+        ).session
         session = orch.patcher.session
         assert "warm_context" not in session

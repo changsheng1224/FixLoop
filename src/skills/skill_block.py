@@ -8,14 +8,13 @@ from typing import Literal
 from src.state import RepairPlan
 from src.tools.spec import default_repair_tool_registry
 
-SkillHintRole = Literal["patcher", "verifier"]
+SkillHintRole = Literal["patcher"]
 SkillBlockSource = Literal["hit", "miss", "none"]
 
 SKILL_BLOCK_HEADER = "[Skill 提示]"
 
 ROLE_LABELS: dict[SkillHintRole, str] = {
     "patcher": "Patcher",
-    "verifier": "Verifier",
 }
 
 
@@ -27,7 +26,6 @@ def _tools_allowed_for_role(role: SkillHintRole) -> set[str]:
 
 _ROLE_CHAR_LIMITS: dict[SkillHintRole, int] = {
     "patcher": 1200,
-    "verifier": 300,
 }
 
 _ROLE_MISS_DEFAULTS: dict[SkillHintRole, dict[str, object]] = {
@@ -36,14 +34,6 @@ _ROLE_MISS_DEFAULTS: dict[SkillHintRole, dict[str, object]] = {
         "guidance": [
             "只改提供的源文件，勿修改测试",
             "优先单行 diff，避免过大 multiline 补丁",
-        ],
-        "avoid": [],
-    },
-    "verifier": {
-        "summary": "未命中专用 Skill；以 sandbox pytest 结果为准判定补丁是否通过。",
-        "guidance": [
-            "构建失败时检查依赖与语法",
-            "测试失败时对照 assert 期望",
         ],
         "avoid": [],
     },
@@ -107,13 +97,6 @@ def _build_hit_lines(plan: RepairPlan, role: SkillHintRole) -> list[str]:
         f"角色: {ROLE_LABELS[role]}",
         f"策略: {skill.matched_skill}",
     ]
-
-    if role == "verifier":
-        if skill.guidance:
-            lines.append(f"验证要点: {skill.guidance[0]}")
-        if skill.avoid:
-            lines.append(f"避免: {skill.avoid[0]}")
-        return lines
 
     lines.append(f"工具序: {_tool_chain(plan, role)}")
     if skill.example_issue.strip():

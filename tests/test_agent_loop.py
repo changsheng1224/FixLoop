@@ -140,7 +140,7 @@ class TestAgentAsk:
             "<final>done</final>",
         ]
         agent = _make_agent(outputs, config, workspace)
-        agent.cwd = str(temp_workspace)
+        agent.bind_workspace(str(temp_workspace), "", str(temp_workspace), "test")
         agent.ask("scan")
 
         run_dirs = list(RunStore(str(temp_workspace)).runs_dir.iterdir())
@@ -286,7 +286,7 @@ class TestAgentLoopStopConditions:
             "<final>caret 重试成功</final>",
         ]
         agent = _make_agent(outputs, config, workspace)
-        agent.cwd = str(temp_workspace)
+        agent.bind_workspace(str(temp_workspace), "", str(temp_workspace), "test")
         answer = agent.ask("测试 caret trace")
         assert "成功" in answer
 
@@ -320,7 +320,7 @@ class TestAgentLoopStopConditions:
             model_client=FailingClient([]),
             workspace=workspace,
         )
-        agent.cwd = str(temp_workspace)
+        agent.bind_workspace(str(temp_workspace), "", str(temp_workspace), "test")
         agent.circuit_breaker = CircuitBreaker(
             failure_threshold=2,
             recovery_timeout=0.05,
@@ -372,7 +372,7 @@ class TestAgentLoopStopConditions:
             "<final>修复成功</final>",
         ]
         agent = _make_agent(outputs, config, workspace)
-        agent.cwd = str(temp_workspace)
+        agent.bind_workspace(str(temp_workspace), "", str(temp_workspace), "test")
         answer = agent.ask("测试 invalid tool")
         assert "成功" in answer
 
@@ -546,7 +546,7 @@ class TestTtftObservability:
         from agent_runtime.run_store import RunStore
 
         agent = _make_agent(["<final>done</final>"], config, workspace)
-        agent.cwd = str(temp_workspace)
+        agent.bind_workspace(str(temp_workspace), "", str(temp_workspace), "test")
         agent.ask("hello")
 
         run_dirs = list(RunStore(str(temp_workspace)).runs_dir.iterdir())
@@ -561,7 +561,7 @@ class TestTtftObservability:
         from agent_runtime.run_store import RunStore
 
         agent = _make_agent(["<final>done</final>"], config, workspace)
-        agent.cwd = str(temp_workspace)
+        agent.bind_workspace(str(temp_workspace), "", str(temp_workspace), "test")
         agent.ask("find the bug")
 
         run_dirs = list(RunStore(str(temp_workspace)).runs_dir.iterdir())
@@ -586,7 +586,7 @@ class TestTtftObservability:
         qu = data.get("quota_usage")
         assert qu is not None, "report.json missing quota_usage"
         assert qu["total"]["used"] >= 0
-        assert qu["total"]["limit"] == 50
+        assert qu["total"]["limit"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -1179,7 +1179,7 @@ class TestHardCapContextOverflow:
         """XML 路径：hard_cap 超限时 AgentLoop 以 context_overflow 终止。"""
         from agent_runtime.agent_loop import AgentLoop
 
-        config.hard_cap = 100  # 极低硬顶，system+tool+workspace 常规即超
+        config.hard_cap = 512
         agent = _make_agent(
             ["<final>should not reach model</final>"],
             config,
@@ -1195,7 +1195,7 @@ class TestHardCapContextOverflow:
         from agent_runtime.agent_loop import AgentLoop
         from agent_runtime.providers.clients import FakeNativeToolClient
 
-        config.hard_cap = 50  # 极低硬顶
+        config.hard_cap = 512
         agent = Agent(
             config=config,
             model_client=FakeNativeToolClient("<final>done</final>"),

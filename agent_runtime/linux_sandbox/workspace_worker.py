@@ -329,58 +329,26 @@ def _metadata(context: ToolContext, args: dict) -> ToolResult:
 
 
 def _checked_patch(source: str, args: dict) -> str:
-    import re
+    from agent_runtime.patch_engine import PatchError, apply_text, parse_patch_input
 
-    from agent_runtime.patch_engine import apply_plan, parse_patch_input
-
-    plan = parse_patch_input(args)
-    if plan.mode == "legacy":
-        updated = apply_plan(source, plan)
-        if updated is None:
-            raise WorkspaceError("stale_preimage", "replacement preimage must match exactly once")
-        return updated
-    # Apply against original coordinates; earlier insertions must not shift a later hunk.
-    original = source.splitlines(keepends=True)
-    newline = "\r\n" if "\r\n" in source else "\n"
-    output, cursor = [], 0
-    for hunk in plan.hunks:
-        header = re.fullmatch(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@.*", hunk.header)
-        if header is None:
-            raise WorkspaceError("invalid_arguments", "invalid hunk header")
-        start = int(header[1]) - 1 if int(header[2] or 1) else int(header[1])
-        old_count, new_count = int(header[2] or 1), int(header[4] or 1)
-        if start < cursor or start > len(original):
-            raise WorkspaceError("stale_preimage", "overlapping or out of range hunk")
-        output.extend(original[cursor:start])
-        cursor, removed, added = start, 0, 0
-        for kind, text in hunk.lines:
-            if kind in (" ", "-"):
-                if cursor >= len(original) or original[cursor].rstrip("\r\n") != text:
-                    raise WorkspaceError("stale_preimage", "hunk preimage mismatch")
-                if kind == " ":
-                    output.append(original[cursor])
-                cursor += 1
-                removed += 1
-            if kind == "+":
-                output.append(text + newline)
-            if kind in (" ", "+"):
-                added += 1
-        if (removed, added) != (old_count, new_count):
-            raise WorkspaceError("invalid_arguments", "hunk line counts mismatch")
-    output.extend(original[cursor:])
-    return "".join(output)
+    try:
+        return apply_text(source, parse_patch_input(args))
+    except PatchError as exc:
+        raise WorkspaceError(exc.code, str(exc)) from exc
 
 
 def _prepare_writes(context: ToolContext, request: SandboxRequest) -> WorkspaceReply:
     from agent_runtime.apply_patch_format import parse_apply_patch_text
-    from agent_runtime.patch_engine import normalize_hunk_headers
+    from agent_runtime.patch_engine import PatchError, apply_operations
 
     args = request.tool_args
     if request.tool_name == "apply_patch":
         patch = args.get("patch") or args.get("diff") or args.get("input") or ""
         if not isinstance(patch, str):
             raise WorkspaceError("invalid_arguments", "patch text required")
-        operations = [(op.path, op.action, op.diff) for op in parse_apply_patch_text(patch)]
+        parsed = parse_apply_patch_text(patch)
+        patch_ops = {op.path: op for op in parsed}
+        operations = [(op.path, op.action, op.diff) for op in parsed]
     else:
         operations = [(args.get("path", ""), request.tool_name, "")]
     for key in ("base_hash", "base_sha256"):
@@ -406,14 +374,13 @@ def _prepare_writes(context: ToolContext, request: SandboxRequest) -> WorkspaceR
         if digest != expected:
             raise WorkspaceError("stale_preimage", f"base version changed: {raw}")
         source = data.decode("utf-8")
-        if action == "delete":
-            if digest is None:
-                raise WorkspaceError("stale_preimage", "delete target missing")
-            updated = None
-        elif action == "add":
-            if digest is not None:
-                raise WorkspaceError("stale_preimage", "add target exists")
-            updated = diff if diff.endswith("\n") else diff + "\n"
+        if action in {"add", "delete", "update"}:
+            try:
+                updated = apply_operations(
+                    {raw: source if digest is not None else None}, [patch_ops[raw]]
+                )[raw]
+            except PatchError as exc:
+                raise WorkspaceError(exc.code, str(exc)) from exc
         elif action == "write_file":
             content = args.get("content", "")
             if not isinstance(content, str) or type(args.get("append", False)) is not bool:
@@ -422,10 +389,7 @@ def _prepare_writes(context: ToolContext, request: SandboxRequest) -> WorkspaceR
         else:
             if digest is None:
                 raise WorkspaceError("stale_preimage", "patch target missing")
-            patch_args = (
-                {"diff": normalize_hunk_headers(diff, source)} if action == "update" else args
-            )
-            updated = _checked_patch(source, patch_args)
+            updated = _checked_patch(source, args)
         if updated is not None:
             if len(updated.encode("utf-8")) > MAX_SOURCE_BYTES:
                 raise WorkspaceError("output_too_large", "edited source exceeds limit")

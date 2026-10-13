@@ -47,8 +47,12 @@ def test_uncertain_receipt_is_readable_but_cannot_resume(tmp_path, cleanup):
 def test_inspect_terminal_still_checks_durable_pair(tmp_path):
     store = ReceiptStore(tmp_path / "state", tmp_path / "workspace")
     store.transition("call", "planned", policy_digest="policy")
-    store.transition("call", "terminal", no_target_started=True,
-                     result={"execution_status": "start_failed", "cleanup": "confirmed"})
+    store.transition(
+        "call",
+        "terminal",
+        no_target_started=True,
+        result={"execution_status": "start_failed", "cleanup": "confirmed"},
+    )
     store.receipt_path("call").unlink()
     with pytest.raises(ValueError, match="receipt_invalid"):
         store.inspect("call")

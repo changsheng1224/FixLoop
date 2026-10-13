@@ -33,17 +33,25 @@ from tests.workbench_unit_service import WorkbenchService
 def spec(tmp_path):
     return SandboxTaskSpec(
         SandboxEnvironmentIdentity("FixLoop-Test", "1", "1", "a" * 64),
-        "identity-v1", "b" * 64, str(tmp_path / "shared-state"),
+        "identity-v1",
+        "b" * 64,
+        str(tmp_path / "shared-state"),
     )
 
 
 @pytest.mark.parametrize("environment_root", [False, True])
 def test_independent_clones_can_use_same_run_id_in_shared_storage(
-    temp_workspace, tmp_path, spec, monkeypatch, environment_root,
+    temp_workspace,
+    tmp_path,
+    spec,
+    monkeypatch,
+    environment_root,
 ):
     clone = tmp_path / "clone"
     _git(temp_workspace, "clone", str(temp_workspace), str(clone))
-    assert _git(clone, "rev-parse", "HEAD").stdout == _git(temp_workspace, "rev-parse", "HEAD").stdout
+    assert (
+        _git(clone, "rev-parse", "HEAD").stdout == _git(temp_workspace, "rev-parse", "HEAD").stdout
+    )
     if environment_root:
         monkeypatch.setenv("FIXLOOP_STATE_ROOT", spec.state_base)
         spec = replace(spec, state_base="")
@@ -72,21 +80,35 @@ def test_independent_clones_can_use_same_run_id_in_shared_storage(
 
 
 def test_worktree_runs_share_project_but_not_workspace_or_state(temp_workspace, spec):
-    handles = [create_worktree(temp_workspace, run, state_base=spec.state_base) for run in ("a", "b")]
+    handles = [
+        create_worktree(temp_workspace, run, state_base=spec.state_base) for run in ("a", "b")
+    ]
     bindings = []
     for handle in handles:
         binding = SandboxTaskBinding.create(
-            temp_workspace, handle.path, handle.run_id, spec, ownership="task", branch=handle.branch,
+            temp_workspace,
+            handle.path,
+            handle.run_id,
+            spec,
+            ownership="task",
+            branch=handle.branch,
         )
         binding.save()
         bindings.append(binding)
         assert binding.project_id == handle.project_id == project_id(temp_workspace)
         assert binding.mapping.workspace_id == handle.workspace_id
         assert SandboxTaskBinding.load(temp_workspace, handle.run_id, spec) == binding
-        assert adopt_worktree(
-            temp_workspace, handle.path, handle.run_id, state_base=handle.state_base,
-            ownership="task", branch=handle.branch,
-        ) == handle
+        assert (
+            adopt_worktree(
+                temp_workspace,
+                handle.path,
+                handle.run_id,
+                state_base=handle.state_base,
+                ownership="task",
+                branch=handle.branch,
+            )
+            == handle
+        )
     assert bindings[0].state_root != bindings[1].state_root
     assert bindings[0].mapping.workspace_id != bindings[1].mapping.workspace_id
     before = bindings[0].project_id
@@ -144,7 +166,9 @@ def test_workbench_records_canonical_source_for_concurrent_copies(tmp_path):
         return ProjectResult("done")
 
     with WorkbenchService(
-        tmp_path / "workbench", executor=Echo(), project_executor=execute,
+        tmp_path / "workbench",
+        executor=Echo(),
+        project_executor=execute,
         project_lock_dir=tmp_path / "locks",
     ) as service:
         chats = [service.create_conversation(project_path=str(root)) for root in (*roots, roots[0])]
@@ -185,16 +209,23 @@ def test_repair_adapter_carries_source_into_factory(tmp_path):
         return SimpleNamespace(
             _active_agents=(),
             repair=lambda *a, **k: RepairState(
-                issue_input="fix", status="fixed",
+                issue_input="fix",
+                status="fixed",
                 verification_result=VerificationResult(all_passed=True),
             ),
         )
 
     with closing(ProjectFiles(copy)) as files:
         result = ProjectExecutor(lambda: object(), repair_factory=factory)(
-            mode="repair", files=files, messages=[{"role": "user", "content": "fix"}],
-            token=CancellationToken(), on_chunk=lambda _: None, publish=lambda *a: None,
-            run_id="run", state_root=tmp_path / "runtime", project_root=str(source),
+            mode="repair",
+            files=files,
+            messages=[{"role": "user", "content": "fix"}],
+            token=CancellationToken(),
+            on_chunk=lambda _: None,
+            publish=lambda *a: None,
+            run_id="run",
+            state_root=tmp_path / "runtime",
+            project_root=str(source),
         )
     assert result.status == "succeeded"
     assert calls[0][0] == str(copy)
@@ -240,14 +271,20 @@ def test_cleanup_inspects_namespaced_binding_and_rejects_wrong_owner(tmp_path, s
 
     monkeypatch.setattr(backend, "GuardedWindowsWorkspaceBackend", inspect)
     resource = {
-        "state_root": spec.state_base, "project_path": str(source),
-        "project_id": binding.project_id, "root_identity": list(binding.project_directory_identity),
-        "workspace": str(copy), "workspace_id": binding.mapping.workspace_id, "run_id": "run",
+        "state_root": spec.state_base,
+        "project_path": str(source),
+        "project_id": binding.project_id,
+        "root_identity": list(binding.project_directory_identity),
+        "workspace": str(copy),
+        "workspace_id": binding.mapping.workspace_id,
+        "run_id": "run",
     }
     assert reconcile_sandbox(resource) is False
     assert seen == [binding]  # A misplaced lookup would incorrectly return True for absence.
     for change in (
-        {"project_id": "other"}, {"workspace_id": "other"}, {"root_identity": []},
+        {"project_id": "other"},
+        {"workspace_id": "other"},
+        {"root_identity": []},
         {"run_id": "../run"},
     ):
         assert reconcile_sandbox({**resource, **change}) is False

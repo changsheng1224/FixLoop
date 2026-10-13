@@ -21,18 +21,15 @@ from agent_runtime.react_phases import ReactPhase
 from agent_runtime.stop_reasons import StopReason
 from agent_runtime.tool_step_runtime import ToolStepState
 
-MAX_EMPTY_RETRIES = 3
-MAX_JSON_RETRIES = 2
-
 
 def _extraction_before_model(agent):
-    service = getattr(getattr(agent, "_plan_session", None), "context_extraction", None)
+    service = getattr(getattr(agent, "plan_session", None), "context_extraction", None)
     if service is not None:
         service.before_model()
 
 
 def _extraction_before_tools(agent, text):
-    service = getattr(getattr(agent, "_plan_session", None), "context_extraction", None)
+    service = getattr(getattr(agent, "plan_session", None), "context_extraction", None)
     if service is not None:
         service.before_tools(text)
 
@@ -112,7 +109,7 @@ def build_native_tools(
 def check_hard_cap(config, token_meta: dict) -> str | None:
     """Prompt 超出 configured hard cap 时返回错误消息。"""
     total = token_meta.get("total_tokens", 0) or token_meta.get("context_sections_total", 0)
-    hard_cap = int(getattr(config, "hard_cap", 8_000) or 8_000)
+    hard_cap = config.hard_cap
     if total > hard_cap:
         return (
             f"<final>Prompt 大小 {total} tokens 超出硬顶限制 ({hard_cap})。"
@@ -216,9 +213,8 @@ def xml_build_context(runtime, ts, user_message: str, *, step: int, callback) ->
     prefix = f"工具 {record.get('tool', '')} 执行完成。\n结果:\n"
     if record.get("retrieval_result") and user_message.startswith(prefix):
         user_message = prefix + f"[observation_ref={oid}; see validated context history]"
-    from agent_runtime.context_manager import ContextManager
 
-    manager = ContextManager(runtime.agent)
+    manager = runtime.agent.create_context_manager()
     output_tokens = int(
         (runtime.agent.session.get("runtime_degradation") or {}).get(
             "max_output_tokens", runtime.agent.config.max_new_tokens
@@ -234,7 +230,7 @@ def xml_build_context(runtime, ts, user_message: str, *, step: int, callback) ->
         return hard_limit
     if token_meta.get("required_state_ref"):
         try:
-            runtime.agent._plan_session.validate_required_context(token_meta["long_task_context"])
+            runtime.agent.plan_session.validate_required_context(token_meta["long_task_context"])
         except ValueError:
             raise ContextBuildBlockedError("state_mismatch") from None
     from agent_runtime.message_projection import (
@@ -286,11 +282,11 @@ def xml_call_model(runtime, ts, prompt_text: str, *, step: int, callback=None) -
     effective_output_tokens = int(
         (runtime.agent.session.get("runtime_degradation") or {}).get(
             "max_output_tokens",
-            getattr(runtime.agent.config, "max_new_tokens", 4096),
+            runtime.agent.config.max_new_tokens,
         )
-        or 4096
     )
-    for empty_try in range(MAX_EMPTY_RETRIES):
+    empty_attempts = runtime.agent.config.max_empty_attempts
+    for empty_try in range(empty_attempts):
         try:
             if meta.get("request_hash"):
                 runtime.state.prepared_context_manager.validate_prepared_request(
@@ -344,7 +340,7 @@ def xml_call_model(runtime, ts, prompt_text: str, *, step: int, callback=None) -
                     "step": step,
                 },
             )
-            if empty_try < MAX_EMPTY_RETRIES - 1:
+            if empty_try < empty_attempts - 1:
                 if not runtime.hooks.sleep_with_deadline(0.5 * (empty_try + 1)):
                     raise CancelledError(
                         "deadline",
@@ -360,8 +356,7 @@ def xml_call_model(runtime, ts, prompt_text: str, *, step: int, callback=None) -
                 raise CancelledError(
                     "api_error",
                     answer=(
-                        "<final>API 错误: 模型连续返回空响应，已重试 "
-                        f"{MAX_EMPTY_RETRIES} 次。</final>"
+                        f"<final>API 错误: 模型连续返回空响应，已重试 {empty_attempts} 次。</final>"
                     ),
                 )
 
@@ -385,7 +380,7 @@ def handle_parse_retry(runtime, ts, raw: str, payload, *, step: int) -> str:
     try:
         from pathlib import Path
 
-        dbg = Path(runtime.agent._cwd) / ".agent" / "debug_retry.txt"
+        dbg = Path(runtime.agent.cwd) / ".agent" / "debug_retry.txt"
         dbg.parent.mkdir(parents=True, exist_ok=True)
         with open(dbg, "a", encoding="utf-8") as f:
             f.write(f"\n=== retry#{runtime.state.retry_count} ===\n{raw}\n")
@@ -509,7 +504,7 @@ def xml_final_retry(runtime, ts, raw: str, answer: str, *, step: int) -> str | N
     from agent_runtime.parse_recovery import ParseFailure, make_parse_retry
 
     ok, error = validate_final_answer(runtime.agent.config, answer)
-    limit = getattr(runtime.agent.config, "max_json_retries", MAX_JSON_RETRIES)
+    limit = runtime.agent.config.max_json_retries
     if ok or runtime.state.json_retry_count >= limit:
         runtime.state.json_retry_count = 0
         return None
@@ -542,7 +537,6 @@ def native_model_turn(
 ):
     """Build native messages, call once and normalize the response for the shared loop."""
     _extraction_before_model(runtime.agent)
-    from agent_runtime.context_manager import ContextManager
     from agent_runtime.message_projection import (
         attach_projection_metadata,
         build_context_prefix,
@@ -559,12 +553,11 @@ def native_model_turn(
             strict_recovery=bool(output_recovery_directive),
         ),
     )
-    phase_output_cap = 4096 if not action_required or output_recovery_directive else 2048
-    max_output = max(512, min(latency_decision["max_output_tokens"], phase_output_cap, 8192))
+    max_output = latency_decision["max_output_tokens"]
     directives = []
     user_override = None
     if output_recovery_directive:
-        if getattr(runtime.agent, "_plan_session", None) is not None:
+        if getattr(runtime.agent, "plan_session", None) is not None:
             directives.append(output_recovery_directive)
         else:
             # Preserve the established standalone L1 recovery envelope.
@@ -584,7 +577,7 @@ def native_model_turn(
     if user_override and directives:
         user_override += "\n\n" + "\n\n".join(directives)
         directives = []
-    manager = ContextManager(runtime.agent)
+    manager = runtime.agent.create_context_manager()
     request, budget_meta = manager.prepare_request(
         user_message,
         protocol="native",

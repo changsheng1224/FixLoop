@@ -68,7 +68,7 @@ def test_github_default_container_end_to_end(temp_workspace, tmp_path, monkeypat
         return patch_state(
             args.issue,
             verification_result=VerificationResult(
-                all_passed=True, total_tests=2, passed=2, execution_status="completed"
+                all_passed=True, total_tests=2, passed=2, execution_status="passed"
             ),
         )
 
@@ -117,14 +117,14 @@ def test_issue_file_and_existing_local_contract(temp_workspace, tmp_path, monkey
 
 
 def test_initialization_environment_failure_preserves_report(temp_workspace, tmp_path, monkeypatch):
-    from src.repair_factory import RequiredVerifierError
+    from src.repair.assembly import VerificationEnvironmentError
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "fake-key")
     redirect_clone(monkeypatch, temp_workspace)
     output = tmp_path / "result"
 
     def execute(repo, token, workspace_ready):
-        raise RequiredVerifierError("Docker 镜像缺失")
+        raise VerificationEnvironmentError("Docker 镜像缺失")
 
     assert run_repair_cli(arguments("owner/project", output), execute) == 2
     data = result(output)
@@ -212,7 +212,7 @@ def test_actual_verification_backend_is_reported(tmp_path):
     state = patch_state(
         "fix",
         verification_result=VerificationResult(
-            all_passed=True, total_tests=2, passed=2, execution_status="completed"
+            all_passed=True, total_tests=2, passed=2, execution_status="passed"
         ),
     )
     state.node_timings["phases_internal"] = {"verify": {"actual_tier": "host"}}
@@ -235,7 +235,7 @@ def test_dry_run_does_not_claim_verified_repair(temp_workspace, tmp_path, monkey
     state = patch_state(
         "fix",
         verification_result=VerificationResult(
-            all_passed=True, total_tests=2, passed=2, execution_status="completed"
+            all_passed=True, total_tests=2, passed=2, execution_status="passed"
         ),
     )
     assert run_repair_cli(args, lambda *a: state) == 0
@@ -351,9 +351,9 @@ def test_real_cli_dispatch_github(temp_workspace, tmp_path, monkeypatch, capsys)
     class FakeOrchestrator:
         verifier = object()
 
-        def repair(self, issue, **kwargs):
+        def run(self, request):
             (captured["repo"] / "README.md").write_text("fixed\n")
-            return patch_state(issue)
+            return patch_state(request.issue)
 
     def factory(**kwargs):
         captured.update(kwargs)
@@ -364,7 +364,7 @@ def test_real_cli_dispatch_github(temp_workspace, tmp_path, monkeypatch, capsys)
 
         return create
 
-    monkeypatch.setattr("src.cli.make_orchestrator_factory", factory)
+    monkeypatch.setattr("src.cli.repair_service_factory", factory)
     monkeypatch.setattr(
         sys,
         "argv",

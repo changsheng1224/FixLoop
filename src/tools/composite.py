@@ -12,7 +12,7 @@ from src.tools.registry import build_repair_tools
 from src.tools.repair_control import build_repair_control_tools
 from src.tools.sandbox_tools import build_sandbox_tool_registry
 
-RepairAgentRole = Literal["patcher", "verifier"]
+RepairAgentRole = Literal["patcher"]
 
 REPAIR_CANONICAL_TOOL_NAMES: tuple[str, ...] = (
     "apply_patch",
@@ -72,9 +72,7 @@ def build_repair_canonical_tools(ctx: ToolContext) -> dict:
     from agent_runtime.tool_spec import bind_execution_tools
     from src.tools.spec import default_repair_tool_registry
 
-    sandbox_mode = bool(
-        getattr(ctx, "sandbox_mode", False) or ctx.sandbox_backend is not None
-    )
+    sandbox_mode = bool(getattr(ctx, "sandbox_mode", False) or ctx.sandbox_backend is not None)
     return bind_workspace_tools(
         ctx,
         bind_execution_tools(selected, default_repair_tool_registry(sandbox_mode=sandbox_mode)),
@@ -111,12 +109,13 @@ def tool_inspect_file(context, args: dict) -> ToolResult:
 
 def build_repair_agent_tools(ctx: ToolContext, role: RepairAgentRole) -> dict:
     """按修复流水线角色返回 canonical 工具注册表（执行权限由 ToolGateway 控制）。"""
-    del role  # 各 phase 同一 schema 集；权限见 src/middleware.py
+    if role != "patcher":
+        raise ValueError("unsupported repair agent role")
     tools = build_repair_canonical_tools(ctx)
     if ctx.sandbox_backend is None and os.environ.get(
         "FIXLOOP_ENABLE_GITHUB_MCP", ""
     ).strip().lower() in ("1", "true", "yes"):
         from agent_runtime.mcp.registry import build_github_mcp_tools_auto
 
-        tools.update(build_github_mcp_tools_auto())
+        tools.update(build_github_mcp_tools_auto(write_roles=frozenset({"patcher"})))
     return tools

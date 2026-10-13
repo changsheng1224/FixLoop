@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from src.benchmark.swebench.patch_export import export_model_patch
-from src.repair.execution.patch_applier import PatchApplier
 from src.repair.failure_tags import (
     allowed_patch_files,
     check_patch_faithfulness,
@@ -76,11 +75,7 @@ class TestTierGateLowImpl:
     def test_low_impl_allows_short_repair(self, tmp_path):
         root = _tmp_repo(tmp_path)
         low = SuspectLocation(
-            file_path="pkg/core.py",
-            start_line=1,
-            end_line=1,
-            reason="llm_guess",
-            confidence=0.3,
+            file_path="pkg/core.py", start_line=1, end_line=1, reason="llm_guess", confidence=0.3
         )
         assert tier_for_suspect(low, root) == SuspectTier.LOW
         d = decide_patch_gate([low], root)
@@ -107,29 +102,13 @@ class TestPathSuffixResolve:
         rel = resolve_repo_relpath(root, "contrib/auth/validators.py")
         assert rel == "django/contrib/auth/validators.py"
 
-    def test_applier_rewrites_path(self, tmp_path):
-        root = _tmp_repo(tmp_path)
-        applier = PatchApplier(str(root))
-        patches = [
-            CandidatePatch(
-                file_path="contrib/auth/validators.py",
-                original_lines="ASCII = r'[A-Za-z]'\n",
-                patched_lines="ASCII = r'X'\n",
-            )
-        ]
-        applied = applier.apply_patches(patches)
-        assert len(applied) == 1
-        assert applied[0].file_path == "django/contrib/auth/validators.py"
-        text = (root / "django/contrib/auth/validators.py").read_text(encoding="utf-8")
-        assert "ASCII = r'X'" in text
-
 
 class TestPhaseBudgetReserve:
     def test_patch_floor_under_total_cap(self):
         cfg = PhaseTimeoutConfig.with_repair_total_cap(900)
         assert cfg.repair_total_s == 900
         assert cfg.patch_s >= 180
-        assert cfg.localize_s + cfg.patch_s + cfg.verify_s <= 900 + 50  # soft check
+        assert cfg.localize_s + cfg.patch_s + cfg.verify_s <= 900 + 50
         assert cfg.patch_s >= cfg.localize_s
 
 
@@ -146,7 +125,6 @@ class TestExportSuspectFallback:
         (modified / "pkg" / "core.py").write_text("x = 2\n", encoding="utf-8")
         (original / "noise.py").write_text("a\n", encoding="utf-8")
         (modified / "noise.py").write_text("b\n", encoding="utf-8")
-
         state = RepairState(
             issue_input="x",
             candidate_patches=[],

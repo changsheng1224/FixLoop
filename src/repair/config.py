@@ -6,13 +6,14 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from agent_runtime.config_loader import load_config_values, parse_bool
 from agent_runtime.policy import config_snapshot
+from src.collaboration.exploration_contracts import ExplorationLimits
 
 
 class RepairConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
+    schema_version: Literal["2.0"] = "2.0"
     sandbox_policy: Literal["required", "preferred", "disabled"] = "preferred"
-    patcher_max_steps: int = Field(default=24, ge=1, le=50)
     patcher_compact: bool = True
     progress: bool = True
     progress_stdout: bool = True
@@ -21,6 +22,7 @@ class RepairConfig(BaseModel):
     progress_heartbeat_s: float = Field(default=60, ge=5, allow_inf_nan=False)
     progress_heartbeat_text: bool = False
     # File path -> qualified Python definition names (e.g. Service.run).
+    exploration: ExplorationLimits = Field(default_factory=ExplorationLimits)
     protected_interfaces: dict[str, list[str]] = Field(default_factory=dict)
     _provenance: dict[str, str] = PrivateAttr(default_factory=dict)
 
@@ -38,7 +40,6 @@ def _stdout_bool(value: str) -> bool:
 
 _ENV_FIELDS = {
     "sandbox_policy": str,
-    "patcher_max_steps": int,
     "patcher_compact": parse_bool,
     "progress": _progress_bool,
     "progress_stdout": _stdout_bool,

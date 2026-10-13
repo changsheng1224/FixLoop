@@ -16,7 +16,7 @@ def test_repairstate_rejects_missing_historical_and_unknown_schema(version):
 
 def test_current_control_roundtrip_and_snapshot_isolation():
     payload = {
-        "schema_version": "1.3",
+        "schema_version": "2.0",
         "issue_input": "x",
         "control": {"user_cancel": True, "allowed_edit": ["a.py"]},
         "node_timings": {"patch_ms": 7},
@@ -36,7 +36,7 @@ def test_historical_phase_and_status_are_rejected(field, value):
     with pytest.raises(ValueError):
         RepairState(issue_input="x", **{field: value})
     with pytest.raises(ValueError):
-        RepairState.from_dict({"schema_version": "1.3", "issue_input": "x", field: value})
+        RepairState.from_dict({"schema_version": "2.0", "issue_input": "x", field: value})
 
 
 def test_unsigned_repair_checkpoint_cannot_resume(tmp_path):
@@ -60,14 +60,14 @@ def test_control_rejects_unknown_fields_and_old_storage_on_new_schema():
     with pytest.raises(ValueError):
         RepairState(issue_input="x", control={"unrecognized_flag": True})
     with pytest.raises(ValueError, match="node_timings"):
-        RepairState.from_dict({"schema_version": "1.3", "node_timings": {"user_cancel": True}})
+        RepairState.from_dict({"schema_version": "2.0", "node_timings": {"user_cancel": True}})
     state = RepairState(issue_input="x")
     with pytest.raises(ValueError):
         state.control.consecutive_env_fails = -1
 
 
 def test_resume_restores_controls_without_replaying_previous_cancellation():
-    from src.orchestrator import Orchestrator
+    from src.repair.session import ExecutionSession
 
     previous = RepairState(
         issue_input="x",
@@ -80,11 +80,13 @@ def test_resume_restores_controls_without_replaying_previous_cancellation():
         },
     )
     current = RepairState(issue_input="x")
-    Orchestrator(None)._restore_state_from_repair_checkpoint(current, previous.to_dict())
+    ExecutionSession(None).coordinator.restore_state_from_repair_checkpoint(
+        current, previous.to_dict()
+    )
     assert current.status == "pending"
     assert current.control.allowed_edit == ["a.py"]
     assert current.control.plan_checkpoint == {"checkpoint_id": "saved"}
-    assert not current.control.user_cancel and not current.control.repair_timeout
+    assert not current.control.user_cancel and (not current.control.repair_timeout)
 
 
 def test_signed_historical_checkpoint_is_rejected_without_migration(tmp_path, monkeypatch):
@@ -161,7 +163,6 @@ def test_blackboard_conflict_strategies_support_priority_merge_and_reject():
     resolved = resolve_blackboard_conflicts(board, strategy="trusted_source_priority")
     assert resolved[0]["winner_source"] == "verifier"
     assert board.read("context:x") == ["b"]
-
     board.write("context:y", ["a"], "retriever")
     assert not board.write("context:y", ["b"], "verifier")
     resolve_blackboard_conflicts(board, strategy="reject_all")

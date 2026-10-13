@@ -29,7 +29,7 @@ __all__ = [
 ]
 
 
-CURRENT_STATE_SCHEMA_VERSION = "1.3"
+CURRENT_STATE_SCHEMA_VERSION = "2.0"
 
 
 class RepairPhase(StrEnum):
@@ -369,7 +369,7 @@ class CandidatePatch:
     @classmethod
     def from_dict(cls, data: dict) -> CandidatePatch:
         """从 dict 反序列化。"""
-        from src.repair.execution.patch_applier import normalize_patch_text_field
+        from src.repair.patch_artifacts import normalize_patch_text_field
 
         return cls(
             file_path=str(data.get("file_path", "") or ""),
@@ -384,7 +384,7 @@ class CandidatePatch:
 
 @dataclass
 class VerificationResult:
-    """验证结果——由 Verifier 产出。
+    """真实命令验证结果，由 VerificationService 判定。
 
     Attributes:
         all_passed: 所有测试是否通过。
@@ -405,9 +405,22 @@ class VerificationResult:
     failure_logs: list[str] = field(default_factory=list)
     build_log: str = ""
     lint_issues: list[str] = field(default_factory=list)
-    schema_version: str = "1.0"
+    schema_version: str = "2.0"
     verification_mode: str = "tests"
-    execution_status: str = "unknown"
+    execution_status: str = "unverified"
+
+    def __post_init__(self):
+        if self.schema_version != "2.0":
+            raise ValueError("unsupported VerificationResult schema_version")
+        if self.execution_status not in {
+            "passed",
+            "failed",
+            "environment_unavailable",
+            "timed_out",
+            "cancelled",
+            "unverified",
+        }:
+            raise ValueError(f"unsupported verification execution_status: {self.execution_status}")
 
     def to_dict(self) -> dict:
         """序列化为 JSON 可写 dict。"""
@@ -428,6 +441,8 @@ class VerificationResult:
     @classmethod
     def from_dict(cls, data: dict) -> VerificationResult:
         """从 dict 反序列化。"""
+        if data.get("schema_version") != "2.0":
+            raise ValueError("unsupported VerificationResult schema_version")
         return cls(
             all_passed=data.get("all_passed", False),
             total_tests=data.get("total_tests", 0),
@@ -437,9 +452,9 @@ class VerificationResult:
             failure_logs=data.get("failure_logs", []),
             build_log=data.get("build_log", ""),
             lint_issues=data.get("lint_issues", []),
-            schema_version=data.get("schema_version", "1.0"),
+            schema_version=data.get("schema_version", "2.0"),
             verification_mode=data.get("verification_mode", "tests"),
-            execution_status=data.get("execution_status", "unknown"),
+            execution_status=data.get("execution_status", "unverified"),
         )
 
 
@@ -533,7 +548,8 @@ class RepairState:
         )
         self.execution = RepairExecutionState.model_validate(
             self.execution.model_dump()
-            if isinstance(self.execution, RepairExecutionState) else self.execution
+            if isinstance(self.execution, RepairExecutionState)
+            else self.execution
         )
         if set(self.node_timings) & set(RepairControl.model_fields):
             errors.append("repair controls must not be stored in node_timings")

@@ -33,7 +33,7 @@ def test_two_plan_nodes_each_native_batch_never_create_four_readers(tmp_path):
             for i in range(2)
         ]
         for agent in agents:
-            agent._plan_session = session
+            agent.plan_session = session
             agent.shared_run_id = session.identity["run_id"]
             reader = agent.tools["read_file"]["run_with_context"]
 

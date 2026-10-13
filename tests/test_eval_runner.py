@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from src.eval.fake_runner import fake_orchestrator_factory
+from src.eval.fake_runner import fixture_repair_service_factory
 from src.eval.models import CaseResult
 from src.eval.runner import EvalRunner, _copy_case_repo, build_eval_report, collect_repo_diff
 
@@ -81,7 +81,7 @@ class TestEvalRunnerFake:
     def test_run_all_fake_orchestrator(self):
         with tempfile.TemporaryDirectory() as tmp:
             runner = EvalRunner(
-                orchestrator_factory=fake_orchestrator_factory(CASES_DIR),
+                orchestrator_factory=fixture_repair_service_factory(CASES_DIR),
                 cases_dir=CASES_DIR,
                 output_dir=tmp,
             )
@@ -100,7 +100,7 @@ class TestEvalRunnerFake:
 
     def test_run_case_unknown(self):
         runner = EvalRunner(
-            orchestrator_factory=fake_orchestrator_factory(CASES_DIR),
+            orchestrator_factory=fixture_repair_service_factory(CASES_DIR),
             cases_dir=CASES_DIR,
         )
         result = runner.run_case("case_999")
@@ -108,12 +108,12 @@ class TestEvalRunnerFake:
         assert "unknown case" in result.error
 
     def test_run_case_exception_normalizes_failed_status(self, tmp_path):
-        class ExplodingOrchestrator:
-            def repair(self, issue: str):
+        class ExplodingService:
+            def run(self, request):
                 raise IndexError("list index out of range")
 
         def factory(repo_path: str):
-            return ExplodingOrchestrator()
+            return ExplodingService()
 
         runner = EvalRunner(
             orchestrator_factory=factory,
@@ -130,7 +130,7 @@ class TestEvalRunnerFake:
     @pytest.mark.parametrize("case_id", [f"case_{i:03d}" for i in range(1, 11)])
     def test_each_case_fixes_with_fake(self, case_id):
         runner = EvalRunner(
-            orchestrator_factory=fake_orchestrator_factory(CASES_DIR),
+            orchestrator_factory=fixture_repair_service_factory(CASES_DIR),
             cases_dir=CASES_DIR,
         )
         result = runner.run_case(case_id)
@@ -148,5 +148,5 @@ class TestRunnerCli:
         report_path = out / "eval_report.json"
         assert report_path.is_file()
         data = json.loads(report_path.read_text(encoding="utf-8"))
-        assert data["summary"]["total"] == _case_count()
-        assert data["summary"]["fix_rate"] >= 0.5
+        assert data["summary"]["total"] == 2
+        assert data["summary"]["fixed"] == 2

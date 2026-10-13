@@ -311,11 +311,16 @@ class ToolBatchScheduler:
             approval_paused = False
             for call in batch.calls:
                 if approval_paused:
-                    self.finish(call, ToolResult(
-                        content="Batch paused for approval; call not started", status="rejected",
-                        error_code="approval_deferred", retryable=False,
-                        metadata={"termination_guaranteed": True},
-                    ))
+                    self.finish(
+                        call,
+                        ToolResult(
+                            content="Batch paused for approval; call not started",
+                            status="rejected",
+                            error_code="approval_deferred",
+                            retryable=False,
+                            metadata={"termination_guaranteed": True},
+                        ),
+                    )
                 elif cancel_token is not None and cancel_token.is_cancelled:
                     self.finish(call, cancellation_result())
                 else:
@@ -357,16 +362,22 @@ class ToolBatchScheduler:
 
         try:
             while pending or active:
-                if any(c.result is not None and c.result.error_code in {
-                    "approval_required", "approval_pending"
-                } for c in batch.calls):
+                if any(
+                    c.result is not None
+                    and c.result.error_code in {"approval_required", "approval_pending"}
+                    for c in batch.calls
+                ):
                     for queued in pending:
-                        self.finish(queued, ToolResult(
-                            content="Batch paused for approval; call not started",
-                            status="rejected",
-                            error_code="approval_deferred", retryable=False,
-                            metadata={"termination_guaranteed": True},
-                        ))
+                        self.finish(
+                            queued,
+                            ToolResult(
+                                content="Batch paused for approval; call not started",
+                                status="rejected",
+                                error_code="approval_deferred",
+                                retryable=False,
+                                metadata={"termination_guaranteed": True},
+                            ),
+                        )
                     pending.clear()
                 cancelled = (cancel_token is not None and cancel_token.is_cancelled) or (
                     expired is not None and expired()
