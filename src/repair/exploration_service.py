@@ -247,19 +247,6 @@ class ExplorationService:
                 if skill_fallback is not None
                 else {"matched_skill": None},
             )
-            try:
-                from src.skills.decision import build_canonical_skill_decision
-                from src.skills.router import SkillRouter
-
-                decision = SkillRouter().route(issue)
-                tracer.emit("orchestrator", "skill_routed", decision.to_trace_payload())
-                canonical = build_canonical_skill_decision(matched, decision)
-                state.repair_plan.skill.canonical_decision = canonical.to_dict()
-                tracer.emit("orchestrator", "skill_decided", canonical.to_dict())
-                if canonical.fallback:
-                    tracer.emit("orchestrator", "skill_fallback", canonical.to_dict())
-            except Exception:
-                pass
         state.node_timings["parse_issue_ms"] = parse_ms
         state.node_timings["skill_resolve_ms"] = skill_ms
         log.info("parse_issue: %dms, skill_resolve: %dms", parse_ms, skill_ms)

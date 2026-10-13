@@ -276,9 +276,3 @@ class SkillRouter:
             fallback=False,
             switched_from=switched,
         )
-
-
-def route_executable_skill(text: str, **kwargs: Any) -> RouteDecision:
-    allowed = {"registry", "embed_fn", "llm_pick_fn"}
-    router_kwargs = {key: value for key, value in kwargs.items() if key in allowed}
-    return SkillRouter(**router_kwargs).route(text)

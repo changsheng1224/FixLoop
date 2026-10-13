@@ -98,7 +98,6 @@ class SkillRegistry:
         root = Path(__file__).resolve().parent
         for path in sorted(root.glob("*.yaml")):
             registry.load_yaml(path)
-        registry.load_yaml(root / "executable" / "specs.yaml")
         return registry
 
 

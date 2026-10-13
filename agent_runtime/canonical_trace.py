@@ -62,18 +62,8 @@ EVENT_CATALOG: dict[str, tuple[str, ...]] = {
         "runtime_contract_recovery",
     ),
     "skill": (
-        "skill_discovered",
-        "skill_matched",
         "skill_hint_rendered",
-        "skill_routed",
-        "skill_decided",
-        "skill_admitted",
-        "skill_started",
-        "skill_tool_called",
-        "skill_completed",
-        "skill_failed",
-        "skill_fallback",
-        "skill_feedback_recorded",
+        "skill_matched",
     ),
     "context": (
         "context_built",
@@ -245,10 +235,6 @@ def infer_status(event: str, payload: dict[str, Any] | None = None) -> str:
         "repair_started",
         "run_started",
         "agent_ask_started",
-        "skill_admitted",
-        "skill_started",
-        "skill_completed",
-        "skill_feedback_recorded",
         "checkpoint_committed",
         "resume_evaluated",
         "session_saved",
@@ -262,10 +248,6 @@ def infer_status(event: str, payload: dict[str, Any] | None = None) -> str:
         "budget_released",
     ):
         return STATUS_OK
-    if event == "skill_failed":
-        if str(data.get("status", "")).lower() == "cancelled":
-            return STATUS_CANCELLED
-        return STATUS_ERROR
     if event in ("budget_exhausted", "latency_slo_exceeded", "provider_error"):
         return STATUS_ERROR
     if event == "span_closed":

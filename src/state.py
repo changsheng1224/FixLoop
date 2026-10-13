@@ -118,7 +118,6 @@ class SkillContext:
     example_patch: str = ""
     fallback_strategy: str = ""
     confidence: float = 0.0
-    canonical_decision: dict = field(default_factory=dict)
     invocation_refs: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -131,7 +130,6 @@ class SkillContext:
             "example_patch": self.example_patch,
             "fallback_strategy": self.fallback_strategy,
             "confidence": self.confidence,
-            "canonical_decision": dict(self.canonical_decision),
             "invocation_refs": list(self.invocation_refs),
         }
 
@@ -147,7 +145,6 @@ class SkillContext:
             example_patch=str(raw.get("example_patch") or ""),
             fallback_strategy=str(raw.get("fallback_strategy") or ""),
             confidence=float(raw.get("confidence", 0.0)),
-            canonical_decision=dict(raw.get("canonical_decision") or {}),
             invocation_refs=list(raw.get("invocation_refs") or []),
         )
 
