@@ -301,6 +301,44 @@ def _runtime_control_snapshot(agent, task_state) -> dict:
     return control
 
 
+def supersede_approval_checkpoint(agent, reason: str) -> dict:
+    """Retire a pending approval pause so the session can move on.
+
+    An ``approval_required`` checkpoint that evaluates to anything other than
+    resumable can never be fulfilled: the approval was cancelled, the runtime
+    restarted, or its authority changed. While it stayed the last checkpoint,
+    every later ``run()`` re-evaluated and refused it, which wedged the session
+    permanently and discarded the caller's message each time. The record is
+    kept -- it stays in the checkpoint list, marked -- but no longer gates the
+    next turn.
+    """
+    checkpoints = agent.session.get("checkpoints") or []
+    if not checkpoints:
+        return {}
+    last = checkpoints[-1]
+    if last.get("trigger") != "approval_required" or last.get("superseded"):
+        return {}
+    last["superseded"] = True
+    last["superseded_reason"] = str(reason or "")
+    agent.session["resume_state"] = {
+        **(agent.session.get("resume_state") or {}),
+        "status": "superseded",
+        "superseded_reason": str(reason or ""),
+    }
+    try:
+        from agent_runtime.session_store import SessionStore
+
+        SessionStore(
+            root=agent.cwd,
+            state_root=str(getattr(agent.tool_context, "state_root", "") or ""),
+        ).save(agent.session)
+    except Exception as exc:  # noqa: BLE001 - the in-memory retire still applies
+        from agent_runtime.logging_setup import get_logger
+
+        get_logger("checkpoint").warning("无法持久化作废的审批 checkpoint: %s", exc)
+    return dict(last)
+
+
 def evaluate_resume_state(agent) -> dict:
     """评估 resume 状态。返回 status + stale_files + identity_diff + last_checkpoint。"""
     checkpoints = agent.session.get("checkpoints", [])

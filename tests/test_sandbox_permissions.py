@@ -554,3 +554,61 @@ def test_l2_cancel_invalidates_pending_before_publishing_recovery(ctx):
     assert events == ["cancel", "cancel"]
     assert not ctx.sandbox_backend.calls
     assert service.snapshot()["tickets"] == {}
+
+
+@pytest.mark.parametrize("change", ["cancel", "revoke"])
+def test_a_pause_that_can_never_be_fulfilled_does_not_wedge_the_session(ctx, tmp_path, change):
+    """An unresolvable approval must not make every later turn refuse.
+
+    The pause used to stay the last checkpoint forever, so `run` re-evaluated
+    and rejected it on each call and the caller's message was never recorded.
+    """
+    from agent_runtime.agent_loop import AgentLoop
+    from agent_runtime.checkpoint import evaluate_resume_state
+    from agent_runtime.task_state import TaskState
+
+    ctx.sandbox_initial_scope = PermissionScope(write_paths=())
+    ctx.sandbox_workspace_versions["a.py"] = DIGEST
+    agent = make_agent(ctx, tmp_path)
+    loop = AgentLoop(agent)
+    ts = TaskState.create(user_request="edit")
+    ts.advance_runtime("reasoning")
+    loop._task_state = ts
+    loop._run_tool_step(ts, "write_file", {"path": "a.py", "content": "new"}, step=1, path="xml")
+
+    service = permission_service(ctx)
+    if change == "cancel":
+        service.cancel_pending()
+    else:
+        service.replace_scope(PermissionScope(write_paths=()))
+    assert evaluate_resume_state(agent)["status"] != "approval-resumable"
+
+    answer = loop.run("继续")
+
+    assert "审批调用无法恢复" not in answer
+    # The turn ran and appended its own checkpoint, so the retired pause is no
+    # longer last -- find it by its marker rather than by position.
+    superseded = [cp for cp in agent.session["checkpoints"] if cp.get("superseded")]
+    assert superseded, "the unresolvable pause was not retired"
+    assert superseded[-1].get("superseded_reason")
+    # The turn actually ran: the user's message reached the transcript.
+    assert any(item.get("content") == "继续" for item in agent.session.get("history") or [])
+
+
+def test_a_still_pending_approval_keeps_waiting_instead_of_running(ctx, tmp_path):
+    """The pause must still hold while the approval is genuinely outstanding."""
+    from agent_runtime.agent_loop import AgentLoop
+    from agent_runtime.task_state import TaskState
+
+    ctx.sandbox_initial_scope = PermissionScope(write_paths=())
+    ctx.sandbox_workspace_versions["a.py"] = DIGEST
+    agent = make_agent(ctx, tmp_path)
+    loop = AgentLoop(agent)
+    ts = TaskState.create(user_request="edit")
+    ts.advance_runtime("reasoning")
+    loop._task_state = ts
+    loop._run_tool_step(ts, "write_file", {"path": "a.py", "content": "new"}, step=1, path="xml")
+
+    assert loop.run("继续") == "等待审批。"
+    assert agent.session.get("awaiting_approval")
+    assert not agent.session["checkpoints"][-1].get("superseded")
