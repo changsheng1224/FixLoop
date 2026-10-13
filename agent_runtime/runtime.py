@@ -497,7 +497,7 @@ class Agent:
     ) -> tuple[str, dict]:
         """用统一 TokenBudget 裁剪 user 段，保留 system/prefix 优先。"""
         from agent_runtime.context_fit import fit_prompt_to_budget
-        from agent_runtime.context_manager import TOTAL_BUDGET
+        from agent_runtime.token_budget import TOTAL_BUDGET
 
         if system_override is not None:
             system = system_override

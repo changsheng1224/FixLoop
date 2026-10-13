@@ -7,13 +7,13 @@ from copy import deepcopy
 
 from agent_runtime.budget_manager import BudgetManager
 from agent_runtime.cancellation import CancelledError
-from agent_runtime.context_manager import TokenBudget
 from agent_runtime.errors import ContextBuildBlockedError
 from agent_runtime.model_call_budget import complete_text
 from agent_runtime.plan_runtime.constraint_records import constraint_history
 from agent_runtime.plan_runtime.decisions import decision_history
 from agent_runtime.plan_runtime.models import digest
 from agent_runtime.task_extraction_schema import INSTRUCTIONS, SCHEMA_VERSION, parse_candidates
+from agent_runtime.token_budget import TokenBudget
 
 MAX_SEGMENTS = 16
 

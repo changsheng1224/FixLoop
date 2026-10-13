@@ -44,8 +44,6 @@ def _build_precedent_summary(state) -> str:
 
 log = get_logger("orchestrator")
 
-DEFAULT_REPAIR_TIMEOUT_S = 180
-
 
 class RepairEvents:
     def __init__(self, session):

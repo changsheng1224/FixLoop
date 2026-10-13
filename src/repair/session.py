@@ -8,8 +8,6 @@ from src.repair.run_context import RepairRunContext
 
 log = get_logger("orchestrator")
 
-DEFAULT_REPAIR_TIMEOUT_S = 180
-
 
 class ExecutionSession:
     def __init__(

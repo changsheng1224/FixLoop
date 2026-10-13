@@ -9,10 +9,6 @@ from typing import Any
 
 from src.state import RepairPhase
 
-SAFE_POINTS = frozenset(
-    {"intent", "context", "localization", "patch", "verify", "recovery", "done", "failed"}
-)
-
 _ALLOWED: dict[str, set[str]] = {
     "": {"intent", "seed", "localize", "context", "patch", "verify", "recovery"},
     "intent": {"context", "localize", "patch", "recovery"},

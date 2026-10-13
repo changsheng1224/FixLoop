@@ -44,10 +44,13 @@ from agent_runtime.task_section import (
     task_preservation_metadata,
 )
 from agent_runtime.tier_policy import TierPolicy, filter_relevant_results
-from agent_runtime.tokenizers import resolve_token_counter, resolve_tokenizer_spec
+from agent_runtime.token_budget import (
+    TOTAL_BUDGET,
+    TokenBudget,
+    history_window_budget,
+    scaled_section_budget,
+)
 
-REF_TOTAL_BUDGET = 6000
-TOTAL_BUDGET = 100000
 BUDGET_PREFIX = 2000
 BUDGET_SYSTEM = 700
 BUDGET_TOOLS = 900
@@ -55,50 +58,8 @@ BUDGET_SKILLS = 400
 BUDGET_MEMORY = 800
 BUDGET_KNOWLEDGE = 600
 BUDGET_SOURCE = 1500
-BUDGET_HISTORY = 2600
 KEEP_RECENT_HISTORY = 6
 HARD_CAP = 8000
-
-
-def scaled_section_budget(section_limit: int, total_limit: int) -> int:
-    """将参考布局下的 section 预算缩放到实际 total_limit。"""
-    return max(1, int(section_limit * total_limit / REF_TOTAL_BUDGET))
-
-
-def history_window_budget(total_limit: int) -> int:
-    """history section 预算 = 压缩管线 window（L2–L5 百分比阈值基准）。"""
-    return scaled_section_budget(BUDGET_HISTORY, total_limit)
-
-
-class TokenBudget:
-    """Token 精确计数器（多 backend：DeepSeek HF / OpenAI tiktoken）。"""
-
-    def __init__(
-        self,
-        model: str = "deepseek-v4-pro",
-        total_limit: int = TOTAL_BUDGET,
-        provider: str = "deepseek",
-    ):
-        self.total_limit = total_limit
-        self.model = model
-        self.provider = provider
-        self._counter = resolve_token_counter(model, provider)
-        self.backend = self._counter.backend
-        self._spec = resolve_tokenizer_spec(model, provider)
-        self.tokenizer_fallback = self._spec.fallback
-        self.tokenizer_id = self._spec.tokenizer_id
-
-    def count(self, text: str) -> int:
-        """返回文本的 token 数。"""
-        return self._counter.count(text)
-
-    def fit(self, text: str, limit: int) -> str:
-        """将文本截断到指定 token 限制以内。"""
-        return self._counter.fit(text, limit)
-
-    def remaining(self, used: int) -> int:
-        """返回剩余 token 预算。"""
-        return max(0, self.total_limit - used)
 
 
 class _DiskCache(dict):

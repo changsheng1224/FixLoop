@@ -27,8 +27,8 @@ from agent_runtime.history_summary import (
 )
 
 if TYPE_CHECKING:
-    from agent_runtime.context_manager import TokenBudget
     from agent_runtime.tier_policy import TierPolicy
+    from agent_runtime.token_budget import TokenBudget
 
 Summarizer = Callable[[str], str]
 
@@ -79,7 +79,7 @@ def truncate_tool_content(
     budget: TokenBudget | None = None,
 ) -> str:
     """L1：按工具类型差异化截断，重要行优先保留（token 级）。"""
-    from agent_runtime.context_manager import TokenBudget as _TokenBudget
+    from agent_runtime.token_budget import TokenBudget as _TokenBudget
 
     budget = budget or _TokenBudget()
     limit = TOOL_TRUNCATION_TOKENS.get(tool_name, DEFAULT_TOOL_TRUNCATION)
@@ -211,7 +211,7 @@ def resolve_history_window(budget: TokenBudget, history_window: int | None = Non
     """history section 预算 = 压缩管线 window。"""
     if history_window is not None:
         return history_window
-    from agent_runtime.context_manager import history_window_budget
+    from agent_runtime.token_budget import history_window_budget
 
     return history_window_budget(budget.total_limit)
 
@@ -1002,7 +1002,7 @@ def render_state_fallback(memory: dict) -> str:
 
 def truncate_tool_result_for_agent(agent, tool_name: str, result_text: str) -> str:
     """AgentLoop / ToolExecutor 投影层：对单次 tool 返回应用 L1。"""
-    from agent_runtime.context_manager import TOTAL_BUDGET, TokenBudget
+    from agent_runtime.token_budget import TOTAL_BUDGET, TokenBudget
 
     cfg = getattr(agent, "config", None)
     budget = TokenBudget(

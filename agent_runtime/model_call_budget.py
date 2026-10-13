@@ -166,7 +166,7 @@ def complete_text(
     on_reserved=None,
 ):
     """Auxiliary calls share the current run ledger, cancellation and deadline."""
-    from agent_runtime.context_manager import TokenBudget
+    from agent_runtime.token_budget import TokenBudget
 
     budget = getattr(agent, "budget_manager", None)
     if budget is None:

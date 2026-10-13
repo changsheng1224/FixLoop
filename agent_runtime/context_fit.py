@@ -9,7 +9,7 @@ from agent_runtime.context_projection import attach_fit_context_projection
 from agent_runtime.task_section import reserve_section_budget, task_preservation_metadata
 
 if TYPE_CHECKING:
-    from agent_runtime.context_manager import TokenBudget
+    from agent_runtime.token_budget import TokenBudget
 
 __all__ = ["fit_prompt_to_budget", "fit_repair_user_prompt"]
 
@@ -52,7 +52,7 @@ def fit_prompt_to_budget(
     total_limit: int | None = None,
     preserve_user: bool = True,
 ) -> tuple[str, str, dict]:
-    from agent_runtime.context_manager import TOTAL_BUDGET, TokenBudget
+    from agent_runtime.token_budget import TOTAL_BUDGET, TokenBudget
 
     if total_limit is None:
         total_limit = TOTAL_BUDGET
@@ -98,8 +98,8 @@ def fit_repair_user_prompt(
     *,
     template_meta: dict | None = None,
 ) -> tuple[str, dict]:
-    from agent_runtime.context_manager import TOTAL_BUDGET
     from agent_runtime.tier_policy import load_orchestrator_pin_fields
+    from agent_runtime.token_budget import TOTAL_BUDGET
 
     config = getattr(agent, "config", None)
     model = getattr(config, "model", "deepseek-v4-pro")

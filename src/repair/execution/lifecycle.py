@@ -6,17 +6,16 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from agent_runtime.logging_setup import get_logger
+from src.repair.constants import DEFAULT_REPAIR_TIMEOUT_S
 from src.repair.phase_clock import PhaseTimeoutConfig
 from src.repair.run_context import RepairRunContext
 from src.state import RepairState
 
 log = get_logger("repair.lifecycle")
 
-DEFAULT_REPAIR_TIMEOUT_S = 180
 # Long enough for the timeout callback's coordination-store write to finish
 # (its own busy timeout is 10s), short enough not to hang the owner thread.
 _CANCEL_JOIN_TIMEOUT_S = 10.0
-
 
 class ExecutionLifecycle:
     def __init__(self, session):
