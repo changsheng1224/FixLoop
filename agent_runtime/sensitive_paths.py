@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import fnmatch
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 # 精确或通配（相对 workspace 的 path 字符串 / basename）
 SENSITIVE_BASENAME_GLOBS: tuple[str, ...] = (
@@ -36,6 +36,12 @@ SENSITIVE_PATH_SUBSTRINGS: tuple[str, ...] = (
     "/.gnupg/",
     "\\.gnupg\\",
 )
+
+# 仓库控制面与运行时私有目录：路径中**任一组件**命中即拒绝，与沙箱层的
+# ``_PROTECTED`` 同语义。按组件匹配而非前缀，才能同时覆盖相对
+# (``.git/hooks/x``)、绝对 (``/repo/.git/hooks/x``) 与嵌套三种形式。
+# ``.aws``/``.ssh``/``.gnupg`` 已由上面的子串规则覆盖。
+PROTECTED_PATH_COMPONENTS: tuple[str, ...] = (".git", ".agent")
 
 # Repository control-plane and deployment credential files.  These are
 # intentionally path-pattern based so nested CI/deployment files are covered
@@ -73,6 +79,8 @@ def is_sensitive_path(path: str | Path) -> bool:
     for sub in SENSITIVE_PATH_SUBSTRINGS:
         if sub.replace("\\", "/").lower() in lower:
             return True
+    if any(part.casefold() in PROTECTED_PATH_COMPONENTS for part in PurePosixPath(text).parts):
+        return True
     normalized = lower.lstrip("./")
     if any(
         fnmatch.fnmatch(normalized, pattern.lower())

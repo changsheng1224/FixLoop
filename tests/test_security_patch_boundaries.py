@@ -102,3 +102,65 @@ def test_security_trace_events_render_low_cardinality_metrics():
     rendered = get_registry().render()
     assert "fixloop_stale_patch_rejections_total" in rendered
     assert "run_id" not in rendered
+
+
+class TestRepositoryControlPlane:
+    """整棵 .git 目录树禁止访问，与沙箱层 _PROTECTED 同语义。"""
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            ".git",
+            ".git/hooks/post-checkout",
+            ".git/hooks/pre-commit",
+            ".git/objects/ab/cdef",
+            "./.git/config",
+            "/repo/.git/hooks/post-checkout",
+            "nested/.git/config",
+            ".agent/history.jsonl",
+        ],
+    )
+    def test_control_plane_paths_are_sensitive(self, path):
+        assert is_sensitive_path(path), path
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "src/main.py",
+            "pkg/git/mod.py",
+            "foo.git/bar.py",
+            ".gitsomething",
+            "gitignore.txt",
+            "docs/.github.md",
+        ],
+    )
+    def test_ordinary_paths_are_not_sensitive(self, path):
+        """组件匹配不是子串匹配：只有整段等于 .git 才拒绝。"""
+        assert not is_sensitive_path(path), path
+
+    @pytest.mark.parametrize("operation", ["create", "modify", "delete"])
+    def test_expand_lock_refuses_control_plane_paths(self, tmp_path, operation):
+        """扩锁授予写权限，但不得把控制面路径写进允许集合。"""
+        lock = EditLockState(repo_root=tmp_path)
+        granted, reason = lock.expand_lock(".git/hooks/post-checkout", operation=operation)
+        assert granted is False
+        assert reason.startswith("sensitive_path")
+
+    def test_two_stage_write_to_a_git_hook_never_lands(self, tmp_path):
+        """F3 的完整路径：先扩锁再写，两步都必须被拒。"""
+        from agent_runtime.tools import tool_write_file
+
+        hook = tmp_path / ".git" / "hooks" / "post-checkout"
+        hook.parent.mkdir(parents=True)
+        lock = EditLockState(repo_root=tmp_path)
+
+        granted, _ = lock.expand_lock(".git/hooks/post-checkout", operation="create")
+        assert granted is False
+        assert not lock.allowed_create
+
+        result = tool_write_file(
+            ToolContext(str(tmp_path)),
+            {"path": ".git/hooks/post-checkout", "content": "#!/bin/sh\necho pwned\n"},
+        )
+        assert result.failed
+        assert not hook.exists()
