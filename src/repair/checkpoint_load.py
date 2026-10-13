@@ -118,9 +118,12 @@ def load_repair_checkpoint(
             return reject("resume_checkpoint_identity_mismatch")
         envelope_raw = data.get("checkpoint_envelope")
         if isinstance(envelope_raw, dict):
-            envelope = CheckpointEnvelope.from_dict(envelope_raw)
-            if envelope.schema_version != CHECKPOINT_ENVELOPE_VERSION:
+            # Check the version before constructing: `from_dict` raises on an
+            # unsupported one, and that ValueError is caught below as
+            # "malformed", so the specific code could never be reported.
+            if envelope_raw.get("schema_version") != CHECKPOINT_ENVELOPE_VERSION:
                 return reject("resume_checkpoint_schema_mismatch")
+            envelope = CheckpointEnvelope.from_dict(envelope_raw)
             if not envelope.verify() or data.get("checkpoint_checksum") != envelope.checksum:
                 return reject("resume_checkpoint_integrity_failed")
             # The envelope task_state is authoritative.  Reject a checkpoint

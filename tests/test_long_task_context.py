@@ -65,8 +65,8 @@ def test_context_manager_projects_long_task_state_into_protected_section(tmp_pat
         agent = SimpleNamespace(
             plan_session=session,
             session={},
-            _cwd=str(tmp_path),
-            _prefix=SimpleNamespace(
+            cwd=str(tmp_path),
+            prefix=SimpleNamespace(
                 tool_signature="",
                 assets_fingerprint="",
                 stable_system_text="",

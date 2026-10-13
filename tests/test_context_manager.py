@@ -143,29 +143,33 @@ class TestContextManagerBuild:
         from agent_runtime.errors import ContextTooLargeError
 
         # 设置极低硬顶（system+tool+workspace 常规就 >300 tokens）
-        agent.config.hard_cap = 100
+        agent.config.hard_cap = 512
         cm = ContextManager(agent)
         with pytest.raises(ContextTooLargeError) as exc_info:
             cm.build("test")
         e = exc_info.value
         assert e.actual > 100
-        assert e.limit == 100
-        assert "100" in str(e)
+        assert e.limit == 512
+        assert "512" in str(e)
 
     def test_hard_cap_high_enough_does_not_raise(self, agent):
         """hard_cap 足够大时不抛异常。"""
-        agent.config.hard_cap = 8000
+        agent.config.hard_cap = 6000  # 受 prompt_budget 约束，取该 fixture 允许的上限
         cm = ContextManager(agent)
         prompt, meta = cm.build("test")
-        assert meta["total_tokens"] <= 8000
+        assert meta["total_tokens"] <= 6000
         assert "test" in prompt
 
     def test_hard_cap_build_dynamic_context_raises(self, agent):
-        """build_dynamic_context() 也检查 hard_cap。"""
+        """build_dynamic_context() 也检查硬顶。
+
+        动态上下文不含 system / request，体积远小于配置允许的最小硬顶
+        (512)，因此在 manager 上直接收紧。被测的是运行时边界，不是配置边界。
+        """
         from agent_runtime.errors import ContextTooLargeError
 
-        agent.config.hard_cap = 50
         cm = ContextManager(agent)
+        cm.hard_cap = 50
         with pytest.raises(ContextTooLargeError):
             cm.build_dynamic_context("test")
 
@@ -173,7 +177,7 @@ class TestContextManagerBuild:
         """build_for_native() 也检查 hard_cap。"""
         from agent_runtime.errors import ContextTooLargeError
 
-        agent.config.hard_cap = 50
+        agent.config.hard_cap = 512
         cm = ContextManager(agent)
         with pytest.raises(ContextTooLargeError):
             cm.build_for_native("test")
@@ -231,7 +235,7 @@ class TestStateSection:
             {"id": "4", "content": "运行全量测试确认无回归", "status": "pending"},
         ]
         # 注入 l2_phase
-        agent._l2_phase = "patching"
+        agent.correlation = {"phase": "patch"}
         return agent
 
     def test_state_section_has_todo_content(self, agent_with_state):
@@ -259,17 +263,17 @@ class TestStateSection:
         assert "修复 calculator.py 除零错误" in state
 
     def test_state_section_has_phase(self, agent_with_state):
-        """state 段包含 L2 repair phase。"""
+        """state 段包含 L2 repair phase（来自 agent.correlation）。"""
         cm = ContextManager(agent_with_state)
         state = cm._get_state()
-        assert "patching" in state
+        assert "阶段: patch" in state
 
     def test_state_section_is_rendered_in_build(self, agent_with_state):
         """state 段内容出现在 ContextManager.build() 的 prompt 输出中。"""
         cm = ContextManager(agent_with_state)
         prompt, _ = cm.build("fix the bug")
         assert "定位错误文件" in prompt
-        assert "patching" in prompt
+        assert "阶段: patch" in prompt
 
     def test_state_section_empty_when_no_todos(self, agent):
         """没有 plan_todos 时 state 段为空。"""
