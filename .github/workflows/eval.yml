@@ -24,8 +24,10 @@ jobs:
       - name: Build sandbox image
         run: docker build -t repair-agent/python-repair:latest -f sandbox/Dockerfile.python sandbox/
 
+      # `src.eval` is the package with the CLI (`__main__.py`); `src.eval.runner`
+      # is a module and running it as `-m` would exit 0 without doing anything.
       - name: Run CI eval (fake, no API)
-        run: python -m src.eval.runner --ci --verbose
+        run: python -m src.eval --ci --verbose
 
       - name: Regression check
         run: |
