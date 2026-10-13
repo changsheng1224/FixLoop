@@ -24,7 +24,7 @@ from agent_runtime.session_contract import (
     workspace_manifest,
 )
 
-CHECKPOINT_SCHEMA_VERSION = "1.0"
+CHECKPOINT_SCHEMA_VERSION = "3.0"
 CheckpointTrigger = Literal["step_end", "user_cancel", "ask_end", "approval_required"]
 VALID_TRIGGERS: frozenset[str] = frozenset(
     {"step_end", "user_cancel", "ask_end", "approval_required"}
@@ -61,13 +61,13 @@ def current_runtime_identity(agent) -> dict:
         {cwd, provider, model, approval, max_steps, tools_signature} 字典。
     """
     return {
-        "cwd": agent._cwd,
+        "cwd": agent.cwd,
         "provider": agent.config.provider,
         "model": agent.config.model,
         "approval": agent.config.approval,
         "max_steps": agent.config.max_steps,
-        "tools_signature": agent._prefix.tool_signature,
-        "prompt_assets_fingerprint": getattr(agent._prefix, "assets_fingerprint", "") or "",
+        "tools_signature": agent.prefix.tool_signature,
+        "prompt_assets_fingerprint": getattr(agent.prefix, "assets_fingerprint", "") or "",
         "sandbox_identity": dict(getattr(agent.tool_context, "sandbox_identity", {}) or {}),
     }
 
@@ -109,11 +109,7 @@ def create_checkpoint(
     sandbox = _sandbox_context(agent)
     source_versions = _sandbox_versions(agent) if sandbox else None
     for path in working.get("recent_files", [])[-5:]:
-        freshness = (
-            source_versions.get(path, "")
-            if sandbox
-            else _file_freshness(agent._cwd, path)
-        )
+        freshness = source_versions.get(path, "") if sandbox else _file_freshness(agent.cwd, path)
         if freshness:
             key_files[path] = freshness
 
@@ -140,7 +136,7 @@ def create_checkpoint(
     manifest = _checkpoint_manifest(agent, source_versions, key_files=list(key_files))
     checkpoint = {
         "schema_version": CHECKPOINT_SCHEMA_VERSION,
-        "checkpoint_envelope_version": "2.0",
+        "checkpoint_envelope_version": CHECKPOINT_ENVELOPE_VERSION,
         "checkpoint_id": "cp-"
         + hashlib.sha256(f"{identity.run_id}:{sequence}:{time.time_ns()}".encode()).hexdigest()[
             :16
@@ -170,7 +166,7 @@ def create_checkpoint(
         ),
         "last_tool_observation": dict(agent.session.get("_last_tool_observation", {}) or {}),
         "workspace_fingerprint": (
-            manifest["fingerprint"] if sandbox else _workspace_fingerprint(agent._cwd)
+            manifest["fingerprint"] if sandbox else _workspace_fingerprint(agent.cwd)
         ),
         "identity": identity.to_dict(),
         "runtime_control": control,
@@ -230,9 +226,9 @@ def create_checkpoint(
         checkpoint_id=checkpoint["checkpoint_id"],
         sequence=sequence,
         trigger=trigger,
-        safe_point="approval" if trigger == "approval_required" else (
-            "tool_step" if trigger == "step_end" else "full_session"
-        ),
+        safe_point="approval"
+        if trigger == "approval_required"
+        else ("tool_step" if trigger == "step_end" else "full_session"),
         identity=identity.to_dict(),
         runtime_control=control,
         task_state=checkpoint.get("task_state", {}),
@@ -271,7 +267,7 @@ def create_checkpoint(
 
 def _runtime_control_snapshot(agent, task_state) -> dict:
     budget = getattr(agent, "_repair_budget", None)
-    deadline = getattr(agent, "_repair_deadline", None)
+    deadline = getattr(agent, "execution_deadline", None)
     loop = getattr(agent, "_loop", None)
     protocol = getattr(loop, "_protocol_state", None)
     tool_state = getattr(loop, "_tool_state", None)
@@ -293,7 +289,7 @@ def _runtime_control_snapshot(agent, task_state) -> dict:
         "turn": int(getattr(task_state, "turn", 0) or 0),
         "tool_steps": int(getattr(task_state, "tool_steps", 0) or 0),
     }
-    plan_session = getattr(agent, "_plan_session", None)
+    plan_session = getattr(agent, "plan_session", None)
     if plan_session is not None:
         control["plan_checkpoint"] = plan_session.checkpoint()
     if _sandbox_context(agent):
@@ -301,9 +297,7 @@ def _runtime_control_snapshot(agent, task_state) -> dict:
 
         control["sandbox_permissions"] = permission_service(agent.tool_context).checkpoint()
     if getattr(task_state, "stop_reason", "") == "approval_required":
-        control["sandbox_approval_call"] = deepcopy(
-            agent.session.get("_sandbox_approval_call", {})
-        )
+        control["sandbox_approval_call"] = deepcopy(agent.session.get("_sandbox_approval_call", {}))
     return control
 
 
@@ -318,6 +312,8 @@ def evaluate_resume_state(agent) -> dict:
     envelope_raw = last.get("checkpoint_envelope")
     if not isinstance(envelope_raw, dict):
         return _emit_resume_result(agent, _resume_result("integrity-failure", last))
+    if envelope_raw.get("schema_version") != CHECKPOINT_ENVELOPE_VERSION:
+        return _emit_resume_result(agent, _resume_result("schema-mismatch", last))
     try:
         envelope = CheckpointEnvelope.from_dict(envelope_raw)
         if envelope.schema_version != CHECKPOINT_ENVELOPE_VERSION:
@@ -345,7 +341,7 @@ def evaluate_resume_state(agent) -> dict:
         return _emit_resume_result(agent, _resume_result("schema-mismatch", last))
     plan_seal = (last.get("runtime_control") or {}).get("plan_checkpoint")
     if plan_seal:
-        plan_session = getattr(agent, "_plan_session", None)
+        plan_session = getattr(agent, "plan_session", None)
         if plan_session is None:
             return _emit_resume_result(agent, _resume_result("plan-resume-required", last))
         try:
@@ -381,8 +377,9 @@ def evaluate_resume_state(agent) -> dict:
     if isinstance(saved_manifest, dict) and saved_manifest:
         manifest_diff = compare_workspace_manifest(
             saved_manifest,
-            _checkpoint_manifest(agent, source_versions,
-                                 key_files=list((saved_manifest.get("files") or {}).keys())),
+            _checkpoint_manifest(
+                agent, source_versions, key_files=list((saved_manifest.get("files") or {}).keys())
+            ),
         )
         result["workspace_manifest_diff"] = manifest_diff
         result["stale_files"].extend(manifest_diff["stale_files"])
@@ -408,7 +405,7 @@ def evaluate_resume_state(agent) -> dict:
     if required:
         from agent_runtime.errors import ContextBuildBlockedError
 
-        plan_session = getattr(agent, "_plan_session", None)
+        plan_session = getattr(agent, "plan_session", None)
         if plan_session is None:
             return _emit_resume_result(agent, _resume_result("plan-resume-required", last))
         try:
@@ -438,7 +435,7 @@ def evaluate_resume_state(agent) -> dict:
         if saved_long_task.get(key) and current_long_task.get(key) != saved_long_task.get(key):
             long_task_diff.append(key)
     result["long_task_diff"] = long_task_diff
-    plan_session = getattr(agent, "_plan_session", None)
+    plan_session = getattr(agent, "plan_session", None)
     if plan_session is not None and saved_long_task and not required:
         try:
             checked = plan_session.build_long_task_context(
@@ -457,8 +454,11 @@ def evaluate_resume_state(agent) -> dict:
 
     # 检查 key_files freshness
     for path, saved_hash in last.get("key_files", {}).items():
-        current = (source_versions.get(path, "") if source_versions is not None
-                   else _file_freshness(agent._cwd, path))
+        current = (
+            source_versions.get(path, "")
+            if source_versions is not None
+            else _file_freshness(agent.cwd, path)
+        )
         if current and current != saved_hash:
             result["stale_files"].append(path)
         elif not current:
@@ -501,36 +501,45 @@ def evaluate_resume_state(agent) -> dict:
         ctx = agent.tool_context
         coordinator = getattr(ctx, "run_coordinator", None)
         authority = coordinator.lease if coordinator is not None else ctx
-        authority_changed = any(
-            original.get(key, default) != getattr(authority, attr, default)
-            for key, attr, default in (
-                ("owner_token", "owner_token" if coordinator else "sandbox_owner_token", ""),
-                ("generation", "generation" if coordinator else "sandbox_generation", 0),
-                (
-                    "coordination_revision",
-                    "coordination_revision" if coordinator else "sandbox_coordination_revision",
-                    0,
-                ),
+        authority_changed = (
+            any(
+                original.get(key, default) != getattr(authority, attr, default)
+                for key, attr, default in (
+                    ("owner_token", "owner_token" if coordinator else "sandbox_owner_token", ""),
+                    ("generation", "generation" if coordinator else "sandbox_generation", 0),
+                    (
+                        "coordination_revision",
+                        "coordination_revision" if coordinator else "sandbox_coordination_revision",
+                        0,
+                    ),
+                )
             )
-        ) if "operation" in original else any(
-            original.get(key, default) != getattr(ctx, attr, default)
-            for key, attr, default in (
-                ("owner", "sandbox_owner_token", ""),
-                ("generation", "sandbox_generation", 0),
-                ("coordination_revision", "sandbox_coordination_revision", 0),
+            if "operation" in original
+            else any(
+                original.get(key, default) != getattr(ctx, attr, default)
+                for key, attr, default in (
+                    ("owner", "sandbox_owner_token", ""),
+                    ("generation", "sandbox_generation", 0),
+                    ("coordination_revision", "sandbox_coordination_revision", 0),
+                )
             )
         )
         if authority_changed and coordinator is not None:
-            authority_changed = approval_for_owner(
-                pending.get("action", {}), coordinator, current["identity"]
-            ) is None
-        if (not sealed or sealed.get("tool") != last.get("tool")
-                or sealed.get("args") != last.get("tool_args")
-                or saved.get("identity") != current["identity"]
-                or pending.get("id") != saved_pending.get("id")
-                or pending.get("action_digest") != saved_pending.get("action_digest")
-                or sealed.get("approval_id") != pending.get("id")
-                or pending.get("revision") != current["revision"] or authority_changed):
+            authority_changed = (
+                approval_for_owner(pending.get("action", {}), coordinator, current["identity"])
+                is None
+            )
+        if (
+            not sealed
+            or sealed.get("tool") != last.get("tool")
+            or sealed.get("args") != last.get("tool_args")
+            or saved.get("identity") != current["identity"]
+            or pending.get("id") != saved_pending.get("id")
+            or pending.get("action_digest") != saved_pending.get("action_digest")
+            or sealed.get("approval_id") != pending.get("id")
+            or pending.get("revision") != current["revision"]
+            or authority_changed
+        ):
             result["status"] = "approval-stale"
         else:
             result["status"] = {
@@ -638,8 +647,11 @@ def _validate_step_effects(agent, checkpoint: dict, result: dict, *, source_vers
         expected = str(effect.get("post_hash", "") or "")
         if not expected:
             continue
-        current = (source_versions.get(path, "") if source_versions is not None
-                   else file_content_hash(agent._cwd, path))
+        current = (
+            source_versions.get(path, "")
+            if source_versions is not None
+            else file_content_hash(agent.cwd, path)
+        )
         if current != expected:
             result["stale_files"].append(path if current else f"{path} (deleted)")
 
@@ -663,8 +675,8 @@ def _sandbox_versions(agent):
 
 def _checkpoint_manifest(agent, versions=None, *, key_files=None):
     if versions is None:
-        return workspace_manifest(agent._cwd, key_files=key_files)
+        return workspace_manifest(agent.cwd, key_files=key_files)
     from agent_runtime.linux_sandbox.receipts import receipt_checksum
 
-    payload = {"root": agent._cwd, "git_head": "", "files": versions}
+    payload = {"root": agent.cwd, "git_head": "", "files": versions}
     return {**payload, "fingerprint": receipt_checksum(payload)[:16]}

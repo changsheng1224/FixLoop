@@ -2,22 +2,19 @@
 
 from __future__ import annotations
 
-__all__ = [
-    "l2_payload_from_agent",
-    "l2_payload_from_task_state",
-]
+__all__ = ["l2_payload_from_agent", "l2_payload_from_task_state"]
 
 
 def l2_payload_from_agent(agent) -> dict:
     """从 Agent 临时 L2 属性构造 trace payload 片段。"""
-    if agent is None or not getattr(agent, "_l2_agent", ""):
+    if agent is None or not getattr(agent, "correlation", {}).get("role", ""):
         return {}
     return {
-        "task_id": getattr(agent, "_l2_task_id", ""),
-        "repair_run_id": getattr(agent, "_l2_repair_run_id", ""),
-        "l2_agent": getattr(agent, "_l2_agent", ""),
-        "l2_phase": getattr(agent, "_l2_phase", ""),
-        "l2_attempt": int(getattr(agent, "_l2_attempt", 0) or 0),
+        "task_id": getattr(agent, "correlation", {}).get("task_id", ""),
+        "repair_run_id": getattr(agent, "correlation", {}).get("repair_run_id", ""),
+        "l2_agent": getattr(agent, "correlation", {}).get("role", ""),
+        "l2_phase": getattr(agent, "correlation", {}).get("phase", ""),
+        "l2_attempt": int(getattr(agent, "correlation", {}).get("attempt", 0) or 0),
     }
 
 

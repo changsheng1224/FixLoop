@@ -31,7 +31,7 @@ from agent_runtime.linux_sandbox.workspace_backend import (  # noqa: E402
 )
 from agent_runtime.providers.clients import FakeModelClient  # noqa: E402
 from src.repair_cli import run_repair_cli  # noqa: E402
-from src.repair_factory import RequiredVerifierError, wire_orchestrator  # noqa: E402
+from src.repair.assembly import VerificationEnvironmentError, create_repair_service  # noqa: E402
 
 RETAINED_RELEASE = {
     "release_id": "83ecffc0a46c7644ce9c7b8255a2a9282743c8bcdd97d2e2eaf705b3014cc31c",
@@ -204,7 +204,7 @@ def main() -> int:
                 return result
 
         def execute(repo_path, cancel_token, workspace_ready):
-            orch = wire_orchestrator(
+            orch = create_repair_service(
                 client,
                 repo_path,
                 execution_backend="wsl_bwrap",
@@ -320,12 +320,12 @@ def main() -> int:
             ),
         )
         report["status"] = "passed"
-    except (RequiredVerifierError, OSError, ValueError, RuntimeError, AssertionError) as exc:
+    except (VerificationEnvironmentError, OSError, ValueError, RuntimeError, AssertionError) as exc:
         report.update(
             {
                 "status": (
                     "blocked"
-                    if isinstance(exc, RequiredVerifierError | OSError)
+                    if isinstance(exc, VerificationEnvironmentError | OSError)
                     else "failed"
                 ),
                 "error_type": type(exc).__name__,

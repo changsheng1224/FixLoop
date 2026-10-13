@@ -172,9 +172,11 @@ def run_repair_cli(
                 report.data["base_commit"] = clone_repository(source, repo, ref=ref, token=token)
                 report.save()
                 language, _ = detect_repair_language(args.issue, repo_root=repo)
-                files = git_run(
-                    repo, "ls-files", "-z", token=token, sandbox=sandbox
-                ).stdout.decode().split("\0")
+                files = (
+                    git_run(repo, "ls-files", "-z", token=token, sandbox=sandbox)
+                    .stdout.decode()
+                    .split("\0")
+                )
                 if language != "python" or not any(
                     name.endswith((".py", ".pyw")) for name in files
                 ):
@@ -199,7 +201,8 @@ def run_repair_cli(
             )
             snapshot = (
                 GitSnapshot(repo, output, token=token, sandbox=sandbox)
-                if is_git_root else TextSnapshot(repo)
+                if is_git_root
+                else TextSnapshot(repo)
             )
 
             def workspace_ready(workspace: str) -> None:
@@ -207,6 +210,7 @@ def run_repair_cli(
                 report.data["source_repo_path"] = str(repo)
                 report.data["repo_path"] = str(snapshot.repo)
                 report.save()
+
             report.data["base_commit"] = snapshot.base_commit
             report.data["baseline_tree"] = getattr(snapshot, "baseline", "")
             report.data["verification_tier"] = (
@@ -233,15 +237,17 @@ def run_repair_cli(
         if report:
             report.fail(exc.category, str(exc))
     except Exception as exc:
-        from src.repair_factory import RequiredVerifierError
+        from src.repair.assembly import VerificationEnvironmentError
 
         category = (
             "verification_environment_failed"
-            if isinstance(exc, RequiredVerifierError)
+            if isinstance(exc, VerificationEnvironmentError)
             else "runtime_failed"
         )
         exit_code = (
-            REPAIR_EXIT_CONFIG if isinstance(exc, RequiredVerifierError) else REPAIR_EXIT_FAIL
+            REPAIR_EXIT_CONFIG
+            if isinstance(exc, VerificationEnvironmentError)
+            else REPAIR_EXIT_FAIL
         )
         print(f"错误: {exc}", file=sys.stderr)
         if report:

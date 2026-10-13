@@ -5,17 +5,14 @@ import time
 
 import pytest
 
-from agent_runtime.cancellation import (
-    CancellationToken,
-    CancelledError,
-    run_with_cancellation,
-)
+from agent_runtime.cancellation import CancellationToken, CancelledError, run_with_cancellation
 from agent_runtime.config import AgentConfig
 from agent_runtime.providers.clients import FakeModelClient
 from agent_runtime.runtime import Agent
 from agent_runtime.stop_reasons import StopReason
 from agent_runtime.task_state import TaskState
 from agent_runtime.tool_executor import ToolExecutor
+from src.repair.service import RepairRequest, RepairService
 
 
 @pytest.fixture
@@ -89,10 +86,7 @@ class TestOllamaStreamCancel:
         from agent_runtime.providers.clients import OllamaModelClient
 
         token = CancellationToken()
-        lines = [
-            b'{"response":"a","done":false}\n',
-            b'{"response":"b","done":false}\n',
-        ]
+        lines = [b'{"response":"a","done":false}\n', b'{"response":"b","done":false}\n']
 
         class FakeResp:
             def __enter__(self):
@@ -206,11 +200,7 @@ class TestCompleteOnceCancel:
                 return "should not return"
 
         config = AgentConfig(provider="fake", max_steps=1, approval="auto")
-        agent = Agent(
-            config=config,
-            model_client=SlowClient(["unused"]),
-            workspace=workspace,
-        )
+        agent = Agent(config=config, model_client=SlowClient(["unused"]), workspace=workspace)
         agent.cancel_token = token
         with pytest.raises(CancelledError):
             agent.complete_once("hello")
@@ -219,8 +209,8 @@ class TestCompleteOnceCancel:
 class TestPatcherCompleteOnceCancel:
     def test_run_patcher_returns_empty_on_cancel(self, temp_workspace):
         from src.agents.patcher import create_patcher
-        from src.orchestrator import Orchestrator
         from src.repair.run_context import RepairRunContext
+        from src.repair.session import ExecutionSession
         from src.state import RepairPlan, RepairState, SuspectLocation
 
         token = CancellationToken()
@@ -234,10 +224,9 @@ class TestPatcherCompleteOnceCancel:
             "agent_runtime.workspace", fromlist=["WorkspaceContext"]
         ).WorkspaceContext.build(str(temp_workspace))
         pat = create_patcher(SlowClient(["[]"]), ws_ctx)
-        orch = Orchestrator(pat, use_pytest_verify=False)
-        orch._repair_ctx = RepairRunContext(cancel_token=token)
-        orch._bind_cancel_token(token)
-
+        orch = ExecutionSession(pat, use_pytest_verify=False)
+        orch.repair_ctx = RepairRunContext(cancel_token=token)
+        orch.lifecycle.bind_cancel_token(token)
         state = RepairState(issue_input="TypeError")
         state.repair_plan = RepairPlan()
         state.suspect_locations = [
@@ -249,7 +238,7 @@ class TestPatcherCompleteOnceCancel:
             token.cancel()
 
         threading.Thread(target=cancel_soon, daemon=True).start()
-        patches, timing = orch._run_patcher(state)
+        patches, timing = orch.patcher_execution.run_patcher(state)
         assert patches == []
         assert token.is_cancelled
 
@@ -268,10 +257,7 @@ class TestSandboxVerifyCancel:
             def create(self, repo_path, profile="python"):
                 raise AssertionError("should not create when already cancelled")
 
-        monkeypatch.setattr(
-            "src.harness.sandbox_verify.SandboxManager",
-            lambda: FakeMgr(),
-        )
+        monkeypatch.setattr("src.harness.sandbox_verify.SandboxManager", lambda: FakeMgr())
         result, timings = run_sandbox_verification_flow(
             ctx, str(temp_workspace), "", cancel_token=token
         )
@@ -288,7 +274,7 @@ class TestSandboxVerifyCancel:
         class FakeContainer:
             def exec_run(self, command):
                 time.sleep(2.0)
-                return 0, b"ok"
+                return (0, b"ok")
 
             def kill(self):
                 killed.append(True)
@@ -335,8 +321,7 @@ class TestRunShellCancel:
         threading.Thread(target=cancel_soon, daemon=True).start()
         t0 = time.time()
         result = tool_run_shell(
-            ctx,
-            {"command": 'python -c "import time; time.sleep(2)"', "timeout": 30},
+            ctx, {"command": 'python -c "import time; time.sleep(2)"', "timeout": 30}
         ).content
         elapsed = time.time() - t0
         assert "取消" in result
@@ -364,7 +349,6 @@ class TestGate7Cancel:
 class TestAgentLoopPostToolCancel:
     def test_post_tool_abort_after_gate7_cancel(self, workspace, monkeypatch):
         token = CancellationToken()
-
         config = AgentConfig(provider="fake", max_steps=3, approval="ask")
         agent = Agent(
             config=config,
@@ -385,7 +369,6 @@ class TestAgentLoopPostToolCancel:
 
         monkeypatch.setattr("builtins.input", fake_input)
         monkeypatch.setattr(agent, "execute_tool", executor.execute_gated)
-
         answer = agent.ask("写文件")
         assert "取消" in answer
         assert token.is_cancelled
@@ -396,19 +379,18 @@ class TestRepairCancel:
         from agent_runtime.cancellation import CancellationToken
         from agent_runtime.workspace import WorkspaceContext
         from src.agents.patcher import create_patcher
-        from src.orchestrator import Orchestrator
+        from src.repair.session import ExecutionSession
         from src.repair.verification.termination import RepairTerminalStatus
 
         ws = WorkspaceContext.build(str(temp_workspace))
         pat = FakeModelClient(["<final>[]</final>"])
-        orch = Orchestrator(
-            create_patcher(pat, ws),
-            use_pytest_verify=False,
-        )
+        orch = ExecutionSession(create_patcher(pat, ws), use_pytest_verify=False)
         (temp_workspace / "app.py").write_text("x = 1\n", encoding="utf-8")
         token = CancellationToken()
         token.cancel()
-        state = orch.repair("TypeError at app.py:1", cancel_token=token, repair_timeout_s=0)
+        state = RepairService(orch).run(
+            RepairRequest("TypeError at app.py:1", cancel_token=token, timeout_s=0)
+        )
         assert state.status == RepairTerminalStatus.USER_CANCEL
         assert state.control.user_cancel
         assert (temp_workspace / "app.py").read_text(encoding="utf-8") == "x = 1\n"

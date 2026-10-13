@@ -55,7 +55,7 @@ def automatic_fixture(root, *, native=False, respond=None, resume=False):
         return complete(prompt, max_new_tokens=max_new_tokens, **kwargs)
 
     client.complete = routed
-    return orch, state, client, candidate_prompts
+    return (orch, state, client, candidate_prompts)
 
 
 @pytest.mark.parametrize("native", [False, True])
@@ -63,9 +63,11 @@ def test_automatic_constraints_and_planning_choices_reach_actual_repair(tmp_path
     orch, state, client, prompts = automatic_fixture(tmp_path, native=native)
     before_tests = (tmp_path / "test_value.py").read_bytes()
     try:
-        patches, meta = orch._run_patcher_toolized(state, "Read and fix value.py", {})
+        patches, meta = orch.patcher_execution.run_patcher_toolized(
+            state, "Read and fix value.py", {}
+        )
         assert patches, (meta, state.agent_errors, state.node_timings)
-        binding = orch._plan_binding
+        binding = orch.plan_binding
         assert binding.session.long_task_state.hard_constraints == ["Do not modify tests"]
         assert len(binding.session.long_task_state.key_decisions) == 1
         planning = next(p for p in client.prompts if p.startswith("Create a small repair task DAG"))
@@ -78,15 +80,16 @@ def test_automatic_constraints_and_planning_choices_reach_actual_repair(tmp_path
         assert actual and all("Do not modify tests" in p for p in actual)
         assert any("Change return literal" in p for p in actual)
         assert len(prompts) == 2
-        assert orch._run_verifier(state).all_passed
+        assert orch.verification.run_verifier(state).all_passed
         assert (tmp_path / "test_value.py").read_bytes() == before_tests
         assert (tmp_path / "value.py").read_text() == "def answer():\n    return 2\n"
     finally:
-        if orch._plan_binding:
-            orch._plan_binding.close()
+        if orch.plan_binding:
+            orch.plan_binding.close()
 
 
 def test_initial_clarification_can_be_resolved_through_host_intake(tmp_path):
+
     def respond(data, call):
         if data["source"]["message_id"] == "original-request":
             return output(
@@ -98,13 +101,13 @@ def test_initial_clarification_can_be_resolved_through_host_intake(tmp_path):
 
     orch, state, client, prompts = automatic_fixture(tmp_path, respond=respond)
     binding = RepairPlanBinding(orch, state)
-    orch._plan_binding = binding
+    orch.plan_binding = binding
     try:
-        assert binding.session.plan is None and not client.prompts
+        assert binding.session.plan is None and (not client.prompts)
         binding.close()
         binding = RepairPlanBinding(orch, state)
-        orch._plan_binding = binding
-        assert len(prompts) == 1  # A durable clarification is not re-extracted.
+        orch.plan_binding = binding
+        assert len(prompts) == 1
         with pytest.raises(ContextBuildBlockedError, match="clarification_required"):
             binding.run_patcher("fix", {}, lambda *args: pytest.fail("must not edit"))
         from agent_runtime.cancellation import CancelledError
@@ -120,17 +123,18 @@ def test_initial_clarification_can_be_resolved_through_host_intake(tmp_path):
             )
         binding.close()
         binding = RepairPlanBinding(orch, state)
-        orch._plan_binding = binding
-        assert binding.session.plan is not None  # Saved answer resumes before old question.
-        patches, meta = orch._run_patcher_toolized(state, "fix value.py", {})
+        orch.plan_binding = binding
+        assert binding.session.plan is not None
+        patches, meta = orch.patcher_execution.run_patcher_toolized(state, "fix value.py", {})
         assert patches, (meta, state.agent_errors)
-        assert orch._run_verifier(state).all_passed
+        assert orch.verification.run_verifier(state).all_passed
         assert len(prompts) == 3
     finally:
         binding.close()
 
 
 def test_incomplete_node_binding_keeps_host_clarification_available(tmp_path):
+
     def respond(data, call):
         if data["source"]["source_kind"] == "model":
             return output()
@@ -157,11 +161,11 @@ def test_incomplete_node_binding_keeps_host_clarification_available(tmp_path):
                     }
                 ]
             )
-        return output()  # Missing choice must block, even after Plan was created.
+        return output()
 
     orch, state, client, prompts = automatic_fixture(tmp_path, respond=respond)
     binding = RepairPlanBinding(orch, state)
-    orch._plan_binding = binding
+    orch.plan_binding = binding
     try:
         assert binding.session.plan is not None
         assert (
@@ -171,9 +175,9 @@ def test_incomplete_node_binding_keeps_host_clarification_available(tmp_path):
             "clarified-choice", "Change literal only", resolves=["original-request"]
         )
         assert "context_extraction_blocked" not in state.node_timings
-        patches, meta = orch._run_patcher_toolized(state, "fix", {})
+        patches, meta = orch.patcher_execution.run_patcher_toolized(state, "fix", {})
         assert patches, (meta, state.agent_errors)
-        assert orch._run_verifier(state).all_passed
+        assert orch.verification.run_verifier(state).all_passed
         assert len(prompts) == 4
     finally:
         binding.close()
@@ -182,32 +186,33 @@ def test_incomplete_node_binding_keeps_host_clarification_available(tmp_path):
 def test_durable_repair_resume_does_not_reextract_or_repeat_write(tmp_path):
     orch, state, client, prompts = automatic_fixture(tmp_path)
     try:
-        patches, meta = orch._run_patcher_toolized(state, "fix", {})
+        patches, meta = orch.patcher_execution.run_patcher_toolized(state, "fix", {})
         assert patches, (meta, state.agent_errors)
-        calls = orch.patcher._run_budget_manager.snapshot()["model_calls"]
+        calls = orch.patcher.budget_manager.snapshot()["model_calls"]
         saved_ids = {key for key, value in calls.items() if value["purpose"] == "extraction"}
         assert len(saved_ids) == 2
     finally:
-        orch._plan_binding.close()
+        orch.plan_binding.close()
     resumed, state, client, prompts = automatic_fixture(tmp_path, resume=True)
     try:
-        patches, meta = resumed._run_patcher_toolized(state, "continue", {})
+        patches, meta = resumed.patcher_execution.run_patcher_toolized(state, "continue", {})
         assert patches, (meta, state.agent_errors)
         assert meta["edit_mode"] == "plan_resume_adopted"
-        assert not prompts and not client.prompts
-        calls = resumed.patcher._run_budget_manager.snapshot()["model_calls"]
+        assert not prompts and (not client.prompts)
+        calls = resumed.patcher.budget_manager.snapshot()["model_calls"]
         assert saved_ids <= set(calls)
-        writes = resumed._plan_binding.session.store.latest("operation", "operation_id").values()
+        writes = resumed.plan_binding.session.store.latest("operation", "operation_id").values()
         assert len([w for w in writes if w["effect"] == "write"]) == 1
-        assert resumed._run_verifier(state).all_passed
+        assert resumed.verification.run_verifier(state).all_passed
     finally:
-        if resumed._plan_binding:
-            resumed._plan_binding.close()
+        if resumed.plan_binding:
+            resumed.plan_binding.close()
 
 
 @pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize("ambiguous", [False, True])
 def test_visible_owner_choice_is_processed_before_tool_dispatch(tmp_path, native, ambiguous):
+
     def respond(data, call):
         if data["source"]["message_id"].startswith("model-choice-"):
             assert data["segment"]["body"] == "I choose to keep the function signature."
@@ -250,8 +255,8 @@ def test_visible_owner_choice_is_processed_before_tool_dispatch(tmp_path, native
     else:
         client._outputs[2] = "<think>hidden reasoning</think>" + prose + client._outputs[2]
     try:
-        patches, meta = orch._run_patcher_toolized(state, "fix", {})
-        session = orch._plan_binding.session
+        patches, meta = orch.patcher_execution.run_patcher_toolized(state, "fix", {})
+        session = orch.plan_binding.session
         assert len(prompts) == 3
         if ambiguous:
             assert not patches
@@ -266,13 +271,14 @@ def test_visible_owner_choice_is_processed_before_tool_dispatch(tmp_path, native
                 d["statement"] == "Preserve function signature"
                 for d in session.long_task_state.key_decisions
             )
-            assert orch._run_verifier(state).all_passed
+            assert orch.verification.run_verifier(state).all_passed
     finally:
-        if orch._plan_binding:
-            orch._plan_binding.close()
+        if orch.plan_binding:
+            orch.plan_binding.close()
 
 
 def test_preplan_choice_is_bound_and_host_update_changes_delegation_snapshot(tmp_path):
+
     def respond(data, call):
         if data["source"]["source_kind"] == "model":
             return output()

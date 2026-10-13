@@ -21,6 +21,14 @@ def config_snapshot(model: BaseModel, provenance: dict[str, str]) -> dict[str, A
                 visit(item, path)
             else:
                 sources[path] = provenance.get(path, "default")
+                if path == "hard_cap" and "hard_cap" not in model.model_fields_set and item != 8000:
+                    sources[path] = "derived:prompt_budget"
+                if (
+                    path == "degradation.max_output_floor"
+                    and "max_output_floor" not in model.degradation.model_fields_set
+                    and item != 512
+                ):
+                    sources[path] = "derived:max_new_tokens"
 
     visit(values)
     payload = {"values": values, "provenance": sources}
@@ -42,6 +50,8 @@ class BudgetPolicy(BaseModel):
     total_tokens: int = Field(default=0, ge=0)
     max_turns: int = Field(default=0, ge=0, le=500)
     max_llm_calls: int = Field(default=0, ge=0, le=2_000)
+    max_read_calls: int = Field(default=0, ge=0, le=5_000)
+    max_shell_calls: int = Field(default=0, ge=0, le=1_000)
     max_tool_calls: int = Field(default=0, ge=0, le=5_000)
     max_write_calls: int = Field(default=0, ge=0, le=1_000)
     max_verify_calls: int = Field(default=0, ge=0, le=1_000)
@@ -88,10 +98,16 @@ class RuntimePolicy(BaseModel):
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
-    schema_version: str = "1.0"
+    schema_version: Literal["2.0"] = "2.0"
     profile: Literal["dev", "prod", "ci"] = "prod"
     provider: str = Field(default="deepseek", min_length=1)
     model: str = Field(default="deepseek-v4-pro", min_length=1)
+    max_concurrent_shell: int = Field(
+        default=3,
+        ge=1,
+        le=32,
+        description="Explicit safety ceiling: at most 32 concurrent shell processes",
+    )
     max_steps: int = Field(default=6, ge=1, le=500)
     max_new_tokens: int = Field(default=2_048, ge=1, le=8_192)
     prompt_budget: int = Field(default=100_000, ge=512, le=2_000_000)
@@ -102,7 +118,15 @@ class RuntimePolicy(BaseModel):
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     json_mode: bool = False
     loop_detect_threshold: int = Field(default=3, ge=0, le=100)
+    protocol_recovery_turns: int = Field(default=3, ge=0, le=500)
     max_json_retries: int = Field(default=2, ge=0, le=20)
+    max_empty_attempts: int = Field(default=3, ge=1, le=20)
+    max_model_attempts: int = Field(
+        default=22,
+        ge=1,
+        le=2000,
+        description="Total XML model attempts, including protocol recovery and successful turns",
+    )
     budget: BudgetPolicy = Field(default_factory=BudgetPolicy)
     deadline: DeadlinePolicy = Field(default_factory=DeadlinePolicy)
     slo: LatencySLOPolicy = Field(default_factory=LatencySLOPolicy)
@@ -113,8 +137,8 @@ class RuntimePolicy(BaseModel):
     def validate_relationships(self) -> RuntimePolicy:
         if self.hard_cap > self.prompt_budget:
             default_hard_cap = RuntimePolicy.model_fields["hard_cap"].default
-            if self.hard_cap == default_hard_cap:
-                self.hard_cap = self.prompt_budget
+            if "hard_cap" not in self.model_fields_set and self.hard_cap == default_hard_cap:
+                object.__setattr__(self, "hard_cap", self.prompt_budget)
             else:
                 raise ValueError("hard_cap must be <= prompt_budget")
         if self.budget.hard_cost_limit_usd and self.budget.soft_cost_limit_usd:
@@ -122,17 +146,20 @@ class RuntimePolicy(BaseModel):
                 raise ValueError("soft_cost_limit_usd must be <= hard_cost_limit_usd")
         if self.degradation.max_output_floor > self.max_new_tokens:
             default_floor = DegradationPolicy.model_fields["max_output_floor"].default
-            if self.degradation.max_output_floor == default_floor:
+            if (
+                "max_output_floor" not in self.degradation.model_fields_set
+                and self.degradation.max_output_floor == default_floor
+            ):
                 # The default floor follows the output cap; an explicitly
                 # contradictory floor is rejected.
-                self.degradation.max_output_floor = self.max_new_tokens
+                object.__setattr__(self.degradation, "max_output_floor", self.max_new_tokens)
             else:
                 raise ValueError("degradation.max_output_floor must be <= max_new_tokens")
         return self
 
     def input_window(self, max_output_tokens: int) -> int:
         """Single-request capacity; zero model window means unspecified."""
-        limit = min(self.prompt_budget, self.hard_cap or 8_000)
+        limit = min(self.prompt_budget, self.hard_cap)
         if self.model_context_window:
             limit = min(
                 limit, self.model_context_window - max_output_tokens - self.context_safety_margin

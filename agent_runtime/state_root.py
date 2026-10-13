@@ -21,7 +21,10 @@ def project_id(root: str | Path) -> str:
 
 
 def managed_storage_root(
-    root: str | Path, explicit: str | Path | None = None, *, create: bool = True,
+    root: str | Path,
+    explicit: str | Path | None = None,
+    *,
+    create: bool = True,
 ) -> Path:
     """Resolve shared product storage. Callers must not pass a project/run directory."""
     value = explicit or os.environ.get("FIXLOOP_STATE_ROOT")
@@ -41,7 +44,10 @@ def managed_state_base(root: str | Path, explicit: str | Path | None = None) -> 
 
 
 def trusted_state_root(
-    root: str | Path, explicit: str | Path | None = None, *, create: bool = True,
+    root: str | Path,
+    explicit: str | Path | None = None,
+    *,
+    create: bool = True,
 ) -> Path | None:
     """Return the external state root only for an explicitly configured sandbox."""
     value = explicit or os.environ.get("FIXLOOP_STATE_ROOT", "")

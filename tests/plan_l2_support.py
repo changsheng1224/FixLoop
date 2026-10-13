@@ -7,7 +7,7 @@ from pathlib import Path
 from agent_runtime.providers.clients import FakeModelClient
 from agent_runtime.workspace import WorkspaceContext
 from src.agents.factory import create_repair_agent
-from src.orchestrator import Orchestrator
+from src.repair.session import ExecutionSession
 from src.state import RepairPlan, RepairState, SuspectLocation
 from tests.repair_support import build_repository
 
@@ -31,11 +31,7 @@ def repair_fixture(root, *, resume=False, full=False):
             + json.dumps(
                 {
                     "name": "patch_file",
-                    "args": {
-                        "path": "value.py",
-                        "old_text": "return 1",
-                        "new_text": "return 2",
-                    },
+                    "args": {"path": "value.py", "old_text": "return 1", "new_text": "return 2"},
                 }
             )
             + "</tool>",
@@ -47,10 +43,8 @@ def repair_fixture(root, *, resume=False, full=False):
     client = FakeModelClient(responses)
     agent = create_repair_agent("patcher", client, WorkspaceContext.build(str(root)), cwd=str(root))
     agent.config.approval = "auto"
-    # Existing fixtures isolate Plan execution. S3 integration tests enable
-    # extraction and supply dedicated bounded candidate responses explicitly.
     agent.config.auto_context_extraction = False
-    orch = Orchestrator(agent, use_pytest_verify=True, sandbox_policy="disabled")
+    orch = ExecutionSession(agent, use_pytest_verify=True, sandbox_policy="disabled")
     state = RepairState(
         issue_input="Fix value.py: answer() returns 1 but should return 2.",
         repair_run_id="plan-fixture-run",
@@ -58,10 +52,10 @@ def repair_fixture(root, *, resume=False, full=False):
         suspect_locations=[SuspectLocation(file_path="value.py", start_line=1, end_line=2)],
     )
     agent.shared_run_id = state.repair_run_id
-    state.execution.run_entry = orch._workspace_entry()
+    state.execution.run_entry = orch.lifecycle.workspace_entry()
     if not full:
         from src.repair.run_context import RepairRunContext
 
-        orch._repair_ctx = RepairRunContext(repair_started_at=time.time())
-        orch._merge_blackboard_for_patch = lambda state: None
-    return orch, state, client
+        orch.repair_ctx = RepairRunContext(repair_started_at=time.time())
+        orch.evidence.merge_blackboard_for_patch = lambda state: None
+    return (orch, state, client)

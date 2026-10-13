@@ -105,11 +105,17 @@ def retrieval_candidates(
                     promotions.append(("key-decisions", f"Decision: {note['text']}"))
             scored.append((score, note))
     scored.sort(
-        key=lambda x: x[0]
-        * {"task": 1.0, "repository": 0.9, "repository_version": 0.85, "user": 0.8, "run": 0.2}.get(
-            x[1].get("scope", "run"), 0.2
-        )
-        * float(x[1].get("confidence", 0.4)),
+        key=lambda x: (
+            x[0]
+            * {
+                "task": 1.0,
+                "repository": 0.9,
+                "repository_version": 0.85,
+                "user": 0.8,
+                "run": 0.2,
+            }.get(x[1].get("scope", "run"), 0.2)
+            * float(x[1].get("confidence", 0.4))
+        ),
         reverse=True,
     )
 

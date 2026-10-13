@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import json
 import threading
 import uuid
@@ -66,12 +65,12 @@ class RepairPlanBinding:
         if not state.repair_run_id:
             state.repair_run_id = "repair-" + uuid.uuid4().hex
         context = orchestrator.patcher.tool_context
-        entry = getattr(orchestrator, "_entry_coordinator", None)
+        entry = getattr(orchestrator, "entry_coordinator", None)
         self.coordinator = (
             entry
             if entry is not None and entry.run_id == state.repair_run_id
             else RunCoordinator(
-                orchestrator._repo_root,
+                orchestrator.repo_root,
                 state.repair_run_id,
                 state.repair_run_id,
                 state_root=str(getattr(context, "state_root", "") or ""),
@@ -87,8 +86,6 @@ class RepairPlanBinding:
         self.coordinator.cancel_token = getattr(orchestrator.patcher, "cancel_token", None)
         self._cancel_unsubscribe = None
         try:
-            # Entry ownership can predate slow Plan/Observation initialization.
-            # Renew before initialization and keep reconciling owners alive too.
             self.owner_lease = self.coordinator.heartbeat()
             self._heartbeat_worker = threading.Thread(target=self._maintain_owner, daemon=True)
             self._heartbeat_worker.start()
@@ -128,7 +125,7 @@ class RepairPlanBinding:
             try:
                 self.coordinator.heartbeat()
             except Exception:
-                return  # the durable fence rejects further dispatch
+                return
 
     def publish_recovery(self, *, stage, reason_code=""):
         from src.repair.recovery_outcome import publish_recovery_outcome
@@ -140,7 +137,7 @@ class RepairPlanBinding:
                 {"run_id": self.state.repair_run_id, "status": "recovery_required"},
                 stage="owner",
                 reason_code="stale_generation",
-                emitter=self.orchestrator._progress_emitter(),
+                emitter=self.orchestrator.events.progress_emitter(),
             )
         return publish_recovery_outcome(
             self.state,
@@ -148,7 +145,7 @@ class RepairPlanBinding:
             stage=stage,
             plan_report=getattr(self, "report", None),
             reason_code=reason_code,
-            emitter=self.orchestrator._progress_emitter(),
+            emitter=self.orchestrator.events.progress_emitter(),
         )
 
     def _request_cancel(self):
@@ -163,7 +160,7 @@ class RepairPlanBinding:
         return request_id
 
     def _open(self, context, *, defer_plan):
-        orchestrator, state = self.orchestrator, self.state
+        orchestrator, state = (self.orchestrator, self.state)
         snapshot_provider = environment_provider = None
         if context.sandbox_task_binding is not None or context.sandbox_backend is not None:
             from agent_runtime.linux_sandbox.workspace_state import (
@@ -177,16 +174,20 @@ class RepairPlanBinding:
             def environment_provider():
                 return environment_binding(context)
 
-        self.read_budget = ReadBudget(4)
+        self.read_budget = ReadBudget(
+            self.agent.config.budget.max_read_calls
+            or self.agent.config.budget.max_tool_calls
+            or self.agent.config.max_steps
+        )
         self.session = PlanSession(
-            orchestrator._repo_root,
+            orchestrator.repo_root,
             state.repair_run_id,
             state.repair_run_id,
             self.agent.tools,
             state_root=context.state_root,
             observation_state=self.agent.session,
             event_sink=self._event,
-            fault=getattr(orchestrator, "_plan_fault", None),
+            fault=getattr(orchestrator, "plan_fault", None),
             owner_lease=self.owner_lease,
             coordination_store=self.coordinator.store,
             snapshot_provider=snapshot_provider,
@@ -199,7 +200,7 @@ class RepairPlanBinding:
             SandboxCallAdapter,
         )
 
-        collaboration = getattr(orchestrator, "_collaboration_runtime", None)
+        collaboration = getattr(orchestrator, "collaboration_runtime", None)
         from src.collaboration.exploration_runtime import ExplorationRuntime
 
         self.exploration = ExplorationRuntime(
@@ -208,8 +209,8 @@ class RepairPlanBinding:
             parent_task_id=state.repair_run_id,
             plan_session=self.session,
             coordinator=self.coordinator,
-            client_factory=getattr(self.agent, "_exploration_client_factory", None),
-            limits=getattr(self.agent, "_exploration_limits", None),
+            client_factory=self.orchestrator.exploration_client_factory,
+            limits=self.orchestrator.exploration_limits,
             event_sink=self._exploration_event,
         )
         context.readonly_exploration_runtime = self.exploration
@@ -235,17 +236,12 @@ class RepairPlanBinding:
             )
         self.session.owner_lease = self.coordinator.lease
         self.exploration.restore(state.control.exploration_checkpoint)
-
-        # Register the tasks created by the current orchestrator only after
-        # recovery has fenced and reconciled resources from an older owner.
-        # Otherwise the current running patch task is mistaken for a stale
-        # subagent left behind by a crashed process.
         if collaboration is not None:
             collaboration.attach_coordinator(self.coordinator)
             self.session.resource_parent = lambda kind: (
                 f"agent:{state.repair_run_id}:" + ("verify" if kind == "verify" else "patch")
             )
-        self.agent._plan_session = self.session
+        self.agent.plan_session = self.session
         request_hash = digest(state.issue_input)
         requests = [e["payload"] for e in self.session.store.events() if e["kind"] == "request"]
         if requests and requests[0]["checksum"] != request_hash:
@@ -265,8 +261,6 @@ class RepairPlanBinding:
                 raise ResumeRecoveryRequiredError("resume_untracked_execution_uncertain")
             context.execution_uncertain = False
             context.sandbox_uncertain = False
-        # Register the raw Issue once, before planning; generated repair prompts
-        # and repository/tool text never pass through the user-message API.
         if not self.session.long_task_state.configuration_checksum:
             self.session.configure_long_task(
                 state.issue_input, hard_constraints=state.hard_constraints
@@ -285,15 +279,13 @@ class RepairPlanBinding:
                 self.extraction.process_registered("original-request")
                 self.extraction.resume_pending()
             except ContextBuildBlockedError as exc:
-                # Keep the owner intake available for a new clarification source.
-                # All model/tool consumers remain fenced by the durable record.
                 extraction_blocked = True
                 state.node_timings["context_extraction_blocked"] = {
                     "reason": exc.reason,
                     "metadata": exc.metadata,
                 }
         if not any(e["kind"] == "baseline" for e in self.session.store.events()):
-            before = orchestrator._snapshot_repo()
+            before = orchestrator.transaction.snapshot_repo()
             self.session.store.append(
                 "baseline",
                 {
@@ -307,10 +299,10 @@ class RepairPlanBinding:
             for e in self.session.store.events()
             if e["kind"] == "planning"
             and self.session.plan
-            and e["payload"]["plan_version"] == self.session.plan.plan_version
+            and (e["payload"]["plan_version"] == self.session.plan.plan_version)
         ]
         self.conclusion = planning[-1]["conclusion"] if planning else ""
-        if not defer_plan and not extraction_blocked:
+        if not defer_plan and (not extraction_blocked):
             try:
                 self._initialize_plan()
                 self.sync()
@@ -322,7 +314,7 @@ class RepairPlanBinding:
         self.publish_recovery(stage="context")
 
     def _event(self, event, payload):
-        tracer = getattr(getattr(self.orchestrator, "_repair_ctx", None), "repair_tracer", None)
+        tracer = getattr(getattr(self.orchestrator, "repair_ctx", None), "repair_tracer", None)
         if tracer:
             tracer.emit("plan", event, payload)
         if event in {
@@ -349,7 +341,7 @@ class RepairPlanBinding:
                 (n for n in view.get("nodes", []) if n["node_id"] == payload.get("node_id")), {}
             )
             phase = node.get("kind", "replan" if event.startswith("replan_") else "plan")
-            self.orchestrator._progress_emitter().emit(
+            self.orchestrator.events.progress_emitter().emit(
                 "plan_progress",
                 summary=f"{phase}: {event} {payload.get('node_id', '')}",
                 phase=phase,
@@ -360,7 +352,7 @@ class RepairPlanBinding:
             )
 
     def _exploration_event(self, event, payload):
-        emitter = getattr(self.agent, "_turn_event_emitter", None)
+        emitter = getattr(self.agent, "turn_event_emitter", None)
         if emitter is not None:
             emitter.emit(
                 event,
@@ -370,17 +362,16 @@ class RepairPlanBinding:
                     if k not in {"event", "event_seq", "run_id", "turn_id"}
                 },
             )
-        tracer = getattr(getattr(self.orchestrator, "_repair_ctx", None), "repair_tracer", None)
+        tracer = getattr(getattr(self.orchestrator, "repair_ctx", None), "repair_tracer", None)
         if tracer:
             tracer.emit("exploration", event, payload)
-        self.orchestrator._progress_emitter().emit(
+        self.orchestrator.events.progress_emitter().emit(
             "exploration_progress", summary=f"{event}: {payload.get('task_id', '')}"
         )
 
     def sync(self):
         seal = self.session.checkpoint()
         self.state.control.plan_checkpoint = seal
-        # A reporting/checkpoint mirror, never the authority used to restore Plan.
         self.state.hard_constraints = list(self.session.long_task_state.hard_constraints)
         if self.exploration is not None:
             self.state.control.exploration_checkpoint = self.exploration.checkpoint()
@@ -390,11 +381,7 @@ class RepairPlanBinding:
             **view,
             "version": view["plan_version"],
             "nodes": [
-                {
-                    **n,
-                    "id": n["node_id"],
-                    "reason": n["block_or_failure_reason"],
-                }
+                {**n, "id": n["node_id"], "reason": n["block_or_failure_reason"]}
                 for n in view["nodes"]
             ],
             "resume": self.report,
@@ -436,8 +423,8 @@ class RepairPlanBinding:
                     reason_code=previous.get("reason_code", ""),
                 )
         finally:
-            if getattr(self.agent, "_plan_session", None) is self.session:
-                self.agent._plan_session = None
+            if getattr(self.agent, "plan_session", None) is self.session:
+                self.agent.plan_session = None
             if self.agent.tool_context.run_coordinator is self.coordinator:
                 self.agent.tool_context.run_coordinator = None
             if (
@@ -447,10 +434,10 @@ class RepairPlanBinding:
                 self.agent.tool_context.readonly_exploration_runtime = None
             if (
                 self.exploration is not None
-                and not getattr(self.agent, "_model_budget_run_bound", False)
-                and getattr(self.agent, "_run_budget_manager", None) is self.exploration.budget
+                and (not getattr(self.agent, "budget_run_bound", False))
+                and (getattr(self.agent, "budget_manager", None) is self.exploration.budget)
             ):
-                del self.agent._run_budget_manager
+                self.agent.budget_manager = None
             if self.session is not None:
                 self.session.close()
 
@@ -462,37 +449,40 @@ class RepairPlanBinding:
             )
         )[:2]
         paths = [p for p in paths if (Path(self.session.workspace) / p).is_file()]
-        if paths and "read_file" in self.agent._tool_names:
+        if paths and "read_file" in self.agent.tool_names:
             return [{"tool": "read_file", "arguments": {"path": p}} for p in paths]
         return [{"tool": "list_files", "arguments": {"path": "."}}]
 
     def _isolated_read(self, operation, attempt):
-        # Registry callbacks close over ToolContext: copying a dictionary alone
-        # would still race on the original context. Rebuild them around a child.
-        child = copy.copy(self.agent)
-        child.session = {"id": self.session.identity["session_id"]}
-        parent_token = getattr(self.agent, "cancel_token", None)
-        child.cancel_token = _ReadCancellationToken(parent_token)
-        child._repair_budget = None
-        if parent_token is not None:
-            parent_token.check()
-        child.tool_context = replace(
+        from agent_runtime.runtime import Agent
+
+        child_token = _ReadCancellationToken(self.agent.cancel_token)
+        child_token.check()
+        observation_state = {"id": self.session.identity["session_id"]}
+        context = replace(
             self.agent.tool_context,
-            cancel_token=child.cancel_token,
+            cancel_token=child_token,
             edit_lock=None,
             grounding_sink=None,
-            observation_state=child.session,
+            observation_state=observation_state,
             exploration_service=None,
             path_resolver=None,
         )
-        child.tools = build_repair_canonical_tools(child.tool_context)
-        child._tool_names = {operation["tool"]}
-        child.quota = QuotaEnforcer(
-            max_total=1, max_writes=0, max_shell=0, group_limits={"read": 1}
+        registry = build_repair_canonical_tools(context)
+        child = Agent(
+            config=self.agent.config,
+            model_client=self.agent.model_client,
+            workspace=self.agent.workspace,
+            cwd=self.agent.cwd,
+            tools={operation["tool"]: registry[operation["tool"]]},
+            tool_context=context,
+            quota=QuotaEnforcer(max_total=1, max_writes=0, max_shell=0, group_limits={"read": 1}),
         )
-        if hasattr(child, "_tool_executor"):
-            del child._tool_executor
-        child._plan_session = self.session
+        child.cancel_token = child_token
+        child.shared_run_id = self.session.identity["run_id"]
+        child.session = observation_state
+        context.observation_state = observation_state
+        child.plan_session = self.session
         result = child.execute_tool(operation["tool"], operation["arguments"])
         if not result.ok:
             return {
@@ -500,21 +490,18 @@ class RepairPlanBinding:
                 "reason": result.error_code,
                 "evidence_refs": self.session.tool_result(attempt)["evidence_refs"],
             }
-        # Mutate the parent's read-before-write ledger only on the owner thread
-        # after the scheduler has joined both isolated reads.
         return self.session.tool_result(attempt)
 
     def _initialize_plan(self):
         session = self.session
-        session.verification_mode = self.orchestrator._verification_service().mode
+        session.verification_mode = self.orchestrator.verification.verification_service().mode
         if session.plan is not None:
             return
         refs = []
         for operation in self.operations:
             self.read_budget.reserve(1)
             result = session.preplan_read(
-                lambda attempt, op=operation: self._isolated_read(op, attempt),
-                (operation["tool"],),
+                lambda attempt, op=operation: self._isolated_read(op, attempt), (operation["tool"],)
             )
             refs.extend(r for r in result.get("evidence_refs", ()) if session.evidence.valid(r))
         if not refs:
@@ -531,9 +518,8 @@ class RepairPlanBinding:
         session.create(plan)
         if self.extraction is not None:
             self.extraction.resume_pending()
-        # Persist before entering any modifying tool loop.
         self.state.control.plan_checkpoint = session.checkpoint()
-        self.orchestrator._checkpoint_progress(self.state)
+        self.orchestrator.events.checkpoint_progress(self.state)
 
     def _planning_client(self):
         client = getattr(self.agent, "light_client", None) or self.agent.model_client
@@ -583,9 +569,11 @@ class RepairPlanBinding:
                     for e in events
                     if e["kind"] == "plan"
                     and e["payload"].get("plan_version") == request["plan_version"] + 1
-                    and e["payload"].get("parent_plan_checksum") == request["plan_checksum"]
-                    and e["payload"].get("replan_reason")
-                    == "verification_failed:" + request["trigger_ref"]
+                    and (e["payload"].get("parent_plan_checksum") == request["plan_checksum"])
+                    and (
+                        e["payload"].get("replan_reason")
+                        == "verification_failed:" + request["trigger_ref"]
+                    )
                 ),
                 None,
             )
@@ -598,7 +586,7 @@ class RepairPlanBinding:
             if not any(
                 e["kind"] == "trace"
                 and e["payload"].get("event") == "replan_committed"
-                and e["payload"].get("trigger_ref") == request["trigger_ref"]
+                and (e["payload"].get("trigger_ref") == request["trigger_ref"])
                 for e in events
             ):
                 session.emit(
@@ -615,7 +603,7 @@ class RepairPlanBinding:
         attempt = session.store.latest("attempt", "attempt_id").get(node.attempt_id, {})
         result = attempt.get("result", {})
         if node.status != "failed" or result.get("status") != "failed":
-            return "", None, {}, "", {}
+            return ("", None, {}, "", {})
         for ref in result.get("evidence_refs", []):
             record = session.evidence.get(ref)
             if not record or record.get("kind") != "tests_passed":
@@ -625,9 +613,9 @@ class RepairPlanBinding:
                 record["attempt_id"] != node.attempt_id
                 or receipt.get("attempt_id") != node.attempt_id
                 or receipt.get("run_id") != session.identity["run_id"]
-                or not record.get("execution_stopped")
-                or attempt.get("plan_version") != session.plan.plan_version
-                or attempt.get("phase") != "reconciled"
+                or (not record.get("execution_stopped"))
+                or (attempt.get("plan_version") != session.plan.plan_version)
+                or (attempt.get("phase") != "reconciled")
             ):
                 continue
             trigger = digest(
@@ -715,9 +703,9 @@ class RepairPlanBinding:
         if handled:
             raise ValueError("replan_trigger_already_processed:" + handled["status"])
         safety = self._replan_safety_reason()
-        deadline = getattr(self.agent, "_repair_deadline", None)
+        deadline = getattr(self.agent, "execution_deadline", None)
         stop = "stop_loss" if has_stop_loss(self.state) else ""
-        if deadline and deadline.remaining_s() is not None and deadline.remaining_s() <= 0:
+        if deadline and deadline.remaining_s() is not None and (deadline.remaining_s() <= 0):
             stop = "plan_generation_deadline_exceeded"
         if any(
             self.exploration.budget.remaining(k) is not None
@@ -779,7 +767,7 @@ class RepairPlanBinding:
                 raise ValueError("replan_source_plan_changed")
             if has_stop_loss(self.state):
                 raise ValueError("stop_loss")
-            if deadline and deadline.remaining_s() is not None and deadline.remaining_s() <= 0:
+            if deadline and deadline.remaining_s() is not None and (deadline.remaining_s() <= 0):
                 raise ValueError("plan_generation_deadline_exceeded")
 
         try:
@@ -795,8 +783,6 @@ class RepairPlanBinding:
                 before_commit=before_commit,
             )
         except Exception as exc:
-            # Once a durable candidate exists, recovery must adopt it, never
-            # label it rejected because a later trace/checkpoint failed.
             if session.plan.plan_version != request["plan_version"]:
                 self._reconcile_replans()
             else:
@@ -827,23 +813,19 @@ class RepairPlanBinding:
                     if v["kind"] == "observation_present"
                     and session.evidence.valid(v["evidence_id"])
                 ]
-                # Reuse a matching pre-plan observation only, never an unrelated read.
                 matching = []
                 for ref in existing:
                     for op in session.store.latest("operation", "operation_id").values():
                         if (
                             ref in op.get("evidence_refs", ())
                             and op["tool"] == operation["tool"]
-                            and op["args_hash"] == digest(operation["arguments"])
+                            and (op["args_hash"] == digest(operation["arguments"]))
                         ):
                             matching.append(ref)
                 if matching:
                     session.run_node(
                         node.node_id,
-                        lambda a, refs=matching: {
-                            "status": "success",
-                            "evidence_refs": refs,
-                        },
+                        lambda a, refs=matching: {"status": "success", "evidence_refs": refs},
                     )
                 else:
                     callbacks[node.node_id] = lambda a, op=operation: self._isolated_read(op, a)
@@ -888,18 +870,21 @@ class RepairPlanBinding:
         ]
         rolled_back = bool(rollback and rollback[-1].get("completed"))
         verification_failed = self._kind("verify").status == "failed"
-        if edit.status == "succeeded" and not rolled_back and not verification_failed:
+        if edit.status == "succeeded" and (not rolled_back) and (not verification_failed):
             baseline = next(e["payload"] for e in session.store.events() if e["kind"] == "baseline")
             before = {p: session.store.get_blob(key) for p, key in baseline["files"].items()}
             from src.repair.execution.edit_from_disk import patches_from_snapshot_diff
 
-            return patches_from_snapshot_diff(before, self.orchestrator._snapshot_repo()), {
-                "total_ms": 0,
-                "model_call_ms": 0,
-                "parse_apply_ms": 0,
-                "edit_mode": "plan_resume_adopted",
-                "agent_answer": "adopted durable patch",
-            }
+            return (
+                patches_from_snapshot_diff(before, self.orchestrator.transaction.snapshot_repo()),
+                {
+                    "total_ms": 0,
+                    "model_call_ms": 0,
+                    "parse_apply_ms": 0,
+                    "edit_mode": "plan_resume_adopted",
+                    "agent_answer": "adopted durable patch",
+                },
+            )
         if edit.status in {"failed", "cancelled", "blocked"} or rolled_back or verification_failed:
             self._retry_from_verification()
         self._prepare_owner_stages()
@@ -908,7 +893,7 @@ class RepairPlanBinding:
         waiting = edit.status == "running" and attempts.get(edit.attempt_id, {}).get(
             "waiting_approval"
         )
-        if edit.status != "ready" and not waiting:
+        if edit.status != "ready" and (not waiting):
             raise ValueError("plan_edit_dependency_not_satisfied")
         value = []
 
@@ -952,14 +937,13 @@ class RepairPlanBinding:
             return session.verify_result(attempt, result.to_dict(), receipt)
 
         session.run_node(verify.node_id, execute)
-        if not self.orchestrator._verification_service().cleanup_confirmed:
+        if not self.orchestrator.verification.verification_service().cleanup_confirmed:
             raise ResumeRecoveryRequiredError("verification_cleanup_unconfirmed")
         self.sync()
         if self._kind("verify").status == "uncertain":
             raise ValueError("plan_verification_execution_unconfirmed")
         if not value:
             raise ValueError("plan_verification_execution_unconfirmed")
-        # Plan completion and L2 terminal status must agree.
         if value[0].all_passed and self._kind("verify").status != "succeeded":
             return VerificationResult(
                 all_passed=False, failure_logs=["plan_completion_unsatisfied"]
@@ -969,7 +953,7 @@ class RepairPlanBinding:
     def rollback(self, callback, expected_after):
         session = self.session
         self.exploration.drain(cancel=True)
-        session._fence(allow_cancelling=True)
+        session.assert_execution_allowed(allow_cancelling=True)
         if session.plan and any(n.status in {"running", "uncertain"} for n in session.plan.nodes):
             raise ValueError("rollback_conflicts_with_unconfirmed_execution")
         payload = {

@@ -304,10 +304,10 @@ def agent_at(tmp_path):
 
 def test_summarizer_retains_long_json_and_charges_shared_budget(tmp_path):
     agent = agent_at(tmp_path)
-    agent._run_budget_manager = BudgetManager({"llm_calls": 1})
+    agent.budget_manager = BudgetManager({"llm_calls": 1})
     raw = make_summarizer(agent)("summarize")
     assert len(raw) > 300 and parse_summary(raw)
-    call = next(iter(agent._run_budget_manager.snapshot()["model_calls"].values()))
+    call = next(iter(agent.budget_manager.snapshot()["model_calls"].values()))
     assert call["purpose"] == "summary" and call["usage_status"] == "actual"
     meta = {}
     result = l5_auto_compact(
@@ -336,7 +336,7 @@ def test_summary_unknown_usage_is_conservative_and_not_refunded(tmp_path, fails)
             return summary_json("historical fact")
 
     agent.light_client = NoUsageClient()
-    agent._run_budget_manager = BudgetManager({"llm_calls": 1})
+    agent.budget_manager = BudgetManager({"llm_calls": 1})
     meta = {}
     l5_auto_compact(
         history(),
@@ -345,13 +345,13 @@ def test_summary_unknown_usage_is_conservative_and_not_refunded(tmp_path, fails)
         summarizer=make_summarizer(agent),
         trigger_tokens=1,
     )
-    snapshot = agent._run_budget_manager.snapshot()
+    snapshot = agent.budget_manager.snapshot()
     call = next(iter(snapshot["model_calls"].values()))
     assert call["purpose"] == "summary"
     assert call["usage_status"] == ("unknown" if fails else "estimated")
     restored = BudgetManager()
     restored.restore(snapshot)
-    agent._run_budget_manager = restored
+    agent.budget_manager = restored
     with pytest.raises(ModelBudgetExceededError):
         make_summarizer(agent)("try again")
     assert agent.light_client.calls == 1

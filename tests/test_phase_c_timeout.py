@@ -1,107 +1,73 @@
-"""Phase C：超时硬停 salvage / phase budget / progress heartbeat。"""
+"""Timeout and failure retain ownership until execution returns."""
 
-from __future__ import annotations
+from types import SimpleNamespace
+from unittest.mock import Mock
 
-import time
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FuturesTimeoutError
-from pathlib import Path
-from unittest.mock import MagicMock
+import pytest
 
-from src.orchestrator import Orchestrator
+from agent_runtime.cancellation import CancellationToken
+from agent_runtime.config import AgentConfig
+from agent_runtime.providers.clients import FakeModelClient
+from agent_runtime.runtime import Agent
+from agent_runtime.workspace import WorkspaceContext
 from src.repair.phase_clock import PhaseTimeoutConfig
-from src.repair.progress import ProgressEmitter
-from src.repair.verification.repair_timeout import (
-    GRACE_AFTER_TIMEOUT_S,
-    handle_repair_wall_timeout,
-)
-from src.state import RepairState
+from src.repair.service import RepairRequest, RepairService
+from src.repair.session import ExecutionSession
 
 
 def test_primary_phase_budget_skips_localize():
-    cfg = PhaseTimeoutConfig.for_patcher_primary(900)
-    assert cfg.localize_s == 0
-    assert cfg.patch_s > 0
-    assert cfg.verify_s > 0
-    assert cfg.repair_total_s == 900
-    assert cfg.patch_s + cfg.verify_s <= 900
+    config = PhaseTimeoutConfig.for_patcher_primary(900)
+    assert config.localize_s == 0
+    assert config.patch_s > 0 and config.verify_s > 0
+    assert config.patch_s + config.verify_s <= 900
 
 
-def test_handle_wall_timeout_salvages_before_restore(tmp_path):
-    root = tmp_path
-    (root / "a.py").write_text("old\n", encoding="utf-8")
-    orch = Orchestrator(None)
-    orch._repo_root = str(root)
-    initial = {"a.py": "old\n"}
-    # simulate worker wrote disk
-    (root / "a.py").write_text("new\n", encoding="utf-8")
-    state = RepairState(issue_input="x")
-    state.suspect_locations = []
-    from src.state import SuspectLocation
-
-    state.suspect_locations = [
-        SuspectLocation(file_path="a.py", start_line=1, end_line=1, confidence=0.9)
-    ]
-
-    t0 = time.monotonic()
-    handle_repair_wall_timeout(
-        orch,
-        state,
-        initial_snapshot=initial,
-        repair_timeout_s=1,
-        cancel_token=MagicMock(),
-        wall_started=t0,
+def test_timeout_keeps_token_and_budget_until_execution_returns(tmp_path, monkeypatch):
+    agent = Agent(
+        AgentConfig(provider="fake"), FakeModelClient([]), WorkspaceContext.build(str(tmp_path))
     )
-    assert state.candidate_patches
-    assert (
-        state.node_timings.get("repair_timeout_salvaged")
-        or state.node_timings.get("phase_timeout_salvaged")
-        or len(state.candidate_patches) >= 1
-    )
-    assert (
-        state.status == "timeout"
-        or str(state.status) in ("timeout", "TIMEOUT")
-        or getattr(state.status, "value", "") == "timeout"
-        or "timeout" in str(state.status).lower()
-    )
-    # wall overshoot recorded and bounded conceptually
-    assert "repair_wall_overshoot_s" in state.node_timings or state.control.repair_timeout > 0
+    session = ExecutionSession(agent, execution_tier="host")
+    token = CancellationToken()
+    timers = []
+
+    class ImmediateTimer:
+        def __init__(self, seconds, callback):
+            self.callback, self.cancelled = callback, False
+            timers.append(self)
+
+        def start(self):
+            self.callback()
+
+        def cancel(self):
+            self.cancelled = True
+
+    def execute(state, initial_snapshot):
+        assert token.is_cancelled and token.reason == "timeout"
+        assert agent.cancel_token is token
+        assert session.repair_ctx.cancel_token is token
+        assert agent.budget_manager is session.model_budget
+        assert session.model_budget is not None
+        state.set_status("user_cancel", "cooperative_stop")
+        return state
+
+    monkeypatch.setattr("src.repair.execution.lifecycle.threading.Timer", ImmediateTimer)
+    monkeypatch.setattr(session.coordinator, "repair_impl", execute)
+    result = RepairService(session).run(RepairRequest("fix", timeout_s=1, cancel_token=token))
+    assert result.status == "timeout"
+    assert timers[0].cancelled
+    assert session.repair_ctx is session.model_budget is session.model_deadline is None
+    assert agent.cancel_token is agent.budget_manager is None
+    assert not session.run_lock.locked()
 
 
-def test_executor_shutdown_does_not_block_on_hung_worker():
-    """shutdown(wait=False) 后调用方应迅速返回。"""
-    import threading
-
-    release = threading.Event()
-    started = time.monotonic()
-
-    def hung():
-        release.wait(30)
-
-    pool = ThreadPoolExecutor(max_workers=1)
-    fut = pool.submit(hung)
-    try:
-        fut.result(timeout=0.2)
-        assert False, "expected timeout"
-    except FuturesTimeoutError:
-        pass
-    pool.shutdown(wait=False, cancel_futures=True)
-    elapsed = time.monotonic() - started
-    release.set()
-    assert elapsed < 5.0
-
-
-def test_progress_heartbeat_and_jsonl(tmp_path: Path):
-    jsonl = tmp_path / "progress.jsonl"
-    events = []
-    em = ProgressEmitter(quiet=True, jsonl_path=str(jsonl), record=events.append)
-    em.emit("heartbeat", summary="alive")
-    em.emit("repair_started", summary="go")
-    assert jsonl.exists()
-    text = jsonl.read_text(encoding="utf-8")
-    assert "heartbeat" in text
-    assert events[0].event == "heartbeat"
-
-
-def test_grace_constant():
-    assert GRACE_AFTER_TIMEOUT_S <= 30
+def test_cleanup_failure_still_releases_edit_lock_and_heartbeat():
+    session = ExecutionSession(None)
+    lock = object()
+    session.edit_lock = lock
+    session.patcher = SimpleNamespace(tool_context=SimpleNamespace(edit_lock=lock))
+    session.collaboration_runtime = SimpleNamespace(close=Mock(side_effect=ValueError("cleanup")))
+    session.progress = SimpleNamespace(stop_heartbeat=Mock())
+    with pytest.raises(ValueError, match="cleanup"):
+        session.coordinator.release_repair_resources()
+    assert session.edit_lock is session.patcher.tool_context.edit_lock is None
+    session.progress.stop_heartbeat.assert_called_once()

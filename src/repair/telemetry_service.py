@@ -29,7 +29,7 @@ class RepairTelemetryService:
         if self.l1_key:
             l1_meta["l1_prompt_cache_key"] = self.l1_key
             ref = self.patcher
-            prefix = getattr(ref, "_prefix", None) if ref is not None else None
+            prefix = getattr(ref, "prefix", None) if ref is not None else None
             if prefix is not None:
                 if prefix.tool_signature:
                     l1_meta["tool_signature"] = prefix.tool_signature
@@ -203,12 +203,12 @@ class RepairTelemetryService:
             if ctx is not None:
                 ctx.log_run_id_token = None
 
-    def _reset_token_tracking(self) -> None:
+    def reset_token_tracking(self) -> None:
         from src.eval.token_usage import reset_clients_session_usage
 
         reset_clients_session_usage(*self.agents)
 
-    def _attach_token_usage(self, state: RepairState) -> None:
+    def attach_token_usage(self, state: RepairState) -> None:
         from src.eval.token_usage import build_repair_token_usage, resolve_model_clients
 
         clients = resolve_model_clients(*self.agents)
@@ -232,13 +232,13 @@ class RepairTelemetryService:
         latency_by_agent: dict[str, dict] = {}
         for agent in self.agents:
             client = getattr(agent, "model_client", None)
-            name = getattr(agent, "_agent_name", "") or "agent"
+            name = getattr(agent, "agent_name", "") or "agent"
             if client and hasattr(client, "latency_stats"):
                 latency_by_agent[name] = client.latency_stats()
         if latency_by_agent:
             state.node_timings["latency_by_agent"] = latency_by_agent
 
-    def _attach_rejection_stats(self, state: RepairState) -> None:
+    def attach_rejection_stats(self, state: RepairState) -> None:
         from src.repair.rejection_aggregate import (
             apply_gateway_denials_to_agent_errors,
             summarize_repair_rejections,

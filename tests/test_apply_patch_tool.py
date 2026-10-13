@@ -6,8 +6,9 @@ import tempfile
 from pathlib import Path
 
 from agent_runtime.apply_patch_format import parse_apply_patch_text, strip_fences
+from agent_runtime.patch_engine import normalize_hunk_headers
 from agent_runtime.tool_context import ToolContext
-from agent_runtime.tools import _normalize_hunk_headers, tool_apply_patch
+from agent_runtime.tools import tool_apply_patch
 from src.repair.execution.edit_lock import EditLockState
 
 SAMPLE = """\
@@ -59,22 +60,16 @@ def test_bare_multi_hunk_headers_are_located_independently():
 @@
 -last = 3
 +last = 30"""
-    normalized = _normalize_hunk_headers(diff, text)
+    normalized = normalize_hunk_headers(diff, text)
     assert "@@ -1,1 +1,1 @@" in normalized
     assert "@@ -3,1 +3,1 @@" in normalized
 
 
-def test_bare_multi_hunk_headers_advance_past_duplicate_preimage():
-    text = "value = 1\nother = 2\nvalue = 1\n"
-    diff = """@@
--value = 1
-+value = 10
-@@
--value = 1
-+value = 11"""
-    normalized = _normalize_hunk_headers(diff, text)
-    assert "@@ -1,1 +1,1 @@" in normalized
-    assert "@@ -3,1 +3,1 @@" in normalized
+def test_bare_hunk_rejects_ambiguous_preimage():
+    import pytest
+
+    with pytest.raises(ValueError, match="exactly once"):
+        normalize_hunk_headers("@@\n-value = 1\n+value = 2", "value = 1\nvalue = 1\n")
 
 
 def test_tool_applies_duplicate_preimage_hunks_with_context():
@@ -145,7 +140,9 @@ def test_parse_rejects_empty_update_preimage():
 *** End Patch
 """
     with pytest.raises(ValueError, match="preimage|empty"):
-        parse_apply_patch_text(only_plus)
+        from agent_runtime.patch_engine import apply_operations
+
+        apply_operations({"a.py": "existing\n"}, parse_apply_patch_text(only_plus))
 
     empty_body = """\
 *** Begin Patch

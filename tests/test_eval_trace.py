@@ -11,7 +11,7 @@ from src.eval.contracts import (
     FailureCode,
     attribute_failure,
 )
-from src.eval.fake_runner import fake_orchestrator_factory
+from src.eval.fake_runner import fixture_repair_service_factory
 from src.eval.metrics import case_result_from_dict
 from src.eval.runner import EvalRunner
 
@@ -36,7 +36,7 @@ def test_evaluation_contract_attributes_failures_deterministically():
 
 def test_eval_run_emits_canonical_lifecycle_trace(tmp_path):
     runner = EvalRunner(
-        orchestrator_factory=fake_orchestrator_factory(CASES_DIR),
+        orchestrator_factory=fixture_repair_service_factory(CASES_DIR),
         cases_dir=CASES_DIR,
         output_dir=tmp_path,
     )

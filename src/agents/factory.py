@@ -3,80 +3,24 @@
 from __future__ import annotations
 
 import json
-from typing import Literal
 
 from agent_runtime.config import AgentConfig
-from agent_runtime.config_loader import load_runtime_policy
-from agent_runtime.repair_budget import _DEFAULT_ALLOCATIONS
 from agent_runtime.runtime import Agent
 from agent_runtime.tool_context import ToolContext
 from src.middleware import ToolGateway, build_repair_gateway
 from src.prompts.loader import load_system_prompt
+from src.prompts.prefix import compose_repair_prefix
 from src.tools.composite import build_repair_agent_tools
 
-RepairAgentRole = Literal["patcher", "verifier"]
 
-# 分 Agent 预算表 — prompt_budget 从 RepairBudgetContext 统一来源读取
-_AGENT_DEFAULTS: dict[RepairAgentRole, dict] = {
-    "patcher": {
-        "max_steps": 24,
-        "max_new_tokens": 8192,
-        "prompt_budget": _DEFAULT_ALLOCATIONS["patcher"],
-        "max_json_retries": 0,
-    },
-    "verifier": {
-        "max_steps": 4,
-        "max_new_tokens": 4096,
-        "prompt_budget": _DEFAULT_ALLOCATIONS["verifier"],
-    },
-}
+def load_repair_agent_config(role, root, *, approval=None, **overrides):
+    from src.repair.policy import resolve_role_policy
 
-
-def _role_quota(agent_name: str = ""):
-    """按 Agent 角色返回差异化配额。
-
-    Patcher:   写文件宽松 → writes=8 shell=2 total=15
-    Verifier:  sandbox 仅容器操作 → shell=3 total=6
-    """
-    from agent_runtime.tool_executor import QuotaEnforcer
-
-    role = (agent_name or "").lower()
-    if role == "patcher":
-        return QuotaEnforcer(
-            max_writes=8,
-            max_shell=2,
-            max_total=24,
-            group_limits={"read": 12, "write": 8, "verify": 2, "recovery": 2},
-        )
-    if role == "verifier":
-        return QuotaEnforcer(
-            max_writes=0,
-            max_shell=3,
-            max_total=6,
-            group_limits={"read": 0, "write": 0, "verify": 6, "recovery": 0},
-        )
-    return QuotaEnforcer()
-
-
-def load_repair_agent_config(
-    role: RepairAgentRole,
-    root: str,
-    *,
-    approval: str | None = None,
-    **overrides,
-) -> AgentConfig:
-    config = load_runtime_policy(
-        workspace_root=root,
-        defaults={"approval": "auto", **_AGENT_DEFAULTS[role]},
-        cli_overrides={"approval": approval, **overrides, "json_mode": role == "verifier"},
-    )
-    sources = config.snapshot()["provenance"]
-    sources["json_mode"] = "role_contract"
-    return config.set_provenance(sources)
+    return resolve_role_policy(role, root, approval=approval, **overrides)
 
 
 def create_repair_agent(
-    role: RepairAgentRole,
+    role: str,
     model_client,
     workspace,
     cwd: str = "",
@@ -90,17 +34,17 @@ def create_repair_agent(
     code_exploration_mode: str = "text",
     code_exploration_server_argv: tuple[str, ...] | None = None,
     sandbox_context: ToolContext | None = None,
-    exploration_client_factory=None,
-    exploration_limits=None,
     runtime_policy: AgentConfig | None = None,
 ) -> Agent:
-    """创建 Patcher 或 Verifier Agent。
+    """创建 Patcher Agent。
 
     Args:
         approval: Gate 7 审批策略。headless repair 默认 ``auto``（Layer 1 Gateway
             承担角色隔离；Layer 2 仍执行并 trace ``approval_policy`` / ``gate_id``）。
             交互式 CLI 可传 ``ask`` 启用双层拦截。
     """
+    if role != "patcher":
+        raise ValueError("only the patcher model role can be constructed here")
     root = cwd or workspace.repo_root
     config = runtime_policy or load_repair_agent_config(
         role,
@@ -112,12 +56,15 @@ def create_repair_agent(
         },
     )
     approval = config.approval
-    if sandbox_context is not None and sandbox_context.sandbox_mode and (
-        code_exploration_mode != "text" or code_exploration_server_argv is not None
+    if (
+        sandbox_context is not None
+        and sandbox_context.sandbox_mode
+        and (code_exploration_mode != "text" or code_exploration_server_argv is not None)
     ):
         raise ValueError("wsl_bwrap does not support LSP or external exploration services")
     if (
-        sandbox_context is not None and sandbox_context.sandbox_mode
+        sandbox_context is not None
+        and sandbox_context.sandbox_mode
         and sandbox_context.exploration_service is not None
     ):
         raise ValueError("wsl_bwrap does not support external exploration services")
@@ -131,8 +78,8 @@ def create_repair_agent(
     tools = build_repair_agent_tools(ctx, role)
     delegation_tools = {}
     if role == "patcher":
-        from agent_runtime.prompt_prefix import build_repair_l1_prefix
         from src.collaboration.delegation import build_delegation_tools
+        from src.prompts.prefix import build_repair_l1_prefix
 
         if l1_prefix is None:
             l1_prefix = build_repair_l1_prefix(
@@ -146,7 +93,6 @@ def create_repair_agent(
     agent_name = role
     gw.bind_tools(tools)
 
-    json_mode = role == "verifier"
     if role == "patcher":
         system_prompt += (
             "\n\n【输出格式】优先 read_file → apply_patch（*** Begin/End Patch）修改文件；"
@@ -154,7 +100,7 @@ def create_repair_agent(
             "完成后简短说明。无法调用工具时报告阻塞原因。"
         )
         # Owner control tools belong to the L2 role projection, preserving the
-        # canonical L1 prefix shared with verifier and existing cache keys.
+        # canonical L1 prefix remains independent of the role projection.
         system_prompt += "\n\nOwner exploration tools: " + json.dumps(
             {
                 name: {"description": spec["description"], "schema": spec["schema"]}
@@ -162,8 +108,6 @@ def create_repair_agent(
             },
             ensure_ascii=False,
         )
-    elif json_mode:
-        system_prompt += "\n\n【输出格式】只输出合法 JSON（不要包裹在 ```json 或 <final> 中）。"
 
     def dispatch(agent_name, name, execute):
         runtime = getattr(ctx, "readonly_exploration_runtime", None)
@@ -186,19 +130,22 @@ def create_repair_agent(
         system_prompt=system_prompt,
         agent_name=agent_name,
         tool_dispatch=dispatch,
-        prefix_mode="repair",
+        prefix_builder=lambda text, agent: compose_repair_prefix(l1_prefix, text),
+        context_budget=budget,
+        tool_gateway=gw,
         dry_run=dry_run,
-        l1_prefix=l1_prefix,
         warm_context=warm_context,
         tool_context=ctx,
         loop_policy=RepairLoopPolicy() if role == "patcher" else None,
-        quota=_role_quota(role),
+        context_allowed_kinds=(
+            "memory",
+            "observation",
+            "source",
+            "patch",
+            "verification",
+            "history",
+        ),
     )
-    agent._repair_gateway = gw
-    agent._exploration_client_factory = exploration_client_factory
-    agent._exploration_limits = exploration_limits
-    if budget is not None:
-        agent._budget = budget
     return agent
 
 
@@ -208,17 +155,4 @@ def create_patcher(
     return create_repair_agent("patcher", model_client, workspace, cwd, approval=approval, **kwargs)
 
 
-def create_verifier(
-    model_client, workspace, cwd: str = "", approval: str | None = None, **kwargs
-) -> Agent:
-    return create_repair_agent(
-        "verifier", model_client, workspace, cwd, approval=approval, **kwargs
-    )
-
-
-__all__ = [
-    "RepairAgentRole",
-    "create_patcher",
-    "create_repair_agent",
-    "create_verifier",
-]
+__all__ = ["create_patcher", "load_repair_agent_config"]

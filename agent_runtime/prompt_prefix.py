@@ -21,13 +21,9 @@ from agent_runtime.prompt_external import (
 
 __all__ = [
     "PromptPrefix",
-    "RepairL1Prefix",
     "build_custom_system_prefix",
     "build_prefix_hashes",
     "build_prompt_prefix",
-    "build_repair_agent_prefix",
-    "build_repair_l1_prefix",
-    "compose_repair_prefix",
     "join_stable_parts",
     "cache_stable_text",
 ]
@@ -61,20 +57,6 @@ def build_prefix_hashes(prefix: PromptPrefix) -> dict[str, str]:
     }
 
 
-@dataclass(frozen=True)
-class RepairL1Prefix:
-    """Repair 流水线共享 L1 稳定段（不含 L2 role）。"""
-
-    stable_system_text: str
-    stable_tools_text: str
-    stable_skills_text: str
-    workspace_text: str
-    hash: str
-    tool_signature: str
-    assets_fingerprint: str
-    workspace_fingerprint: str
-
-
 @dataclass
 class PromptPrefix:
     """系统提示词前缀。"""
@@ -82,14 +64,14 @@ class PromptPrefix:
     text: str
     stable_text: str
     workspace_text: str
-    hash: str  # cache_stable_text 的 SHA256
+    hash: str
     workspace_fingerprint: str
-    tool_signature: str  # 工具 schema 的 SHA256
+    tool_signature: str
     stable_system_text: str = ""
     stable_tools_text: str = ""
     stable_skills_text: str = ""
-    role_text: str = ""  # L2 角色 prompt（不进 hash，fill 时并入 skills）
-    assets_fingerprint: str = ""  # 外置 rules+examples 内容 hash
+    role_text: str = ""
+    assets_fingerprint: str = ""
 
 
 def _resolve_repo_root(workspace, repo_root: str | Path | None) -> Path:
@@ -110,10 +92,7 @@ def _resolve_assets(
     return load_prompt_assets(_resolve_repo_root(workspace, repo_root))
 
 
-def _filter_tools(
-    tools_registry: dict,
-    tool_names: set[str] | tuple[str, ...] | None,
-) -> dict:
+def _filter_tools(tools_registry: dict, tool_names: set[str] | tuple[str, ...] | None) -> dict:
     if tool_names is None:
         return tools_registry
     allowed = set(tool_names)
@@ -133,11 +112,9 @@ def _make_prompt_prefix(
     for part in (stable_system_text, stable_tools_text, stable_skills_text, role_text):
         if part:
             assert_stable_prefix_clean(part)
-
     cache_text = cache_stable_text(stable_system_text, stable_tools_text)
     if not cache_text:
         cache_text = stable_system_text.strip()
-
     stable_text = join_stable_parts(stable_system_text, stable_tools_text, stable_skills_text)
     workspace_text = workspace.text()
     parts = [stable_text]
@@ -174,20 +151,14 @@ def _assemble_stable_sections(
     prompt_assets: PromptAssets,
     tools_registry: dict,
     *,
-    repair: bool,
+    persona: str,
+    additional_rules: str,
     dry_run: bool,
     approval: str,
 ) -> _StableSectionBundle:
-    if repair:
-        stable_system_text = join_stable_parts(
-            compose_rules(prompt_assets, dry_run=dry_run, approval=approval),
-            _repair_tool_gateway_note(),
-        )
-    else:
-        stable_system_text = join_stable_parts(
-            _system_persona(),
-            compose_rules(prompt_assets, dry_run=dry_run, approval=approval),
-        )
+    stable_system_text = join_stable_parts(
+        persona, compose_rules(prompt_assets, dry_run=dry_run, approval=approval), additional_rules
+    )
     stable_tools_text = _tools_section(tools_registry)
     stable_skills_text = compose_examples(prompt_assets)
     for part in (stable_system_text, stable_tools_text, stable_skills_text):
@@ -218,6 +189,8 @@ def build_prompt_prefix(
     tool_names: set[str] | tuple[str, ...] | None = None,
     repo_root: str | Path | None = None,
     assets: PromptAssets | None = None,
+    persona: str | None = None,
+    additional_rules: str = "",
 ) -> PromptPrefix:
     """构建 System Prompt 前缀。
 
@@ -228,7 +201,8 @@ def build_prompt_prefix(
     bundle = _assemble_stable_sections(
         prompt_assets,
         tools_registry,
-        repair=False,
+        persona=_system_persona() if persona is None else persona,
+        additional_rules=additional_rules,
         dry_run=dry_run,
         approval=approval,
     )
@@ -242,116 +216,18 @@ def build_prompt_prefix(
     )
 
 
-def build_repair_l1_prefix(
-    workspace,
-    tools_registry: dict,
-    dry_run: bool = False,
-    approval: str = "ask",
-    *,
-    repo_root: str | Path | None = None,
-    assets: PromptAssets | None = None,
-) -> RepairL1Prefix:
-    """构建 repair 全流程共享的 L1 稳定段（Orchestrator 构建一次）。"""
-    prompt_assets = _resolve_assets(workspace, repo_root, assets)
-    bundle = _assemble_stable_sections(
-        prompt_assets,
-        tools_registry,
-        repair=True,
-        dry_run=dry_run,
-        approval=approval,
-    )
-    return RepairL1Prefix(
-        stable_system_text=bundle.stable_system_text,
-        stable_tools_text=bundle.stable_tools_text,
-        stable_skills_text=bundle.stable_skills_text,
-        workspace_text=workspace.text(),
-        hash=_cache_hash_from_bundle(bundle),
-        tool_signature=bundle.tool_signature,
-        assets_fingerprint=bundle.assets_fingerprint,
-        workspace_fingerprint=workspace.fingerprint(),
-    )
-
-
-def compose_repair_prefix(l1: RepairL1Prefix, role_text: str) -> PromptPrefix:
-    """L1 共享束 + L2 角色 prompt → 完整 PromptPrefix。"""
-    role_text = role_text.strip()
-    if role_text:
-        assert_stable_prefix_clean(role_text)
-    stable_text = join_stable_parts(
-        l1.stable_system_text,
-        l1.stable_tools_text,
-        l1.stable_skills_text,
-    )
-    parts = [stable_text]
-    if role_text:
-        parts.append(role_text)
-    if l1.workspace_text:
-        parts.append(l1.workspace_text)
-    return PromptPrefix(
-        text="\n\n".join(parts),
-        stable_text=stable_text,
-        stable_system_text=l1.stable_system_text,
-        stable_tools_text=l1.stable_tools_text,
-        stable_skills_text=l1.stable_skills_text,
-        workspace_text=l1.workspace_text,
-        hash=l1.hash,
-        workspace_fingerprint=l1.workspace_fingerprint,
-        tool_signature=l1.tool_signature,
-        role_text=role_text,
-        assets_fingerprint=l1.assets_fingerprint,
-    )
-
-
-def build_repair_agent_prefix(
-    l2_role_prompt: str,
-    workspace,
-    tools_registry: dict,
-    dry_run: bool = False,
-    approval: str = "ask",
-    *,
-    tool_names: tuple[str, ...] | set[str] | None = None,
-    repo_root: str | Path | None = None,
-    assets: PromptAssets | None = None,
-) -> PromptPrefix:
-    """Repair 双层 prefix：L1 stable（rules+tools+examples）+ L2 role（不进 hash）。"""
-    tools_registry = _filter_tools(tools_registry, tool_names)
-    l1 = build_repair_l1_prefix(
-        workspace,
-        tools_registry,
-        dry_run=dry_run,
-        approval=approval,
-        repo_root=repo_root,
-        assets=assets,
-    )
-    return compose_repair_prefix(l1, l2_role_prompt)
-
-
 def build_custom_system_prefix(system_prompt: str, workspace) -> PromptPrefix:
     """L2 角色 system prompt + workspace；稳定段仅为 system_prompt。"""
     stable_system_text = system_prompt.strip()
-    return _make_prompt_prefix(
-        stable_system_text,
-        "",
-        "",
-        workspace,
-        tool_signature="",
-    )
+    return _make_prompt_prefix(stable_system_text, "", "", workspace, tool_signature="")
 
 
 def _system_persona() -> str:
     return (
-        "你是一个本地编码 Agent（agent_runtime）。"
-        "你的任务是帮助用户理解、分析和修改代码仓库。"
-        "你需要使用提供的工具来探索代码库并完成任务。"
-        "注意：工具执行结果中如果出现 [DRY RUN] 前缀，表示当前在演习模式下运行，"
-        "不会实际修改文件。你仍应基于 DRY RUN 结果规划后续步骤。"
-    )
-
-
-def _repair_tool_gateway_note() -> str:
-    return (
-        "**7. 工具可见性与权限**：下列为 repair 流水线工具全集；"
-        "实际可调用范围由运行时权限控制。若调用被拒绝，请换用其他工具或返回 <final>。"
+        "你是一个本地编码 Agent（agent_runtime）。你的任务是帮助用户理解、分析和修改代码仓库。"
+        "你需要使用提供的工具来探索代码库并完成任务。注意：工具执行结果中如果出现 [DRY RUN] "
+        "前缀，表示当前在演习模式下运行，不会实际修改文件。"
+        "你仍应基于 DRY RUN 结果规划后续步骤。"
     )
 
 

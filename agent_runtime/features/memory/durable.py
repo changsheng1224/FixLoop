@@ -21,10 +21,9 @@ AUTHORITY_ORDER = {"user": 3, "agent": 2, "auto": 1}
 _SOURCE_AUTHORITY = {
     "user": "user",
     "stack_parse": "agent",
-    "patcher": "agent",
+    "agent": "agent",
     "rule_seed": "agent",
     "runtime_context": "agent",
-    "verifier": "agent",
     "final_answer": "agent",
     "llm": "agent",
 }

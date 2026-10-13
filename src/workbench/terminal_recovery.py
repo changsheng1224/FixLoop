@@ -16,6 +16,7 @@ class TerminalRecovery:
         self.directory.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
         self.pending = {}
+        self.capture = None
         for path in self.directory.glob("*.json"):
             payload = json.loads(path.read_text(encoding="utf-8"))
             if path.name != payload["run_id"] + ".json":
@@ -38,6 +39,8 @@ class TerminalRecovery:
             if run.status not in TERMINAL:
                 result = dict(payload["result"])
                 resource = self.store.resource(run_id)
+                if result.get("error") == "terminal_capture_failed" and self.capture is not None:
+                    result["output_snapshot"] = self.capture(run_id, resource["root_identity"])
                 if resource is not None and resource.get("state") != "stopped":
                     result.update(
                         status="interrupted",

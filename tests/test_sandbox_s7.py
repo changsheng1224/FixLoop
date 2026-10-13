@@ -7,12 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent_runtime.linux_sandbox.task_context import (
-    SandboxEnvironmentIdentity,
-    SandboxTaskSpec,
-)
+from agent_runtime.linux_sandbox.task_context import SandboxEnvironmentIdentity, SandboxTaskSpec
 from agent_runtime.tool_context import ToolContext
-from src.orchestrator import Orchestrator
+from src.repair.service import RepairRequest, RepairService
+from src.repair.session import ExecutionSession
 from src.state import RepairState
 
 
@@ -61,14 +59,14 @@ class BindingAgent:
 def _orchestrator(tmp_path, backend_factory, *, fail_agent=False):
     agent = BindingAgent(tmp_path, fail=fail_agent)
     spec = _spec(tmp_path)
-    orch = Orchestrator(
+    orch = ExecutionSession(
         agent,
         sandbox_context=agent.tool_context,
         sandbox_task_spec=spec,
         sandbox_backend_factory=backend_factory,
     )
-    orch._sandbox_repository_root = str(tmp_path)
-    return orch, agent, spec
+    orch.sandbox_repository_root = str(tmp_path)
+    return (orch, agent, spec)
 
 
 def test_task_binding_is_created_before_backend_and_shared_with_agent(tmp_path):
@@ -81,9 +79,7 @@ def test_task_binding_is_created_before_backend_and_shared_with_agent(tmp_path):
 
     orch, agent, spec = _orchestrator(tmp_path, factory)
     state = RepairState(issue_input="fix", repair_run_id="repair-task")
-
-    orch._prepare_sandbox_task(state, resume=False)
-
+    orch.lifecycle.prepare_sandbox_task(state, resume=False)
     binding, backend = created[0]
     assert agent.bound == (binding, backend)
     assert agent.tool_context.sandbox_task_binding == binding
@@ -99,7 +95,7 @@ def test_repair_entry_binds_task_before_pipeline_and_closes_backend(tmp_path):
     orch, agent, _specification = _orchestrator(
         tmp_path, lambda binding: RecordingBackend(binding, events)
     )
-    orch._snapshot_repo = lambda: {}
+    orch.transaction.snapshot_repo = lambda: {}
     observed = []
 
     def fake_pipeline(state, _initial_snapshot):
@@ -112,7 +108,7 @@ def test_repair_entry_binds_task_before_pipeline_and_closes_backend(tmp_path):
         )
         return state
 
-    orch._repair_impl_with_plan = fake_pipeline
+    orch.coordinator.repair_impl_with_plan = fake_pipeline
     notified = []
 
     def ready(root):
@@ -120,8 +116,9 @@ def test_repair_entry_binds_task_before_pipeline_and_closes_backend(tmp_path):
         assert not observed
         notified.append(root)
 
-    result = orch.repair("fix", repair_timeout_s=0, run_id="repair-entry", workspace_ready=ready)
-
+    result = RepairService(orch).run(
+        RepairRequest("fix", timeout_s=0, run_id="repair-entry", workspace_ready=ready)
+    )
     assert result.repair_run_id == "repair-entry"
     assert observed and observed[0][0] == "repair-entry"
     assert observed[0][1] is not None
@@ -140,13 +137,11 @@ def test_binding_failure_closes_pinned_backend_without_host_fallback(tmp_path):
 
     orch, _agent, _specification = _orchestrator(tmp_path, factory, fail_agent=True)
     state = RepairState(issue_input="fix", repair_run_id="repair-task")
-
     with pytest.raises(RuntimeError, match="agent binding failed"):
-        orch._prepare_sandbox_task(state, resume=False)
-
+        orch.lifecycle.prepare_sandbox_task(state, resume=False)
     assert created[0].events == ["backend.close"]
     assert created[0]._closed is True
-    assert orch._sandbox_context.sandbox_backend is None
+    assert orch.sandbox_context.sandbox_backend is None
 
 
 def test_backend_binding_mismatch_closes_rejected_backend(tmp_path):
@@ -159,10 +154,8 @@ def test_backend_binding_mismatch_closes_rejected_backend(tmp_path):
 
     orch, _agent, _specification = _orchestrator(tmp_path, factory)
     state = RepairState(issue_input="fix", repair_run_id="repair-task")
-
     with pytest.raises(ValueError, match="sandbox_backend_binding_mismatch"):
-        orch._prepare_sandbox_task(state, resume=False)
-
+        orch.lifecycle.prepare_sandbox_task(state, resume=False)
     assert created[0].events == ["backend.close"]
 
 
@@ -172,23 +165,23 @@ def test_uncaught_repair_exception_closes_backend_before_plan_binding(tmp_path):
         tmp_path, lambda binding: RecordingBackend(binding, events)
     )
     backend = RecordingBackend(SimpleNamespace(), events)
-    orch._sandbox_context.sandbox_backend = backend
+    orch.sandbox_context.sandbox_backend = backend
 
     class Binding:
         def close(self):
             events.append("binding.close")
 
-    orch._plan_binding = Binding()
+    orch.plan_binding = Binding()
     from unittest.mock import Mock
 
     runtime = Mock()
-    orch._collaboration_runtime = runtime
+    orch.collaboration_runtime = runtime
     state = RepairState(issue_input="fix")
-    orch._repair_impl_with_plan = lambda *_args: (_ for _ in ()).throw(RuntimeError("boom"))
-
+    orch.coordinator.repair_impl_with_plan = lambda *_args: (_ for _ in ()).throw(
+        RuntimeError("boom")
+    )
     with pytest.raises(RuntimeError, match="boom"):
-        orch._repair_impl(state)
-
+        orch.coordinator.repair_impl(state)
     assert events == ["backend.close", "binding.close"]
     runtime.close.assert_called_once()
 
@@ -196,11 +189,10 @@ def test_uncaught_repair_exception_closes_backend_before_plan_binding(tmp_path):
 def test_uncertain_backend_cleanup_preserves_recovery_status(tmp_path):
     events = []
     orch, _agent, _specification = _orchestrator(
-        tmp_path,
-        lambda binding: RecordingBackend(binding, events),
+        tmp_path, lambda binding: RecordingBackend(binding, events)
     )
     backend = RecordingBackend(SimpleNamespace(), events, failure=ValueError("execution_uncertain"))
-    orch._sandbox_context.sandbox_backend = backend
+    orch.sandbox_context.sandbox_backend = backend
 
     class Coordinator:
         lease = object()
@@ -215,13 +207,13 @@ def test_uncertain_backend_cleanup_preserves_recovery_status(tmp_path):
         def close(self):
             events.append("binding.close")
 
-    orch._plan_binding = Binding()
+    orch.plan_binding = Binding()
     state = RepairState(issue_input="fix")
-    orch._repair_impl_with_plan = lambda *_args: (_ for _ in ()).throw(RuntimeError("boom"))
-
+    orch.coordinator.repair_impl_with_plan = lambda *_args: (_ for _ in ()).throw(
+        RuntimeError("boom")
+    )
     with pytest.raises(RuntimeError, match="boom"):
-        orch._repair_impl(state)
-
+        orch.coordinator.repair_impl(state)
     assert state.status == "recovery_required"
     assert state.control.coordination_status == "recovery_required"
     assert events == [
@@ -235,15 +227,11 @@ def test_invalid_resume_checkpoint_closes_backend_before_return(tmp_path):
     from agent_runtime.linux_sandbox.task_context import SandboxTaskBinding
 
     events = []
-    orch, _agent, spec = _orchestrator(
-        tmp_path, lambda binding: RecordingBackend(binding, events)
-    )
+    orch, _agent, spec = _orchestrator(tmp_path, lambda binding: RecordingBackend(binding, events))
     binding = SandboxTaskBinding.create(tmp_path, tmp_path, "repair-task", spec)
     binding.save()
-    orch._snapshot_repo = lambda: {}
-
-    result = orch.repair("fix", resume_run_id="repair-task")
-
+    orch.transaction.snapshot_repo = lambda: {}
+    result = RepairService(orch).run(RepairRequest("fix", resume_run_id="repair-task"))
     assert result.status == "recovery_required"
     assert result.agent_errors["checkpoint"]
     assert events == ["backend.close"]
@@ -256,11 +244,11 @@ def test_cancel_before_pipeline_closes_backend(tmp_path):
     orch, _agent, _specification = _orchestrator(
         tmp_path, lambda binding: RecordingBackend(binding, events)
     )
-    orch._snapshot_repo = lambda: {}
+    orch.transaction.snapshot_repo = lambda: {}
     token = CancellationToken()
     token.cancel("user")
-
-    result = orch.repair("fix", cancel_token=token, run_id="repair-cancel")
-
+    result = RepairService(orch).run(
+        RepairRequest("fix", cancel_token=token, run_id="repair-cancel")
+    )
     assert result.status == "user_cancel"
     assert events == ["backend.close"]

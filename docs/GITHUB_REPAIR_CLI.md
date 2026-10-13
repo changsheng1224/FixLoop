@@ -1,5 +1,7 @@
 # GitHub 修复 CLI
 
+当前修复执行统一调用 `RepairService.run(RepairRequest)`，真实验证由 `VerificationService` 判定；完整契约见 [正式修复契约](REPAIR_CONTRACT.md)。
+
 ## 用户流程
 
 配置一次 API、Git 认证/代理和 Docker 验证环境，然后输入仓库与问题：
@@ -9,7 +11,7 @@ fixloop repair --repo owner/project --issue "输入、实际行为与预期行�
 ```
 
 CLI 按 preflight → clone → snapshot → repair → delivery 输出进度，调用已有
-Patcher / Critic / Verifier。每次远程修复使用新目录和 detached HEAD；不复用、清理
+Patcher / Critic / VerificationService。每次远程修复使用新目录和 detached HEAD；不复用、清理
 或重置用户的其他仓库，也不自动 push 或创建 PR。
 
 ## 输入与运行目录

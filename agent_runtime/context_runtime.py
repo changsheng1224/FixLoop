@@ -34,6 +34,7 @@ class ContextRequest:
     policy_version: str = "context-policy-v2"
     required_kinds: tuple[str, ...] = ()
     min_kind_counts: dict[str, int] = field(default_factory=dict)
+    allowed_kinds: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -46,16 +47,7 @@ class ContextViewPolicy:
 
     @classmethod
     def for_request(cls, request: ContextRequest) -> ContextViewPolicy:
-        role = (request.role or "").lower()
-        if role in {"localizer", "explorer"}:
-            kinds = ("memory", "observation", "source", "workspace", "history")
-        elif role in {"patcher", "editor"}:
-            kinds = ("memory", "observation", "source", "patch", "verification", "history")
-        elif role in {"critic", "verifier", "test"}:
-            kinds = ("observation", "patch", "verification", "source", "history")
-        else:
-            kinds = ()
-        return cls(role=role, phase=request.phase, allowed_kinds=kinds)
+        return cls(role=request.role, phase=request.phase, allowed_kinds=request.allowed_kinds)
 
     def allows(self, item: ContextItem) -> bool:
         return not self.allowed_kinds or item.kind in self.allowed_kinds

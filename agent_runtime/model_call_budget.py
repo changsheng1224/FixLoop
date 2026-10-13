@@ -50,7 +50,7 @@ def invoke_model_call(
     Settle only on the owner thread. A late worker after cancellation cannot
     refund an unknown reservation or mutate the restored budget.
     """
-    if purpose not in {"repair", "planning", "exploration", "extraction", "summary"}:
+    if not isinstance(purpose, str) or not purpose:
         raise ValueError("invalid_model_call_purpose")
     if input_tokens < 0 or output_tokens <= 0:
         raise ValueError("invalid_model_call_reservation")
@@ -68,7 +68,13 @@ def invoke_model_call(
     key = "model:" + uuid.uuid4().hex
     reserved = _costs(input_tokens, output_tokens)
     if not budget.reserve_model_call(key, purpose, reserved):
-        raise ModelBudgetExceededError("model_call_budget_exhausted")
+        rejected = [budget.check(resource, amount) for resource, amount in reserved.items()]
+        detail = ", ".join(
+            f"{decision.reason}: used={decision.used}, limit={decision.limit}"
+            for decision in rejected
+            if not decision.allowed
+        )
+        raise ModelBudgetExceededError(detail or "model_call_budget_exhausted")
     if on_reserved is not None:
         on_reserved(budget.snapshot())
 
@@ -79,7 +85,13 @@ def invoke_model_call(
             if deadline is not None:
                 deadline.check()
             before = dict(getattr(client, "session_usage", {}) or {})
-            result = fn()
+            from agent_runtime.providers.retry_policy import retry_context
+
+            binding = retry_context.set((cancel_token, deadline.deadline_at if deadline else None))
+            try:
+                result = fn()
+            finally:
+                retry_context.reset(binding)
             usage = getattr(result, "usage", {}) or {}
             after = dict(getattr(client, "session_usage", {}) or {})
             if (
@@ -119,18 +131,18 @@ def complete_text(
     """Auxiliary calls share the current run ledger, cancellation and deadline."""
     from agent_runtime.context_manager import TokenBudget
 
-    budget = getattr(agent, "_run_budget_manager", None)
+    budget = getattr(agent, "budget_manager", None)
     if budget is None:
         budget = BudgetManager.from_config(agent.config)
-        agent._run_budget_manager = budget
-        agent._standalone_model_budget = True
+        agent.budget_manager = budget
+        agent.standalone_model_budget = True
     counter = TokenBudget(model=agent.config.model, provider=agent.config.provider)
-    deadline = getattr(agent, "_repair_deadline", None)
+    deadline = getattr(agent, "execution_deadline", None)
     if deadline is None:
         from agent_runtime.repair_runtime import ExecutionDeadline
 
         deadline = ExecutionDeadline(agent.config.deadline.repair_s)
-        agent._repair_deadline = deadline
+        agent.execution_deadline = deadline
     try:
         return invoke_model_call(
             lambda: client.complete(prompt, max_new_tokens=max_output_tokens),

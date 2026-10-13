@@ -470,15 +470,9 @@ class AnthropicCompatibleModelClient(SessionUsageMixin):
         max_retries = 3
 
         def sleep_with_deadline(delay: float) -> None:
-            if deadline is not None:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TimeoutError("provider deadline exceeded during retry backoff")
-                delay = min(float(delay), remaining)
-            if delay > 0:
-                time.sleep(delay)
-            if deadline is not None and time.monotonic() >= deadline:
-                raise TimeoutError("provider deadline exceeded during retry backoff")
+            from agent_runtime.providers.retry_policy import wait_retry
+
+            wait_retry(delay, deadline=deadline)
 
         for attempt in range(max_retries):
             try:

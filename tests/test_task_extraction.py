@@ -78,7 +78,7 @@ def extraction(session, respond=lambda data, call: output(), *, limit=6000, budg
         model_client=client,
         session={},
         cancel_token=CancellationToken(),
-        _run_budget_manager=budget,
+        budget_manager=budget,
     )
     service = TaskExtraction(agent, session)
     session.context_extraction = service
@@ -125,7 +125,7 @@ def test_chinese_english_negation_exceptions_and_empty_message_commit_once(tmp_p
         revision = session.long_task_state.state_revision
         assert service.process_user_message("u2", "继续")["phase"] == "committed"
         assert session.long_task_state.state_revision == revision
-        calls = service.agent._run_budget_manager.snapshot()["model_calls"]
+        calls = service.agent.budget_manager.snapshot()["model_calls"]
         assert len(calls) == 2 and all(c["purpose"] == "extraction" for c in calls.values())
 
 
@@ -391,7 +391,7 @@ with session_for(sys.argv[1]) as session:
         assert len(client.prompts) == (1 if point == "extraction_intake_saved" else 0)
         assert session.long_task_state.hard_constraints == ["Keep tests", "Keep API"]
         assert len(session.long_task_state.constraint_records) == 2
-        budget = service.agent._run_budget_manager.snapshot()
+        budget = service.agent.budget_manager.snapshot()
         assert len(budget["model_calls"]) == 1
         session.verify_checkpoint(session.checkpoint())
 
@@ -408,7 +408,7 @@ def test_saved_segment_resume_uses_existing_result_and_does_not_refund_budget(tm
         session.fault = fault
         with pytest.raises(CancelledError):
             service.process_user_message("resume", "保留 API")
-        budget = service.agent._run_budget_manager
+        budget = service.agent.budget_manager
         budget.reserve("llm_calls", 2)
         session.fault = None
         restored = TaskExtraction(service.agent, session)
@@ -643,11 +643,11 @@ def test_expired_deadline_blocks_extraction_before_dispatch(tmp_path):
     with session_for(tmp_path) as session:
         seed(session)
         service, client = extraction(session)
-        service.agent._repair_deadline = ExecutionDeadline.from_remaining(0)
+        service.agent.execution_deadline = ExecutionDeadline.from_remaining(0)
         with pytest.raises(ContextBuildBlockedError):
             service.process_user_message("deadline", "Preserve API")
         assert not client.prompts
-        assert not service.agent._run_budget_manager.snapshot()["model_calls"]
+        assert not service.agent.budget_manager.snapshot()["model_calls"]
 
 
 def test_source_not_offered_cannot_be_imported_by_extractor(tmp_path):

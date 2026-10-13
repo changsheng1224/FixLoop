@@ -187,7 +187,7 @@ def test_timeout_and_cancellation_have_stable_terminal_states():
     timed_out = _gateway().execute(
         "demo",
         {"text": "x"},
-        runner=lambda args: (time.sleep(0.05) or {"result": {"value": 1}}),
+        runner=lambda args: time.sleep(0.05) or {"result": {"value": 1}},
         timeout_s=0.01,
     )
     assert timed_out.invocation.status == "timed_out"

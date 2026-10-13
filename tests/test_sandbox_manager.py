@@ -11,7 +11,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.harness.patch_applier import PatchApplier
 from src.harness.python_runner import PythonTestRunner
 from src.harness.sandbox_manager import (
     EXEC_TIMEOUT_EXIT_CODE,
@@ -23,7 +22,6 @@ from src.harness.sandbox_manager import (
     sandbox_pip_install_command,
     sandbox_tmpfs_mounts,
 )
-from src.state import CandidatePatch
 
 
 class FakeSandbox:
@@ -79,7 +77,6 @@ def _successful_upload_results(sock: FakeUploadSocket):
 class TestSandboxManager:
     def test_create_returns_sandbox(self):
         mgr = SandboxManager()
-        # _docker 未初始化时不应报错
         assert mgr.IMAGE == "repair-agent/python-repair"
 
     def test_python_image_normalizes_entrypoint_line_endings(self):
@@ -93,7 +90,6 @@ class TestSandboxManager:
         assert "/code" in mounts
         assert mounts["/tmp"].startswith("size=")
         assert mounts["/code"].startswith("size=")
-        # nobody(65534) 写入 /code 需要 world-writable tmpfs
         assert "mode=1777" in mounts["/tmp"]
         assert "mode=1777" in mounts["/code"]
 
@@ -136,9 +132,7 @@ class TestSandboxManager:
         fake_container.exec_run.return_value = (0, b"ok")
         mgr._docker = MagicMock()
         mgr._docker.containers.get.return_value = fake_container
-
         result = mgr.execute(Sandbox(id="sb-1", profile="python"), "echo hi && true", timeout=5)
-
         assert result.exit_code == 0
         argv = fake_container.exec_run.call_args[0][0]
         assert argv == sandbox_shell_argv("echo hi && true")
@@ -149,7 +143,6 @@ class TestSandboxManager:
         repo = tmp_path / "proj"
         repo.mkdir()
         (repo / "main.py").write_text("x = 1\n", encoding="utf-8")
-
         fake_container = MagicMock()
         fake_container.id = "container-abc"
         fake_sock = FakeUploadSocket()
@@ -163,9 +156,7 @@ class TestSandboxManager:
         mgr = SandboxManager()
         mgr._docker = MagicMock()
         mgr._docker.containers.run = fake_run
-
         sandbox = mgr.create(str(repo))
-
         assert sandbox.id == "container-abc"
         assert captured["read_only"] is True
         assert "/code" in captured["tmpfs"]
@@ -186,21 +177,16 @@ class TestSandboxManager:
         repo = tmp_path / "proj"
         repo.mkdir()
         (repo / "main.py").write_text("x = 1\n", encoding="utf-8")
-
         fake_container = MagicMock()
         fake_container.id = "container-broken-runtime"
         fake_container.exec_run.return_value = SimpleNamespace(
-            exit_code=127,
-            output=b"/bin/sh: 1: /entrypoint.sh: not found",
+            exit_code=127, output=b"/bin/sh: 1: /entrypoint.sh: not found"
         )
-
         mgr = SandboxManager()
         mgr._docker = MagicMock()
         mgr._docker.containers.run.return_value = fake_container
-
         with pytest.raises(SandboxRuntimeProbeError) as raised:
             mgr.create(str(repo))
-
         assert raised.value.code == "sandbox_runtime_unavailable"
         assert raised.value.entrypoint == "/entrypoint.sh"
         assert raised.value.exit_code == 127
@@ -211,18 +197,14 @@ class TestSandboxManager:
         repo = tmp_path / "proj"
         repo.mkdir()
         (repo / "main.py").write_text("x = 1\n", encoding="utf-8")
-
         fake_container = MagicMock()
         fake_container.id = "container-code"
         fake_sock = FakeUploadSocket()
         fake_container.exec_run.side_effect = _successful_upload_results(fake_sock)
-
         mgr = SandboxManager()
         mgr._docker = MagicMock()
         mgr._docker.containers.run.return_value = fake_container
-
         mgr.create(str(repo))
-
         assert fake_sock.data.endswith(b"\x04")
         tar_bytes = base64.decodebytes(bytes(fake_sock.data[:-1]))
         with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:") as tar:
@@ -234,7 +216,6 @@ class TestSandboxManager:
         (tmp_path / "huge.bin").write_bytes(b"x" * 500)
         mgr = SandboxManager()
         mgr._docker = MagicMock()
-
         import src.harness.sandbox_tar as sandbox_tar_mod
 
         original_max = sandbox_tar_mod.sandbox_tar_max_bytes
@@ -244,22 +225,18 @@ class TestSandboxManager:
                 mgr.create(str(tmp_path))
         finally:
             sandbox_tar_mod.sandbox_tar_max_bytes = original_max
-
         mgr._docker.containers.run.assert_not_called()
 
     def test_create_kills_container_when_exec_upload_fails(self, tmp_path):
         repo = tmp_path / "proj"
         repo.mkdir()
         (repo / "main.py").write_text("x = 1\n", encoding="utf-8")
-
         fake_container = MagicMock()
         fake_container.id = "container-fail"
         fake_container.exec_run.side_effect = RuntimeError("upload failed")
-
         mgr = SandboxManager()
         mgr._docker = MagicMock()
         mgr._docker.containers.run.return_value = fake_container
-
         with pytest.raises(RuntimeError, match="upload failed"):
             mgr.create(str(repo))
         fake_container.kill.assert_called_once()
@@ -275,28 +252,10 @@ class TestSandboxManager:
         fake_container.exec_run = slow_exec
         mgr._docker = MagicMock()
         mgr._docker.containers.get.return_value = fake_container
-
         result = mgr.execute(Sandbox(id="sb-1", profile="python"), "sleep 2", timeout=1)
-
         assert result.exit_code == EXEC_TIMEOUT_EXIT_CODE
         assert "timeout after 1s" in result.stderr
         fake_container.kill.assert_called_once()
-
-
-class TestPatchApplier:
-    def test_apply_single_patch(self):
-        mgr = FakeManager({"patch": ExecResult(0, "patched", "")})
-        applier = PatchApplier(mgr)
-        patch = CandidatePatch(file_path="calc.py", diff="-old\n+new")
-        results = applier.apply(FakeSandbox(), [patch])
-        assert results == [True]
-
-    def test_apply_rollback_on_failure(self):
-        mgr = FakeManager({"patch_0": ExecResult(1, "", "fail")})
-        applier = PatchApplier(mgr)
-        patch = CandidatePatch(file_path="calc.py", diff="-old\n+new")
-        results = applier.apply(FakeSandbox(), [patch])
-        assert results == [False]
 
 
 class TestPythonRunner:
@@ -339,13 +298,9 @@ class TestPythonRunner:
             runtests_path="tests/runtests.py",
             settings_module="tests.test_sqlite",
         )
-
         result = PythonTestRunner(mgr).run(
-            FakeSandbox(),
-            "auth_tests.test_validators",
-            profile=profile,
+            FakeSandbox(), "auth_tests.test_validators", profile=profile
         )
-
         assert result.all_passed
         assert result.total_tests == 22
         assert result.passed == 22
@@ -369,11 +324,7 @@ class TestPythonRunner:
         assert mgr.calls[0].startswith("/entrypoint.sh test")
 
     def test_pytest_timeout_includes_partial_stdout(self):
-        mgr = FakeManager(
-            {
-                "pytest": ExecResult(-1, "partial output\n" * 20, "timeout after 900s"),
-            }
-        )
+        mgr = FakeManager({"pytest": ExecResult(-1, "partial output\n" * 20, "timeout after 900s")})
         runner = PythonTestRunner(mgr)
         result = runner.run(FakeSandbox())
         assert any("partial output" in log for log in result.failure_logs)

@@ -61,7 +61,7 @@ def test_mcp_specs_and_capability_query_share_registry():
     from src.middleware import ToolGateway
 
     client, _ = build_mock_github_mcp_client()
-    specs = build_github_mcp_tool_specs(client)
+    specs = build_github_mcp_tool_specs(client, write_roles=frozenset({"patcher"}))
     registry = ToolRegistry(specs)
     gateway = ToolGateway(registry=registry)
     gateway.bind_tools(project_tool_specs(specs))

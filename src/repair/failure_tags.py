@@ -77,8 +77,11 @@ def allowed_patch_files(state: RepairState) -> set[str]:
     与 bonus §24 faithfulness（patch ⊆ allowed）共用；勿重复实现第二套集合逻辑。
     """
     allowed: set[str] = set()
-    for path in (*state.control.allowed_edit, *state.control.allowed_create,
-                 *state.control.allowed_delete):
+    for path in (
+        *state.control.allowed_edit,
+        *state.control.allowed_create,
+        *state.control.allowed_delete,
+    ):
         allowed.add(_normalize_path(path))
     for suspect in state.suspect_locations:
         if suspect.file_path:

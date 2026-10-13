@@ -42,16 +42,17 @@ class BudgetDecision:
     allowed: bool
     group: ToolBudgetGroup
     used: int
-    limit: int
+    limit: int | float
     reason: str = ""
 
 
 class ToolBudgetLedger:
     """Thread-safe independent counters; one group cannot consume another."""
 
-    def __init__(self, limits: dict[str | ToolBudgetGroup, int]):
+    def __init__(self, limits: dict[str | ToolBudgetGroup, int | None]):
         self._limits = {
-            ToolBudgetGroup(str(key)): max(0, int(value)) for key, value in limits.items()
+            ToolBudgetGroup(str(key)): float("inf") if value is None else max(0, int(value))
+            for key, value in limits.items()
         }
         for group in ToolBudgetGroup:
             self._limits.setdefault(group, 0)
@@ -84,8 +85,10 @@ class ToolBudgetLedger:
             return {
                 group.value: {
                     "used": self._counts[group],
-                    "limit": self._limits[group],
-                    "remaining": max(0, self._limits[group] - self._counts[group]),
+                    "limit": None if self._limits[group] == float("inf") else self._limits[group],
+                    "remaining": None
+                    if self._limits[group] == float("inf")
+                    else max(0, self._limits[group] - self._counts[group]),
                     "rejected": self._rejected[group],
                 }
                 for group in ToolBudgetGroup

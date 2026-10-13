@@ -36,7 +36,7 @@ class VerifyRun:
         mode = "static" if self.internal.get("actual_tier") == TIER_STATIC else "tests"
         self.internal.setdefault("mode", mode)
         self.result.verification_mode = mode
-        self.result.execution_status = "completed" if self.internal.get("completed") else "unknown"
+        self.result.execution_status = "unverified"
 
 
 class VerifyStrategy(Protocol):
@@ -201,6 +201,31 @@ class PytestVerifyStrategy:
             )
         except CancelledError:
             return _verify_cancelled_run(t0)
+        except subprocess.TimeoutExpired as exc:
+            return VerifyRun(
+                VerificationResult(failure_logs=[str(exc)]),
+                int((time.time() - t0) * 1000),
+                {
+                    "actual_tier": "host",
+                    "completed": False,
+                    "cleanup": "confirmed",
+                    "category": "timeout",
+                },
+                "timeout",
+            )
+        except OSError as exc:
+            return VerifyRun(
+                VerificationResult(failure_logs=[str(exc)]),
+                int((time.time() - t0) * 1000),
+                {
+                    "actual_tier": "host",
+                    "completed": False,
+                    "cleanup": "confirmed",
+                    "not_started": True,
+                    "category": "verification_environment_failed",
+                },
+                str(exc),
+            )
         elapsed_ms = int((time.time() - t0) * 1000)
         passed = code == 0
         counts = {

@@ -76,10 +76,16 @@ def run_tool_step(runtime, ts, tool_name, tool_args, **kwargs):
         context = kwargs.get("call_context")
         if request is not None:
             result = request
-        elif context is not None:
-            result = runtime.agent.execute_tool(tool_name, tool_args, call_context=context)
         else:
-            result = runtime.agent.execute_tool(tool_name, tool_args)
+            from agent_runtime.model_tool_runtime import ModelToolRuntime
+
+            result = ModelToolRuntime.execute(
+                runtime.agent.execute_tool,
+                tool_name,
+                tool_args,
+                call_context=context,
+                cancel_token=runtime.agent.cancel_token,
+            )
     except BaseException as exc:
         flow.throw(exc)
         raise
@@ -278,6 +284,9 @@ def tool_step_flow(
             runtime.agent.session["_in_flight_action"] = action_raw
         try:
             result = yield
+            transform = runtime.agent.tool_result_transform
+            if transform is not None:
+                result = transform(tool_name, tool_args, result)
             runtime.agent.loop_policy.review_result(
                 runtime.policy_context, tool_name, tool_args, result
             )
@@ -395,12 +404,14 @@ def tool_step_flow(
         path=str(path),
     )
     projection_input = result_text
-    if isinstance(retrieval, dict):
+    if isinstance(retrieval, dict) and runtime.agent.tool_result_transform is None:
         from agent_runtime.code_exploration.consumption import retrieval_header
 
         projection_input = retrieval_header(retrieval) + result_text
-    projected_result_text = truncate_tool_result_for_agent(
-        runtime.agent, tool_name, projection_input
+    projected_result_text = (
+        projection_input
+        if runtime.agent.tool_result_transform is not None
+        else truncate_tool_result_for_agent(runtime.agent, tool_name, projection_input)
     )
     if len(projected_result_text) < len(projection_input):
         result.output_truncated = True
@@ -488,20 +499,43 @@ def record_step_progress(
     # 死循环检测：Gate 5.5 rejection → 升级为 stop
     error_code = result.error_code
     if error_code == "approval_deferred":
-        runtime.agent.record({"role": "tool", "tool_name": tool_name,
-                              "content": result_text, "observation_id": stored.observation_id})
+        runtime.agent.record(
+            {
+                "role": "tool",
+                "tool_name": tool_name,
+                "content": result_text,
+                "observation_id": stored.observation_id,
+            }
+        )
         return result_text
     if error_code in {"approval_required", "approval_pending"}:
         ts.stop_with_reason(StopReason.APPROVAL_REQUIRED, "waiting_approval")
         runtime.state.stop_reason = StopReason.APPROVAL_REQUIRED
-        runtime.agent.record({"role": "tool", "tool_name": tool_name,
-                              "content": result_text, "observation_id": stored.observation_id})
-        runtime.hooks.emit("approval_required", {
-            "tool": tool_name, "approval_id": result.metadata.get("approval_id", ""),
-        })
+        runtime.agent.record(
+            {
+                "role": "tool",
+                "tool_name": tool_name,
+                "content": result_text,
+                "observation_id": stored.observation_id,
+            }
+        )
+        runtime.hooks.emit(
+            "approval_required",
+            {
+                "tool": tool_name,
+                "approval_id": result.metadata.get("approval_id", ""),
+            },
+        )
         next_message = "调用尚未执行，等待批准或拒绝。\n" + result_text
         runtime.hooks.persist_step_checkpoint(
-            ts, tool_name, tool_args, result_text, next_message, result, step=step, path=path,
+            ts,
+            tool_name,
+            tool_args,
+            result_text,
+            next_message,
+            result,
+            step=step,
+            path=path,
         )
         return next_message
     if error_code == "loop_detected":
@@ -585,7 +619,11 @@ def record_step_progress(
                         "observation_id": stored.observation_id,
                     }
                 )
-                next_message = f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
+                next_message = (
+                    result_text
+                    if runtime.agent.tool_result_transform is not None
+                    else f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
+                )
                 runtime.hooks.persist_step_checkpoint(
                     ts,
                     tool_name,
@@ -620,7 +658,11 @@ def record_step_progress(
             "observation_id": stored.observation_id,
         }
     )
-    next_message = f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
+    next_message = (
+        result_text
+        if runtime.agent.tool_result_transform is not None
+        else f"工具 {tool_name} 执行完成。\n结果:\n{result_text}"
+    )
     progress = runtime.progress
     if progress is not None:
         runtime.agent.session["turn_progress"] = progress.checkpoint(runtime.batch)

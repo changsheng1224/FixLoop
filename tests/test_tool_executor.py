@@ -75,6 +75,7 @@ def test_unknown_write_keeps_disk_and_blocks_followup_writes(agent, executor, te
 def test_sandbox_timeout_with_confirmed_cleanup_allows_followup(agent, executor, monkeypatch):
     from agent_runtime.linux_sandbox.models import SandboxResult
     from tests.test_sandbox_workspace_routing import Backend
+
     backend = agent.tool_context.sandbox_backend = Backend()
     backend.workspace_tools_only = False
     (Path(agent.tool_context.root) / "test_a.py").write_text("def test_a(): pass\n")

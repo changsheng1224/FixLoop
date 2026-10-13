@@ -6,7 +6,8 @@ import pytest
 
 from agent_runtime.linux_sandbox.models import SandboxResult
 from agent_runtime.tool_context import ToolContext
-from src.orchestrator import Orchestrator
+from src.repair.service import RepairRequest, RepairService
+from src.repair.session import ExecutionSession
 from src.repair.verification.verify import BwrapVerifyStrategy
 from src.state import RepairState
 
@@ -59,23 +60,22 @@ def test_no_host_fallback_and_baseline_receipt(tmp_path, monkeypatch):
     )
     ctx = ToolContext(root=str(tmp_path), sandbox_backend=backend)
     state = RepairState(issue_input="failure")
-    orch = Orchestrator(SimpleNamespace(tool_context=ctx), sandbox_context=ctx)
-    orch._repo_root = str(tmp_path)
-    orch._record_validation_exit(state, "baseline_pytest_code")
+    orch = ExecutionSession(SimpleNamespace(tool_context=ctx), sandbox_context=ctx)
+    orch.repo_root = str(tmp_path)
+    orch.verification.record_validation_exit(state, "baseline_pytest_code")
     assert state.control.baseline_pytest_code == 1
     assert state.node_timings["baseline_pytest_code_receipt_id"] == "baseline"
     backend.result = SandboxResult("rejected", error_code="namespace_unavailable")
     from agent_runtime.test_execution import ProcessCleanupUnconfirmedError
 
     with pytest.raises(ProcessCleanupUnconfirmedError):
-        orch._record_validation_exit(state, "post_patch_pytest_code")
+        orch.verification.record_validation_exit(state, "post_patch_pytest_code")
 
 
 def test_non_python_is_not_sent_to_backend(tmp_path):
     backend = Backend(SandboxResult("completed", exit_code=0, cleanup="confirmed"))
     run = BwrapVerifyStrategy(ToolContext(root=str(tmp_path), sandbox_backend=backend)).run(
-        str(tmp_path),
-        language="java",
+        str(tmp_path), language="java"
     )
     assert run.error == "verification_environment_failed"
     assert backend.requests == []
@@ -97,26 +97,28 @@ def test_missing_actual_backend_or_receipt_fails_closed(tmp_path):
 
 
 def test_factory_requires_prepared_environment_before_model_setup(tmp_path):
-    from src.repair_factory import RequiredVerifierError, wire_orchestrator
+    from src.repair.assembly import VerificationEnvironmentError, create_repair_service
 
     class FailingEnvironment:
         def ensure(self, **kwargs):
             raise RuntimeError("environment unavailable")
 
-    with pytest.raises(RequiredVerifierError, match="sandbox unavailable"):
-        wire_orchestrator(
+    with pytest.raises(VerificationEnvironmentError, match="sandbox unavailable"):
+        create_repair_service(
             None,
             str(tmp_path),
             execution_backend="wsl_bwrap",
             sandbox_environment_manager=FailingEnvironment(),
-        )
+        ).session
 
 
 def test_factory_rejects_conflicting_tier(tmp_path):
-    from src.repair_factory import RequiredVerifierError, wire_orchestrator
+    from src.repair.assembly import VerificationEnvironmentError, create_repair_service
 
-    with pytest.raises(RequiredVerifierError, match="conflicts"):
-        wire_orchestrator(None, str(tmp_path), execution_backend="wsl_bwrap", execution_tier="host")
+    with pytest.raises(VerificationEnvironmentError, match="conflicts"):
+        create_repair_service(
+            None, str(tmp_path), execution_backend="wsl_bwrap", execution_tier="host"
+        ).session
 
 
 def test_cli_sandbox_backend_does_not_use_removed_p3_gate(monkeypatch, capsys, temp_workspace):
@@ -124,14 +126,14 @@ def test_cli_sandbox_backend_does_not_use_removed_p3_gate(monkeypatch, capsys, t
 
     from src.cli import main
     from src.cli_exit_codes import REPAIR_EXIT_CONFIG
-    from src.repair_factory import RequiredVerifierError
+    from src.repair.assembly import VerificationEnvironmentError
 
     monkeypatch.setattr("src.cli.load_dotenv", lambda: None)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "fake-key")
     monkeypatch.setenv("FIXLOOP_STATE_ROOT", str(temp_workspace.parent / "state"))
 
     def unavailable(*args, **kwargs):
-        raise RequiredVerifierError("wsl_bwrap sandbox unavailable: test environment")
+        raise VerificationEnvironmentError("wsl_bwrap sandbox unavailable: test environment")
 
     monkeypatch.setattr("src.cli._execute_repair", unavailable)
     monkeypatch.setattr(
@@ -155,7 +157,7 @@ def test_cli_sandbox_backend_does_not_use_removed_p3_gate(monkeypatch, capsys, t
 
 
 def test_orchestrator_final_route_has_no_host_fallback(tmp_path, monkeypatch):
-    from src.orchestrator import Orchestrator
+    from src.repair.session import ExecutionSession
 
     backend = Backend(
         SandboxResult(
@@ -168,14 +170,17 @@ def test_orchestrator_final_route_has_no_host_fallback(tmp_path, monkeypatch):
         )
     )
     ctx = ToolContext(root=str(tmp_path), sandbox_backend=backend)
-    orch = Orchestrator(SimpleNamespace(_cwd=str(tmp_path), tool_context=ctx), sandbox_context=ctx)
-    monkeypatch.setattr(orch, "_pick_test_path", lambda _: "")
+    orch = ExecutionSession(
+        SimpleNamespace(cwd=str(tmp_path), tool_context=ctx), sandbox_context=ctx
+    )
+    monkeypatch.setattr(orch.verification, "pick_test_path", lambda _: "")
     monkeypatch.setattr(
         "src.repair.verification.verify.run_profile", lambda *_a, **_kw: pytest.fail("host bypass")
     )
     state = RepairState(issue_input="failure")
-    assert orch._run_verifier(state).all_passed
+    assert orch.verification.run_verifier(state).all_passed
     assert backend.requests[0].operation == "pytest"
     assert state.node_timings["phases_internal"]["verify"]["receipt_id"] == "final"
-    with pytest.raises(ValueError, match="P3"):
-        orch.repair("failure")
+    result = RepairService(orch).run(RepairRequest("failure"))
+    assert result.status == "failed"
+    assert "P3" in result.agent_errors["runtime"]

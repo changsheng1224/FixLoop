@@ -35,7 +35,7 @@ def _record(root, *, state=None, state_root="", end=None):
         retrieval_query_id=result.metadata["retrieval_result"]["query_id"],
         retrieval_result=result.metadata["retrieval_result"],
     )
-    return state, context, store, record
+    return (state, context, store, record)
 
 
 def test_contract_survives_disk_reload_and_expansion_truncation(tmp_path):
@@ -200,7 +200,6 @@ def test_actual_model_request_drops_changed_source_in_history_and_native_tail(tm
             return base.complete_turn(self, request)
 
         RecordingClient.complete_turn = complete_turn
-
     else:
 
         def complete(self, prompt, *args, **kwargs):
@@ -210,7 +209,6 @@ def test_actual_model_request_drops_changed_source_in_history_and_native_tail(tm
             return base.complete(self, prompt, *args, **kwargs)
 
         RecordingClient.complete = complete
-
     client = RecordingClient()
     agent = Agent(
         config=AgentConfig(provider="fake", max_steps=5),
@@ -284,10 +282,7 @@ def test_change_immediately_after_tool_does_not_leak_through_continuation(tmp_pa
     source.write_text("old_marker = 1\n", encoding="utf-8")
     base = FakeNativeToolClient if native else FakeModelClient
     client = base(
-        [
-            '<tool>{"name":"read_file","args":{"path":"mod.py"}}</tool>',
-            "<final>done</final>",
-        ]
+        ['<tool>{"name":"read_file","args":{"path":"mod.py"}}</tool>', "<final>done</final>"]
     )
     requests = []
     if native:
@@ -323,27 +318,25 @@ def test_l2_real_read_patch_and_host_verifier_keep_contracts(tmp_path):
 
     orch, state, client = repair_fixture(tmp_path)
     try:
-        patches, meta = orch._run_patcher_toolized(state, "repair", {})
+        patches, meta = orch.patcher_execution.run_patcher_toolized(state, "repair", {})
         assert patches, (meta, state.agent_errors)
-        assert orch._run_verifier(state).all_passed
+        assert orch.verification.run_verifier(state).all_passed
         assert "return 2" in (tmp_path / "value.py").read_text()
         assert any("completeness=complete_in_scope" in prompt for prompt in client.prompts)
         assert any("freshness=fresh" in prompt for prompt in client.prompts)
-        journal = list(
-            orch._plan_binding.session.store.latest("operation", "operation_id").values()
-        )
+        journal = list(orch.plan_binding.session.store.latest("operation", "operation_id").values())
         assert (
             sum(
                 item["tool"] == "patch_file"
                 and item["phase"] == "result_recorded"
-                and item["status"] == "success"
+                and (item["status"] == "success")
                 for item in journal
             )
             == 1
         )
     finally:
-        if orch._plan_binding:
-            orch._plan_binding.close()
+        if orch.plan_binding:
+            orch.plan_binding.close()
 
 
 def test_task_scope_uses_runtime_identity_and_rejects_cross_task_expansion(tmp_path):
@@ -389,7 +382,6 @@ def test_restored_checkpoint_with_changed_source_cannot_replay_old_tool_body(tmp
     )
     restored.session["resume_state"] = evaluate_resume_state(restored)
     assert restored.session["resume_state"]["status"] == "step-resumable"
-    # Mutation after recovery assessment must still be caught at consumption.
     source.write_text("def current_marker():\n    return 2\n", encoding="utf-8")
     assert "resumed" in restored.ask("continue")
     assert "obsolete_marker" not in client.prompts[0]
@@ -411,11 +403,7 @@ def test_selected_snippet_freshness_does_not_promote_parent_query(tmp_path):
         )
         service.relations({})
         text, selection = select_source_context(
-            service,
-            TokenBudget(),
-            role="",
-            phase="repair",
-            token_limit=1500,
+            service, TokenBudget(), role="", phase="repair", token_limit=1500
         )
         assert selection.selected
         assert "snippet_freshness=fresh" in text

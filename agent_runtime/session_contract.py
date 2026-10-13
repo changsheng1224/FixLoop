@@ -10,8 +10,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-SESSION_SCHEMA_VERSION = "2.0"
-CHECKPOINT_ENVELOPE_VERSION = "2.0"
+SESSION_SCHEMA_VERSION = "3.0"
+CHECKPOINT_ENVELOPE_VERSION = "3.0"
 
 
 def _stable_hash(value: Any) -> str:
@@ -73,7 +73,7 @@ class SessionIdentity:
 
 @dataclass
 class CheckpointEnvelope:
-    """Stable outer envelope; payloads remain backward-compatible dictionaries."""
+    """Versioned outer envelope for the current execution contract."""
 
     checkpoint_id: str
     sequence: int
@@ -112,6 +112,8 @@ class CheckpointEnvelope:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> CheckpointEnvelope:
+        if raw.get("schema_version") != CHECKPOINT_ENVELOPE_VERSION:
+            raise ValueError("unsupported_checkpoint_envelope_version")
         fields = {
             "checkpoint_id",
             "sequence",

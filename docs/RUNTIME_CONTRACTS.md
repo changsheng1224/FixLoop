@@ -1,227 +1,27 @@
-# 当前运行时契约
+# 通用运行时契约
 
-运行时预算、超时、下述工具入口和修复状态统一使用当前契约，不提供历史别名或自动迁移。
-
-## 配置
-
-预算放在 `budget`，超时放在 `deadline`。Python 构造和 JSON 配置使用相同结构：
+Layer 1 的 `Agent` 不依赖修复业务。模型调用、协议解析、工具分派、重试、预算和取消集中在同一执行核心；角色行为通过系统提示、工具治理、loop policy 和 context policy 注入。Layer 2 的正式接口见 [修复契约](REPAIR_CONTRACT.md)。
 
 ```python
-from agent_runtime import AgentConfig
+from agent_runtime.config import AgentConfig
+from agent_runtime.runtime import Agent
+from agent_runtime.workspace import WorkspaceContext
 
 config = AgentConfig(
-    budget={"max_llm_calls": 20, "max_tool_calls": 40, "max_write_calls": 8},
-    deadline={"repair_s": 600, "step_s": 120, "tool_s": 30},
+    provider="fake", max_model_attempts=10,
+    budget={"max_llm_calls": 10, "max_tool_calls": 20, "total_tokens": 24000},
+    deadline={"step_s": 120, "tool_s": 30},
 )
+agent = Agent(config, client, WorkspaceContext.build(repo_path), cwd=repo_path)
+answer = agent.ask("读取文件并说明问题")
 ```
 
-```json
-{
-  "budget": {"max_llm_calls": 20, "max_tool_calls": 40, "max_write_calls": 8},
-  "deadline": {"repair_s": 600, "step_s": 120, "tool_s": 30}
-}
-```
+应用调用工具使用 `Agent.execute_tool`，闸口使用 `ToolExecutor.execute_gated`。工具结果为 `ToolResult`，工具 schema 与治理注册表一致。只读权限通过工具白名单／治理策略限制，工具配额由有效配置生成；不以修复角色名称在运行时分配权限。
 
-环境变量使用 `FIXLOOP_BUDGET_MAX_LLM_CALLS`、`FIXLOOP_BUDGET_MAX_TOOL_CALLS`、
-`FIXLOOP_DEADLINE_REPAIR_S`、`FIXLOOP_DEADLINE_STEP_S`、`FIXLOOP_DEADLINE_TOOL_S`。
-CLI 的 `--tool-timeout` 和 `--step-timeout` 直接设置嵌套超时字段。
+`AgentConfig.snapshot()` 在执行前提供有效配置和来源。`prompt_budget/hard_cap/model_context_window` 控制单次上下文；`budget` 控制累计资源；`deadline` 控制时间。`max_model_attempts` 明确限制 XML 调用尝试，`protocol_recovery_turns` 和 `max_empty_attempts` 控制协议恢复。没有工厂隐藏上限。
 
-原标量字段 `max_llm_calls_per_repair`、`max_tool_calls`、`max_write_calls`、
-`max_verify_calls`、`max_recovery_attempts`、`repair_wall_timeout_s`、
-`step_timeout_s`、`tool_timeout_s` 已删除，配置中出现这些字段会报错。
-旧标量环境变量不再读取。限额和超时中的 `0` 表示不限制。
+取消令牌、预算和总截止时间贯穿模型、工具与重试等待。`Retry-After` 不缩短；不足时间等待时明确失败。Explorer 使用同一核心和隔离上下文策略；普通聊天与项目任务调度器独立。
 
-`prompt_budget` 是单次请求上下文上限，`budget.prompt_tokens` 是整次运行累计预算，
-两者分别控制不同资源。
+统一纯文本补丁核心严格检查原文和原始 hunk 坐标，后端承担权限、快照与原子写入。最终回答不会触发补丁应用。所有支持和拒绝格式见 [补丁契约](REPAIR_CONTRACT.md#补丁核心和后端事务)。
 
-## 工具和导入
-
-- 搜索工具统一叫 `grep`，参数类型是 `GrepArgs`，不再注册 `search`。
-- 工具执行结果统一使用 `agent_runtime.tool_result.ToolResult`。
-- 应用调用工具通过 `Agent.execute_tool()`；闸口直接调用使用
-  `ToolExecutor.execute_gated()`，不再提供 `ToolExecutor.execute()`。
-- 回调基类是 `agent_runtime.callbacks.AgentCallback`。
-- 上下文预算适配函数从 `agent_runtime.context_fit` 导入。
-- 任务保护与任务模板函数从 `agent_runtime.task_section` 导入；通用模板渲染从
-  `agent_runtime.template_render` 导入。
-
-Patcher 通过受治理工具修改磁盘，运行时根据快照差异生成 `CandidatePatch`，用于
-审计和导出。最终回答中的 JSON 或文本 diff 不会被当成落盘补丁重新应用。
-
-## 状态和恢复
-
-`RepairState` 只读取显式标注 `schema_version: "1.3"` 的状态。
-旧版本、缺失版本、旧阶段 `retrieve`、旧状态 `patched` 均被拒绝；上下文阶段使用
-`context`，已生成但未验证的补丁使用 `pending_verify`，验证成功使用 `fixed`。
-
-L1 和 L2 checkpoint 必须携带当前版本 `2.0` 的 `CheckpointEnvelope`，并通过完整性
-校验。历史无 envelope 的 checkpoint 和 L2 `1.0`/`1.1`/`1.2` 状态不能继续恢复，需创建新运行。
-现有历史结果文件仍可留作人工审计，不会被自动改写。
-
-
-## 2026-10-04：工具契约破坏式更新
-
-- 通用 `ToolSpec`、`ToolRegistry` 与执行投影从 `agent_runtime.tool_spec` 导入。
-  `src.tools.spec` 只声明修复域默认权限；不再提供旧路径兼容导出。
-- 注册表只接受 `schema` 字段中的 object JSON Schema。删除简写参数格式、
-  `json_schema` / `protocol_schema` 双轨字段与隐式类型转换。
-  `auto_schema()` 从 dataclass 生成 JSON Schema，保留 nullable、数组项类型和默认值。
-- 所有工具执行函数返回 `ToolResult`。文本消费者显式读取 `.content`；
-  执行器检查 `.status`、`.error_code`、`.retryable`，不再根据 `Error` 文本猜测失败。
-  自定义工具返回裸字符串会被拒绝为 `invalid_tool_result`。
-- L2 通过 `ToolContext.edit_lock` 注入 `EditPolicy`，通过 `grounding_sink` 接收证据。
-  删除按仓库路径保存的全局编辑锁注册表及静默异常放行。
-  恢复检查点只恢复编辑范围，必须重新读取文件才能写入。
-- `IssueIntentAdapter` 移至 `src.repair.intent_adapter`。L1 不再导入 L2；
-  `tests/test_runtime_contract_boundaries.py` 以 AST 检查保护依赖方向。
-
-自定义工具、外部调用方与测试桩必须直接改用以上契约，不提供自动迁移层。
-Skill 注册、上下文装配和持久化格式的其余兼容路径于 2026-10-05 一并收敛，见下文。
-
-## 2026-10-04：结果、校验与进程执行收敛
-
-- `ToolResult` 的 `status`、`error_code`、`retryable`、`changed_files`、
-  `receipt`、`duration_ms`、`output_truncated` 是运行时唯一状态来源。
-  `metadata` 只保存扩展信息，写入重复控制字段会被拒绝。
-  日志和持久化使用 `to_metadata()` 导出的独立快照；不支持旧 metadata 构造方式。
-  工具执行后的策略判定完成后重新生成回执，再写入 action ledger 和 Observation。
-- 工具参数采用 JSON Schema Draft 2020-12，由 `jsonschema` 完整校验；
-  不进行类型转换。支持组合约束、布尔 schema 和本地 `$ref`，禁用远程引用加载。
-  保留标准的开放对象语义；需要禁止未知字段的工具显式声明
-  `additionalProperties: false`。MCP 发现、模型投影和执行校验保留完整 schema。
-- 宿主 shell 使用统一执行器，持续读取 stdout/stderr，按流限制保留的输出，
-  统一使用 UTF-8 解码和单调时钟计时。取消、超时清理进程组并报告清理是否确认；
-  `data.exit_code` 保存命令退出码，`output_truncated` 标记输出截断。
-- 声明式验证使用解析后的可执行文件路径；启动时的操作系统错误返回
-  `verification_environment_failed`，不再以未捕获异常中断流程。
-
-## 2026-10-05：兼容面收敛（破坏式）
-
-在保持先进实现的前提下删除历史别名、转发壳与死代码，调用方必须改用当前契约。
-
-- **Skill 合同**：删除转发壳 `src.skills.prompt`（直连 `src.skills.skill_block`）；
-  `SkillContext.from_dict` 只认当前键，不再反查旧 `skill_*` 键；
-  删除未接线的 `SkillKind.HYBRID`；`src.skills` 包不再导出内部符号。
-- **上下文运行时**：删除 `ContextPolicyEngine.select`，统一走 `select_with_result`；
-  `ObservationStore.put` 不再接受 `redact` 形参；磁盘缓存不再读取旧单行格式。
-- **停机与状态**：删除 legacy 自由文本停机归一化
-  （`normalize_stop_reason` / `stop_reason_detail_from_legacy`）与未使用的
-  `TaskState.stop()`；`TaskState.from_dict` 原样读取 `stop_reason`。
-- **记忆**：删除无人调用的 `normalize_memory_state` 与孤立的 `MAX_FILE_SUMMARIES`。
-- **预算与 CLI**：删除 trace/prompt 中的 `payload["legacy"]` 旧预算视图；
-  删除 CLI 中无生产者的 `{agent}_internal` 计时回退（仅保留 `phases_internal`）。
-- **执行杂项**：删除 `PhaseTimeoutConfig.from_repair_timeout`
-  （改用 `with_repair_total_cap`）、`patch_applier.extract_json_block`
-  （直接调用 `agent_runtime.json_recovery.repair_structured_output`）、
-  `swebench.harness._parse_resolved` 与 `UserProfileStore.remove`
-  （改用 `invalidate`）。
-
-## 2026-10-05（续）：意图 / 载荷 / 记忆兼容面收敛（破坏式）
-
-- **意图**：删除 `llm_fallback.maybe_refine_graph` 兼容壳，统一使用
-  `maybe_refine(...).graph`；`CandidateEvent.from_dict` 与意图路由指标不再用
-  `"legacy"` 作为 `router_version` / `taxonomy_version` 缺省，改用
-  `INTENT_ROUTER_VERSION` / `INTENT_TAXONOMY_VERSION`。
-- **载荷字段**：读取侧收敛到唯一 canonical 键（删除无生产者的别名）——
-  trace 的 `context_built` 只读 `context_sections`、`tool_executed` 只读
-  `tool_args`；`attribute_failure` 只读 `failure_class`；
-  `tool_observations` 条目只读 `tool`；观测导出只读 `model`。
-  多来源/模型容错与外部协议双拼写（`duration_ms|elapsed_ms`、`status|outcome`、
-  `token_usage`、MCP/LSP/SWE-bench）保留。
-- **记忆/持久化**：`DurableMemoryStore._read_topic` 只接受 topic 名，删除
-  direct-Path 兼容分支；`canonical_trace.validate_event` 删除未使用的
-  `require_canonical` 形参与其旧格式短路。
-- **死代码**：删除 `agent_runtime.tools` 未使用的 `json` 导入；
-  修正 `loop_protocols` 中遮蔽 `dataclasses.field` 的循环变量。
-
-## 2026-10-13: Execution, Authorization And Recovery
-
-### File Operations
-
-Editing, creating and deleting a file require separate grants. Use
-`expand_lock(path, operation="modify" | "create" | "delete")`. Creation accepts
-missing paths within the workspace, including new modules and tests, and verifies
-absence before granting access. Modification and deletion require a fresh read
-after the grant. Restoring a checkpoint restores scope, but never read evidence.
-The sandbox supplies its own source/absence evidence; host paths are not used to
-authorize sandbox edits.
-
-Atomic writes use an exclusively created temporary file in the target directory.
-They preserve an existing target's permission bits and leave neighboring `.tmp`
-files untouched. Creation uses an exclusive final link, so a concurrent creator
-cannot be overwritten. New files use private `0600` permissions on POSIX.
-
-### Verification
-
-Startup resolves sandbox policy and execution tier into one immutable execution
-policy. Disabled sandbox plus automatic tier selects host/static execution even
-if a container backend is available. Required sandbox rejects host/static tiers;
-disabled sandbox rejects explicit container/bwrap execution. No later module
-reinterprets the original configuration. The verifier is a backend description,
-not an Agent with a model loop, prompt, session or token budget.
-
-Linux host execution runs through a dedicated subreaper. Normal completion,
-cancellation and timeout drain all descendants, including processes that fork
-and leave the original session. A confirmed cleanup receipt is required before
-success, cancellation or timeout is acknowledged. Unknown cleanup fences the
-workspace against rollback/reuse. WSL bwrap retains its PID namespace boundary.
-
-Critic supports `rules_first` and `off`. `llm` and unknown modes are rejected during
-startup. `off` is explicitly skipped, never recorded as a passed review.
-
-Static checks have their own verification mode; they do not establish a green
-test baseline. A successful dynamic command without collected tests cannot
-establish a successful test result.
-
-### Language Scope
-
-Source-read authorization uses the same capability list across languages;
-supported implementation files can be authorized without consuming explicit
-scope expansions, subject to the same automatic-scope limit. Test files still
-require explicit authorization when outside the seeded scope.
-
-| Language | Source extensions | Host test profile | Static checker |
-| --- | --- | --- | --- |
-| Python | `.py` | pytest | Python compile |
-| JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs` | npm test | node --check for JS/MJS/CJS |
-| TypeScript | `.ts`, `.tsx` | npm test | tsc, using tsconfig when present |
-| Java | `.java` | Maven or Gradle | javac |
-| Go | `.go` | go test | gofmt; profile uses go vet |
-| Rust | `.rs` | cargo test | rustc; profile uses cargo check |
-| Ruby | `.rb` | No built-in test profile | ruby -c |
-| PHP | `.php` | No built-in test profile | php -l |
-
-JSX requires a project test/build toolchain; `node --check` does not validate
-JSX. Standalone Java/Rust checks may require project dependencies; use a project
-profile for full build/test validation.
-
-Project `.venv`/`venv` Python, `node_modules/.bin` tools and Maven/Gradle wrappers
-take precedence over PATH tools. Windows batch wrappers support project paths
-containing spaces. No resolver installs or downloads tools; missing tools are
-reported as unavailable. Source discovery excludes dependency/build directories.
-
-### Durable State And Recovery
-
-Repair state schema is `1.3`. Verification receipts, phase revision, run/workspace
-identity, model budgets/deadlines and recovery inputs belong to typed execution
-state. Operation grants and confirmed export scope belong to typed control state.
-Timing dictionaries contain observations/projections; changing them cannot
-authorize files or override verification/phase recovery. Older checkpoints are
-rejected with a schema mismatch; there is no implicit migration.
-
-Workbench terminal results are journaled before database commit. Stop, send,
-admission, wait and restart retry pending results. Replay is idempotent, including
-a failure after the original database commit. Unconfirmed resources remain
-fenced and cannot publish candidate patches or successful output snapshots.
-
-### Packaging And Dependencies
-
-Wheels include runtime YAML for intent prototypes, pricing and fixed context
-fields. The packaging regression installs a wheel and loads these resources from
-outside the source directory with isolated Python.
-
-Semantic retrieval is optional: install `agent_runtime[semantic]` to enable its
-embedding model dependency. Without it, keyword retrieval remains available and
-enabling semantic retrieval emits installation guidance. The retained public
-patch applier executes only explicit, exact patches; it does not infer import
-renames or rewrite calls/strings.
+RuntimePolicy 为 `2.0`，session 与 checkpoint envelope 为 `3.0`。旧字段、旧导出和旧 checkpoint 拒绝，不自动迁移。

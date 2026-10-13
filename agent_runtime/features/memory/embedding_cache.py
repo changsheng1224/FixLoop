@@ -46,9 +46,14 @@ class EmbeddingConfig:
         if (
             not self.model_id.strip()
             or not re.fullmatch(r"[a-f0-9]{40,64}", self.revision)
-            or any(type(n) is not int or n <= 0 for n in (
-                self.dimensions, self.max_seq_length, self.max_chars,
-            ))
+            or any(
+                type(n) is not int or n <= 0
+                for n in (
+                    self.dimensions,
+                    self.max_seq_length,
+                    self.max_chars,
+                )
+            )
             or type(self.normalize_embeddings) is not bool
             or not self.encoder_version
             or not self.text_version
@@ -78,9 +83,13 @@ class EmbeddingCache:
             "device": "cpu",
             "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
         }
-        key = hashlib.sha256(json.dumps(
-            descriptor, sort_keys=True, separators=(",", ":"),
-        ).encode()).hexdigest()
+        key = hashlib.sha256(
+            json.dumps(
+                descriptor,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
         return self.root / f"{key}.npy"
 
     def valid(self, vector) -> bool:

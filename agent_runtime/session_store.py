@@ -126,6 +126,8 @@ class SessionStore:
         Args:
             session: 会话字典（必须含 "id" 字段）。
         """
+        if "schema_version" in session and session["schema_version"] != SESSION_SCHEMA_VERSION:
+            raise ValueError("unsupported_session_version")
         self.ensure_dir()
         session_id = self._validate_id(session.get("id", "unknown"))
         path = self.sessions_dir / f"{session_id}.json"
@@ -228,16 +230,19 @@ class SessionStore:
                     try:
                         data = self._read_path(bak)
                         return data if isinstance(data, dict) else None
-                    except Exception:
+                    except (json.JSONDecodeError, OSError):
                         pass
                 return None
 
     @staticmethod
     def _read_path(path: Path) -> dict | None:
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return None
+        if isinstance(data, dict) and data.get("schema_version") != SESSION_SCHEMA_VERSION:
+            raise ValueError("unsupported_session_version")
+        return data
 
     def latest(self) -> str | None:
         """返回最近修改的 session id（按 mtime 排序）。

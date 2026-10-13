@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import random
+import time
 from collections.abc import Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -21,6 +23,29 @@ __all__ = [
 DEFAULT_RETRY_CAP = 120.0
 DEFAULT_RATE_LIMIT_BASE = 1.0
 DEFAULT_SERVER_ERROR_BASE = 2.0
+retry_context = ContextVar("model_retry_context", default=(None, None))
+
+
+def wait_retry(delay: float, *, deadline: float | None = None, cancel_token=None) -> None:
+    """Never dispatch before the minimum delay; fail if it cannot fit the deadline."""
+    bound_token, bound_deadline = retry_context.get()
+    token = cancel_token or bound_token
+    deadlines = [value for value in (deadline, bound_deadline) if value is not None]
+    end = time.monotonic() + max(0.0, delay)
+    total_deadline = min(deadlines) if deadlines else None
+    if token is not None:
+        token.check()
+    if total_deadline is not None and end >= total_deadline:
+        raise TimeoutError("retry_deadline_exhausted: server wait exceeds remaining runtime")
+    if token is None:
+        time.sleep(max(0.0, delay))
+    else:
+        while time.monotonic() < end:
+            token.check()
+            time.sleep(min(0.05, end - time.monotonic()))
+        token.check()
+    if total_deadline is not None and time.monotonic() >= total_deadline:
+        raise TimeoutError("retry_deadline_exhausted")
 
 
 @dataclass(frozen=True)
@@ -45,7 +70,7 @@ class RetryPolicy:
 
     def delay(self, attempt: int, *, retry_after_s: float | None = None) -> float:
         if retry_after_s is not None:
-            raw = min(self.max_delay_s, max(0.0, retry_after_s))
+            return max(0.0, retry_after_s)
         else:
             raw = min(self.max_delay_s, self.base_delay_s * (2 ** max(0, attempt - 1)))
         return apply_equal_jitter(raw)
@@ -99,9 +124,9 @@ def compute_rate_limit_delay(
     base: float = DEFAULT_RATE_LIMIT_BASE,
     cap: float = DEFAULT_RETRY_CAP,
 ) -> float:
-    """429 退避：优先 Retry-After，否则指数退避，再 equal jitter。"""
+    """Server delay is a minimum, uncapped; otherwise exponential equal jitter."""
     if retry_after is not None:
-        raw = min(cap, max(0.0, retry_after))
+        return max(0.0, retry_after)
     else:
         raw = min(cap, base * (2**attempt))
     return apply_equal_jitter(raw)

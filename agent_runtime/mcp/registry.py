@@ -38,7 +38,9 @@ def build_mock_github_mcp_client(
     return client, server
 
 
-def build_github_mcp_tool_specs(client: _McpClientLike) -> list[ToolSpec]:
+def build_github_mcp_tool_specs(
+    client: _McpClientLike, *, write_roles: frozenset[str] = frozenset({"external_writer"})
+) -> list[ToolSpec]:
     """Discover allowed GitHub tools and build canonical ToolSpecs."""
     specs: list[ToolSpec] = []
     for remote in client.list_tools():
@@ -51,8 +53,8 @@ def build_github_mcp_tool_specs(client: _McpClientLike) -> list[ToolSpec]:
                 description=remote.description or f"GitHub MCP: {remote.name}",
                 input_schema=dict(remote.input_schema),
                 executor=_make_runner(client, remote.name),
-                roles=frozenset({"patcher"} if is_write else {"*"}),
-                phases=frozenset({"context", "patch", "verify", "verification"}),
+                roles=write_roles if is_write else frozenset({"*"}),
+                phases=frozenset(),
                 budget_group="write" if is_write else "read",
                 timeout_s=float(getattr(client, "timeout_s", 30.0) or 30.0),
                 side_effect="external_write" if is_write else "read",
@@ -70,13 +72,15 @@ def build_github_mcp_tool_specs(client: _McpClientLike) -> list[ToolSpec]:
     return specs
 
 
-def build_github_mcp_tool_registry(client: _McpClientLike) -> dict[str, dict[str, Any]]:
+def build_github_mcp_tool_registry(
+    client: _McpClientLike, *, write_roles: frozenset[str] = frozenset({"external_writer"})
+) -> dict[str, dict[str, Any]]:
     """``tools/list`` → 过滤 allowlist → FixLoop tools dict。
 
     每条含 ``schema/risky/execution_tier/description/run``，
     ``run`` 内部 ``tools/call`` 并把结果写成 Observation 字符串。
     """
-    tools = project_tool_specs(build_github_mcp_tool_specs(client))
+    tools = project_tool_specs(build_github_mcp_tool_specs(client, write_roles=write_roles))
     for name, tool in tools.items():
         tool["mcp_server"] = client.server_name
         tool["mcp_tool"] = name
@@ -154,17 +158,19 @@ def open_github_mcp_client(
     return client, server
 
 
-def build_github_mcp_tools_auto() -> dict[str, dict[str, Any]]:
+def build_github_mcp_tools_auto(
+    *, write_roles: frozenset[str] = frozenset({"external_writer"})
+) -> dict[str, dict[str, Any]]:
     """按环境自动选 Mock/官方并构建工具表。
 
     官方启动失败时回退 Mock（避免修复流水线因 MCP 挂掉）。
     """
     try:
         client, _handle = open_github_mcp_client()
-        return build_github_mcp_tool_registry(client)
+        return build_github_mcp_tool_registry(client, write_roles=write_roles)
     except McpUnavailableError:
         fallback = os.environ.get("FIXLOOP_GITHUB_MCP_FALLBACK", "error").strip().lower()
         if fallback in {"mock", "fake"}:
             client, _ = build_mock_github_mcp_client()
-            return build_github_mcp_tool_registry(client)
+            return build_github_mcp_tool_registry(client, write_roles=write_roles)
         raise

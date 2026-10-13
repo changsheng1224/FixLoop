@@ -6,6 +6,7 @@ import argparse
 import sys
 
 from agent_runtime.logging_setup import add_log_level_argument, setup_logging_from_args
+from src.eval.case_io import OFFLINE_SMOKE_CASES
 from src.eval.cli_helpers import print_eval_report, run_eval
 from src.eval.runner import DEFAULT_CASES_DIR
 
@@ -21,22 +22,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--fake",
         action="store_true",
-        help="Fake Orchestrator（应用 expected_patch，无需 API）",
+        help="离线固定模型响应，经正式修复服务修改并验证内置 Case",
     )
     parser.add_argument(
         "--skip-verify",
         action="store_true",
-        help="禁用 Verifier 重试（默认启用 pytest/Docker 验证）",
-    )
-    parser.add_argument(
-        "--with-verify",
-        action="store_true",
-        help="（已默认启用）显式开启 Verifier",
+        help="跳过真实验证；结果不可标记 fixed",
     )
     parser.add_argument(
         "--ci",
         action="store_true",
-        help="CI 模式：--all --fake --skip-verify，输出到 eval_results/ci",
+        help="CI 模式：通过正式修复服务验证两个离线契约用例",
     )
     parser.add_argument(
         "--resume",
@@ -59,9 +55,11 @@ def main(argv: list[str] | None = None) -> int:
     setup_logging_from_args(args)
 
     if args.ci:
-        args.all = True
+        if args.skip_verify:
+            parser.error("--ci requires actual test verification; remove --skip-verify")
+        args.all = False
+        args.cases = list(OFFLINE_SMOKE_CASES)
         args.fake = True
-        args.skip_verify = True
         if args.output == "eval_results":
             args.output = "eval_results/ci"
 

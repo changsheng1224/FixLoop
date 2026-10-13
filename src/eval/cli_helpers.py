@@ -6,10 +6,10 @@ import json
 import sys
 from pathlib import Path
 
-from src.eval.fake_runner import fake_orchestrator_factory
+from src.eval.fake_runner import fixture_repair_service_factory
 from src.eval.models import EvalReport
 from src.eval.runner import DEFAULT_CASES_DIR, EvalRunner
-from src.repair_factory import make_orchestrator_factory
+from src.repair.assembly import repair_service_factory
 
 
 def resolve_json_output_path(output: str, default_filename: str) -> tuple[Path, Path]:
@@ -80,9 +80,9 @@ def run_eval(
     output_dir, report_path = resolve_report_path(output)
 
     if fake:
-        factory = fake_orchestrator_factory(cases_dir)
+        factory = fixture_repair_service_factory(cases_dir)
     else:
-        factory = make_orchestrator_factory(
+        factory = repair_service_factory(
             skip_verify=skip_verify, model_client=model_client, workspace_policy="provided"
         )
 

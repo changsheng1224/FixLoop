@@ -15,7 +15,7 @@ class ContextUpdates:
     """Host API mixed into PlanSession; none of these methods are model tools."""
 
     def _context_owner(self):
-        self._fence()
+        self.assert_execution_allowed()
         if threading.get_ident() != self.owner_thread:
             raise ValueError("owner_thread_required")
 

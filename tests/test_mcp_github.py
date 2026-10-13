@@ -146,7 +146,7 @@ class TestRegistry:
 class TestGatewayPermissions:
     def test_mcp_specs_bind_into_gateway(self, mock_pair):
         client, _ = mock_pair
-        tools = build_github_mcp_tool_registry(client)
+        tools = build_github_mcp_tool_registry(client, write_roles=frozenset({"patcher"}))
         gw = build_repair_gateway()
         gw.bind_tools(tools)
         assert gw.can_call("patcher", "github_create_draft_pr") is True

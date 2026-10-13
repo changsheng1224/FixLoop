@@ -22,7 +22,7 @@ from src.eval.contracts import (
     attribute_failure,
 )
 from src.eval.models import CaseResult, EvalReport
-from src.eval.patch_utils import apply_unified_patch
+from src.repair.service import RepairRequest
 from src.repair.verification.termination import introduced_regression, regression_detected
 
 # Agent 运行时会在 repo 内写入的目录，不计入评测 patch diff
@@ -267,17 +267,7 @@ class EvalRunner:
         store.append_trace_event(eval_run_id, event, payload, status=status)
 
     def _is_fake_mode(self) -> bool:
-        if hasattr(self, "_cached_fake_mode"):
-            return self._cached_fake_mode
-        from src.eval.fake_runner import FakePatchOrchestrator
-
-        try:
-            self._cached_fake_mode = isinstance(
-                self.orchestrator_factory("."), FakePatchOrchestrator
-            )
-        except Exception:
-            self._cached_fake_mode = False
-        return self._cached_fake_mode
+        return bool(getattr(self.orchestrator_factory, "offline_fixture", False))
 
     def list_cases(self) -> list[str]:
         """列出 cases_dir 下 case_NNN 目录名。"""
@@ -453,10 +443,8 @@ class EvalRunner:
             error = ""
             state = None
             try:
-                orch = self.orchestrator_factory(str(tmp_repo.resolve()))
-                if hasattr(orch, "_case_id"):
-                    orch._case_id = case_id
-                state = orch.repair(issue)
+                service = self.orchestrator_factory(str(tmp_repo.resolve()))
+                state = service.run(RepairRequest(issue))
             except Exception as exc:
                 error = str(exc)
             duration_ms = int((time.time() - t0) * 1000)
@@ -694,9 +682,3 @@ def _read_min_lines(case_dir: Path) -> int:
     if text.upper() == "TBD":
         return 0
     return int(text)
-
-
-def apply_expected_patch_to_repo(repo: Path, case_dir: Path) -> None:
-    """测试/基线用：将 expected_patch 应用到 repo 副本。"""
-    patch = (case_dir / "expected_patch.diff").read_text(encoding="utf-8")
-    apply_unified_patch(repo, patch)

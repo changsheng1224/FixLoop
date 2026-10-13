@@ -24,6 +24,7 @@ from src.benchmark.swebench.patch_export import export_model_patch
 from src.benchmark.swebench.predictions import write_predictions_jsonl
 from src.benchmark.swebench.repo_prep import RepoPrepError, preflight_repo, prepare_repo
 from src.benchmark.swebench.types import FailureClass, InstanceResult, SweInstance
+from src.repair.service import RepairRequest
 
 
 @dataclass
@@ -47,7 +48,6 @@ class AdapterConfig:
     harness_backend: str = "auto"  # auto | native | wsl
     wsl_distro: str | None = None
     harness_only_with_patch: bool = True
-    allow_gold_patch_injection: bool = False
     instances_sha256: str = ""
     require_verifier_sandbox: bool = False
 
@@ -81,7 +81,7 @@ class SweBenchAdapter:
                 "allow_unverified_harness": cfg.allow_unverified_harness,
                 "repair_runtime": "patcher_v2",
                 "baseline_policy": "strict_preflight_v1",
-                "gold_patch_visibility": "assisted" if cfg.allow_gold_patch_injection else "strict",
+                "gold_patch_visibility": "strict",
                 "instances_sha256": cfg.instances_sha256,
                 "require_verifier_sandbox": cfg.require_verifier_sandbox,
             },
@@ -450,18 +450,13 @@ class SweBenchAdapter:
 
         try:
             orch = self.orchestrator_factory(str(repo_path))
-            # 若工厂支持 set_gold（测试辅助）
-            if cfg.allow_gold_patch_injection and inst.patch:
-                setter = getattr(orch, "set_gold_patch", None)
-                if callable(setter):
-                    setter(inst.patch)
-                elif hasattr(orch, "_gold") and inst.patch:
-                    orch._gold = inst.patch
             issue = instance_to_issue(inst)
-            state = orch.repair(
-                issue,
-                max_retries=cfg.max_retries,
-                repair_timeout_s=cfg.repair_timeout_s,
+            state = orch.run(
+                RepairRequest(
+                    issue,
+                    max_retries=cfg.max_retries,
+                    timeout_s=cfg.repair_timeout_s,
+                )
             )
             result.repair_status = str(getattr(state, "status", "") or "")
             result.repair_run_id = str(getattr(state, "repair_run_id", "") or "")
@@ -496,10 +491,12 @@ class SweBenchAdapter:
             elif not result.model_patch.strip():
                 result.error = "empty_model_patch"
         except Exception as e:  # noqa: BLE001
-            from src.repair_factory import RequiredVerifierError
+            from src.repair.assembly import VerificationEnvironmentError
 
             result.failure_class = (
-                FailureClass.ENV if isinstance(e, RequiredVerifierError) else FailureClass.AGENT
+                FailureClass.ENV
+                if isinstance(e, VerificationEnvironmentError)
+                else FailureClass.AGENT
             )
             result.error = str(e)
             result.failure_detail = str(e)

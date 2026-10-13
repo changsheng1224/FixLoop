@@ -9,8 +9,7 @@ from agent_runtime.config_loader import load_runtime_policy
 
 def test_automatic_context_extraction_switch_loads_with_provenance(tmp_path):
     config = load_runtime_policy(
-        env={"FIXLOOP_AUTO_CONTEXT_EXTRACTION": "false"},
-        user_config=str(tmp_path / "missing.json"),
+        env={"FIXLOOP_AUTO_CONTEXT_EXTRACTION": "false"}, user_config=str(tmp_path / "missing.json")
     )
     assert not config.auto_context_extraction
     assert config.snapshot()["provenance"]["auto_context_extraction"] == "environment"
@@ -73,8 +72,7 @@ def test_explicit_zero_timeout_and_budget_override_lower_priority_limits(tmp_pat
 def test_invalid_environment_boolean_is_rejected(tmp_path):
     with pytest.raises(ValueError, match="FIXLOOP_JSON_MODE"):
         load_runtime_policy(
-            env={"FIXLOOP_JSON_MODE": "tru"},
-            user_config=str(tmp_path / "missing.json"),
+            env={"FIXLOOP_JSON_MODE": "tru"}, user_config=str(tmp_path / "missing.json")
         )
 
 
@@ -83,32 +81,30 @@ def test_repair_configuration_precedence_provenance_and_validation(tmp_path):
     from tests.repair_support import build_repository
 
     user = tmp_path / "user.json"
-    user.write_text(json.dumps({"repair": {"patcher_max_steps": 8}}), encoding="utf-8")
+    user.write_text(json.dumps({"repair": {"progress_heartbeat_s": 8}}), encoding="utf-8")
     root = build_repository(
         tmp_path / "repo",
-        {
-            ".fixloop/config.json": json.dumps({"repair": {"patcher_max_steps": 12}}),
-        },
+        {".fixloop/config.json": json.dumps({"repair": {"progress_heartbeat_s": 12}})},
     )
     config = load_repair_config(
         workspace_root=str(root),
         user_config=str(user),
-        env={"FIXLOOP_PATCHER_MAX_STEPS": "16", "DEEPSEEK_API_KEY": "secret"},
-        cli_overrides={"patcher_max_steps": 20},
+        env={"FIXLOOP_PROGRESS_HEARTBEAT_S": "16", "DEEPSEEK_API_KEY": "secret"},
+        cli_overrides={"progress_heartbeat_s": 20},
     )
-    assert config.patcher_max_steps == 20
+    assert config.progress_heartbeat_s == 20
     snapshot = config.snapshot()
-    assert snapshot["provenance"]["patcher_max_steps"] == "cli"
+    assert snapshot["provenance"]["progress_heartbeat_s"] == "cli"
     assert snapshot["provenance"]["progress"] == "default"
     assert "secret" not in json.dumps(snapshot)
     assert (
         load_repair_config(
             workspace_root=str(root), user_config=str(user), env={}
-        ).patcher_max_steps
+        ).progress_heartbeat_s
         == 12
     )
     with pytest.raises(ValueError):
-        load_repair_config(env={"FIXLOOP_PATCHER_MAX_STEPS": "bad"}, user_config=str(user))
+        load_repair_config(env={"FIXLOOP_PROGRESS_HEARTBEAT_S": "bad"}, user_config=str(user))
     with pytest.raises(ValueError):
         load_repair_config(env={"FIXLOOP_PROGRESS_HEARTBEAT_S": "nan"}, user_config=str(user))
     with pytest.raises(ValueError):
@@ -117,16 +113,16 @@ def test_repair_configuration_precedence_provenance_and_validation(tmp_path):
 
 def test_role_factory_and_warm_budget_use_resolved_model(tmp_path, monkeypatch):
     from agent_runtime.providers.clients import FakeModelClient
-    from src.repair_factory import wire_orchestrator
+    from src.repair.assembly import create_repair_service
 
     monkeypatch.setenv("FIXLOOP_MODEL", "custom-model")
     monkeypatch.setenv("FIXLOOP_MAX_STEPS", "11")
     monkeypatch.setenv("FIXLOOP_APPROVAL", "never")
-    orch = wire_orchestrator(FakeModelClient(["ok"]), str(tmp_path), skip_verify=True)
+    orch = create_repair_service(FakeModelClient(["ok"]), str(tmp_path), skip_verify=True).session
     policy = orch.patcher.config
     assert policy.max_steps == 11 and policy.approval == "never"
     assert policy.model == "custom-model"
-    assert orch._budget_ctx.master.model == "custom-model"
+    assert orch.budget_ctx.master.model == "custom-model"
     assert policy.snapshot()["provenance"]["max_steps"] == "environment"
 
 
@@ -141,9 +137,7 @@ def test_workspace_file_order_is_preserved_for_nested_budget(tmp_path):
         },
     )
     policy = load_runtime_policy(
-        workspace_root=str(tmp_path),
-        env={},
-        user_config=str(tmp_path / "missing.json"),
+        workspace_root=str(tmp_path), env={}, user_config=str(tmp_path / "missing.json")
     )
     assert policy.approval == "auto"
     assert policy.budget.max_tool_calls == 7
@@ -159,12 +153,10 @@ def test_removed_scalar_config_is_rejected(tmp_path, field):
 
 def test_per_prompt_and_run_token_limits_are_independent(tmp_path):
     policy = load_runtime_policy(
-        defaults={"prompt_budget": 4000},
-        env={},
-        user_config=str(tmp_path / "missing.json"),
+        defaults={"prompt_budget": 4000}, env={}, user_config=str(tmp_path / "missing.json")
     )
     assert policy.prompt_budget == 4000
-    assert policy.effective_budget()["prompt_tokens"] == 100_000
+    assert policy.effective_budget()["prompt_tokens"] == 100000
 
 
 def test_non_git_fixture_does_not_load_enclosing_repository_context(tmp_path):

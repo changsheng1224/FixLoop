@@ -25,11 +25,11 @@ class TaskExtraction:
         self.counter = TokenBudget(model=agent.config.model, provider=agent.config.provider)
         self.output_tokens = min(agent.config.max_new_tokens, 2048)
         self.input_limit = agent.config.input_window(self.output_tokens)
-        if getattr(agent, "_run_budget_manager", None) is None:
-            agent._run_budget_manager = BudgetManager.from_config(agent.config)
+        if getattr(agent, "budget_manager", None) is None:
+            agent.budget_manager = BudgetManager.from_config(agent.config)
         budgets = session.store.latest("extraction_budget", "budget_id")
         if budgets:
-            agent._run_budget_manager.restore_missing_model_calls(
+            agent.budget_manager.restore_missing_model_calls(
                 next(iter(budgets.values()))["snapshot"], purpose="extraction"
             )
 
@@ -402,7 +402,7 @@ class TaskExtraction:
                     on_reserved=self._budget_snapshot,
                 )
             finally:
-                self._budget_snapshot(self.agent._run_budget_manager.snapshot())
+                self._budget_snapshot(self.agent.budget_manager.snapshot())
             try:
                 result = parse_candidates(
                     raw,

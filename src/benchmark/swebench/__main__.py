@@ -50,7 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="只写 Manifest + 转换 Issue，不 clone/repair",
     )
-    p.add_argument("--fake", action="store_true", help="使用 FakeGoldPatchOrchestrator（无 API）")
+    p.add_argument("--fake", action="store_true", help="使用 offline repair service（无 API）")
     p.add_argument("--skip-clone", action="store_true", help="不 clone，使用 work-root 已有目录")
     p.add_argument("--run-harness", action="store_true", help="repair 后调用官方/WSL harness")
     p.add_argument(
@@ -133,22 +133,21 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _make_factory(args):
     if args.fake or args.provider == "fake":
-        from src.benchmark.swebench.fake import FakeGoldPatchOrchestrator
+        from src.benchmark.swebench.fake import offline_service_factory
 
-        def factory(repo: str):
-            return FakeGoldPatchOrchestrator(repo, gold_patch="")
+        factory = offline_service_factory
 
         return factory
 
     from agent_runtime.bootstrap import create_model_client, load_dotenv
-    from src.repair_factory import make_orchestrator_factory
+    from src.repair.assembly import repair_service_factory
 
     load_dotenv()
     client = create_model_client(
         provider=args.provider,
         model=args.model or None,
     )
-    return make_orchestrator_factory(
+    return repair_service_factory(
         workspace_policy="provided",  # The harness already owns a per-instance checkout.
         model_client=client,
         skip_verify=bool(args.skip_verify),
@@ -249,7 +248,6 @@ def main(argv: list[str] | None = None) -> int:
         max_workers=args.max_workers,
         harness_backend=args.harness_backend,
         wsl_distro=args.wsl_distro or None,
-        allow_gold_patch_injection=bool(args.fake or args.provider == "fake"),
         instances_sha256=args.instances_sha256,
         require_verifier_sandbox=bool(args.require_verifier_sandbox),
     )

@@ -199,7 +199,10 @@ class SandboxTaskBinding:
             or not all(
                 isinstance(value, str) and value
                 for value in (
-                    self.repository_root, self.state_root, self.project_root, self.project_id,
+                    self.repository_root,
+                    self.state_root,
+                    self.project_root,
+                    self.project_id,
                 )
             )
             or not isinstance(self.project_directory_identity, tuple)
@@ -342,7 +345,8 @@ class SandboxTaskBinding:
             environment = SandboxEnvironmentIdentity(**raw.pop("environment"))
             binding = cls(
                 **{**raw, "project_directory_identity": tuple(raw["project_directory_identity"])},
-                mapping=mapping, environment=environment,
+                mapping=mapping,
+                environment=environment,
             )
         except (KeyError, TypeError, ValueError, OSError) as exc:
             raise ValueError("sandbox_task_invalid") from exc

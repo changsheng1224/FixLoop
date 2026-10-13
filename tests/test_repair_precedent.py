@@ -32,8 +32,10 @@ def _write_raw(path: Path, lines: list[str]) -> None:
             owned.append(line)
             continue
         record.update(
-            project_id=access.project_id, user_id=access.user_id,
-            task_id=access.task_id, scope="run",
+            project_id=access.project_id,
+            user_id=access.user_id,
+            task_id=access.task_id,
+            scope="run",
         )
         owned.append(json.dumps(record))
     path.write_text("\n".join(owned) + "\n", encoding="utf-8")

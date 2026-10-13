@@ -10,7 +10,7 @@ from .validate import MAX_REPLANS, validate_plan
 
 def check_replan(session):
     """Cheap preflight before generation; submission repeats these gates."""
-    session._fence()
+    session.assert_execution_allowed()
     old = session.plan
     if old.plan_version > MAX_REPLANS:
         raise ValueError("replan_budget_exceeded")
@@ -37,7 +37,7 @@ def check_replan(session):
 
 
 def replan(session, candidate, *, reason: str, evidence_refs: list[str]):
-    session._fence()
+    session.assert_execution_allowed()
     if reason.startswith("verification_failed:"):
         check_replan(session)
     old = session.plan

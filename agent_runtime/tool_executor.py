@@ -103,7 +103,7 @@ class ToolExecutor:
             "call_id": call_context.call_id,
             "source": "native",
         }
-        local.agent._tool_names = call_context.allowed_tools
+        local.agent.restrict_tools(call_context.allowed_tools)
         local.agent.tools = {name: dict(spec) for name, spec in call_context.registry.items()}
         for spec in local.agent.tools.values():
             spec["idempotency_key"] = call_context.idempotency_key
@@ -137,7 +137,7 @@ class ToolExecutor:
         if token is not None and token.is_cancelled:
             return self._rejected_cancel("Error: 任务已取消，跳过工具执行。")
 
-        allowed = self.agent._tool_names
+        allowed = self.agent.tool_names
         if name not in allowed:
             return self._rejected(
                 1,
@@ -201,9 +201,9 @@ class ToolExecutor:
                 execution_tier="linux_sandbox" if access in sandbox_access else "trusted_host",
                 execution_mode="thread",
                 terminal=name == "finish_repair",
-                side_effect="write" if access is SandboxToolAccess.SANDBOX_WRITE else (
-                    "process" if access is SandboxToolAccess.SANDBOX_COMMAND else "read"
-                ),
+                side_effect="write"
+                if access is SandboxToolAccess.SANDBOX_WRITE
+                else ("process" if access is SandboxToolAccess.SANDBOX_COMMAND else "read"),
             )
 
         # ---- Gate 3: 参数校验 ----
@@ -659,7 +659,7 @@ class ToolExecutor:
                 return ToolResult.error(str(exc), code="invalid_tool_result", retryable=False)
             if token is None or not token.is_cancelled:
                 self._resilience.after(name, tool_spec, success=normalized.ok)
-            deadline = getattr(self.agent, "_repair_deadline", None)
+            deadline = getattr(self.agent, "execution_deadline", None)
             remaining = deadline.remaining_s() if deadline is not None else None
             if normalized.ok or not policy.should_retry(
                 attempt=attempt,
@@ -692,7 +692,7 @@ class ToolExecutor:
         if spec_timeout > 0:
             timeout_s = spec_timeout if timeout_s <= 0 else min(timeout_s, spec_timeout)
         timeout_s = int(timeout_s)
-        deadline = getattr(self.agent, "_repair_deadline", None)
+        deadline = getattr(self.agent, "execution_deadline", None)
         remaining = deadline.remaining_s() if deadline is not None else None
         if remaining is not None:
             timeout_s = (
@@ -731,8 +731,11 @@ class ToolExecutor:
             if sandbox_enabled(ctx):
                 from agent_runtime.linux_sandbox.workspace_contract import WORKSPACE_TOOLS
 
-                result = (execute_workspace_tool(ctx, name, args)
-                          if name in WORKSPACE_TOOLS else execute_canonical_tool(ctx, name, args))
+                result = (
+                    execute_workspace_tool(ctx, name, args)
+                    if name in WORKSPACE_TOOLS
+                    else execute_canonical_tool(ctx, name, args)
+                )
             elif tool_spec.get("isolated_read"):
                 # Audited pure filesystem readers run in the batch worker.
                 # The scheduler owns timeout/cleanup; no nested orphan thread.
@@ -1033,27 +1036,13 @@ class ToolExecutor:
             return False
 
     def _build_patch_preview(self, args: dict) -> tuple[dict | None, str | None]:
-        """为 patch_file 构建 apply 前预览；失败返回错误信息。"""
-        from agent_runtime.patch_engine import try_build_patch_preview
+        from agent_runtime.patch_engine import build_preview, parse_patch_input, preview_to_metadata
 
-        raw_path = args.get("path", "")
-        if not raw_path:
-            return None, "缺少必填参数 path"
         try:
-            target = self.agent.tool_context.resolve(raw_path)
-        except ValueError as e:
-            return None, str(e)
-        if not target.exists():
-            return None, f"文件不存在: {raw_path}"
-        if not target.is_file():
-            return None, f"不是文件: {raw_path}"
-        try:
-            text = target.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            return None, f"无法以 UTF-8 编码读取: {raw_path}"
-        except OSError as e:
-            return None, f"读取文件失败: {e}"
-        return try_build_patch_preview(raw_path, text, args)
+            preview = build_preview(args.get("path", ""), parse_patch_input(args))
+            return preview_to_metadata(preview), None
+        except ValueError as exc:
+            return None, str(exc)
 
     def _capture_snapshot(self) -> dict[str, str]:
         """对 workspace 根目录下所有文件做 SHA256 快照。"""
@@ -1205,9 +1194,9 @@ class QuotaEnforcer:
 
     def __init__(
         self,
-        max_writes: int = 20,
-        max_shell: int = 10,
-        max_total: int = 50,
+        max_writes: int | float = float("inf"),
+        max_shell: int | float = float("inf"),
+        max_total: int | float = float("inf"),
         max_concurrent_shell: int = 3,
         *,
         group_limits: dict | None = None,
@@ -1224,6 +1213,23 @@ class QuotaEnforcer:
         self._terminal_reserve_used = False
         self._reservation_lock = threading.RLock()
         self._reservations: dict[str, tuple] = {}
+
+    @classmethod
+    def from_policy(cls, policy):
+        """Resolve every execution quota from the validated effective policy."""
+        limits = policy.budget
+        return cls(
+            max_writes=limits.max_write_calls or float("inf"),
+            max_shell=limits.max_shell_calls or float("inf"),
+            max_total=limits.max_tool_calls or float("inf"),
+            max_concurrent_shell=policy.max_concurrent_shell,
+            group_limits={
+                "read": limits.max_read_calls or None,
+                "write": limits.max_write_calls or None,
+                "verify": limits.max_verify_calls or None,
+                "recovery": limits.max_recovery_attempts or None,
+            },
+        )
 
     def reserve_call(self, key, name, spec, args):
         """Reserve capacity atomically; rejected gates release without charging."""
@@ -1400,11 +1406,15 @@ class QuotaEnforcer:
         Returns:
             True 如果允许执行。
         """
+        if self._counts["total"] + len(self._reservations) >= self._limits["total"]:
+            return False
+        if tool_name == "run_shell":
+            pending = sum(name == "run_shell" for name, _, _, _ in self._reservations.values())
+            if self._counts["shell"] + pending >= self._limits["shell"]:
+                return False
         decision = self.decision(tool_name, tool_spec, args)
         if decision is not None:
             return decision.allowed
-        if self._counts["total"] + len(self._reservations) >= self._limits["total"]:
-            return False
         if tool_name in ("write_file", "patch_file", "apply_patch"):
             return self._counts["write"] < self._limits["write"]
         if tool_name == "run_shell":
@@ -1466,9 +1476,11 @@ class QuotaEnforcer:
     def quota_summary(self) -> dict:
         """返回结构化配额使用数据（供 report.json）。"""
         summary = {
-            "writes": {"used": self._counts["write"], "limit": self._limits["write"]},
-            "shell": {"used": self._counts["shell"], "limit": self._limits["shell"]},
-            "total": {"used": self._counts["total"], "limit": self._limits["total"]},
+            key: {
+                "used": self._counts[group],
+                "limit": None if self._limits[group] == float("inf") else self._limits[group],
+            }
+            for key, group in (("writes", "write"), ("shell", "shell"), ("total", "total"))
         }
         if self._group_ledger is not None:
             summary["groups"] = self._group_ledger.summary()

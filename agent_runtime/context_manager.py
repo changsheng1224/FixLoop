@@ -46,19 +46,18 @@ from agent_runtime.task_section import (
 from agent_runtime.tier_policy import TierPolicy, filter_relevant_results
 from agent_runtime.tokenizers import resolve_token_counter, resolve_tokenizer_spec
 
-# Section token 预算分配（以 REF_TOTAL_BUDGET 为参考布局，随 prompt_budget 等比缩放）
 REF_TOTAL_BUDGET = 6000
-TOTAL_BUDGET = 100_000
+TOTAL_BUDGET = 100000
 BUDGET_PREFIX = 2000
 BUDGET_SYSTEM = 700
 BUDGET_TOOLS = 900
 BUDGET_SKILLS = 400
 BUDGET_MEMORY = 800
-BUDGET_KNOWLEDGE = 600  # 持久知识检索（episodic notes + durable facts）
+BUDGET_KNOWLEDGE = 600
 BUDGET_SOURCE = 1500
 BUDGET_HISTORY = 2600
-KEEP_RECENT_HISTORY = 6  # 最近 N 组完整交互，最终装箱时仍按组选择
-HARD_CAP = 8000  # 硬顶 token 数，超出拒绝 ask
+KEEP_RECENT_HISTORY = 6
+HARD_CAP = 8000
 
 
 def scaled_section_budget(section_limit: int, total_limit: int) -> int:
@@ -137,7 +136,6 @@ class _DiskCache(dict):
     def __setitem__(self, key, value):
         super().__setitem__(key, value)
         try:
-            # 文件格式：第一行原始 key，其余 value
             self._path(key).write_text(f"{key}\n{value}", encoding="utf-8")
         except Exception:
             pass
@@ -165,7 +163,7 @@ class ContextManager:
         "skills",
         "workspace",
         "memory",
-        "knowledge",  # 持久知识检索（episodic notes + durable facts）
+        "knowledge",
         "source",
         "feedback",
         "history",
@@ -184,11 +182,7 @@ class ContextManager:
     )
 
     def __init__(
-        self,
-        agent,
-        total_budget: int | None = None,
-        *,
-        budget: TokenBudget | None = None,
+        self, agent, total_budget: int | None = None, *, budget: TokenBudget | None = None
     ):
         self.agent = agent
         if budget is not None:
@@ -249,7 +243,7 @@ class ContextManager:
                     metadata={"actual_tokens": actual, "available_tokens": limit},
                 )
             metadata["provider_input_tokens"] = actual
-        return text, metadata
+        return (text, metadata)
 
     def build_dynamic_context(self, user_message: str) -> tuple[str, dict]:
         """组装动态上下文（不含 system / request）。
@@ -263,7 +257,7 @@ class ContextManager:
         )
         self._check_hard_cap(metadata.get("total_tokens", 0), metadata)
         parts = [sections[name] for name in self.DYNAMIC_ORDER if sections.get(name)]
-        return "\n\n".join(parts), metadata
+        return ("\n\n".join(parts), metadata)
 
     def build_for_native(self, user_message: str) -> tuple[str, str, dict]:
         """Native API：stable system+tools + 动态 user 上下文（含 skills/task）。
@@ -281,12 +275,12 @@ class ContextManager:
         user_parts = [sections[name] for name in self.DYNAMIC_ORDER if sections.get(name)]
         if sections.get("request"):
             user_parts.append(sections["request"])
-        return system_prompt, "\n\n".join(user_parts), metadata
+        return (system_prompt, "\n\n".join(user_parts), metadata)
 
     def _base_metadata(self) -> dict:
         from agent_runtime.prompt_prefix import build_prefix_hashes
 
-        prefix = self.agent._prefix
+        prefix = self.agent.prefix
         prefix_hashes = build_prefix_hashes(prefix)
         return {
             "sections": {},
@@ -331,7 +325,6 @@ class ContextManager:
         tools = copy.deepcopy(list(tools))
         all_groups = native_groups(list(native_tail)) if protocol == "native" else []
         groups = [] if action_required else all_groups
-        # Keep at most the recent three complete groups, never slice messages.
         groups = groups[-3:]
         metadata = self._base_metadata()
         metadata["model_limits"] = {
@@ -422,8 +415,6 @@ class ContextManager:
         request = encode()
         actual = count(request)
         if governed:
-            # Protocol encoding may add a few tokens. Drop lowest-priority whole
-            # optional sections; required sections never enter this list.
             for name in reversed(metadata["elastic_budget"]["priority"]):
                 if actual <= limit:
                     break
@@ -462,7 +453,7 @@ class ContextManager:
                     "context_required_over_budget",
                     metadata={"actual_tokens": actual, "available_tokens": limit},
                 )
-            self.agent._plan_session.validate_required_context(metadata["long_task_context"])
+            self.agent.plan_session.validate_required_context(metadata["long_task_context"])
         if actual > limit:
             raise ContextBuildBlockedError(
                 "model_input_window_exceeded",
@@ -511,15 +502,13 @@ class ContextManager:
         metadata["tool_tail_drops"] = [
             {
                 "call_id": call_id,
-                "reason": (
-                    "forced_action"
-                    if action_required
-                    else "recency_limit"
-                    if call_id not in eligible_ids
-                    else "protocol_budget"
-                    if "elastic:tail:protocol_budget" in metadata["cuts"]
-                    else "elastic_budget"
-                ),
+                "reason": "forced_action"
+                if action_required
+                else "recency_limit"
+                if call_id not in eligible_ids
+                else "protocol_budget"
+                if "elastic:tail:protocol_budget" in metadata["cuts"]
+                else "elastic_budget",
             }
             for call_id in metadata["dropped_tool_call_ids"]
         ]
@@ -543,7 +532,7 @@ class ContextManager:
         self._record_context_manifest(metadata, sections)
         history = self.agent.read_history()
         seal_history_at_build(self.agent.session, len(history), sections.get("history", ""))
-        return request, metadata
+        return (request, metadata)
 
     def validate_prepared_request(self, request, metadata):
         from agent_runtime.context_preparation import request_hash
@@ -551,7 +540,7 @@ class ContextManager:
         if metadata["request_hash"] != request_hash(request, metadata["request_protocol"]):
             raise ContextBuildBlockedError("context_request_changed")
         if metadata.get("required_state_ref"):
-            self.agent._plan_session.validate_required_context(metadata["long_task_context"])
+            self.agent.plan_session.validate_required_context(metadata["long_task_context"])
 
     def _fill_sections(
         self,
@@ -567,7 +556,7 @@ class ContextManager:
         tail_refs=None,
     ) -> dict[str, str]:
         """按预算填充各 section，返回 name → 文本。"""
-        governed = getattr(self.agent, "_plan_session", None) is not None
+        governed = getattr(self.agent, "plan_session", None) is not None
         total = min(
             self.budget.total_limit,
             getattr(
@@ -576,34 +565,30 @@ class ContextManager:
                 self.budget.total_limit,
             ),
         )
-        if native_tools and not governed:
+        if native_tools and (not governed):
             total = max(0, total - protocol_tokens)
         state_text = self._get_long_task(metadata) if governed else self._get_state()
-        if governed and not native_tools:
-            # Reserve delimiters before optional filling, then count the joined
-            # XML prompt too. No mandatory text is cut to make room.
+        if governed and (not native_tools):
             protocol_tokens = 32
         if governed:
             total = max(0, min(total, self.hard_cap) - protocol_tokens)
         request_text = ""
         request_tokens = 0
         section_cap = total
-
         if include_request:
             processed = (
                 user_message if governed else apply_l1_to_request_text(user_message, self.budget)
             )
             request_text, tpl_meta = render_task_message(
-                processed,
-                repo_root=self._agent_repo_root(),
+                processed, repo_root=self._agent_repo_root()
             )
             metadata.update(tpl_meta)
             if directives:
                 request_text += "\n\n" + directives
             request_tokens = self.budget.count(request_text)
-            if request_tokens > total and not governed:
+            if request_tokens > total and (not governed):
                 original_tokens = request_tokens
-                target = max(256, int(total * 0.60))
+                target = max(256, int(total * 0.6))
                 request_text = self._compact_oversized_request(request_text, target)
                 request_tokens = self.budget.count(request_text)
                 metadata["emergency_compaction"] = {
@@ -622,7 +607,6 @@ class ContextManager:
                 metadata["request_preserved"] = False
                 metadata["task_budget_overflow"] = True
             section_cap = total if governed else reserve_section_budget(total, request_tokens)
-
         filler = SectionFiller(
             self.budget,
             metadata,
@@ -632,7 +616,6 @@ class ContextManager:
         )
         self._active_metadata = metadata
         self._prepare_code_evidence(metadata, (tail_refs or {}).values())
-
         if governed:
             required = {"state": state_text}
             if include_request:
@@ -641,13 +624,9 @@ class ContextManager:
                 required["system"] = (
                     self._get_system_for_native() if native_tools else self._get_system()
                 )
-                # Native schemas are reserved and supplied through the provider
-                # protocol; repeating their text here wastes protected budget.
                 if not native_tools:
                     required["tools"] = self._get_tools()
-                # Role instructions are mandatory. Generic invocation examples
-                # are redundant with the rules/schemas and omitted on Plan runs.
-                required["skills"] = getattr(self.agent._prefix, "role_text", "") or ""
+                required["skills"] = getattr(self.agent.prefix, "role_text", "") or ""
             filler.add_required(required)
             metadata["protocol_reserved_tokens"] = protocol_tokens
         elif include_system:
@@ -667,15 +646,12 @@ class ContextManager:
             self._fill_legacy_sections(
                 filler, metadata, user_message, section_cap, total, state_text
             )
-
         sections = dict(filler.sections)
         used = filler.used
-
         if include_request:
             sections["request"] = request_text
             if not governed:
                 used += request_tokens
-
         metadata["_context_prefix_text"] = "\n".join(
             sections[name] for name in self.SECTION_ORDER if sections.get(name)
         )
@@ -686,7 +662,7 @@ class ContextManager:
         metadata["total_tokens"] = used
         metadata["budget"] = self.budget.total_limit
         if governed:
-            self.agent._plan_session.validate_required_context(metadata["long_task_context"])
+            self.agent.plan_session.validate_required_context(metadata["long_task_context"])
         metadata["tokenizer_backend"] = self.budget.backend
         attach_context_projection(metadata, agent=self.agent, budget=self.budget)
         self._record_context_manifest(metadata, sections)
@@ -719,15 +695,11 @@ class ContextManager:
             )
             available = max(0, min(BUDGET_SOURCE, section_cap - filler.used))
             filler.add_section("source", self._get_source(metadata, available), BUDGET_SOURCE)
-        # Keep the current request available to the integrity check.  The
-        # request is intentionally not part of projected history, so checking
-        # the goal against history alone incorrectly reports goal loss on every
-        # native build.
         metadata["_context_issue"] = user_message
         history_text = self._get_compressed_history(metadata)
         for observation_id in metadata.get("_source_observation_refs", []):
             pattern = (
-                rf"(?ms)^\*\*tool\*\*: \[{re.escape(observation_id)}\].*?"
+                f"(?ms)^\\*\\*tool\\*\\*: \\[{re.escape(observation_id)}\\].*?"
                 r"(?=^\*\*(?:user|assistant|tool|system)\*\*:|\Z)"
             )
             history_text = re.sub(
@@ -740,11 +712,7 @@ class ContextManager:
         )
         history_text = self._fit_history_text(history_text, history_limit, metadata)
         metadata["_history_section_text"] = history_text
-        filler.add_section(
-            "history",
-            history_text,
-            history_window_budget(section_cap or total),
-        )
+        filler.add_section("history", history_text, history_window_budget(section_cap or total))
 
     def _fill_elastic_sections(self, filler, metadata, user_message, groups, refs):
         from dataclasses import replace
@@ -799,7 +767,7 @@ class ContextManager:
                 feedback.append((oid, f"[recent_tool_feedback observation_ref={oid}]\n{content}"))
 
             def render_feedback(units):
-                return "\n\n".join(text for _, text in units)
+                return "\n\n".join((text for _, text in units))
 
             def fit_feedback(_text, limit):
                 self._selected_feedback = pack_units(
@@ -828,7 +796,7 @@ class ContextManager:
 
                 def render_source(units):
                     return (
-                        ("## 当前代码片段\n" + "\n\n".join(item.content for item in units))
+                        "## 当前代码片段\n" + "\n\n".join(item.content for item in units)
                         if units
                         else ""
                     )
@@ -868,7 +836,7 @@ class ContextManager:
             metadata.get("_source_observation_refs", []) + metadata["feedback_observation_refs"]
         ):
             history = re.sub(
-                rf"(?ms)^\*\*tool\*\*: \[{re.escape(oid)}\].*?"
+                f"(?ms)^\\*\\*tool\\*\\*: \\[{re.escape(oid)}\\].*?"
                 r"(?=^\*\*(?:user|assistant|tool|system)\*\*:|\Z)",
                 f"**tool**: [source selected in current context: {oid}]\n",
                 history,
@@ -894,8 +862,9 @@ class ContextManager:
             service,
             self.budget,
             role=str(getattr(self.agent, "agent_name", "") or ""),
-            phase=str(getattr(self.agent, "_l2_phase", "repair") or "repair"),
+            phase=str(getattr(self.agent, "correlation", {}).get("phase", "repair") or "repair"),
             token_limit=max(0, token_limit - 16),
+            allowed_kinds=self.agent.context_allowed_kinds,
             source_checks=getattr(self, "_code_source_checks", None),
             elastic=elastic,
         )
@@ -1005,10 +974,7 @@ class ContextManager:
         head_budget = max(1, int(available * 0.75))
         tail_budget = max(1, available - head_budget)
         head = self.budget.fit(text, head_budget).rstrip()
-
-        # TokenBudget.fit is prefix-oriented. Binary search the shortest suffix
-        # boundary that fits the reserved tail budget.
-        lo, hi = 0, len(text)
+        lo, hi = (0, len(text))
         while lo < hi:
             mid = (lo + hi) // 2
             if self.budget.count(text[mid:]) <= tail_budget:
@@ -1037,12 +1003,7 @@ class ContextManager:
         )
         dropped = [
             ref
-            for ref in dict.fromkeys(
-                [
-                    *metadata.get("_dropped_context_ids", []),
-                    *offered,
-                ]
-            )
+            for ref in dict.fromkeys([*metadata.get("_dropped_context_ids", []), *offered])
             if ref not in selected
         ]
         metadata["_observation_refs"] = list(history_refs)
@@ -1133,8 +1094,6 @@ class ContextManager:
             return None
         return getattr(workspace, "repo_root", "") or getattr(workspace, "cwd", "") or None
 
-    # ---- Section 收集 ----
-
     def _get_system(self) -> str:
         prefix = getattr(self.agent, "_prefix", None)
         if prefix is not None:
@@ -1152,7 +1111,6 @@ class ContextManager:
                 break
             head_lines.append(line)
         head = "\n".join(head_lines).strip()
-        # 仅保留 compose_rules 挂的运行时后缀（8./9.），勿把 persona 再抄一遍
         extras: list[str] = []
         for line in original.splitlines():
             s = line.strip()
@@ -1193,7 +1151,7 @@ class ContextManager:
         if prefix is not None:
             role = getattr(prefix, "role_text", "") or ""
         parts = [default_examples_text(native_tools=True)]
-        if role and "<function_calls>" not in role and "<invoke" not in role:
+        if role and "<function_calls>" not in role and ("<invoke" not in role):
             parts.append(role)
         return "\n\n".join(parts)
 
@@ -1208,7 +1166,7 @@ class ContextManager:
         return format_state_text(self.agent.session, agent=self.agent)
 
     def _get_workspace(self) -> str:
-        workspace_text = getattr(self.agent._prefix, "workspace_text", "")
+        workspace_text = getattr(self.agent.prefix, "workspace_text", "")
         if workspace_text:
             return workspace_text
         workspace = getattr(self.agent, "workspace", None)
@@ -1243,15 +1201,12 @@ class ContextManager:
         working = mem.get("working", {})
         getattr(self, "_active_metadata", {})["_memory_state"] = mem
         parts = []
-
         task = working.get("task_summary", "")
         if task:
             parts.append(f"任务: {task}")
-
         files = working.get("recent_files", [])
         if files:
             parts.append(f"最近文件: {', '.join(files[-5:])}")
-
         summaries = mem.get("file_summaries", {})
         if summaries:
             lines = []
@@ -1260,20 +1215,17 @@ class ContextManager:
                     lines.append(f"  {path}: {info.get('summary', '')[:100]}")
             if lines:
                 parts.append("文件摘要:\n" + "\n".join(lines))
-
         evidence = render_evidence_ledger(mem)
         if evidence:
             parts.append(evidence)
-
         repair_state = render_repair_context(mem)
         if repair_state:
             parts.insert(0, repair_state)
-
         return "\n".join(parts) if parts else ""
 
     def _get_long_task(self, metadata: dict) -> str:
         """Project PlanSession state into a compression-protected section."""
-        plan_session = getattr(self.agent, "_plan_session", None)
+        plan_session = getattr(self.agent, "plan_session", None)
         if plan_session is None:
             return ""
         try:
@@ -1334,21 +1286,18 @@ class ContextManager:
         query = run_user_query(self.agent.session, query)
         if not query:
             return ""
-        from agent_runtime.features.memory import (
-            retrieval_candidates_semantic,
-        )
+        from agent_runtime.features.memory import retrieval_candidates_semantic
 
         parts = []
         request = ContextRequest(
-            phase=str(getattr(self.agent, "_l2_phase", "repair") or "repair"),
+            phase=str(getattr(self.agent, "correlation", {}).get("phase", "repair") or "repair"),
             intent=query,
-            role=str(getattr(self.agent, "_l2_agent", "") or ""),
+            role=str(getattr(self.agent, "correlation", {}).get("role", "") or ""),
             token_budget=scaled_section_budget(BUDGET_KNOWLEDGE, self.budget.total_limit),
             min_kind_counts={"memory": 1},
+            allowed_kinds=self.agent.context_allowed_kinds,
         )
         policy = ContextPolicyEngine()
-
-        # Layer 1: Episodic 检索
         mem = self.agent.session.get("memory", {})
         from agent_runtime.features.memory.access import agent_governance
 
@@ -1392,7 +1341,9 @@ class ContextManager:
                 governed.record_usage_stage(
                     item.source_ref,
                     usage="projected",
-                    stage=str(getattr(self.agent, "_l2_phase", "repair") or "repair"),
+                    stage=str(
+                        getattr(self.agent, "correlation", {}).get("phase", "repair") or "repair"
+                    ),
                     task_id=str(identity.get("task_id", "") or ""),
                     turn_id=turn_id,
                     prompt_id=prompt_id,
@@ -1407,15 +1358,12 @@ class ContextManager:
             lines = ["治理记忆候选（必须由当前代码证据确认）:"]
             for item in governed_items:
                 lines.append(
-                    f"  - {item.content[:150]} "
-                    f"[utility={item.utility(request):.4f} confidence={item.confidence:.2f}]"
+                    f"  - {item.content[:150]} [utility={item.utility(request):.4f} "
+                    f"confidence={item.confidence:.2f}]"
                 )
             parts.append("\n".join(lines))
         results = retrieval_candidates_semantic(
-            mem,
-            query,
-            limit=2,
-            semantic_memory=getattr(self.agent, "semantic_memory", None),
+            mem, query, limit=2, semantic_memory=getattr(self.agent, "semantic_memory", None)
         )
         results = filter_relevant_results(results, self.tier_policy)
         recalled_ids.extend(str(item.get("memory_id", "")) for item in results)
@@ -1423,13 +1371,10 @@ class ContextManager:
             lines = ["历史经验候选（必须由当前代码证据确认，不是当前事实）:"]
             for r in results:
                 lines.append(
-                    f"  - {r.get('text', '')[:150]} "
-                    f"[scope={r.get('scope', 'unknown')} "
+                    f"  - {r.get('text', '')[:150]} [scope={r.get('scope', 'unknown')} "
                     f"confidence={float(r.get('confidence', 0.0)):.2f}]"
                 )
             parts.append("\n".join(lines))
-
-        # Project knowledge is read-only and filtered before ranking/projection.
         try:
             shared = agent_governance(self.agent, shared_read=True)
             shared_results = shared.recall(query, limit=2, record_event=False)
@@ -1440,20 +1385,17 @@ class ContextManager:
                 parts.append("\n".join(lines))
         except (OSError, ValueError):
             pass
-
-        # Feedback stays run-local. Shared project facts never become writable
-        # merely because a run retrieved them.
         recalled_ids = list(dict.fromkeys(item for item in recalled_ids if item))
         mem["recalled_memory_ids"] = recalled_ids
         mem["memory_context_attribution"] = {
             "turn_id": turn_id,
             "prompt_id": prompt_id,
-            "phase": str(getattr(self.agent, "_l2_phase", "repair") or "repair"),
+            "phase": str(getattr(self.agent, "correlation", {}).get("phase", "repair") or "repair"),
         }
         governed.record_recall(
             recalled_ids,
             task_id=str(identity.get("task_id", "") or ""),
-            stage=str(getattr(self.agent, "_l2_phase", "repair") or "repair"),
+            stage=str(getattr(self.agent, "correlation", {}).get("phase", "repair") or "repair"),
             turn_id=turn_id,
             prompt_id=prompt_id,
             decisions=list(mem.get("memory_recall_decisions", [])),
@@ -1490,7 +1432,6 @@ class ContextManager:
             else item
             for item in history
         ]
-
         sealed_count, sealed_text = get_sealed_history(self.agent.session)
         if sealed_count > 0 and sealed_text:
             manifest = self.agent.session.get("context_manifest", {})
@@ -1519,29 +1460,24 @@ class ContextManager:
                     *metadata.get("_history_unit_refs", []),
                 ]
             return f"{sealed_text.rstrip()}\n{tail_text}"
-
         return self._format_projected_history(history, metadata)
 
     def _format_projected_history(self, history: list, metadata: dict | None = None) -> str:
         """对 history 切片跑 L0–L5 并格式化为 history section 文本。"""
         if not history:
             return ""
-
         meta = metadata if metadata is not None else {}
         meta.setdefault("_memory_state", self.agent.session.get("memory", {}))
         sealed_count, sealed_text = get_sealed_history(self.agent.session)
         include_header = not (sealed_count > 0 and sealed_text)
-
         projected = run_compression_pipeline(
             history,
             self.budget,
             metadata=meta,
             summarizer=make_summarizer(self.agent),
-            summary_cache=(
-                {}
-                if any(not view["ok"] for view in meta.get("code_evidence", {}).values())
-                else self._summary_cache
-            ),
+            summary_cache={}
+            if any(not view["ok"] for view in meta.get("code_evidence", {}).values())
+            else self._summary_cache,
             history_window=history_window_budget(self.budget.total_limit),
             tier_policy=self.tier_policy,
             allow_summary=SUMMARY_PREFIX not in sealed_text,
@@ -1572,7 +1508,6 @@ class ContextManager:
             str(item.get("observation_id")) for item in projected if item.get("observation_id")
         ]
         meta["_observation_refs"] = list(dict.fromkeys(observation_refs))
-
         groups = interaction_groups(projected)
         units = [
             self._strip_history_header(self._format_compressed_result(group)) for group in groups
@@ -1599,12 +1534,12 @@ class ContextManager:
             return "\n".join([*texts, notice]) if omitted else "\n".join(texts)
 
         if self.budget.count(text) <= limit:
-            chosen, fitted = list(range(len(units))), text
+            chosen, fitted = (list(range(len(units))), text)
         else:
             chosen = pack_units(list(range(len(units))), limit, self.budget, render, newest=True)
             fitted = render(chosen)
             if self.budget.count(fitted) > limit:
-                chosen, fitted = [], ""
+                chosen, fitted = ([], "")
         metadata["_observation_refs"] = list(
             dict.fromkeys(ref for index in chosen for ref in references[index])
         )
@@ -1621,7 +1556,6 @@ class ContextManager:
         lines: list[str] = []
         if include_header:
             lines.extend(["## 对话历史", ""])
-
         if old:
             compressed = self._strip_history_header(self._format_compressed_result(old))
             if compressed:
@@ -1629,7 +1563,6 @@ class ContextManager:
                 lines.append(prefix)
                 lines.append(compressed)
                 lines.append("")
-
         if include_header:
             lines.append("### 最近对话")
         if recent:

@@ -2,11 +2,12 @@
 
 ## 项目概述
 
-从 Python 标准库零 LLM 框架依赖构建 Multi-Agent 代码修复系统。分两层：
-- **Layer 1**：Agent 运行时内核（~1900行，M1-M4）
-- **Layer 2**：多 Agent 修复系统（~1000行，M5-M8）
+FixLoop 分两层：
+- **Layer 1**：通用 Agent 执行、工具治理、预算、取消、上下文和事件。
+- **Layer 2**：修复角色、提示、阶段规则和业务默认值；唯一入口为 `RepairService.run(RepairRequest)`。
 
-详细设计见 `docs/DEVELOPMENT_PLAN_ALL.md`，每日计划见 `docs/M1-M2-DAILY.md` 等；Layer 2 导读见 `docs/M5_GUIDE.md`、`docs/M6_GUIDE.md`（含 PR #65 E2E 加固总结）。
+当前架构和流程见 `docs/REPAIR_CONTRACT.md`；配置、状态和 checkpoint 见
+`docs/REPAIR_STATE_CONFIG_CONTRACTS.md`。旧里程碑资料仅在 `docs/history` 供人工查看。
 
 ## 执行规范
 

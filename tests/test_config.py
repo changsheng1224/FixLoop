@@ -36,7 +36,7 @@ class TestAgentConfigValidation:
 
     def test_max_steps_too_large(self):
         with pytest.raises(ValidationError):
-            AgentConfig(max_steps=100)
+            AgentConfig(max_steps=501)
 
     def test_temperature_out_of_range(self):
         with pytest.raises(ValidationError):
@@ -45,8 +45,8 @@ class TestAgentConfigValidation:
     def test_provider_empty(self):
         """空字符串 provider 应被拒绝（如果有校验）或接受。"""
         # 当前没有 provider 枚举校验，空字符串应被接受
-        config = AgentConfig(provider="")
-        assert config.provider == ""
+        with pytest.raises(ValidationError):
+            AgentConfig(provider="")
 
 
 class TestAgentConfigOverride:

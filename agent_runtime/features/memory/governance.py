@@ -345,7 +345,8 @@ class MemoryGovernanceService:
         self._trusted_access = access_context is not None
         self.access = access_context or MemoryAccessContext(
             project_id(repo_root) if repo_root else "state-" + namespace,
-            str(task_id or namespace), str(user_id or "local"),
+            str(task_id or namespace),
+            str(user_id or "local"),
         )
         self.user_id, self.task_id = self.access.user_id, self.access.task_id
         self.probe = probe
@@ -400,8 +401,10 @@ class MemoryGovernanceService:
         if not self.access.allows(raw, check_version=False):
             return False
         return self.access.allows(
-            raw, version=self.current_repo_fingerprint
-            if raw.get("scope") == "repository_version" else "",
+            raw,
+            version=self.current_repo_fingerprint
+            if raw.get("scope") == "repository_version"
+            else "",
         )
 
     def _owned(self, memory_id: str, *, write: bool = True) -> dict | None:
@@ -449,9 +452,11 @@ class MemoryGovernanceService:
             return []
         events = self.state.setdefault("memory_usage_events", [])
         created: list[dict[str, Any]] = []
-        normalized_ids = list(dict.fromkeys(
-            str(item) for item in memory_ids if item and self._owned(str(item), write=False)
-        ))
+        normalized_ids = list(
+            dict.fromkeys(
+                str(item) for item in memory_ids if item and self._owned(str(item), write=False)
+            )
+        )
         self.state["recalled_memory_ids"] = normalized_ids
         for memory_id in normalized_ids:
             event = MemoryUsageEvent(
@@ -622,9 +627,11 @@ class MemoryGovernanceService:
         memory = normalize_candidate(
             candidate,
             scope=scope,
-            repo_fingerprint=repo_fingerprint or (
+            repo_fingerprint=repo_fingerprint
+            or (
                 self.current_repo_fingerprint
-                if scope == "repository_version" or self._version_provider is None else ""
+                if scope == "repository_version" or self._version_provider is None
+                else ""
             ),
         )
         memory.user_id = self.user_id
@@ -641,7 +648,8 @@ class MemoryGovernanceService:
         if memory.scope not in {item.value for item in MemoryScope}:
             raise ValueError("unknown memory scope")
         if (
-            not self.access.project_id or not self.user_id
+            not self.access.project_id
+            or not self.user_id
             or (memory.scope in {"run", "task"} and not self.task_id)
         ):
             raise PermissionError("memory requires a complete caller identity")
@@ -750,7 +758,8 @@ class MemoryGovernanceService:
         by_key: dict[tuple[str, str], GovernedMemory] = {}
         inactive: dict[str, GovernedMemory] = {}
         foreign = {
-            key: raw for key, raw in self.registry.items()
+            key: raw
+            for key, raw in self.registry.items()
             if not self.access.allows(raw, write=True)
         }
         for raw in self._writable_records():
@@ -1144,9 +1153,12 @@ class MemoryGovernanceService:
 
     def user_resolve(self, conflict_id: str, winner_ids: list[str]) -> bool:
         conflict = self.conflicts.get(conflict_id)
-        if not conflict or not conflict.get("candidate_ids") or any(
-            not self._owned(item) for item in conflict["candidate_ids"]
-        ) or any(item not in conflict["candidate_ids"] for item in winner_ids):
+        if (
+            not conflict
+            or not conflict.get("candidate_ids")
+            or any(not self._owned(item) for item in conflict["candidate_ids"])
+            or any(item not in conflict["candidate_ids"] for item in winner_ids)
+        ):
             return False
         for memory_id in winner_ids:
             if not self.confirm(memory_id, evidence_ref="user:conflict_resolution"):

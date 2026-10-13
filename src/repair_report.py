@@ -53,15 +53,15 @@ class RepairReport:
         actual_tier = internal.get("actual_tier", tier)
         static_checked = bool(
             vr
-            and vr.all_passed
             and vr.verification_mode == "static"
-            and vr.execution_status == "completed"
+            and vr.execution_status == "unverified"
+            and internal.get("category") == "static_passed"
         )
         tested = bool(
             vr
             and vr.all_passed
             and vr.total_tests > 0
-            and vr.execution_status == "completed"
+            and vr.execution_status == "passed"
             and actual_tier not in {"static", "skipped", "none"}
             and not self.data.get("dry_run")
         )

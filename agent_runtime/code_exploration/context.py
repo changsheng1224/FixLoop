@@ -21,6 +21,7 @@ def select_source_context(
     token_limit: int,
     source_checks=None,
     elastic: bool = False,
+    allowed_kinds: tuple[str, ...] = (),
 ) -> tuple[str, object | None]:
     """Recheck source and Observation before every prompt projection."""
     if not service.pending_candidates or token_limit <= 0:
@@ -34,6 +35,7 @@ def select_source_context(
         role=role,
         phase=phase,
         token_budget=token_limit if elastic else min(1500, token_limit),
+        allowed_kinds=allowed_kinds,
     )
     candidates: list[ContextItem] = []
     for raw in service.pending_candidates[:6]:

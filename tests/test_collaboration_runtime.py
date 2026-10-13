@@ -149,7 +149,9 @@ def test_repair_runtime_does_not_renew_before_recovery_or_external_tasks(tmp_pat
     runtime = RepairCollaborationRuntime(str(tmp_path), "scoped", state, task_lease_seconds=0.2)
     try:
         assert runtime._heartbeat_worker.ident is None
-        runtime.store.create_task(AgentTask(task_id="external", run_id="scoped", role="x", kind="x"))
+        runtime.store.create_task(
+            AgentTask(task_id="external", run_id="scoped", role="x", kind="x")
+        )
         external = runtime.store.claim_task("external", runtime.worker, lease_seconds=0.2)
         runtime.advance("context", state)
         time.sleep(0.35)

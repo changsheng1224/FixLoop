@@ -1,6 +1,6 @@
 """S1 schema. No migration of legacy linear runtime sessions is implied."""
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 APPLICATION_ID = 0x464C5742  # FLWB
 
 TABLES = (

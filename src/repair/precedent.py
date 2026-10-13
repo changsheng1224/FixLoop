@@ -32,7 +32,8 @@ class RepairPrecedentStore:
 
         root = state_root_for(repo_root, state_root)
         self.access = access_context or MemoryAccessContext(
-            project_id(repo_root), workspace_id(root),
+            project_id(repo_root),
+            workspace_id(root),
         )
         self._path = _precedent_topic_path(root)
 
@@ -132,8 +133,13 @@ class RepairPrecedentStore:
                     record = json.loads(line)
                 except ValueError:
                     continue
-                if isinstance(record, dict) and "issue_type" in record and not self.access.allows(
-                    record, write=True,
+                if (
+                    isinstance(record, dict)
+                    and "issue_type" in record
+                    and not self.access.allows(
+                        record,
+                        write=True,
+                    )
                 ):
                     raise PermissionError("cannot overwrite precedents outside caller boundary")
         entries = self._read_all()
@@ -159,10 +165,7 @@ class RepairPrecedentStore:
                 continue
             try:
                 data = json.loads(line)
-                if (
-                    isinstance(data, dict) and "issue_type" in data
-                    and self.access.allows(data)
-                ):
+                if isinstance(data, dict) and "issue_type" in data and self.access.allows(data):
                     entries.append(data)
             except (json.JSONDecodeError, ValueError):
                 pass

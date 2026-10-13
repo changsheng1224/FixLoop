@@ -14,12 +14,17 @@ def atomic_write_text(
     目标文件要么保持原样，要么被完整新内容替换；不会留下半截目标文件。
     失败时清理临时文件并重新抛出 OSError。
     """
+    atomic_write_bytes(path, content.encode(encoding), create_only=create_only)
+
+
+def atomic_write_bytes(path: Path, content: bytes, *, create_only: bool = False) -> None:
+    """Atomically replace bytes without platform newline translation."""
     path.parent.mkdir(parents=True, exist_ok=True)
     mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else None
     fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     tmp = Path(name)
     try:
-        with os.fdopen(fd, "w", encoding=encoding) as stream:
+        with os.fdopen(fd, "wb") as stream:
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())

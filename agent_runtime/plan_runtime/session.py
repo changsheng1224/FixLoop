@@ -102,7 +102,7 @@ class PlanSession(ContextUpdates):
             else snapshot(self.workspace)
         )
 
-    def _fence(self, *, allow_cancelling: bool = False) -> None:
+    def assert_execution_allowed(self, *, allow_cancelling: bool = False) -> None:
         if self.owner_lease is not None and self.coordination_store is not None:
             self.coordination_store.assert_lease(
                 self.owner_lease, allow_cancelling=allow_cancelling
@@ -121,7 +121,7 @@ class PlanSession(ContextUpdates):
         self.close()
 
     def cut(self, point: str):
-        self._fence(allow_cancelling=True)
+        self.assert_execution_allowed(allow_cancelling=True)
         if self.fault:
             self.fault(point)
 
@@ -139,7 +139,7 @@ class PlanSession(ContextUpdates):
 
     def commit(self, plan: Plan):
         self._require_context_commit_resolved()
-        self._fence(allow_cancelling=True)
+        self.assert_execution_allowed(allow_cancelling=True)
         validate_plan(plan, self.registry, identity=self.identity)
         self.store.save_plan(plan)
         self.plan = plan
@@ -158,7 +158,7 @@ class PlanSession(ContextUpdates):
         self.checkpoint()
 
     def checkpoint(self) -> dict:
-        self._fence(allow_cancelling=True)
+        self.assert_execution_allowed(allow_cancelling=True)
         self.cut("before_checkpoint")
         self._persist_long_task_state()
         coordination_seal = None
@@ -199,7 +199,7 @@ class PlanSession(ContextUpdates):
         from .decisions import new_decision
 
         with self._mutex:
-            self._fence()
+            self.assert_execution_allowed()
             self._require_context_commit_resolved()
             if threading.get_ident() != self.owner_thread:
                 raise ValueError("owner_thread_required")
@@ -248,7 +248,7 @@ class PlanSession(ContextUpdates):
                 source_kind=source_kind,
                 source_refs=source_refs,
             )
-            self._fence()
+            self.assert_execution_allowed()
             self.long_task_state.key_decisions.append(record)
             self.long_task._touch()
             self.long_task_state.context_revision += 1
@@ -319,7 +319,7 @@ class PlanSession(ContextUpdates):
         from agent_runtime.errors import ContextBuildBlockedError
 
         with self._mutex:
-            self._fence()
+            self.assert_execution_allowed()
             if self.plan is None or not self.plan.verify():
                 raise ContextBuildBlockedError("state_mismatch")
             self.require_extraction_resolved()
@@ -464,7 +464,7 @@ class PlanSession(ContextUpdates):
 
         with self._mutex:
             try:
-                self._fence()
+                self.assert_execution_allowed()
                 self.validate_plan_view(context["plan_view"])
                 rebuilt = self.build_required_context(context["current_node"]["node_id"])
             except (ValueError, OSError, KeyError) as exc:
@@ -547,7 +547,7 @@ class PlanSession(ContextUpdates):
 
     def prepare(self, node_id: str) -> dict:
         with self._mutex:
-            self._fence()
+            self.assert_execution_allowed()
             self._require_context_commit_resolved()
             self.refresh()
             node = self.plan.node(node_id)
@@ -597,7 +597,7 @@ class PlanSession(ContextUpdates):
             return {**raw, "phase": "dispatched"}
 
     def preplan_read(self, callback, allowed_tools: tuple[str, ...]) -> dict:
-        self._fence()
+        self.assert_execution_allowed()
         if self.plan is not None:
             raise ValueError("preplan_after_plan_created")
         attempts = self.store.latest("attempt", "attempt_id")
@@ -658,7 +658,7 @@ class PlanSession(ContextUpdates):
 
     def tool_operation(self, agent, name: str, arguments: dict, *, call_context=None):
         """Owner-thread journal preparation and settlement around isolated execution."""
-        self._fence()
+        self.assert_execution_allowed()
         self._require_context_commit_resolved()
         attempt = getattr(self.local, "attempt", None)
         if attempt is None:
@@ -850,7 +850,7 @@ class PlanSession(ContextUpdates):
         ]
 
     def record_result(self, attempt: dict, result: dict):
-        self._fence(allow_cancelling=True)
+        self.assert_execution_allowed(allow_cancelling=True)
         after = self.snapshot_workspace()
         raw = {**attempt, "phase": "result_recorded", "workspace_after": after, "result": result}
         self.store.append("attempt", raw)
@@ -859,7 +859,7 @@ class PlanSession(ContextUpdates):
 
     def settle(self, attempt: dict) -> str:
         with self._mutex:
-            self._fence(allow_cancelling=True)
+            self.assert_execution_allowed(allow_cancelling=True)
             node = self.plan.node(attempt["node_id"])
             if (
                 attempt["plan_version"] != self.plan.plan_version

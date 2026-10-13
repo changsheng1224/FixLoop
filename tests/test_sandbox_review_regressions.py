@@ -19,16 +19,18 @@ def test_remote_sandbox_preserves_backend_options(temp_workspace, tmp_path, monk
     monkeypatch.setenv("DEEPSEEK_API_KEY", "fake-key")
     redirect_clone(monkeypatch, temp_workspace)
     output = tmp_path / "result"
-    args = arguments("owner/project", output, execution_backend="wsl_bwrap",
-                     code_exploration_mode="text")
+    args = arguments(
+        "owner/project", output, execution_backend="wsl_bwrap", code_exploration_mode="text"
+    )
 
     def execute(repo, token, ready):
         assert args.execution_tier == "auto"
         assert args.require_sandbox is False
         ready(repo)
         (Path(repo) / "README.md").write_text("repaired\n")
-        return patch_state(args.issue,
-                           verification_result=VerificationResult(all_passed=True, total_tests=1))
+        return patch_state(
+            args.issue, verification_result=VerificationResult(all_passed=True, total_tests=1)
+        )
 
     assert run_repair_cli(args, execute) == 0
     assert result(output)["patch_available"]
@@ -41,8 +43,9 @@ def test_cli_exports_bound_worktree_even_after_interruption(
     monkeypatch.setenv("DEEPSEEK_API_KEY", "fake-key")
     output, worktree = tmp_path / "result", tmp_path / "task-worktree"
     original = (temp_workspace / "README.md").read_bytes()
-    args = arguments(temp_workspace, output, execution_backend="wsl_bwrap",
-                     code_exploration_mode="text")
+    args = arguments(
+        temp_workspace, output, execution_backend="wsl_bwrap", code_exploration_mode="text"
+    )
 
     def execute(repo, token, ready):
         git_run(Path(repo), "worktree", "add", "--detach", str(worktree), "HEAD")
@@ -53,8 +56,9 @@ def test_cli_exports_bound_worktree_even_after_interruption(
             raise CancelledError("user")
         if ending == "error":
             raise RuntimeError("interrupted after edit")
-        return patch_state(args.issue,
-                           verification_result=VerificationResult(all_passed=True, total_tests=1))
+        return patch_state(
+            args.issue, verification_result=VerificationResult(all_passed=True, total_tests=1)
+        )
 
     assert run_repair_cli(args, execute) == {"success": 0, "cancel": 130, "error": 1}[ending]
     assert (temp_workspace / "README.md").read_bytes() == original
@@ -94,8 +98,12 @@ def test_approval_survives_durable_owner_takeover(tmp_path, decision):
     lease = old.lease
     identity = {"workspace": lease.workspace_id, "task": "task", "run": "run"}
     service = PermissionService(identity, state_root=state, workspace=repo)
-    req = installer(workspace_id=lease.workspace_id, owner_token=lease.owner_token,
-                    generation=lease.generation, coordination_revision=lease.coordination_revision)
+    req = installer(
+        workspace_id=lease.workspace_id,
+        owner_token=lease.owner_token,
+        generation=lease.generation,
+        coordination_revision=lease.coordination_revision,
+    )
     versions = {"deps/demo.whl": "a" * 64}
     pending = service.authorize(req, coordinator=old, input_versions=versions)
     if decision is not None:
@@ -105,9 +113,13 @@ def test_approval_survives_durable_owner_takeover(tmp_path, decision):
     new = RunCoordinator(str(repo), "task", "run", state_root=str(state))
     new.acquire()
     new.reconcile()
-    resumed = replace(req, call_id="resumed", owner_token=new.lease.owner_token,
-                      generation=new.lease.generation,
-                      coordination_revision=new.lease.coordination_revision)
+    resumed = replace(
+        req,
+        call_id="resumed",
+        owner_token=new.lease.owner_token,
+        generation=new.lease.generation,
+        coordination_revision=new.lease.coordination_revision,
+    )
     service = PermissionService(identity, state_root=state, workspace=repo)
     answer = service.authorize(resumed, coordinator=new, input_versions=versions)
     if decision is None:
@@ -136,9 +148,12 @@ def test_takeover_does_not_expand_approved_invocation(tmp_path, change):
     owner = RunCoordinator(str(repo), "task", "run", state_root=str(tmp_path / "state"))
     owner.acquire()
     owner.reconcile()
-    req = installer(workspace_id=owner.lease.workspace_id, owner_token=owner.lease.owner_token,
-                    generation=owner.lease.generation,
-                    coordination_revision=owner.lease.coordination_revision)
+    req = installer(
+        workspace_id=owner.lease.workspace_id,
+        owner_token=owner.lease.owner_token,
+        generation=owner.lease.generation,
+        coordination_revision=owner.lease.coordination_revision,
+    )
     service = PermissionService({})
     versions = {"deps/demo.whl": "a" * 64}
     pending = service.authorize(req, input_versions=versions)
@@ -147,9 +162,13 @@ def test_takeover_does_not_expand_approved_invocation(tmp_path, change):
     replacement = RunCoordinator(str(repo), "task", "run", state_root=str(tmp_path / "state"))
     replacement.acquire()
     replacement.reconcile()
-    resumed = replace(req, call_id="next", owner_token=replacement.lease.owner_token,
-                      generation=replacement.lease.generation,
-                      coordination_revision=replacement.lease.coordination_revision)
+    resumed = replace(
+        req,
+        call_id="next",
+        owner_token=replacement.lease.owner_token,
+        generation=replacement.lease.generation,
+        coordination_revision=replacement.lease.coordination_revision,
+    )
     if change == "arguments":
         resumed = replace(resumed, timeout_s=19)
     elif change == "inputs":
@@ -160,7 +179,9 @@ def test_takeover_does_not_expand_approved_invocation(tmp_path, change):
         with pytest.raises(CoordinationError):
             service.authorize(resumed, coordinator=owner, input_versions=versions)
     else:
-        assert service.authorize(resumed, coordinator=replacement,
-                                 input_versions=versions)["status"] == "approval_pending"
+        assert (
+            service.authorize(resumed, coordinator=replacement, input_versions=versions)["status"]
+            == "approval_pending"
+        )
     assert not service.snapshot()["tickets"]
     replacement.finish("released")

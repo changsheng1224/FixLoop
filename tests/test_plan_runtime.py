@@ -98,7 +98,9 @@ def test_grounded_edit_runs_quick_test_without_completing_final_verify(tmp_path)
     (tmp_path / "value.py").write_text("value = 1\n")
     with session_for(tmp_path) as session:
         plan, _ = grounded_plan(
-            session, [{"tool": "read_file", "arguments": {"path": "value.py"}}], [],
+            session,
+            [{"tool": "read_file", "arguments": {"path": "value.py"}}],
+            [],
             objective="repair value",
         )
         session.create(plan)

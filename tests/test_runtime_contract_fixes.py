@@ -9,9 +9,8 @@ from types import SimpleNamespace
 import pytest
 
 from agent_runtime.tool_context import ToolContext
-from agent_runtime.tools import tool_apply_patch, tool_write_file
+from agent_runtime.tools import tool_apply_patch, tool_patch_file, tool_write_file
 from src.repair.execution.edit_lock import EditLockState
-from src.repair.execution.patch_applier import PatchApplier
 from src.repair.execution_state import VerificationReceipt
 from src.repair.language_capabilities import project_command
 from src.repair.phase_fsm import RepairPhaseFSM
@@ -56,7 +55,7 @@ def test_disabled_auto_ignores_available_container(host, static, expected):
     policy = resolve_execution_policy(
         sandbox_policy="disabled",
         execution_tier="auto",
-        verifier=VerificationBackend(),
+        verification_backend=VerificationBackend(),
         host=host,
         static=static,
     )
@@ -100,7 +99,7 @@ def test_static_typescript_executes_project_local_checker(tmp_path, monkeypatch,
     root = tmp_path / "project with spaces"
     root.mkdir()
     (root / "main.ts").write_text("export const value = 1;\n")
-    (root / "tsconfig.json").write_text('{}')
+    (root / "tsconfig.json").write_text("{}")
     checker = root / "checker.py"
     checker.write_text(
         "import json, sys\nfrom pathlib import Path\n"
@@ -121,7 +120,11 @@ def test_static_typescript_executes_project_local_checker(tmp_path, monkeypatch,
     assert result.internal["cleanup"] == "confirmed"
     assert result.internal["checked_files"] == 1
     assert json.loads((root / "checker-args.json").read_text()) == [
-        "--noEmit", "--pretty", "false", "-p", str(root.resolve())
+        "--noEmit",
+        "--pretty",
+        "false",
+        "-p",
+        str(root.resolve()),
     ]
     assert result.internal["steps"][0]["exit_code"] == exit_code
 
@@ -157,7 +160,14 @@ def test_explicit_import_patch_leaves_calls_methods_and_strings_alone(tmp_path):
         original_lines="from module import old",
         patched_lines="from module import new",
     )
-    assert PatchApplier(str(tmp_path)).apply_patches([patch])
+    assert tool_patch_file(
+        ToolContext(str(tmp_path)),
+        {
+            "path": patch.file_path,
+            "old_text": patch.original_lines,
+            "new_text": patch.patched_lines,
+        },
+    ).ok
     assert path.read_text() == text.replace("from module import old", "from module import new")
 
 

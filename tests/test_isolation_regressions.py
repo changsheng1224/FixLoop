@@ -22,8 +22,9 @@ from agent_runtime.session_store import SessionStore
 from agent_runtime.state_root import project_id, workspace_id
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.worktree import _git
+from src.repair.assembly import create_repair_service
 from src.repair.checkpoint_load import save_repair_checkpoint
-from src.repair_factory import wire_orchestrator
+from src.repair.service import RepairRequest, RepairService
 from src.state import RepairState
 from src.workbench.project import ProjectExecutor
 from src.workbench.store import WorkbenchStore
@@ -37,6 +38,7 @@ def encodings(tmp_path, monkeypatch):
     monkeypatch.setenv("FIXLOOP_STATE_ROOT", str(tmp_path / "storage"))
 
     def load(config):
+
         def encode(text, **kwargs):
             calls.append(text)
             seed = int(hashlib.sha256(text.encode()).hexdigest()[:8], 16)
@@ -49,7 +51,7 @@ def encodings(tmp_path, monkeypatch):
 
 
 def orchestrator(root, storage, *, tier="host"):
-    return wire_orchestrator(
+    return create_repair_service(
         FakeModelClient(["<final>done</final>"]),
         str(root),
         skip_verify=True,
@@ -57,7 +59,7 @@ def orchestrator(root, storage, *, tier="host"):
         workspace_policy="worktree",
         execution_tier=tier,
         runtime_overrides={"provider": "fake", "model": "fake", "approval": "auto"},
-    )
+    ).session
 
 
 def fact(value="pytest PRIVATE_RUN_FACT"):
@@ -66,11 +68,7 @@ def fact(value="pytest PRIVATE_RUN_FACT"):
 
 @pytest.mark.parametrize("separate_project", [False, True], ids=["same-project", "clones"])
 def test_concurrent_entries_partition_code_state_memory_and_cache(
-    temp_workspace,
-    tmp_path,
-    monkeypatch,
-    encodings,
-    separate_project,
+    temp_workspace, tmp_path, monkeypatch, encodings, separate_project
 ):
     roots = [temp_workspace, temp_workspace]
     if separate_project:
@@ -82,7 +80,6 @@ def test_concurrent_entries_partition_code_state_memory_and_cache(
     barrier = threading.Barrier(2)
     resources = {}
     original = (temp_workspace / "README.md").read_bytes()
-
     for index, orch in enumerate(orchs):
 
         def body(state, initial_snapshot, *, orch=orch, index=index):
@@ -99,17 +96,15 @@ def test_concurrent_entries_partition_code_state_memory_and_cache(
             resources[index] = (agent, local.memory_id, memory, vector)
             return state
 
-        # The repair body is deterministic; entry, snapshot, binding and stores are real.
-        monkeypatch.setattr(orch, "_repair_impl", body)
-
+        monkeypatch.setattr(orch.coordinator, "repair_impl", body)
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = [
-            pool.submit(orch.repair, "fix", run_id=run_id, repair_timeout_s=0)
+            pool.submit(orch.lifecycle.execute, "fix", run_id=run_id, repair_timeout_s=0)
             for orch, run_id in zip(orchs, run_ids, strict=True)
         ]
         states = [future.result(timeout=40) for future in futures]
     first, second = (resources[i] for i in range(2))
-    a, b = first[0], second[0]
+    a, b = (first[0], second[0])
     assert workspace_id(a._cwd) != workspace_id(b._cwd)
     assert a.state_root != b.state_root and first[1] != second[1]
     assert (a.memory_access.project_id == b.memory_access.project_id) is (not separate_project)
@@ -131,16 +126,12 @@ def test_concurrent_entries_partition_code_state_memory_and_cache(
 
 @pytest.mark.parametrize("drift", [False, True], ids=["resume", "policy-drift"])
 def test_retained_checkout_resume_keeps_run_memory_but_rechecks_content_and_policy(
-    temp_workspace,
-    tmp_path,
-    monkeypatch,
-    encodings,
-    drift,
+    temp_workspace, tmp_path, monkeypatch, encodings, drift
 ):
     storage = tmp_path / "storage"
     first = orchestrator(temp_workspace, storage)
     state = RepairState(issue_input="fix", repair_run_id="retained")
-    first._prepare_host_worktree(state, resume=False)
+    first.lifecycle.prepare_host_worktree(state, resume=False)
     agent = first.patcher
     local = agent_governance(agent)
     owned = local.ingest(fact(), scope="task")
@@ -149,7 +140,7 @@ def test_retained_checkout_resume_keeps_run_memory_but_rechecks_content_and_poli
     original = (Path(agent._cwd) / "README.md").read_text()
     vector = memory.embed(original)
     old_key = memory.cache.path(original)
-    state.execution.run_entry = first._workspace_entry()
+    state.execution.run_entry = first.lifecycle.workspace_entry()
     save_repair_checkpoint(state, agent._cwd, state_root=agent.state_root)
     (Path(agent._cwd) / "README.md").write_text("dirty candidate", encoding="utf-8")
     before = copy.deepcopy(local.store.list_memories())
@@ -165,18 +156,20 @@ def test_retained_checkout_resume_keeps_run_memory_but_rechecks_content_and_poli
         cache = second.patcher.semantic_memory
         assert cache.cache.root == memory.cache.root
         assert np.array_equal(cache.embed(original), vector)
-        assert encodings == [original]  # Restored embedding was read from disk.
+        assert encodings == [original]
         cache.embed("dirty candidate")
         assert cache.cache.path("dirty candidate") != old_key
         assert encodings == [original, "dirty candidate"]
         return restored
 
-    monkeypatch.setattr(second, "_repair_impl", body)
+    monkeypatch.setattr(second.coordinator, "repair_impl", body)
     if drift:
         monkeypatch.setattr(
-            second, "_snapshot_repo", lambda: pytest.fail("snapshot before rejection")
+            second.transaction,
+            "snapshot_repo",
+            lambda: pytest.fail("snapshot before rejection"),
         )
-    result = second.repair("fix", resume_run_id="retained", repair_timeout_s=0)
+    result = RepairService(second).run(RepairRequest("fix", resume_run_id="retained", timeout_s=0))
     assert (result.status == "recovery_required") is drift
     if drift:
         assert result.agent_errors["checkpoint"] == "resume_workspace_policy_mismatch"
@@ -190,17 +183,13 @@ def test_retained_checkout_resume_keeps_run_memory_but_rechecks_content_and_poli
 
 @pytest.mark.parametrize("damage", ["project", "run", "missing-owner"])
 def test_misrouted_persisted_record_never_enters_model_prompt_or_feedback(
-    temp_workspace,
-    tmp_path,
-    encodings,
-    damage,
+    temp_workspace, tmp_path, encodings, damage
 ):
     orch = orchestrator(temp_workspace, tmp_path / "storage")
-    orch._prepare_host_worktree(
+    orch.lifecycle.prepare_host_worktree(
         RepairState(issue_input="fix", repair_run_id="current"), resume=False
     )
     agent = orch.patcher
-    # Deliberately contaminate the correct database using a trusted low-level store.
     local = agent_governance(agent)
     raw = local.ingest(fact(), scope="task").to_dict()
     if damage == "project":
@@ -222,12 +211,10 @@ def test_misrouted_persisted_record_never_enters_model_prompt_or_feedback(
 
 
 def test_session_restore_cannot_relabel_source_project_in_same_execution_directory(
-    temp_workspace,
-    tmp_path,
-    encodings,
+    temp_workspace, tmp_path, encodings
 ):
     orch = orchestrator(temp_workspace, tmp_path / "storage")
-    orch._prepare_host_worktree(
+    orch.lifecycle.prepare_host_worktree(
         RepairState(issue_input="fix", repair_run_id="session"), resume=False
     )
     agent = orch.patcher
@@ -244,9 +231,7 @@ def test_session_restore_cannot_relabel_source_project_in_same_execution_directo
             agent.session["id"],
             config=AgentConfig(provider="fake"),
             tool_context=ToolContext(
-                root=agent._cwd,
-                project_root=str(other),
-                state_root=agent.state_root,
+                root=agent._cwd, project_root=str(other), state_root=agent.state_root
             ),
         )
     assert agent_governance(agent).inspect(owned.memory_id)
@@ -254,14 +239,12 @@ def test_session_restore_cannot_relabel_source_project_in_same_execution_directo
 
 
 def test_workbench_fork_shares_only_published_knowledge_and_ancestor_history(
-    tmp_path,
-    monkeypatch,
-    encodings,
+    tmp_path, monkeypatch, encodings
 ):
     source = tmp_path / "source"
     source.mkdir()
     (source / "value.py").write_text("value = 1\n", encoding="utf-8")
-    clients, agents, requests, owned_ids = [], [], [], []
+    clients, agents, requests, owned_ids = ([], [], [], [])
     shared_before = []
     original_ask = Agent.ask
 
@@ -286,13 +269,10 @@ def test_workbench_fork_shares_only_published_knowledge_and_ancestor_history(
             )
         return original_ask(agent, request, *args, **kwargs)
 
-    # Inject owned test facts before the real Agent loop; inspect actual model prompts.
     monkeypatch.setattr(Agent, "ask", ask)
     executor = ProjectExecutor(client, provider="fake")
     with WorkbenchService(
-        tmp_path / "workbench",
-        project_executor=executor,
-        project_lock_dir=tmp_path / "locks",
+        tmp_path / "workbench", project_executor=executor, project_lock_dir=tmp_path / "locks"
     ) as service:
         chat = service.create_conversation(project_path=str(source))
         first = service.send(chat.id, "pytest ORIGINAL_REQUEST", mode="project_chat")
@@ -325,7 +305,7 @@ def test_workbench_fork_shares_only_published_knowledge_and_ancestor_history(
         assert "FUTURE_REQUEST" not in clients[2].prompts[-1]
         assert "ANSWER_0" not in clients[2].prompts[-1]
         shared_after = agent_governance(agents[-1], shared_read=True).store.list_memories()
-        assert shared_after == shared_before  # Retrieval/finalization did not change shared facts.
+        assert shared_after == shared_before
         assert (source / "value.py").read_text() == "value = 1\n"
         assert not (source / ".agent").exists()
         database = service.store.database

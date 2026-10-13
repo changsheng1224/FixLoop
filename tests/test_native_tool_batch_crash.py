@@ -40,7 +40,7 @@ with session_for(root) as session:
     # Exercise the crash cut with a complete task and room for the native schema.
     agent.config.prompt_budget = 6000
     agent.config.hard_cap = 6000
-    agent._plan_session = session
+    agent.plan_session = session
     agent.shared_run_id = session.identity['run_id']
     session.fault = lambda point: os._exit(73) if point == cut else None
     session.run_node(node_id, lambda attempt: (

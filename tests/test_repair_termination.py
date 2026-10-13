@@ -10,7 +10,7 @@ from src.repair.verification.termination import (
     is_terminal,
     regression_detected,
 )
-from src.state import CandidatePatch, RepairState
+from src.state import CandidatePatch, RepairState, VerificationResult
 
 
 class TestRepairTerminalStatus:
@@ -24,6 +24,9 @@ class TestRepairTerminalStatus:
         state = RepairState(
             issue_input="x",
             status="fixed",
+            verification_result=VerificationResult(
+                all_passed=True, total_tests=1, passed=1, execution_status="passed"
+            ),
             candidate_patches=[CandidatePatch(file_path="a.py")],
         )
         assert is_repair_success(state)
@@ -39,31 +42,15 @@ class TestRepairTerminalStatus:
         assert has_actionable_patch(state)
 
 
-def test_unverified_naive_output_is_not_a_repair_success():
-    import json
-
-    from agent_runtime.providers.clients import FakeModelClient
-    from src.eval.variants import NaiveOrchestrator
-
-    client = FakeModelClient([json.dumps([{"file_path": "a.py", "diff": "-old\n+new"}])])
-    state = NaiveOrchestrator(client).repair("fix a.py")
-    assert state.status == "pending_verify"
-    assert has_actionable_patch(state)
-    assert not is_repair_success(state)
-
-
-def test_unverified_fake_patch_is_not_a_repair_success(tmp_path):
-    from src.benchmark.swebench.fake import FakeGoldPatchOrchestrator
-
-    state = FakeGoldPatchOrchestrator(str(tmp_path)).repair("smoke")
-    assert state.status == "pending_verify"
-    assert has_actionable_patch(state)
-    assert not is_repair_success(state)
-
-
 class TestApplyTerminalStatus:
     def test_keeps_fixed(self):
-        state = RepairState(issue_input="x", status="fixed")
+        state = RepairState(
+            issue_input="x",
+            status="fixed",
+            verification_result=VerificationResult(
+                all_passed=True, total_tests=1, passed=1, execution_status="passed"
+            ),
+        )
         apply_terminal_status(state)
         assert state.status == RepairTerminalStatus.FIXED
 
@@ -92,12 +79,7 @@ class TestApplyTerminalStatus:
         assert state.status == RepairTerminalStatus.EXHAUSTED
 
     def test_regression(self):
-        state = RepairState(
-            issue_input="x",
-            status="pending",
-            retry_count=3,
-            max_retries=3,
-        )
+        state = RepairState(issue_input="x", status="pending", retry_count=3, max_retries=3)
         state.control.baseline_pytest_code = 0
         state.control.post_patch_pytest_code = 1
         apply_terminal_status(state)

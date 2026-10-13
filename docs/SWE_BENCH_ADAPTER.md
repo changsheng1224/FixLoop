@@ -1,5 +1,7 @@
 # SWE-bench Lite Benchmark Adapter v1
 
+当前修复执行统一调用 `RepairService.run(RepairRequest)`，真实验证由 `VerificationService` 判定；完整契约见 [正式修复契约](REPAIR_CONTRACT.md)。
+
 > 将 SWE-bench Lite 实例接入 FixLoop：数据加载 → 仓库准备 → `repair` → Patch 导出 → 官方 Harness 判分。  
 > **代码权威**：`src/benchmark/swebench/`。计划勾选见 `docs/2026-08-03-to-08-09-enhancement-plan.md`（8 月 8 日下午）。  
 > **改码约束**：`docs/SWE_BENCH_LITE_FIX_CONSTRAINTS.md`。**5 题失败与证据**：`docs/SWE_BENCH_LITE_DEV5_FAILURES.md`。
@@ -37,7 +39,7 @@ scripts/run_swebench_lite_dev5.ps1 -RunId r18
 
 脚本读取 `configs/swebench/lite_dev5_r16_protocol.json`，校验公开输入 JSONL 的
 SHA-256，从 `artifacts/swebench_repos_r16` 为五题创建全新的指定 commit 工作副本，
-并固定 provider、model、顺序、重试、超时、Critic 和 Docker Verifier。调用方只提供
+并固定 provider、model、顺序、重试、超时、Critic 和 Docker 命令验证后端。调用方只提供
 唯一 `RunId`；如输出目录已存在、Git 基线不干净、Docker daemon/镜像不可用，运行会
 在模型调用前失败。该协议不运行官方 SWE-bench Harness。
 
@@ -182,7 +184,7 @@ Lite 实例 (HF 或 JSONL)
   checkout base_commit  →  work-root/<instance_id>
         │
         ▼
-  instance_to_issue()   →  Orchestrator.repair()
+  instance_to_issue()   →  RepairService.run(RepairRequest)
         │
         ▼
   export model_patch    →  predictions.jsonl + instances/*/model_patch.diff

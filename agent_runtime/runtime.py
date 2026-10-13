@@ -5,14 +5,11 @@ Agent 是最外层的用户接口，封装了模型客户端、工具注册表�
 
 import json
 from pathlib import Path
-from typing import Literal
 
 from agent_runtime.config import AgentConfig
-from agent_runtime.prompt_prefix import build_prompt_prefix
+from agent_runtime.prompt_prefix import build_custom_system_prefix, build_prompt_prefix
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.tools import build_tool_registry
-
-PrefixMode = Literal["default", "repair"]
 
 
 class Agent:
@@ -33,16 +30,28 @@ class Agent:
         system_prompt: str = "",
         agent_name: str = "",
         tool_dispatch=None,
-        prefix_mode: PrefixMode = "default",
-        l1_prefix=None,
+        prefix_builder=None,
+        context_budget=None,
+        tool_gateway=None,
+        correlation=None,
         warm_context=None,
         tool_context: ToolContext | None = None,
         loop_policy=None,
         quota=None,
+        context_factory=None,
+        isolated_context=False,
+        tool_result_transform=None,
+        event_sink=None,
+        context_allowed_kinds: tuple[str, ...] = (),
     ):
         from agent_runtime.loop_policy import LoopPolicy
 
         self.loop_policy = loop_policy if loop_policy is not None else LoopPolicy()
+        self.context_factory = context_factory
+        self.isolated_context = isolated_context
+        self.tool_result_transform = tool_result_transform
+        self.event_sink = event_sink
+        self.context_allowed_kinds = tuple(context_allowed_kinds)
         self.config = config
         self.model_client = model_client
         self.light_client = light_client
@@ -52,10 +61,20 @@ class Agent:
         self._system_prompt = system_prompt
         self._agent_name = agent_name
         self._tool_dispatch = tool_dispatch
-        self._prefix_mode: PrefixMode = prefix_mode
-        self._l1_prefix = l1_prefix
+        self._prefix_builder = prefix_builder
+        self.tool_gateway = tool_gateway
+        self.correlation = dict(correlation or {})
         self._warm_context = warm_context  # 预热上下文（可选），供 ContextManager 复用
-        self._budget = None  # 共享 TokenBudget（可选），RepairBudgetContext 注入
+        self._budget = context_budget
+        self.budget_manager = None
+        self.execution_deadline = None
+        self.budget_run_bound = False
+        self.standalone_model_budget = False
+        self.plan_session = None
+        self.turn_event_emitter = None
+        self.last_task_state = None
+        self.last_run_node_timings = {}
+        self.workspace_pinned = False
         self.shared_run_id: str | None = None
         self._last_budget_meta: dict = {}
         self.cancel_token = None
@@ -102,7 +121,43 @@ class Agent:
         self.circuit_breaker = CircuitBreaker()
         from agent_runtime.tool_executor import QuotaEnforcer
 
-        self.quota = quota if quota is not None else QuotaEnforcer()
+        self.quota = quota if quota is not None else QuotaEnforcer.from_policy(config)
+
+    @property
+    def cwd(self):
+        return self._cwd
+
+    @property
+    def prefix(self):
+        return self._prefix
+
+    @property
+    def tool_dispatch(self):
+        return self._tool_dispatch
+
+    def set_tool_dispatch(self, dispatch):
+        self._tool_dispatch = dispatch
+
+    @property
+    def tool_names(self):
+        return self._tool_names
+
+    def restrict_tools(self, names):
+        names = frozenset(names)
+        if not names <= frozenset(self._tool_names):
+            raise ValueError("cannot expand tool permissions")
+        self._tool_names = names
+
+    def create_context_manager(self):
+        from agent_runtime.context_manager import ContextManager
+
+        return (self.context_factory or ContextManager)(self)
+
+    def bind_budget(self, budget, deadline):
+        self.budget_manager = budget
+        self.execution_deadline = deadline
+        self.budget_run_bound = budget is not None
+        self.standalone_model_budget = False
 
     @property
     def agent_name(self) -> str:
@@ -224,14 +279,8 @@ class Agent:
                 self._prefix.stable_text, self._prefix.role_text, workspace_text
             ),
         )
-        if self._l1_prefix is not None:
-            self._l1_prefix = replace(
-                self._l1_prefix,
-                workspace_text=workspace_text,
-                workspace_fingerprint=fingerprint,
-            )
 
-    def bind_repair_workspace(self, root: str, state_root: str, project: str, run_id: str) -> None:
+    def bind_workspace(self, root: str, state_root: str, project: str, run_id: str) -> None:
         """Bind a fresh host Agent to a controller-owned repair checkout."""
         from dataclasses import replace
 
@@ -253,7 +302,7 @@ class Agent:
         self.state_root = self.tool_context.state_root = state_root
         self.tool_context.project_root = project
         self._memory_task_id = run_id
-        self._workspace_pinned = True
+        self.workspace_pinned = True
         self.workspace = WorkspaceContext.build(root)
         self._warm_context = self._semantic_memory = None
         snapshot = self.session.get("config_snapshot")
@@ -280,12 +329,6 @@ class Agent:
                 self._prefix.stable_text, self._prefix.role_text, workspace_text
             ),
         )
-        if self._l1_prefix is not None:
-            self._l1_prefix = replace(
-                self._l1_prefix,
-                workspace_text=workspace_text,
-                workspace_fingerprint=fingerprint,
-            )
 
     def pending_sandbox_approval(self) -> dict | None:
         """Return a detached proposal for the trusted UI; model tools cannot resolve it."""
@@ -325,15 +368,15 @@ class Agent:
         # workspace 切换检测：cwd 变更时重建 workspace + invalidate prefix + 清空 memory
         self._detect_workspace_switch()
 
-        if self.cancel_token is None or self.cancel_token.is_cancelled:
+        if self.cancel_token is None:
             self.cancel_token = CancellationToken()
         self._active_cancel_token = self.cancel_token
 
-        if getattr(self, "_standalone_model_budget", False) and not getattr(
-            self, "_model_budget_run_bound", False
+        if getattr(self, "standalone_model_budget", False) and not getattr(
+            self, "budget_run_bound", False
         ):
-            self._run_budget_manager = None
-            self._repair_deadline = None
+            self.budget_manager = None
+            self.execution_deadline = None
 
         loop = AgentLoop(agent=self, stream=stream)
         self.tool_context.exploration_event_sink = loop._emit
@@ -350,7 +393,7 @@ class Agent:
         """
         import os
 
-        if getattr(self, "_workspace_pinned", False):
+        if getattr(self, "workspace_pinned", False):
             return
 
         binding = self.tool_context.sandbox_task_binding
@@ -428,11 +471,11 @@ class Agent:
         默认使用构造时的 ``system_prompt``；传入 ``system_prompt`` 可 per-call 覆盖
         （如 Patcher 按 issue_type 注入变体，且故意不含 L1 repair prefix）。
         """
-        if getattr(self, "_standalone_model_budget", False) and not getattr(
-            self, "_model_budget_run_bound", False
+        if getattr(self, "standalone_model_budget", False) and not getattr(
+            self, "budget_run_bound", False
         ):
-            self._run_budget_manager = None
-            self._repair_deadline = None
+            self.budget_manager = None
+            self.execution_deadline = None
         user_message, budget_meta = self.fit_user_message(
             user_message, system_override=system_prompt
         )
@@ -446,7 +489,7 @@ class Agent:
             self.model_client,
             full_prompt,
             max_output_tokens=self.config.max_new_tokens or 4096,
-            purpose="repair",
+            purpose="completion",
         )
 
     def fit_user_message(
@@ -568,7 +611,7 @@ class Agent:
                 return self._tool_dispatch(self._agent_name, name, run)
         else:
             dispatch = run
-        plan_session = getattr(self, "_plan_session", None)
+        plan_session = getattr(self, "plan_session", None)
         if plan_session is not None:
             return plan_session.execute_tool(self, name, args, dispatch, call_context=call_context)
         return dispatch()
@@ -660,26 +703,10 @@ class Agent:
     # ---- 内部方法 ----
 
     def _build_prefix(self, system_prompt: str = ""):
+        if self._prefix_builder is not None:
+            return self._prefix_builder(system_prompt, self)
         """构建 System Prompt 前缀。system_prompt 非空时用它替代默认前缀。"""
         if system_prompt:
-            if self._prefix_mode == "repair":
-                if self._l1_prefix is not None:
-                    from agent_runtime.prompt_prefix import compose_repair_prefix
-
-                    return compose_repair_prefix(self._l1_prefix, system_prompt)
-                from agent_runtime.prompt_prefix import build_repair_agent_prefix
-
-                return build_repair_agent_prefix(
-                    system_prompt,
-                    self.workspace,
-                    self.tools,
-                    dry_run=self.dry_run,
-                    approval=self.config.approval,
-                    tool_names=self._tool_names,
-                    repo_root=self._cwd,
-                )
-            from agent_runtime.prompt_prefix import build_custom_system_prefix
-
             return build_custom_system_prefix(system_prompt, self.workspace)
         return build_prompt_prefix(
             self.workspace,
@@ -707,7 +734,7 @@ class Agent:
         workspace_id = hashlib.sha256(str(Path(self._cwd).resolve()).encode()).hexdigest()[:16]
         return {
             "id": session_id,
-            "schema_version": "2.0",
+            "schema_version": "3.0",
             "revision": 0,
             "session_scope": {
                 "session_id": session_id,

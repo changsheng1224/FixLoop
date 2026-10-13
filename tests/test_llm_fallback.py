@@ -6,9 +6,9 @@ from agent_runtime.config import AgentConfig
 
 
 def make_orchestrator():
-    from src.orchestrator import Orchestrator
+    from src.repair.session import ExecutionSession
 
-    return Orchestrator(SimpleNamespace(config=AgentConfig(), session={}))
+    return ExecutionSession(SimpleNamespace(config=AgentConfig(), session={}))
 
 
 class TestLLMClassifyIssue:
@@ -16,23 +16,22 @@ class TestLLMClassifyIssue:
         """issue_type='unknown' 时调用 _llm_classify_issue。"""
         from unittest.mock import MagicMock, patch
 
-        from src.orchestrator import Orchestrator
+        from src.repair.session import ExecutionSession
 
         orch = make_orchestrator()
-        orch._light_client = MagicMock()
-        orch._light_client.complete.return_value = "type_error"
-
-        with patch.object(Orchestrator, "_llm_classify_issue", wraps=orch._llm_classify_issue):
-            result = orch._llm_classify_issue("some unknown error description")
+        orch.light_client = MagicMock()
+        orch.light_client.complete.return_value = "type_error"
+        with patch.object(
+            ExecutionSession, "_llm_classify_issue", wraps=orch.exploration.llm_classify_issue
+        ):
+            result = orch.exploration.llm_classify_issue("some unknown error description")
         assert result == "type_error"
 
     def test_no_light_client_returns_none(self):
         """无 light_client 时返回 None → 保持 unknown。"""
-
         orch = make_orchestrator()
-        orch._light_client = None
-
-        result = orch._llm_classify_issue("error")
+        orch.light_client = None
+        result = orch.exploration.llm_classify_issue("error")
         assert result is None
 
     def test_bad_response_returns_none(self):
@@ -40,10 +39,9 @@ class TestLLMClassifyIssue:
         from unittest.mock import MagicMock
 
         orch = make_orchestrator()
-        orch._light_client = MagicMock()
-        orch._light_client.complete.return_value = "not_a_valid_type"
-
-        result = orch._llm_classify_issue("error")
+        orch.light_client = MagicMock()
+        orch.light_client.complete.return_value = "not_a_valid_type"
+        result = orch.exploration.llm_classify_issue("error")
         assert result is None
 
     def test_exception_returns_none(self):
@@ -51,10 +49,9 @@ class TestLLMClassifyIssue:
         from unittest.mock import MagicMock
 
         orch = make_orchestrator()
-        orch._light_client = MagicMock()
-        orch._light_client.complete.side_effect = RuntimeError("API error")
-
-        result = orch._llm_classify_issue("error")
+        orch.light_client = MagicMock()
+        orch.light_client.complete.side_effect = RuntimeError("API error")
+        result = orch.exploration.llm_classify_issue("error")
         assert result is None
 
     def test_classify_includes_all_types(self):
@@ -64,11 +61,10 @@ class TestLLMClassifyIssue:
         from src.repair.prompt_router import ROUTED_ISSUE_TYPES
 
         orch = make_orchestrator()
-        orch._light_client = MagicMock()
-        orch._light_client.complete.return_value = "type_error"
-
-        orch._llm_classify_issue("test")
-        prompt = orch._light_client.complete.call_args[0][0]
+        orch.light_client = MagicMock()
+        orch.light_client.complete.return_value = "type_error"
+        orch.exploration.llm_classify_issue("test")
+        prompt = orch.light_client.complete.call_args[0][0]
         for t in ROUTED_ISSUE_TYPES:
             assert t in prompt
 
@@ -79,16 +75,12 @@ class TestParseIssueFallback:
         from unittest.mock import MagicMock, patch
 
         orch = make_orchestrator()
-        orch._light_client = MagicMock()
-        orch._light_client.complete.return_value = "type_error"
-
-        # mock _classify_issue_type to return "unknown"
-        orch._classify_issue_type = lambda i: ("unknown", "none")
-        orch._repo_root = "."
-
+        orch.light_client = MagicMock()
+        orch.light_client.complete.return_value = "type_error"
+        orch.exploration.classify_issue_type = lambda i: ("unknown", "none")
+        orch.repo_root = "."
         with patch.object(orch, "_parse_file_line", return_value=0):
-            plan = orch._parse_issue("some ambiguous error")
-
+            plan = orch.exploration.parse_issue("some ambiguous error")
         assert plan.issue_type == "type_error"
         assert plan.intent_parser == "llm"
 
@@ -97,13 +89,11 @@ class TestParseIssueFallback:
         from unittest.mock import patch
 
         orch = make_orchestrator()
-        orch._light_client = None
-        orch._classify_issue_type = lambda i: ("unknown", "none")
-        orch._repo_root = "."
-
+        orch.light_client = None
+        orch.exploration.classify_issue_type = lambda i: ("unknown", "none")
+        orch.repo_root = "."
         with patch.object(orch, "_parse_file_line", return_value=0):
-            plan = orch._parse_issue("ambiguous error")
-
+            plan = orch.exploration.parse_issue("ambiguous error")
         assert plan.issue_type == "unknown"
         assert plan.intent_parser == "rule"
 
@@ -112,13 +102,10 @@ class TestParseIssueFallback:
         from unittest.mock import MagicMock, patch
 
         orch = make_orchestrator()
-        orch._light_client = MagicMock()
-        orch._classify_issue_type = lambda i: ("type_error", "explicit_exception")
-        orch._repo_root = "."
-
+        orch.light_client = MagicMock()
+        orch.exploration.classify_issue_type = lambda i: ("type_error", "explicit_exception")
+        orch.repo_root = "."
         with patch.object(orch, "_parse_file_line", return_value=0):
-            plan = orch._parse_issue("TypeError at calc.py:42")
-
+            plan = orch.exploration.parse_issue("TypeError at calc.py:42")
         assert plan.issue_type == "type_error"
-        # 已知类型不调 LLM → light_client.complete 不应被调用
-        orch._light_client.complete.assert_not_called()
+        orch.light_client.complete.assert_not_called()

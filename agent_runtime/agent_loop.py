@@ -9,7 +9,6 @@ import uuid
 
 from agent_runtime.cancellation import CancelledError
 from agent_runtime.errors import ContextBuildBlockedError, ContextTooLargeError
-from agent_runtime.loop_limits import max_parse_attempts
 from agent_runtime.loop_protocols import (
     ProtocolHooks,
     ProtocolRuntime,
@@ -21,10 +20,8 @@ from agent_runtime.loop_protocols import (
     xml_invalid_tool_retry,
     xml_model_turn,
 )
-from agent_runtime.model_timing import (
-    ModelCallTiming,
-    emit_model_timing_events,
-)
+from agent_runtime.model_timing import ModelCallTiming, emit_model_timing_events
+from agent_runtime.model_tool_runtime import ModelToolRuntime
 from agent_runtime.providers.retry_policy import RateLimitExceededError
 from agent_runtime.react_phases import ReactPath, ReactPhase
 from agent_runtime.state_root import agent_state_root
@@ -70,9 +67,7 @@ class AgentLoop:
         self._plan_todos: list[dict] = []
         self._step_guard = StepGuard()
         self._last_dream_stats: dict[str, int] = {}
-        self._max_native_recovery_turns = max(
-            2, min(6, int(agent.config.budget.max_recovery_attempts or 3))
-        )
+        self._max_native_recovery_turns = agent.config.protocol_recovery_turns
         from agent_runtime.repair_run import RunTerminalGuard
 
         self._terminal_guard = RunTerminalGuard()
@@ -81,10 +76,10 @@ class AgentLoop:
         from agent_runtime.latency_controller import LatencySLOController
         from agent_runtime.repair_runtime import ExecutionDeadline, RepairBudget
 
-        self._repair_deadline = getattr(agent, "_repair_deadline", None) or ExecutionDeadline(
+        self.execution_deadline = getattr(agent, "execution_deadline", None) or ExecutionDeadline(
             agent.config.deadline.repair_s
         )
-        agent._repair_deadline = self._repair_deadline
+        agent.execution_deadline = self.execution_deadline
         self._repair_budget = RepairBudget(
             max_turns=self.max_steps,
             max_tool_calls=agent.config.budget.max_tool_calls,
@@ -92,15 +87,14 @@ class AgentLoop:
             max_verify_calls=agent.config.budget.max_verify_calls,
             max_recovery_attempts=agent.config.budget.max_recovery_attempts or 0,
         )
-        self._budget_manager = getattr(agent, "_run_budget_manager", None)
+        self._budget_manager = getattr(agent, "budget_manager", None)
         if self._budget_manager is None:
             self._budget_manager = BudgetManager.from_config(agent.config)
-            agent._standalone_model_budget = True
-        agent._run_budget_manager = self._budget_manager
+            agent.standalone_model_budget = True
+        agent.budget_manager = self._budget_manager
         self._budget_turns_seen = 0
         self._latency_controller = LatencySLOController(
-            getattr(agent.config, "slo", None),
-            getattr(agent.config, "degradation", None),
+            getattr(agent.config, "slo", None), getattr(agent.config, "degradation", None)
         )
         self.agent.session["runtime_budget"] = self._budget_manager.snapshot()
 
@@ -148,7 +142,7 @@ class AgentLoop:
             policy_context=self._policy_context(),
             guard=self._step_guard,
             budget=self._repair_budget,
-            deadline=self._repair_deadline,
+            deadline=self.execution_deadline,
             recorder=self._observation_recorder,
             todos=self._plan_todos,
             progress=getattr(self, "_turn_progress", None),
@@ -202,7 +196,6 @@ class AgentLoop:
         if self._last_cache_key and cache_key != self._last_cache_key:
             self._cache_key_changes += 1
         self._last_cache_key = cache_key
-        # emit 压缩触发事件
         pipe = meta.get("compression_pipeline") or {}
         for ev in pipe.get("compression_events", []):
             self._emit("compression_triggered", ev)
@@ -218,7 +211,6 @@ class AgentLoop:
             store = DurableMemoryStore(str(agent_state_root(self.agent)))
             prefs = store.get_preferences()
             avg_conf = round(sum(p.confidence for p in prefs) / max(len(prefs), 1), 2)
-
             dream = self._last_dream_stats if hasattr(self, "_last_dream_stats") else {}
             return {
                 "episodic_notes": len(episodic),
@@ -262,7 +254,7 @@ class AgentLoop:
         build_count = self._context_built_count
         cache_hit_rate = 0.0
         if build_count > 0:
-            cache_hit_rate = round(1.0 - (self._cache_key_changes / build_count), 3)
+            cache_hit_rate = round(1.0 - self._cache_key_changes / build_count, 3)
         return {
             "sections": dict(self._context_section_totals),
             "build_count": build_count,
@@ -278,13 +270,7 @@ class AgentLoop:
     def _cancel_token(self):
         return getattr(self.agent, "cancel_token", None)
 
-    def _abort_if_cancelled(
-        self,
-        ts,
-        *,
-        phase: str,
-        in_flight: str = "",
-    ) -> str | None:
+    def _abort_if_cancelled(self, ts, *, phase: str, in_flight: str = "") -> str | None:
         token = self._cancel_token
         if token is None or not token.is_cancelled:
             return None
@@ -314,11 +300,7 @@ class AgentLoop:
             from agent_runtime.checkpoint import create_checkpoint
 
             create_checkpoint(
-                self.agent,
-                ts,
-                ts.user_request,
-                trigger="user_cancel",
-                in_flight_tool=inflight,
+                self.agent, ts, ts.user_request, trigger="user_cancel", in_flight_tool=inflight
             )
         except Exception:
             pass
@@ -327,13 +309,14 @@ class AgentLoop:
 
     def _invoke_model_call(self, fn):
         from agent_runtime.cancellation import BlockingDeadlineError
-        from agent_runtime.model_call_budget import ModelBudgetExceededError, invoke_model_call
+        from agent_runtime.model_call_budget import ModelBudgetExceededError
+        from agent_runtime.model_tool_runtime import ModelToolRuntime
         from agent_runtime.repair_runtime import ExecutionDeadline
 
         request = self._protocol_state.prepared_request
         manager = self._protocol_state.prepared_context_manager
         meta = self._protocol_state.last_budget_meta or self._protocol_state.last_token_meta or {}
-        deadline = self._repair_deadline
+        deadline = self.execution_deadline
         if request.deadline is not None:
             remaining = max(0, request.deadline - _time.monotonic())
             repair_remaining = deadline.remaining_s()
@@ -341,13 +324,13 @@ class AgentLoop:
                 min(remaining, repair_remaining) if repair_remaining is not None else remaining
             )
         try:
-            result = invoke_model_call(
+            result = ModelToolRuntime.invoke(
                 fn,
                 budget=self._budget_manager,
                 client=self.agent.model_client,
                 input_tokens=int(meta.get("provider_input_tokens", meta.get("total_tokens", 0))),
                 output_tokens=request.max_output_tokens,
-                purpose="repair",
+                purpose=self.agent.agent_name or "task",
                 cancel_token=self._cancel_token,
                 deadline=deadline,
                 timeout_s=self.agent.config.deadline.step_s or None,
@@ -357,17 +340,15 @@ class AgentLoop:
                 ),
             )
             return result
-        except ModelBudgetExceededError:
+        except ModelBudgetExceededError as exc:
             self._tool_state.stop_reason = StopReason.BUDGET_EXHAUSTED
             ts = self._task_state
-            ts.stop_with_reason(
-                StopReason.BUDGET_EXHAUSTED, "stopped", detail="model_call_budget_exhausted"
-            )
+            ts.stop_with_reason(StopReason.BUDGET_EXHAUSTED, "stopped", detail=str(exc))
             raise CancelledError(
                 "budget", answer=self._complete_run(ts, "<final>统一模型预算已耗尽。</final>")
             ) from None
         except (BlockingDeadlineError, TimeoutError):
-            if self._repair_deadline.expired():
+            if self.execution_deadline.expired():
                 answer = self._check_run_deadline(self._task_state)
                 raise CancelledError("deadline", answer=answer) from None
             raise StepTimeoutError(
@@ -375,12 +356,10 @@ class AgentLoop:
             ) from None
         finally:
             self._protocol_state.llm_call_count = sum(
-                call["purpose"] == "repair"
+                call["purpose"] == (self.agent.agent_name or "task")
                 for call in self._budget_manager.snapshot()["model_calls"].values()
             )
             self.agent.session["runtime_budget"] = self._budget_manager.snapshot()
-
-    # ---- 停机与 trace 收尾 ----
 
     def _sync_stop_reason(self, ts) -> None:
         self.stop_reason = ts.stop_reason or self.stop_reason
@@ -398,18 +377,11 @@ class AgentLoop:
     def _emit_run_finished(self, ts) -> None:
         self._emit("run_finished", self._run_finished_payload(ts))
 
-    def _complete_run(
-        self,
-        ts,
-        answer: str,
-        *,
-        recording: dict | None = None,
-    ) -> str:
+    def _complete_run(self, ts, answer: str, *, recording: dict | None = None) -> str:
         """TaskState 已写入终态后：同步 stop_reason、可选 recording、落盘。"""
         if ts.stop_reason == StopReason.APPROVAL_REQUIRED:
-            # Waiting is a resumable state, not a terminal run or cancellation.
             self._sync_stop_reason(ts)
-            self.agent._last_task_state = ts
+            self.agent.last_task_state = ts
             self.agent.session["resume_status"] = "approval-pending"
             self._emit("run_waiting_approval", {"checkpoint_id": ts.checkpoint_id})
             self._get_store().write_task_state(ts)
@@ -425,8 +397,7 @@ class AgentLoop:
                 )
             except ValueError as exc:
                 self._emit(
-                    "runtime_contract_violation",
-                    {"detail": str(exc), "phase": str(ts.phase)},
+                    "runtime_contract_violation", {"detail": str(exc), "phase": str(ts.phase)}
                 )
         from agent_runtime.repair_run import attribute_failure
 
@@ -441,9 +412,7 @@ class AgentLoop:
         )
         terminal_status = ts.stop_reason or ts.status or "completed"
         if not self._terminal_guard.try_finish(
-            ts.run_id,
-            terminal_status,
-            self._run_finished_payload(ts),
+            ts.run_id, terminal_status, self._run_finished_payload(ts)
         ):
             late = self._terminal_guard.late_events[-1]
             self._emit(late.kind, late.payload)
@@ -475,18 +444,15 @@ class AgentLoop:
 
     def _finish_terminal_tool(self, ts, error, *, recording=None) -> str:
         self._emit(
-            "terminal_tool_accepted",
-            {"tool": error.tool_name, "payload_chars": len(error.payload)},
+            "terminal_tool_accepted", {"tool": error.tool_name, "payload_chars": len(error.payload)}
         )
         return self._finish_answer(ts, error.payload, recording=recording)
 
     def _check_run_deadline(self, ts) -> str | None:
-        if not self._repair_deadline.expired():
+        if not self.execution_deadline.expired():
             return None
         ts.stop_with_reason(
-            StopReason.DEADLINE_EXCEEDED,
-            "stopped",
-            detail="repair wall-clock deadline exceeded",
+            StopReason.DEADLINE_EXCEEDED, "stopped", detail="repair wall-clock deadline exceeded"
         )
         return self._complete_run(ts, "<final>已达到 repair 全局执行期限，当前任务停止。</final>")
 
@@ -506,10 +472,8 @@ class AgentLoop:
         )
         return self._complete_run(
             ts,
-            (
-                f"<final>单步执行超时（{error.timeout_s} 秒），"
-                f"step={error.step}，path={error.path or 'unknown'}。</final>"
-            ),
+            f"<final>单步执行超时（{error.timeout_s} 秒），"
+            f"step={error.step}，path={error.path or 'unknown'}。</final>",
         )
 
     def _maybe_step_timeout(self, ts, clock, step: int, path: ReactPath):
@@ -537,15 +501,12 @@ class AgentLoop:
             self._emit("provider_error", provider_error.to_trace_payload())
             ts.stop_with_reason(StopReason.API_ERROR, "failed", detail=str(provider_error))
             return self._complete_run(
-                ts,
-                f"<final>Provider 错误（{provider_error.code.value}）：{provider_error}</final>",
+                ts, f"<final>Provider 错误（{provider_error.code.value}）：{provider_error}</final>"
             )
         return None
 
     def _circuit_trace_listener(self, event: str, payload: dict) -> None:
         self._emit(event, payload)
-
-    # ---- ReAct / 计时 ----
 
     def _record_model_timings(self, ts, timings: list, *, default_attempt: int = 1) -> None:
         if not timings:
@@ -603,13 +564,7 @@ class AgentLoop:
         )
 
     def _notify_react_phase(
-        self,
-        phase,
-        *,
-        step: int,
-        path: ReactPath,
-        tool: str | None = None,
-        callback=None,
+        self, phase, *, step: int, path: ReactPath, tool: str | None = None, callback=None
     ) -> None:
         progress = getattr(self, "_turn_progress", None)
         if progress is not None:
@@ -622,10 +577,7 @@ class AgentLoop:
             StepEngine(self._task_state, self._emit).enter(
                 str(phase), step=step, path=path, tool=tool or ""
             )
-        self._emit(
-            "react_phase",
-            build_react_phase_payload(phase, step=step, path=path, tool=tool),
-        )
+        self._emit("react_phase", build_react_phase_payload(phase, step=step, path=path, tool=tool))
         self._notify(
             "on_react_phase",
             callback,
@@ -640,13 +592,17 @@ class AgentLoop:
 
     def _sleep_with_deadline(self, seconds: float) -> bool:
         """Sleep only within the remaining repair deadline."""
-        remaining = self._repair_deadline.remaining_s()
-        if remaining is not None and remaining <= 0:
+        from agent_runtime.providers.retry_policy import wait_retry
+
+        try:
+            wait_retry(
+                seconds,
+                deadline=self.execution_deadline.deadline_at,
+                cancel_token=self._cancel_token,
+            )
+        except TimeoutError:
             return False
-        delay = float(seconds) if remaining is None else min(float(seconds), remaining)
-        if delay > 0:
-            _time.sleep(delay)
-        return not self._repair_deadline.expired()
+        return True
 
     def _budget_payload(self) -> dict:
         """Return the current unified budget view for prompts and trace."""
@@ -657,8 +613,7 @@ class AgentLoop:
 
     def _apply_latency_decision(self, max_output_tokens: int) -> dict:
         decision = self._latency_controller.decide(
-            remaining_s=self._repair_deadline.remaining_s(),
-            max_output_tokens=max_output_tokens,
+            remaining_s=self.execution_deadline.remaining_s(), max_output_tokens=max_output_tokens
         )
         self.agent.session["runtime_degradation"] = {
             "skip_optional_context": "skip_optional_context" in decision["actions"],
@@ -725,27 +680,14 @@ class AgentLoop:
         specific = mapping.get(group)
         return specific is None or self._budget_check(specific)
 
-    def _grant_read_reserve(
-        self,
-        path: str,
-        *,
-        kind: str,
-        step: int,
-        generation: int = 0,
-    ) -> None:
+    def _grant_read_reserve(self, path: str, *, kind: str, step: int, generation: int = 0) -> None:
         quota = getattr(self.agent, "quota", None)
         if quota is None or not hasattr(quota, "grant_read_reserve"):
             return
         if quota.grant_read_reserve(path, kind=kind, generation=generation):
             self._emit(
                 "post_lock_read_reserved" if kind == "post_lock" else "targeted_read_reserved",
-                {
-                    "step": step,
-                    "path": path,
-                    "kind": kind,
-                    "generation": generation,
-                    "uses": 1,
-                },
+                {"step": step, "path": path, "kind": kind, "generation": generation, "uses": 1},
             )
 
     def _matching_read_reservation(self, tool_name: str, tool_args: dict) -> dict | None:
@@ -779,9 +721,7 @@ class AgentLoop:
 
     def _native_tool_names(self, *, action_required=False, strict_recovery=False):
         return self.agent.loop_policy.visible_tools(
-            self._policy_context(),
-            action_required=action_required,
-            strict_recovery=strict_recovery,
+            self._policy_context(), action_required=action_required, strict_recovery=strict_recovery
         )
 
     def _budget_reserve_turn(self, turn: int) -> bool:
@@ -802,10 +742,8 @@ class AgentLoop:
             emit=self._emit,
             on_changed_paths=self._invalidate_tool_exploration,
             on_retrieval=self._observe_tool_retrieval,
-            sandbox_bound=(
-                self.agent.tool_context.sandbox_task_binding is not None
-                or self.agent.tool_context.sandbox_backend is not None
-            ),
+            sandbox_bound=self.agent.tool_context.sandbox_task_binding is not None
+            or self.agent.tool_context.sandbox_backend is not None,
         )
 
     def _invalidate_tool_exploration(self, tool_name):
@@ -824,17 +762,10 @@ class AgentLoop:
             from agent_runtime.tools import _exploration_service
 
             _exploration_service(self.agent.tool_context).observe(
-                tool_name,
-                tool_args,
-                retrieval,
-                observation_id,
+                tool_name, tool_args, retrieval, observation_id
             )
 
-    # ---- 工具执行（XML / Native 共用）----
-
     def _append_turn_progress(self, event, payload):
-        # Progress delivery requires an authoritative trace append. Let IO
-        # failures stop dispatch instead of displaying an unrecorded event.
         self._get_store().append_trace_event(payload["run_id"], event, payload)
 
     def _deliver_turn_progress(self, event, callback):
@@ -879,8 +810,8 @@ class AgentLoop:
             progress.emit("turn_completed", status=status)
             self.agent.session["turn_progress"] = progress.checkpoint(batch)
             self._turn_progress = None
-            if getattr(self.agent, "_turn_event_emitter", None) is progress:
-                self.agent._turn_event_emitter = None
+            if getattr(self.agent, "turn_event_emitter", None) is progress:
+                self.agent.turn_event_emitter = None
             self._active_tool_batch = None
 
     def _run_native_batch(self, ts, calls, *, turn, callback=None, native_content=None):
@@ -891,7 +822,7 @@ class AgentLoop:
         )
 
         base_step = ts.tool_steps
-        plan = getattr(self.agent, "_plan_session", None)
+        plan = getattr(self.agent, "plan_session", None)
 
         def step_flow(call, prepared_result):
             return self._tool_step_flow(
@@ -926,17 +857,12 @@ class AgentLoop:
         hooks = BatchExecutionHooks(
             step_flow=step_flow,
             settle_step=settle_step,
-            execute_serial=lambda call: self.agent.execute_tool(
-                call.tool_name,
-                call.arguments,
-                call_context=call.context,
+            execute_serial=lambda call: ModelToolRuntime.dispatch(
+                call, self.agent.execute_tool, cancel_token=self._cancel_token
             ),
             plan_operation=(
                 lambda call: plan.tool_operation(
-                    self.agent,
-                    call.tool_name,
-                    call.arguments,
-                    call_context=call.context,
+                    self.agent, call.tool_name, call.arguments, call_context=call.context
                 )
             )
             if plan is not None
@@ -944,48 +870,40 @@ class AgentLoop:
             dispatch=dispatch,
             activate=activate,
             acting=lambda call: self._notify_react_phase(
-                ReactPhase.ACTING,
-                step=turn,
-                path="native",
-                tool=call.tool_name,
-                callback=callback,
+                ReactPhase.ACTING, step=turn, path="native", tool=call.tool_name, callback=callback
             ),
             uncertain=uncertain,
         )
         runner = ToolBatchRunner(
             context=self.agent.tool_context,
             registry=dict(self.agent.tools),
-            allowed_tools=self.agent._tool_names,
+            allowed_tools=self.agent.tool_names,
             executor=self.agent._get_tool_executor(),
             progress=self._turn_progress,
             session=self.agent.session,
             hooks=hooks,
             cancel_token=self._cancel_token,
-            expired=self._repair_deadline.expired,
+            expired=self.execution_deadline.expired,
             tool_timeout_s=float(self.agent.config.effective_deadline()["tool_s"] or 0),
             emit=self._emit,
         )
         results, refs = runner.run(calls, native_content=native_content)
         if (msg := self._abort_if_cancelled(ts, phase="batch_settled")) is not None:
             raise CancelledError("user", answer=msg)
-        return results, refs
-
-    # ---- XML 路径辅助 ----
+        return (results, refs)
 
     def _check_xml_loop_limits(self, ts) -> str | None:
         if ts.tool_steps > self.max_steps:
             ts.stop_step_limit(self.max_steps)
             return self._complete_run(
-                ts,
-                f"<final>已达到最大工具调用步数限制({self.max_steps})，当前任务未完成。</final>",
+                ts, f"<final>已达到最大工具调用步数限制({self.max_steps})，当前任务未完成。</final>"
             )
-        limit = max_parse_attempts(self.max_steps)
+        limit = self.agent.config.max_model_attempts
         if ts.attempts >= limit:
             ts.stop_retry_limit(limit)
             return self._complete_run(
                 ts,
-                "<final>模型输出格式错误次数过多，已终止。"
-                "请检查 System Prompt 中的工具调用格式说明。</final>",
+                f"<final>模型调用尝试已达到 max_model_attempts={limit}，已终止。</final>",
             )
         return None
 
@@ -1006,7 +924,6 @@ class AgentLoop:
             self._emit("plan_phase", {"source": "skipped"})
             self._plan_todos = []
             return
-
         todos = self._generate_plan(user_message)
         self._plan_todos = todos
         if todos:
@@ -1014,7 +931,7 @@ class AgentLoop:
             self._emit(
                 "plan_phase",
                 {
-                    "source": ("llm" if getattr(self.agent, "light_client", None) else "rule"),
+                    "source": "llm" if getattr(self.agent, "light_client", None) else "rule",
                     "count": len(todos),
                 },
             )
@@ -1025,13 +942,13 @@ class AgentLoop:
 
     def _generate_plan(self, user_message: str) -> list[dict]:
         """用 light_client 或规则生成 TodoList。"""
-        # 尝试 light_client
         light = getattr(self.agent, "light_client", None)
         if light is not None:
             try:
                 prompt = (
                     "将以下任务分解为 2-5 个步骤。只输出 JSON 数组：\n"
-                    f'[{{"id":"1","content":"...","status":"pending"}},...]\n\n{user_message[:500]}'
+                    '[{"id":"1","content":"...","status":"pending"},...]\n\n'
+                    f"{user_message[:500]}"
                 )
                 from agent_runtime.model_call_budget import complete_text
 
@@ -1046,7 +963,6 @@ class AgentLoop:
                         return todos
             except Exception:
                 pass
-        # 规则 fallback
         msg = user_message.lower()
         todos = []
         i = 1
@@ -1066,18 +982,10 @@ class AgentLoop:
                 }
             )
             todos.append(
-                {
-                    "id": str(i + 2),
-                    "content": "Generate and apply fix patch",
-                    "status": "pending",
-                }
+                {"id": str(i + 2), "content": "Generate and apply fix patch", "status": "pending"}
             )
             todos.append(
-                {
-                    "id": str(i + 3),
-                    "content": "Verify fix passes tests",
-                    "status": "pending",
-                }
+                {"id": str(i + 3), "content": "Verify fix passes tests", "status": "pending"}
             )
         else:
             todos.append({"id": str(i), "content": "Read relevant files", "status": "pending"})
@@ -1126,7 +1034,7 @@ class AgentLoop:
             return
         meta = result.to_metadata()
         approval = result.error_code in {"approval_required", "approval_pending"}
-        if result.status != "success" and not approval:
+        if result.status != "success" and (not approval):
             return
         try:
             from agent_runtime.checkpoint import create_checkpoint, file_content_hash
@@ -1152,11 +1060,9 @@ class AgentLoop:
             effects = [
                 {
                     "path": path,
-                    "post_hash": (
-                        current_versions.get(path, "")
-                        if current_versions is not None
-                        else file_content_hash(self.agent._cwd, path)
-                    ),
+                    "post_hash": current_versions.get(path, "")
+                    if current_versions is not None
+                    else file_content_hash(self.agent.cwd, path),
                 }
                 for path in affected_paths
             ]
@@ -1192,7 +1098,7 @@ class AgentLoop:
             ts.checkpoint_id = cp.get("checkpoint_id", "") if cp else ""
             ts.checkpoint_sequence = int(cp.get("sequence", 0) or 0) if cp else 0
             SessionStore(
-                root=self.agent._cwd,
+                root=self.agent.cwd,
                 state_root=str(getattr(self.agent.tool_context, "state_root", "") or ""),
             ).save(self.agent.session)
             self._get_store().write_task_state(ts)
@@ -1201,10 +1107,7 @@ class AgentLoop:
                 self._emit("approval_checkpoint_failed", {"tool": tool_name})
                 raise
 
-    # ---- 入口 ----
-
     def run(self, user_message: str, callback=None, *, skip_plan: bool = False) -> str:
-        # The runtime owner is the run thread, which may differ from the constructor thread.
         self._observation_recorder = self._new_observation_recorder()
         from agent_runtime.budget_manager import BudgetManager
         from agent_runtime.latency_controller import LatencySLOController
@@ -1227,16 +1130,14 @@ class AgentLoop:
                 return (
                     "等待审批。"
                     if checked["status"] == "approval-pending"
-                    else ("审批调用无法恢复：" + checked["status"])
+                    else "审批调用无法恢复：" + checked["status"]
                 )
         resume_state = self._consume_step_resume_state()
         if resume_state is not None:
             self._reset_exploration_on_resume()
             return self._run_from_step_resume(resume_state, callback=callback)
-
         if self.agent.tool_context.exploration_mode == "relations":
             self.agent.session["exploration_epoch"] = uuid.uuid4().hex
-
         shared = getattr(self.agent, "shared_run_id", None)
         agent_name = getattr(self.agent, "_agent_name", "") or "agent"
         ts = TaskState.create(
@@ -1245,13 +1146,18 @@ class AgentLoop:
             session_id=str(self.agent.session.get("id", "") or ""),
             attempt_id="attempt-" + uuid.uuid4().hex[:16],
         )
-        l2_agent = getattr(self.agent, "_l2_agent", "") or ""
+        l2_agent = getattr(self.agent, "correlation", {}).get("role", "") or ""
         if shared and l2_agent:
-            ts.task_id = getattr(self.agent, "_l2_task_id", "") or f"{shared}-{agent_name}"
-            ts.l2_repair_run_id = getattr(self.agent, "_l2_repair_run_id", "") or shared
+            ts.task_id = (
+                getattr(self.agent, "correlation", {}).get("task_id", "")
+                or f"{shared}-{agent_name}"
+            )
+            ts.l2_repair_run_id = (
+                getattr(self.agent, "correlation", {}).get("repair_run_id", "") or shared
+            )
             ts.l2_agent = l2_agent
-            ts.l2_phase = getattr(self.agent, "_l2_phase", "") or ""
-            ts.l2_attempt = int(getattr(self.agent, "_l2_attempt", 0) or 0)
+            ts.l2_phase = getattr(self.agent, "correlation", {}).get("phase", "") or ""
+            ts.l2_attempt = int(getattr(self.agent, "correlation", {}).get("attempt", 0) or 0)
         elif shared:
             ts.task_id = f"{shared}-{agent_name}"
         session_identity = self.agent.session.setdefault("session_identity", {})
@@ -1267,13 +1173,12 @@ class AgentLoop:
         self.agent.loop_policy.reset(self._policy_context())
         self._call_timings = []
         self._budget_manager = getattr(
-            self.agent, "_run_budget_manager", None
+            self.agent, "budget_manager", None
         ) or BudgetManager.from_config(self.agent.config)
-        self.agent._run_budget_manager = self._budget_manager
+        self.agent.budget_manager = self._budget_manager
         self._budget_turns_seen = 0
         self._latency_controller = LatencySLOController(
-            getattr(self.agent.config, "slo", None),
-            getattr(self.agent.config, "degradation", None),
+            getattr(self.agent.config, "slo", None), getattr(self.agent.config, "degradation", None)
         )
         self._protocol_state.retry_count = 0
         self._tool_state.blocked_convergence_reads = 0
@@ -1283,16 +1188,15 @@ class AgentLoop:
         self._tool_state.recovery_kind = ""
         from agent_runtime.repair_runtime import ExecutionDeadline
 
-        self._repair_deadline = getattr(self.agent, "_repair_deadline", None) or ExecutionDeadline(
-            self.agent.config.deadline.repair_s
-        )
-        self.agent._repair_deadline = self._repair_deadline
+        self.execution_deadline = getattr(
+            self.agent, "execution_deadline", None
+        ) or ExecutionDeadline(self.agent.config.deadline.repair_s)
+        self.agent.execution_deadline = self.execution_deadline
         self._repair_budget.turns = 0
         self._repair_budget.tool_calls = 0
         self._repair_budget.writes = 0
         self._repair_budget.verifies = 0
         self._repair_budget.recoveries = 0
-
         cb = self.agent.circuit_breaker
         cb.add_listener(self._circuit_trace_listener)
         try:
@@ -1302,19 +1206,18 @@ class AgentLoop:
 
                 init_run_projection(self.agent.session, user_message)
                 self.agent.record({"role": "user", "content": user_message})
-                self._gen_task_summary(user_message)
+                if not self.agent.isolated_context:
+                    self._gen_task_summary(user_message)
                 self._plan_phase(user_message, skip_plan=skip_plan)
                 self._tool_state.no_progress_steps = 0
-                # 重置 StepGuard + 注入任务上下文
                 self._step_guard.reset(
                     task_summary=self._get_task_summary_text(),
                     suspect_files=self._extract_suspect_files(),
                     localization_mode=self.agent.loop_policy.localization_mode,
                 )
-
                 answer = self._run_loop(user_message, ts, callback)
-                # Memory Dream: ask() 结束后自动维护记忆
-                self._run_memory_dream()
+                if not self.agent.isolated_context:
+                    self._run_memory_dream()
                 return answer
         finally:
             cb.remove_listener(self._circuit_trace_listener)
@@ -1372,11 +1275,10 @@ class AgentLoop:
 
             progress = checkpoint["turn_progress"]
             self.agent.session["turn_progress"] = progress
-            plan = getattr(self.agent, "_plan_session", None)
+            plan = getattr(self.agent, "plan_session", None)
             operations = plan.store.latest("operation", "operation_id").values() if plan else ()
             self.agent.session["turn_progress_replay"] = restore_progress(
-                progress,
-                operations=operations,
+                progress, operations=operations
             )
             self._notify(
                 "on_turn_progress_replay",
@@ -1392,13 +1294,11 @@ class AgentLoop:
         self._restore_runtime_control(checkpoint.get("runtime_control") or {})
         self._call_timings = []
         user_message = checkpoint.get("next_user_message", "")
-
         cb = self.agent.circuit_breaker
         cb.add_listener(self._circuit_trace_listener)
         try:
             with log_context(
-                run_id=ts.run_id,
-                agent=getattr(self.agent, "_agent_name", "") or "agent",
+                run_id=ts.run_id, agent=getattr(self.agent, "_agent_name", "") or "agent"
             ):
                 self._emit(
                     "run_resumed",
@@ -1424,8 +1324,6 @@ class AgentLoop:
                         "sandbox_approval_call"
                     ]
                     if resume_state.get("approval_status") == "approved":
-                        # Run the sealed invocation first. Routing validates the original
-                        # owner/arguments/preimages and consumes the approval exactly once.
                         try:
                             user_message = self._run_tool_step(
                                 ts,
@@ -1444,7 +1342,8 @@ class AgentLoop:
                         self.agent.record({"role": "user", "content": user_message})
                     self.agent.session.pop("_sandbox_approval_call", None)
                 answer = self._run_loop(user_message, ts, callback, path=path)
-                self._run_memory_dream()
+                if not self.agent.isolated_context:
+                    self._run_memory_dream()
                 return answer
         finally:
             cb.remove_listener(self._circuit_trace_listener)
@@ -1461,18 +1360,18 @@ class AgentLoop:
         if budget:
             self._repair_budget.restore(budget)
         manager_snapshot = control.get("budget_manager")
-        run_bound = getattr(self.agent, "_model_budget_run_bound", False)
-        if manager_snapshot and not run_bound:
+        run_bound = getattr(self.agent, "budget_run_bound", False)
+        if manager_snapshot and (not run_bound):
             self._budget_manager.restore(manager_snapshot)
             self.agent.session["runtime_budget"] = self._budget_manager.snapshot()
             self._budget_turns_seen = int((manager_snapshot.get("used") or {}).get("turns", 0) or 0)
         deadline = control.get("deadline") or {}
         remaining = deadline.get("remaining_s")
-        current = self._repair_deadline.remaining_s() if run_bound else None
+        current = self.execution_deadline.remaining_s() if run_bound else None
         if current is not None:
             remaining = min(remaining, current) if remaining is not None else current
-        self._repair_deadline = ExecutionDeadline.from_remaining(remaining)
-        self.agent._repair_deadline = self._repair_deadline
+        self.execution_deadline = ExecutionDeadline.from_remaining(remaining)
+        self.agent.execution_deadline = self.execution_deadline
         self._protocol_state.retry_count = int(
             control.get("retry_count", self._protocol_state.retry_count) or 0
         )
@@ -1491,7 +1390,7 @@ class AgentLoop:
             lambda event: self._deliver_turn_progress(event, callback),
         )
         self._turn_progress.emit("turn_started", status="running")
-        self.agent._turn_event_emitter = self._turn_progress
+        self.agent.turn_event_emitter = self._turn_progress
 
     def _run_loop(self, user_message: str, ts, callback=None, *, path=None) -> str:
         """One control loop; protocol adapters return tools, finals or recoverable errors."""
@@ -1525,8 +1424,8 @@ class AgentLoop:
                         f"<final>已达到最大工具调用步数限制({self.max_steps})，当前任务未完成。</final>",
                     )
                 self._begin_native_turn(ts, callback)
-                if recovery_turn and not (
-                    self._tool_state.recovery_directive or self._tool_state.action_required
+                if recovery_turn and (
+                    not (self._tool_state.recovery_directive or self._tool_state.action_required)
                 ):
                     ts.stop_step_limit(self.max_steps)
                     return self._complete_run(
@@ -1539,17 +1438,14 @@ class AgentLoop:
                     return msg
                 if (msg := self._check_xml_loop_limits(ts)) is not None:
                     return msg
-            # Text format retries retain the tool-step index; native requests count turns.
             step = turn if native else ts.tool_steps + 1
-            latency_decision = self._apply_latency_decision(
-                int(getattr(self.agent.config, "max_new_tokens", 0) or 4096)
-            )
-            if native and not recovery_turn and not self._repair_budget.allow_turn():
+            latency_decision = self._apply_latency_decision(self.agent.config.max_new_tokens)
+            if native and (not recovery_turn) and (not self._repair_budget.allow_turn()):
                 ts.stop_step_limit(self.max_steps)
                 return self._complete_run(
                     ts, f"<final>已达到最大推理轮数限制({self.max_steps})。</final>"
                 )
-            if not recovery_turn and not self._budget_reserve_turn(step):
+            if not recovery_turn and (not self._budget_reserve_turn(step)):
                 ts.stop_with_reason(
                     StopReason.BUDGET_EXHAUSTED, "stopped", detail="unified budget turns exhausted"
                 )
@@ -1621,10 +1517,9 @@ class AgentLoop:
                     raise
                 ts.stop_with_reason(StopReason.API_ERROR, "failed", detail=f"error: {e}")
                 return self._complete_run(ts, f"<final>API 错误: {e}</final>")
-
             payload = response.payload
             if response.status == "stop" and response.response_kind == "final":
-                return payload["text"]  # The adapter already finalized this failure.
+                return payload["text"]
             if response.response_kind == "error":
                 if native:
                     output_recovery_directive = payload["directive"]
@@ -1753,7 +1648,6 @@ class AgentLoop:
         if client is None:
             set_task_summary(self.agent.session["memory"], user_message)
             return
-
         try:
             from agent_runtime.model_call_budget import complete_text
 
@@ -1767,7 +1661,6 @@ class AgentLoop:
             summary = raw.strip()[:300] if raw else user_message[:300]
         except Exception:
             summary = user_message[:300]
-
         set_task_summary(self.agent.session["memory"], summary)
 
     def _get_task_summary_text(self) -> str:
@@ -1788,22 +1681,16 @@ class AgentLoop:
         from agent_runtime.intent.stack_parse import relativize_suspect_path
 
         files: set[str] = set()
-        # 1. 从 plan_todos 提取（如 content 含文件名）
         for todo in self._plan_todos:
             content = todo.get("content", "")
-            for m in re.findall(r"[\w/\-]+\.py", content):
+            for m in re.findall("[\\w/\\-]+\\.py", content):
                 files.add(m.split("/")[-1].split("\\")[-1])
-
-        # 2. 从 task_summary 提取
         task = self._get_task_summary_text()
-        for m in re.findall(r"[\w/\-]+\.py", task):
+        for m in re.findall("[\\w/\\-]+\\.py", task):
             files.add(m.split("/")[-1].split("\\")[-1])
-
-        # 3. 从 traceback 提取全部 File "..." 帧（非仅首帧）
         user_req = self._task_state.user_request if self._task_state else ""
-        for raw in re.findall(r'File\s+"([^"]+)"', user_req):
+        for raw in re.findall('File\\s+"([^"]+)"', user_req):
             files.add(raw.split("/")[-1].split("\\")[-1])
-
         root = None
         try:
             root = Path(self.agent.tool_context.root)
@@ -1811,9 +1698,8 @@ class AgentLoop:
             root = None
         if root is None or not root.is_dir():
             return files
-
         in_repo: set[str] = set()
-        for raw in re.findall(r'File\s+"([^"]+)"', user_req):
+        for raw in re.findall('File\\s+"([^"]+)"', user_req):
             mapped = relativize_suspect_path(raw, repo_root=root)
             if mapped:
                 in_repo.add(Path(mapped).name)
@@ -1824,7 +1710,6 @@ class AgentLoop:
                 mapped = relativize_suspect_path(name, repo_root=root)
                 if mapped:
                     in_repo.add(Path(mapped).name)
-        # 空集合 → StepGuard 跳过 drift（避免仓外锚点误杀）
         return in_repo
 
     def _run_memory_dream(self) -> None:
@@ -1838,16 +1723,9 @@ class AgentLoop:
         stats, dreamer = run_memory_dream(mem, governance=agent_governance(self.agent))
         if any(
             stats.get(k, 0)
-            for k in (
-                "deduped",
-                "expired",
-                "trimmed",
-                "durable_gc",
-                "promotion_suggestions",
-            )
+            for k in ("deduped", "expired", "trimmed", "durable_gc", "promotion_suggestions")
         ):
             self._emit("memory_dream", dream_summary_to_trace(stats, dreamer))
-        # 存储 dream stats 供 _build_memory_health 合并
         self._last_dream_stats = stats
 
     def _get_store(self):
@@ -1855,7 +1733,7 @@ class AgentLoop:
             from agent_runtime.run_store import RunStore
 
             self._store = RunStore(
-                root=self.agent._cwd,
+                root=self.agent.cwd,
                 state_root=str(getattr(self.agent.tool_context, "state_root", "") or ""),
             )
         return self._store
@@ -1901,16 +1779,15 @@ class AgentLoop:
             self._emit("tool_preview", {"tool": tool_name, **preview})
         content = str(getattr(result, "content", "") or "")
         trace_payload = tool_trace_payload(
-            tool_name,
-            meta,
-            tool_args=tool_args,
-            result_content=content,
+            tool_name, meta, tool_args=tool_args, result_content=content
         )
         if meta.get("provider") == "mcp":
             self._emit("mcp_call", trace_payload)
         self._emit("tool_executed", trace_payload)
 
     def _emit(self, event: str, payload: dict | None = None):
+        if self.agent.event_sink is not None:
+            self.agent.event_sink(event, dict(payload or {}))
         try:
             from agent_runtime.l2_context import l2_payload_from_agent, l2_payload_from_task_state
 
@@ -1935,7 +1812,7 @@ class AgentLoop:
 
     def _finalize_run(self, ts):
         self._close_turn_progress(
-            status=("uncertain" if str(ts.status) == "running" else str(ts.status))
+            status="uncertain" if str(ts.status) == "running" else str(ts.status)
         )
         from agent_runtime import loop_finalizer
 

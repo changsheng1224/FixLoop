@@ -50,7 +50,7 @@ agent_runtime = ["*.yaml", "intent/*.yaml", "data/tokenizers/**/*", "data/tiktok
 src = [
     "prompts/*.txt", "prompts/**/*.txt", "prompts/tasks/*.md",
     "skills/*.yaml", "skills/executable/*.yaml", "skills/eval_cases/*.yaml",
-    "eval/*.json", "eval/cases/**/*.txt", "eval/cases/**/*.yaml",
+    "eval/*.json", "eval/cases/**/*.diff", "eval/cases/**/*.txt", "eval/cases/**/*.yaml",
     "eval/cases/**/*.json", "eval/cases/**/*.toml", "eval/cases/**/*.md",
     "eval/cases/**/*.py", "eval/cases/**/*.js", "eval/cases/**/*.java",
 ]
@@ -70,7 +70,7 @@ select = ["E", "F", "W", "I", "N", "UP"]
 "tests/**" = ["E501"]
 "tests/test_light_client.py" = ["N802", "E501"]
 "tests/test_providers_replay.py" = ["N802", "E501"]
-"src/repair_factory.py" = ["E741"]
+"src/repair/assembly.py" = ["E741"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -11,9 +11,7 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass
-from pathlib import Path
 
-from agent_runtime.patch_engine import normalize_hunk_headers as _normalize_hunk_headers
 from agent_runtime.schema_utils import auto_schema
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.tool_result import ToolResult, ToolStatus
@@ -314,29 +312,6 @@ def _near_snippet(text: str, needle: str, *, radius: int = 2) -> str:
     return f"near=\n{head}"
 
 
-def _check_diff_preimage(file_text: str, plan) -> str | None:
-    """校验 unified hunk 删除/上下文行是否匹配当前文件。"""
-    import re
-
-    if getattr(plan, "mode", None) != "diff":
-        return None
-    lines = file_text.splitlines()
-    for hunk in plan.hunks or []:
-        m = re.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", hunk.header)
-        if not m:
-            return "bad_hunk_header"
-        idx = int(m.group(1)) - 1
-        for kind, text in hunk.lines:
-            if kind in (" ", "-"):
-                if idx >= len(lines):
-                    return "past_eof"
-                if lines[idx] != text:
-                    return f"line_{idx + 1}_mismatch"
-                idx += 1
-            # '+' 不前进 old idx
-    return None
-
-
 def _edit_time_lint_py(path: str, new_text: str) -> str | None:
     """返回错误信息；通过则 None。"""
     if not path.endswith(".py"):
@@ -348,251 +323,62 @@ def _edit_time_lint_py(path: str, new_text: str) -> str | None:
     return None
 
 
-def _patch_transaction_paths(context, patch_text: str) -> dict:
-    """Capture only paths named by an apply_patch envelope."""
-    import re
-
-    snapshot: dict = {}
-    for raw in re.findall(r"\*\*\*\s+(?:Update|Add|Delete) File:\s*(.+)", patch_text or ""):
-        try:
-            target = context.resolve(raw.strip())
-        except ValueError:
-            continue
-        try:
-            stat = target.lstat() if target.exists() else None
-            snapshot[str(target)] = {
-                "exists": bool(stat),
-                "bytes": target.read_bytes() if stat and target.is_file() else None,
-                "mode": stat.st_mode if stat else None,
-            }
-        except OSError:
-            snapshot[str(target)] = {"exists": False, "bytes": None, "mode": None}
-    return snapshot
-
-
-def _restore_patch_transaction(snapshot: dict) -> None:
-    for raw_path, before in snapshot.items():
-        target = Path(raw_path)
-        try:
-            if before["exists"]:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(before["bytes"] or b"")
-                if before.get("mode") is not None:
-                    target.chmod(before["mode"])
-            elif target.exists() or target.is_symlink():
-                target.unlink()
-        except OSError:
-            # Preserve the original patch error; the caller records rollback
-            # failure through the returned metadata/trace path.
-            pass
-
-
 def tool_apply_patch(context, args: dict) -> ToolResult:
-    """Transactional wrapper around the canonical apply_patch implementation."""
+    """Prepare every mutation through the text core, then commit through the backend."""
     if (routed := _sandbox_workspace_result(context, "apply_patch", args)) is not None:
         return routed
-    patch_text = args.get("patch") or args.get("diff") or args.get("input") or ""
-    snapshot = _patch_transaction_paths(context, str(patch_text))
-    expected = args.get("base_sha256") or args.get("base_hash")
-    if expected:
-        expected_by_path = expected if isinstance(expected, dict) else {}
-        for raw_path in expected_by_path or {"": expected}:
-            if isinstance(expected, dict):
-                value = expected_by_path.get(raw_path)
-                try:
-                    target = context.resolve(raw_path)
-                except ValueError:
-                    return ToolResult.error(
-                        f"Error: base hash path invalid: {raw_path}", code="tool_execution_failed"
-                    )
-            else:
-                value = expected
-                target = next((Path(path) for path in snapshot), None)
-            if target is None or not target.is_file():
-                return ToolResult.error(
-                    "Error: base hash target missing", code="tool_execution_failed"
-                )
-            import hashlib
-
-            actual = hashlib.sha256(target.read_bytes()).hexdigest()
-            if actual != str(value):
-                return ToolResult.error(
-                    f"Error: stale patch/base hash mismatch: {target}", code="stale_preimage"
-                )
-    result = _tool_apply_patch_unchecked(context, args)
-    if result.failed:
-        _restore_patch_transaction(snapshot)
-        try:
-            from agent_runtime.metrics import get_registry
-
-            reason = "stale_patch" if result.error_code == "stale_preimage" else "apply_error"
-            metric = (
-                "fixloop_stale_patch_rejections_total"
-                if reason == "stale_patch"
-                else "fixloop_patch_rollbacks_total"
-            )
-            get_registry().counter_inc(metric, labels={"reason": reason})
-        except Exception:
-            pass
-    return result
-
-
-def _tool_apply_patch_unchecked(context, args: dict) -> ToolResult:
-    """Codex 风格 apply_patch：*** Begin/End Patch；ACI 写后回显 + edit-time lint。"""
     from agent_runtime.apply_patch_format import parse_apply_patch_text
-    from agent_runtime.atomic_io import atomic_write_text
-    from agent_runtime.patch_engine import apply_plan, parse_patch_input
+    from agent_runtime.patch_engine import PatchError, apply_operations
     from agent_runtime.sensitive_paths import is_sensitive_path, sensitive_reject_message
-
-    patch_text = args.get("patch") or args.get("diff") or args.get("input") or ""
-    if not str(patch_text).strip():
-        return ToolResult.error(
-            "Error: apply_patch 缺少 patch 文本（*** Begin Patch ... *** End Patch）",
-            code="tool_execution_failed",
-        )
+    from agent_runtime.workspace_patches import HostPatchTransaction
 
     serial_err = _reject_if_write_serial(context)
     if serial_err:
         return ToolResult.error(serial_err, code="tool_execution_failed")
-
     try:
-        ops = parse_apply_patch_text(str(patch_text))
-    except ValueError as e:
-        return ToolResult.error(f"Error: {e}", code="tool_execution_failed")
-
-    summaries: list[str] = []
-    for op in ops:
-        raw_path = op.path
-        if is_sensitive_path(raw_path):
-            return ToolResult.error(
-                sensitive_reject_message(raw_path), code="tool_execution_failed"
-            )
-        rejected = _reject_if_edit_locked(
-            context,
-            raw_path,
-            operation={"add": "create", "delete": "delete"}.get(op.action, "modify"),
+        ops = parse_apply_patch_text(
+            args.get("patch") or args.get("diff") or args.get("input") or ""
         )
-        if rejected:
-            return ToolResult.error(rejected, code="tool_execution_failed")
-        try:
-            target = context.resolve(raw_path)
-        except ValueError as e:
-            return ToolResult.error(f"Error: {e}", code="tool_execution_failed")
-
-        if op.action == "delete":
-            if not target.exists():
+        for op in ops:
+            target = context.resolve(op.path)
+            if is_sensitive_path(target):
                 return ToolResult.error(
-                    f"Error: delete 目标不存在: {raw_path}", code="tool_execution_failed"
+                    sensitive_reject_message(op.path), code="tool_execution_failed"
                 )
-            try:
-                target.unlink()
-            except OSError as e:
-                return ToolResult.error(f"Error: 删除失败: {e}", code="tool_execution_failed")
-            summaries.append(f"deleted {raw_path}")
-            continue
-
-        if op.action == "add":
-            if target.exists() or target.is_symlink():
-                return ToolResult.error("Error: create target exists", code="stale_preimage")
-            content = op.diff if op.diff.endswith("\n") else op.diff + "\n"
-            lint_err = _edit_time_lint_py(raw_path, content)
+            rejected = _reject_if_edit_locked(
+                context,
+                op.path,
+                operation={"add": "create", "delete": "delete"}.get(op.action, "modify"),
+            )
+            if rejected:
+                return ToolResult.error(rejected, code="tool_execution_failed")
+        transaction = HostPatchTransaction(context.resolve, [op.path for op in ops])
+        transaction.check_hashes(args.get("base_sha256") or args.get("base_hash"))
+        changes = apply_operations(transaction.sources(), ops)
+        for path, content in changes.items():
+            lint_err = _edit_time_lint_py(path, content) if content is not None else None
             if lint_err:
                 lock = _resolve_edit_lock(context)
                 if lock is not None:
                     lock.edit_lint_reject_count += 1
-                return ToolResult.error(f"Error: {lint_err}", code="edit_lint_reject")
-            try:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                atomic_write_text(target, content, create_only=True)
-            except OSError as e:
-                return ToolResult.error(f"Error: 写入失败: {e}", code="tool_execution_failed")
-            summaries.append(f"added {raw_path} ({len(content)} chars)")
-            continue
-
-        # update
-        if not target.is_file():
-            return ToolResult.error(f"Error: 文件不存在: {raw_path}", code="tool_execution_failed")
-        try:
-            text = target.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            return ToolResult.error(
-                f"Error: 无法以 UTF-8 读取: {raw_path}", code="tool_execution_failed"
-            )
-
-        from agent_runtime.apply_patch_format import update_diff_has_preimage
-
-        if not update_diff_has_preimage(op.diff or ""):
-            near = _near_snippet(text, "")
-            return ToolResult.error(
-                f"Error: apply_patch empty_original（Update 缺少 - / 上下文行）。"
-                f"先 read_file {raw_path} 再带 preimage 重试。{near}",
-                code="tool_execution_failed",
-            )
-
-        diff = _normalize_hunk_headers(op.diff, text)
-        try:
-            plan = parse_patch_input({"diff": diff})
-        except ValueError as e:
-            return ToolResult.error(f"Error: {e}", code="tool_execution_failed")
-
-        # Preimage 校验：删除行须与文件当前内容一致（防静默错位改写）
-        pre_err = _check_diff_preimage(text, plan)
-        if pre_err:
-            removed = "\n".join(
-                ln[1:]
-                for ln in diff.splitlines()
-                if ln.startswith("-") and not ln.startswith("---")
-            )
-            near = _near_snippet(text, removed)
-            return ToolResult.error(
-                f"Error: apply_patch stale/未匹配（{pre_err}）。"
-                f"先 read_file 再 apply_patch。{near}",
-                code="stale_preimage",
-            )
-
-        new_text = apply_plan(text, plan)
-        if new_text is None:
-            removed = "\n".join(
-                ln[1:]
-                for ln in diff.splitlines()
-                if ln.startswith("-") and not ln.startswith("---")
-            )
-            near = _near_snippet(text, removed)
-            return ToolResult.error(
-                f"Error: apply_patch stale/未匹配（hunk 与文件不一致）。{near}",
-                code="stale_preimage",
-            )
-
-        lint_err = _edit_time_lint_py(raw_path, new_text)
-        if lint_err:
-            lock = _resolve_edit_lock(context)
-            if lock is not None:
-                lock.edit_lint_reject_count += 1
-            return ToolResult.error(f"Error: {lint_err}（未落盘）", code="edit_lint_reject")
-
-        try:
-            atomic_write_text(target, new_text)
-        except OSError as e:
-            return ToolResult.error(f"Error: 写入失败: {e}", code="tool_execution_failed")
-
-        lock = _resolve_edit_lock(context)
-        if lock is not None:
-            lock.apply_patch_ok_count += 1
-
-        # 写后窗口回显（ACI）
-        lines = new_text.splitlines()
-        window = "\n".join(f"{i + 1:4d} | {lines[i]}" for i in range(min(40, len(lines))))
-        summaries.append(
-            f"ok apply_patch {raw_path} ({len(text.splitlines())}→{len(lines)} lines)\n"
-            f"--- 写后窗口 ---\n{window}"
+                return ToolResult.error(f"Error: {lint_err}（未落盘）", code="edit_lint_reject")
+        transaction.commit(changes)
+    except (ValueError, OSError, UnicodeError) as exc:
+        return ToolResult.error(
+            f"Error: {getattr(exc, 'code', 'tool_execution_failed')}: {exc}",
+            code=exc.code if isinstance(exc, PatchError) else "tool_execution_failed",
         )
-
+    lock = _resolve_edit_lock(context)
+    if lock is not None:
+        lock.apply_patch_ok_count += len(ops)
     _mark_write_done(context)
-    return (
-        ToolResult(content="\n\n".join(summaries))
-        if summaries
-        else ToolResult.error("Error: apply_patch 无有效操作")
-    )
+    summaries = []
+    for path, content in changes.items():
+        window = "\n".join(
+            f"{i + 1:4d} | {line}" for i, line in enumerate((content or "").splitlines()[:40])
+        )
+        summaries.append(f"ok apply_patch {path}\n--- 写后窗口 ---\n{window}")
+    return ToolResult(content="\n\n".join(summaries))
 
 
 def tool_quick_test(context, args: dict) -> ToolResult:
@@ -781,14 +567,14 @@ def tool_patch_file(context, args: dict) -> ToolResult:
         return ToolResult.error(f"Error: 不是文件: {raw_path}", code="tool_execution_failed")
 
     try:
-        text = target.read_text(encoding="utf-8")
+        text = target.read_bytes().decode("utf-8")
     except UnicodeDecodeError:
         return ToolResult.error(
             f"Error: 无法以 UTF-8 编码读取: {raw_path}", code="tool_execution_failed"
         )
 
     from agent_runtime.atomic_io import atomic_write_text
-    from agent_runtime.patch_engine import apply_plan, build_preview, parse_patch_input
+    from agent_runtime.patch_engine import build_preview, parse_patch_input
 
     expected_hash = args.get("base_sha256") or args.get("base_hash")
     if expected_hash:
@@ -805,27 +591,12 @@ def tool_patch_file(context, args: dict) -> ToolResult:
     except ValueError as e:
         return ToolResult.error(f"Error: {e}", code="tool_execution_failed")
 
-    if plan.mode == "legacy":
-        count = text.count(plan.old_text)
-        if count == 0:
-            near = _near_snippet(text, plan.old_text)
-            return ToolResult.error(
-                f"Error: old_text 在文件中未找到（出现 0 次）。old_text 必须恰好出现 1 次。{near}",
-                code="stale_preimage",
-            )
-        if count > 1:
-            return ToolResult.error(
-                f"Error: old_text 出现 {count} 次，必须恰好出现 1 次。请提供更多上下文使其唯一。",
-                code="stale_preimage",
-            )
+    from agent_runtime.patch_engine import PatchError, apply_text
 
-    new_text = apply_plan(text, plan)
-    if new_text is None:
-        near = _near_snippet(text, getattr(plan, "old_text", "") or "")
-        return ToolResult.error(
-            f"Error: 补丁无法应用到文件（hunk 与文件内容不匹配 / stale）。{near}",
-            code="stale_preimage",
-        )
+    try:
+        new_text = apply_text(text, plan)
+    except PatchError as exc:
+        return ToolResult.error(f"Error: {exc}", code=exc.code)
 
     lint_err = _edit_time_lint_py(raw_path, new_text)
     if lint_err:
@@ -844,7 +615,7 @@ def tool_patch_file(context, args: dict) -> ToolResult:
     delta = preview.lines_added - preview.lines_removed
     lines = new_text.splitlines()
     window = "\n".join(f"{i + 1:4d} | {lines[i]}" for i in range(min(20, len(lines))))
-    if preview.hunk_count == 1 and plan.mode == "legacy":
+    if preview.hunk_count == 1 and plan.mode == "replacement":
         return ToolResult(
             content=f"已修补 {raw_path}（替换 1 处，{delta:+d} 字符）\n--- 写后窗口 ---\n{window}"
         )

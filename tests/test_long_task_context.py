@@ -63,7 +63,7 @@ def test_context_manager_projects_long_task_state_into_protected_section(tmp_pat
         session.create(simple_plan(session))
         session.configure_long_task("request", hard_constraints=["constraint"])
         agent = SimpleNamespace(
-            _plan_session=session,
+            plan_session=session,
             session={},
             _cwd=str(tmp_path),
             _prefix=SimpleNamespace(

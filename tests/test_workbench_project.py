@@ -3,6 +3,7 @@
 import threading
 from contextlib import closing, contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,7 +14,7 @@ from agent_runtime.cancellation import (
     run_blocking,
 )
 from agent_runtime.providers.clients import FakeModelClient
-from src.repair_factory import wire_orchestrator
+from src.repair.assembly import create_repair_service
 from src.state import RepairState, VerificationResult
 from src.workbench.files import ProjectFiles
 from src.workbench.models import ConflictError
@@ -51,7 +52,7 @@ class Editor:
 def complete(service, cid, text, mode="repair"):
     turn = service.send(cid, text, mode=mode)
     run = service.wait(cid, turn.run.id, timeout=20)
-    assert run.status == "succeeded", run
+    assert run.status == "succeeded", (run.error, run.artifacts, run.answer)
     assert run.output_snapshot_id
     return turn
 
@@ -217,15 +218,22 @@ def test_repair_adapter_requires_l2_fixed_and_verification(tmp_path, verified):
 
     def factory(client, root, **kw):
         class Orch:
-            _active_agents = ()
+            session = SimpleNamespace(active_agents=(), progress=None)
 
-            def repair(self, issue, **options):
-                calls.append((issue, options, kw))
+            def run(self, request):
+                issue = request.issue
+                calls.append((issue, request, kw))
                 (Path(root) / "v.py").write_text("changed", encoding="utf-8")
                 return RepairState(
                     issue_input=issue,
                     status="fixed",
-                    verification_result=VerificationResult(all_passed=verified),
+                    verification_result=VerificationResult(
+                        all_passed=verified,
+                        total_tests=1,
+                        passed=int(verified),
+                        failed=int(not verified),
+                        execution_status="passed" if verified else "failed",
+                    ),
                 )
 
         return Orch()
@@ -237,8 +245,8 @@ def test_repair_adapter_requires_l2_fixed_and_verification(tmp_path, verified):
         assert run.status == ("succeeded" if verified else "failed")
         assert run.artifacts["verified"] is verified
         assert run.artifacts["changed_files"] == ["v.py"]
-        assert calls[0][1]["repair_timeout_s"] == 0
-        assert calls[0][1]["run_id"] == run.id
+        assert calls[0][1].timeout_s == 0
+        assert calls[0][1].run_id == run.id
 
 
 def test_restart_captures_actual_interrupted_project_without_replay(tmp_path):
@@ -280,7 +288,16 @@ def test_real_l2_repair_edits_disk_and_runs_local_verification(tmp_path, monkeyp
         provider="fake",
         timeout_s=60,
         execution_tier="host",
-        repair_factory=wire_orchestrator,
+        repair_factory=lambda *a, **kw: create_repair_service(
+            *a,
+            **{
+                **kw,
+                "runtime_overrides": {
+                    **kw.get("runtime_overrides", {}),
+                    "auto_context_extraction": False,
+                },
+            },
+        ),
     )
     with workspace(tmp_path, executor) as (service, chat, repo):
         (repo / "test_value.py").write_text(
@@ -288,7 +305,7 @@ def test_real_l2_repair_edits_disk_and_runs_local_verification(tmp_path, monkeyp
         )
         turn = service.send(chat.id, "Change the initial value in v.py from 1 to 2.", mode="repair")
         run = service.wait(chat.id, turn.run.id, timeout=65)
-        assert run.status == "succeeded", run
+        assert run.status == "succeeded", (run.error, run.artifacts, run.answer)
         assert run.artifacts["verified"] is True
         assert run.artifacts["verification"]["passed"] >= 1
         assert run.artifacts["changed_files"] == ["v.py"]
@@ -339,13 +356,13 @@ def test_output_capture_failure_blocks_history_until_restart(tmp_path, monkeypat
         def flaky(files, **kwargs):
             nonlocal calls
             calls += 1
-            if calls == 2:
+            if calls >= 2:
                 raise OSError("disk unavailable")
             return save(files, **kwargs)
 
         monkeypatch.setattr(service.restoration.repository, "save", flaky)
         turn = service.send(chat.id, "partial", mode="repair")
-        with pytest.raises(TimeoutError):
+        with pytest.raises(ConflictError):
             service.wait(chat.id, turn.run.id, timeout=0.5)
         assert service.store.get_run(chat.id, turn.run.id).status == "running"
         with pytest.raises(ConflictError):

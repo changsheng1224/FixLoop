@@ -9,14 +9,11 @@ from agent_runtime.prompt_external import (
     default_rules_text,
     load_prompt_assets,
 )
-from agent_runtime.prompt_prefix import (
-    build_prompt_prefix,
-    build_repair_agent_prefix,
-    cache_stable_text,
-)
+from agent_runtime.prompt_prefix import build_prompt_prefix, cache_stable_text
 from agent_runtime.tool_context import ToolContext
 from agent_runtime.tools import build_tool_registry
 from agent_runtime.workspace import WorkspaceContext
+from src.prompts.prefix import build_repair_agent_prefix
 from src.tools.composite import build_repair_canonical_tools
 
 
@@ -33,8 +30,7 @@ class TestLoadPromptAssets:
         agent_dir = temp_workspace / ".agent"
         agent_dir.mkdir()
         (agent_dir / "rules.md").write_text(
-            "## 项目规则\n\n**1. 禁止修改 tests/ 目录**",
-            encoding="utf-8",
+            "## 项目规则\n\n**1. 禁止修改 tests/ 目录**", encoding="utf-8"
         )
         assets = load_prompt_assets(temp_workspace)
         assert assets.rules_source == "repo:.agent/rules.md"
@@ -46,8 +42,7 @@ class TestLoadPromptAssets:
         agent_dir.mkdir()
         base = load_prompt_assets(temp_workspace).fingerprint
         (agent_dir / "examples.md").write_text(
-            "### 示例 1: 自定义\n```\n<final>ok</final>\n```",
-            encoding="utf-8",
+            "### 示例 1: 自定义\n```\n<final>ok</final>\n```", encoding="utf-8"
         )
         updated = load_prompt_assets(temp_workspace).fingerprint
         assert base != updated
@@ -82,29 +77,16 @@ class TestPrefixIntegration:
         )
         assert prefix.assets_fingerprint != ""
 
-    def test_repair_agents_share_assets_fingerprint(self, temp_workspace):
-        from agent_runtime.providers.clients import FakeModelClient
-        from src.agents.factory import create_patcher, create_verifier
-
-        ws = WorkspaceContext.build(str(temp_workspace))
-        loc = create_verifier(FakeModelClient(["<final>ok</final>"]), ws, cwd=str(temp_workspace))
-        pat = create_patcher(FakeModelClient(["<final>ok</final>"]), ws, cwd=str(temp_workspace))
-        assert loc._prefix.assets_fingerprint == pat._prefix.assets_fingerprint
-
     def test_repair_prefix_uses_external_examples(self, temp_workspace):
         agent_dir = temp_workspace / ".agent"
         agent_dir.mkdir()
         (agent_dir / "examples.md").write_text(
-            "### 示例 1: Repair custom\n```\n<final>done</final>\n```",
-            encoding="utf-8",
+            "### 示例 1: Repair custom\n```\n<final>done</final>\n```", encoding="utf-8"
         )
         ws = WorkspaceContext.build(str(temp_workspace))
         ctx = ToolContext(root=str(temp_workspace))
         registry = build_repair_canonical_tools(ctx)
         prefix = build_repair_agent_prefix(
-            "You are Localizer.",
-            ws,
-            registry,
-            repo_root=str(temp_workspace),
+            "You are Localizer.", ws, registry, repo_root=str(temp_workspace)
         )
         assert "Repair custom" in prefix.stable_text
