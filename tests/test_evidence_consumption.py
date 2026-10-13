@@ -254,8 +254,11 @@ def test_actual_request_distinguishes_checked_source_summary_and_retained_body(
         session.configure_long_task("inspect source", hard_constraints=["do not edit"])
         agent, client = _agent(tmp_path, session, native=native, budget=4500 if large else 6000)
         agent.shared_run_id = session.identity["run_id"]
-        agent._l2_agent = "observer"
-        agent._l2_task_id = session.identity["task_id"]
+        agent.correlation = {
+            "role": "observer",
+            "task_id": session.identity["task_id"],
+            "repair_run_id": session.identity["run_id"],
+        }
         agent.session["id"] = session.identity["session_id"]
         agent.session["session_identity"] = dict(session.identity)
         agent.session["session_scope"] = {"session_id": session.identity["session_id"]}
@@ -388,8 +391,11 @@ def test_native_consumption_tracks_retained_groups_after_forced_action(tmp_path,
         session.configure_long_task("inspect source")
         agent, client = _agent(tmp_path, session, native=True)
         agent.shared_run_id = session.identity["run_id"]
-        agent._l2_agent = "observer"
-        agent._l2_task_id = session.identity["task_id"]
+        agent.correlation = {
+            "role": "observer",
+            "task_id": session.identity["task_id"],
+            "repair_run_id": session.identity["run_id"],
+        }
         agent.session["id"] = session.identity["session_id"]
         agent.session["session_identity"] = dict(session.identity)
         agent.session["session_scope"] = {"session_id": session.identity["session_id"]}

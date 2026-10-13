@@ -76,7 +76,12 @@ class TestAgentLoopStopReason:
         assert "tool_steps" in report["node_timings"]["stop_reason_detail"]
 
     def test_parse_fail_emits_canonical_reason(self, workspace, temp_workspace):
-        config = AgentConfig(provider="fake", max_steps=2, deadline={"step_s": 0, "tool_s": 0})
+        config = AgentConfig(
+            provider="fake",
+            max_steps=2,
+            max_model_attempts=10,
+            deadline={"step_s": 0, "tool_s": 0},
+        )
         client = FakeModelClient(["not xml"] * 20)
         agent = Agent(
             config=config,

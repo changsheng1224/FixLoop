@@ -102,11 +102,25 @@ def assert_delivery(output: Path, *, source: str, base: str, tier: str):
         "delivery",
     ]
     assert (output / "report.md").is_file()
-    repo = Path(report["repo_path"])
+    # The clone stays pristine; the runtime repairs in a managed worktree and
+    # keeps its per-run state under the managed project partition.
+    from agent_runtime.state_root import managed_state_base
+
+    repo = Path(report["source_repo_path"])
     assert repo == output / "repo"
-    trace = repo / ".agent" / "runs" / report["runtime_run_id"] / "trace.jsonl"
+    run_id = report["runtime_run_id"]
+    trace = (
+        managed_state_base(repo, report.get("state_root"))
+        / "tasks"
+        / run_id
+        / ".agent"
+        / "runs"
+        / run_id
+        / "trace.jsonl"
+    )
     assert trace.is_file()
     assert "patch_file" in trace.read_text(encoding="utf-8")
+    assert f"Trace：{trace}" in (output / "report.md").read_text(encoding="utf-8")
     patch = (output / "patch.diff").read_bytes()
     assert patch and b"test_value.py" not in patch
     clean = output.parent / (output.name + "-reapply")

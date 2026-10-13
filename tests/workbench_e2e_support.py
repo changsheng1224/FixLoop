@@ -42,9 +42,18 @@ def http(url, method="GET", body=None, *, token=None, expected=200, timeout=10):
 
 
 def eventually(check, timeout=45):
+    """Poll `check` until it is truthy.
+
+    A sandboxed run holds the tree it is writing, so a transient permission
+    error during a poll means "not yet", not "failed"; the deadline still
+    bounds the wait.
+    """
     deadline = time.monotonic() + timeout
     while True:
-        value = check()
+        try:
+            value = check()
+        except PermissionError:
+            value = False
         if value:
             return value
         if time.monotonic() >= deadline:

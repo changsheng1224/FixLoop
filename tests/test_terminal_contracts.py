@@ -57,7 +57,9 @@ def test_static_checks_do_not_count_as_tested_repair(tmp_path):
         issue_input="fix",
         status="fixed",
         candidate_patches=[CandidatePatch(file_path="a.py")],
-        verification_result=VerificationResult(all_passed=True, total_tests=1, passed=1),
+        verification_result=VerificationResult(
+            all_passed=True, total_tests=1, passed=1, execution_status="passed"
+        ),
     )
     report = RepairReport(tmp_path, "fixture")
     report.record_state(state, "static")

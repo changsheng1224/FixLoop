@@ -238,13 +238,14 @@ def test_compatibility_shims_stay_removed():
     assert hasattr(ContextPolicyEngine, "select_with_result")
     assert not hasattr(ContextPolicyEngine, "select")
 
+    import importlib.util
+
     from src.benchmark.swebench import harness
-    from src.repair.execution import patch_applier
     from src.repair.phase_clock import PhaseTimeoutConfig
 
     assert not hasattr(PhaseTimeoutConfig, "from_repair_timeout")
     assert hasattr(PhaseTimeoutConfig, "with_repair_total_cap")
-    assert not hasattr(patch_applier, "extract_json_block")
+    assert importlib.util.find_spec("src.repair.execution.patch_applier") is None
     assert not hasattr(harness, "_parse_resolved")
 
 

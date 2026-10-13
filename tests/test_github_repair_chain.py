@@ -31,6 +31,10 @@ def prepare_environment(tmp_path, monkeypatch, *, offline=True):
         "FIXLOOP_DEADLINE_REPAIR_S": "90",
         "FIXLOOP_DEADLINE_TOOL_S": "30",
         "FIXLOOP_PROGRESS_HEARTBEAT": "0",
+        # The scripted first reply is a plain conclusion, not the extraction
+        # schema; leaving the model-driven extraction on would persist a blocked
+        # record and abort every later patcher turn.
+        "FIXLOOP_AUTO_CONTEXT_EXTRACTION": "false",
     }.items():
         monkeypatch.setenv(name, value)
     if offline:

@@ -1,6 +1,7 @@
 """Project scope, config invalidation, corruption and atomic publication without downloads."""
 
 import hashlib
+import importlib.machinery
 import os
 import subprocess
 import sys
@@ -241,8 +242,15 @@ def test_model_loader_pins_revision_and_separates_profiles(monkeypatch):
         calls.append((args, kwargs))
         return SimpleNamespace(max_seq_length=None)
 
+    # `_get_semantic_model` gates on `find_spec`, which reads `__spec__`; a
+    # spec-less double in sys.modules raises instead of reporting absence.
     monkeypatch.setitem(
-        sys.modules, "sentence_transformers", SimpleNamespace(SentenceTransformer=model)
+        sys.modules,
+        "sentence_transformers",
+        SimpleNamespace(
+            __spec__=importlib.machinery.ModuleSpec("sentence_transformers", None),
+            SentenceTransformer=model,
+        ),
     )
     config = EmbeddingConfig()
     first = semantic._get_semantic_model(config)
@@ -427,18 +435,20 @@ def test_workbench_copies_use_source_cache_outside_run_state(tmp_path, monkeypat
     monkeypatch.setattr(Agent, "ask", ask)
 
     def factory(client, root, **kwargs):
-        orch = create_repair_service(client, root, skip_verify=True, **kwargs).session
+        service = create_repair_service(client, root, skip_verify=True, **kwargs)
 
         def repair(*args, **kwargs):
-            encode(orch.patcher)
+            encode(service.session.patcher)
             return RepairState(
                 issue_input="fix",
                 status="fixed",
-                verification_result=VerificationResult(all_passed=True),
+                verification_result=VerificationResult(
+                    all_passed=True, total_tests=1, passed=1, execution_status="passed"
+                ),
             )
 
-        orch.lifecycle.execute = repair
-        return orch
+        service.session.lifecycle.execute = repair
+        return service
 
     executor = ProjectExecutor(
         lambda: FakeModelClient([]), provider="fake", execution_tier="host", repair_factory=factory

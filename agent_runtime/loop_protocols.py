@@ -659,7 +659,10 @@ def native_model_turn(
         path="native",
     )
 
-    if finish.kind == FinishKind.TOOL_CALLS and result.tool_calls:
+    # `tool_calls` with an empty normalized list is itself a protocol violation:
+    # it must reach `ToolCallBatch.create`, which rejects the empty batch, rather
+    # than falling through and being reported as an empty final answer.
+    if finish.kind == FinishKind.TOOL_CALLS:
         visible = result.text or "\n".join(
             block.get("text", "")
             for block in (result.content or [])

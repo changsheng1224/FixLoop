@@ -206,14 +206,20 @@ def test_repair_adapter_carries_source_into_factory(tmp_path):
 
     def factory(client, root, **kw):
         calls.append((root, kw))
-        return SimpleNamespace(
-            _active_agents=(),
-            repair=lambda *a, **k: RepairState(
-                issue_input="fix",
-                status="fixed",
-                verification_result=VerificationResult(all_passed=True),
-            ),
-        )
+
+        class Orch:
+            session = SimpleNamespace(active_agents=(), progress=None)
+
+            def run(self, request):
+                return RepairState(
+                    issue_input="fix",
+                    status="fixed",
+                    verification_result=VerificationResult(
+                        all_passed=True, total_tests=1, passed=1, execution_status="passed"
+                    ),
+                )
+
+        return Orch()
 
     with closing(ProjectFiles(copy)) as files:
         result = ProjectExecutor(lambda: object(), repair_factory=factory)(

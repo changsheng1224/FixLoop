@@ -224,7 +224,7 @@ class TestResumeSkipsParse:
         assert orch.patch_calls == 2
         assert result.retry_count == 1
         assert result.status == "pending_verify"
-        assert "直接调用一次 apply_patch" in result.feedback
+        assert "请基于现有证据调用一次 apply_patch" in result.feedback
 
     def test_skip_verify_still_runs_critic_and_retries(self, tmp_path, monkeypatch):
         from src.repair.session import ExecutionSession
