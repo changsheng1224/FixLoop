@@ -51,10 +51,17 @@ class RepairReport:
         vr = state.verification_result
         internal = (state.node_timings.get("phases_internal") or {}).get("verify") or {}
         actual_tier = internal.get("actual_tier", tier)
+        static_checked = bool(
+            vr
+            and vr.all_passed
+            and vr.verification_mode == "static"
+            and vr.execution_status == "completed"
+        )
         tested = bool(
             vr
             and vr.all_passed
             and vr.total_tests > 0
+            and vr.execution_status == "completed"
             and actual_tier not in {"static", "skipped", "none"}
             and not self.data.get("dry_run")
         )
@@ -75,7 +82,11 @@ class RepairReport:
             verification_receipt=state.node_timings.get("plan_verification_receipt", {}),
             failure_tags=list(state.failure_tags),
             agent_errors=dict(state.agent_errors),
-            verification_scope="runtime_selected_tests" if tested else "unverified",
+            verification_scope="runtime_selected_tests"
+            if tested
+            else "static_checks"
+            if static_checked
+            else "unverified",
         )
         self.data.update(category="", error="")
         if status in {"user_cancel", "recovery_required", "timeout", "regression"}:
@@ -123,6 +134,8 @@ class RepairReport:
         if self.data.get("verification_scope") == "runtime_selected_tests":
             vr = self.data["verification"]
             lines.append(f"验证：{vr['passed']}/{vr['total_tests']} 通过（运行时选择的测试范围）。")
+        elif self.data.get("verification_scope") == "static_checks":
+            lines.append("静态检查已完成并通过；尚未运行测试，补丁等待测试验证。")
         else:
             lines.append("尚无测试通过证据；静态检查和跳过验证不算修复已验证。")
         if self.data["error"]:

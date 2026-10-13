@@ -405,6 +405,8 @@ class VerificationResult:
     build_log: str = ""
     lint_issues: list[str] = field(default_factory=list)
     schema_version: str = "1.0"
+    verification_mode: str = "tests"
+    execution_status: str = "unknown"
 
     def to_dict(self) -> dict:
         """序列化为 JSON 可写 dict。"""
@@ -418,6 +420,8 @@ class VerificationResult:
             "build_log": self.build_log,
             "lint_issues": self.lint_issues,
             "schema_version": self.schema_version,
+            "verification_mode": self.verification_mode,
+            "execution_status": self.execution_status,
         }
 
     @classmethod
@@ -433,6 +437,8 @@ class VerificationResult:
             build_log=data.get("build_log", ""),
             lint_issues=data.get("lint_issues", []),
             schema_version=data.get("schema_version", "1.0"),
+            verification_mode=data.get("verification_mode", "tests"),
+            execution_status=data.get("execution_status", "unknown"),
         )
 
 

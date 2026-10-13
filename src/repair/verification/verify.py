@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from agent_runtime.test_execution import ProcessCleanupUnconfirmedError, run_command, run_pytest
 from agent_runtime.tools import TIER_CONTAINER, TIER_HOST
 from src.repair.verification.verification_profiles import select_verification_profile
 from src.repair.verification.verification_runner import run_profile
@@ -26,6 +27,12 @@ class VerifyRun:
     elapsed_ms: int
     internal: dict
     error: str | None = None
+
+    def __post_init__(self):
+        mode = "static" if self.internal.get("actual_tier") == TIER_STATIC else "tests"
+        self.internal.setdefault("mode", mode)
+        self.result.verification_mode = mode
+        self.result.execution_status = "completed" if self.internal.get("completed") else "unknown"
 
 
 class VerifyStrategy(Protocol):
@@ -84,6 +91,10 @@ def _verify_cancelled_run(start: float) -> VerifyRun:
             isolation_level=ISOLATION_NONE,
             trusted_execution=False,
             user_cancel=True,
+            cleanup="confirmed",
+            execution_stopped=True,
+            completed=False,
+            category="interrupted",
         ),
         error="user_cancel",
     )
@@ -127,6 +138,8 @@ class DockerVerifyStrategy:
                     isolation_level=ISOLATION_NONE,
                     trusted_execution=False,
                     sandbox_unavailable=True,
+                    cleanup="confirmed",
+                    not_started=True,
                     fallback_candidate=TIER_HOST,
                     error=str(exc),
                 ),
@@ -147,6 +160,8 @@ class DockerVerifyStrategy:
                 )
             )
             return _verify_from_sandbox_result(result, internal, t0)
+        except ProcessCleanupUnconfirmedError:
+            raise
         except Exception as exc:
             elapsed_ms = int((time.time() - t0) * 1000)
             from src.harness.sandbox_verify import verification_result_for_sandbox_error
@@ -173,20 +188,13 @@ class PytestVerifyStrategy:
     """宿主机 subprocess pytest（execution_tier=host）。"""
 
     def run(self, repo_root: str, test_path: str = "", cancel_token=None) -> VerifyRun:
-        from agent_runtime.cancellation import CancelledError, run_with_cancellation
-        from src.eval.runner import run_pytest
-
-        del test_path
-
-        def _run_pytest():
-            return run_pytest(Path(repo_root))
+        from agent_runtime.cancellation import CancelledError
 
         t0 = time.time()
         try:
-            if cancel_token is not None:
-                code, out = run_with_cancellation(_run_pytest, cancel_token)
-            else:
-                code, out = _run_pytest()
+            code, out = run_pytest(
+                Path(repo_root), [test_path] if test_path else None, cancel_token=cancel_token
+            )
         except CancelledError:
             return _verify_cancelled_run(t0)
         elapsed_ms = int((time.time() - t0) * 1000)
@@ -219,8 +227,9 @@ class PytestVerifyStrategy:
                 trusted_execution=True,
                 warning=HOST_FALLBACK_WARNING,
                 pytest_ms=elapsed_ms,
-                command=[sys.executable, "-m", "pytest", "-q"],
+                command=[sys.executable, "-m", "pytest", "-q", *([test_path] if test_path else [])],
                 completed=True,
+                cleanup="confirmed",
                 pytest_exit_code=code,
                 category="passed"
                 if code == 0
@@ -393,15 +402,17 @@ class StaticVerifyStrategy:
         *,
         language: str = "python",
     ) -> VerifyRun:
-        del test_path, cancel_token
+        del test_path
         root = Path(repo_root)
         t0 = time.time()
         language = (language or "python").lower()
         if language != "python":
-            return self._run_external_static_check(root, language, t0)
+            return self._run_external_static_check(root, language, t0, cancel_token)
 
         failures: list[str] = []
         for path in root.rglob("*.py"):
+            if cancel_token is not None:
+                cancel_token.check()
             if any(part in {".git", ".pytest_cache", "__pycache__"} for part in path.parts):
                 continue
             try:
@@ -433,6 +444,12 @@ class StaticVerifyStrategy:
                 static_ms=elapsed_ms,
                 language=language,
                 checked_files=sum(1 for _ in root.rglob("*.py")),
+                command=["python.compile"],
+                operation="python.compile",
+                completed=True,
+                cleanup="confirmed",
+                exit_code=0 if ok else 1,
+                category="static_passed" if ok else "static_failed",
             ),
             error=None if ok else "static_verify_failed",
         )
@@ -442,6 +459,7 @@ class StaticVerifyStrategy:
         root: Path,
         language: str,
         start: float,
+        cancel_token=None,
     ) -> VerifyRun:
         specs = {
             "java": ("javac", (".java",), self._java_check_command),
@@ -477,22 +495,27 @@ class StaticVerifyStrategy:
                     language=language,
                     checker=tool,
                     checked_files=0,
+                    operation=tool,
+                    command=[],
+                    steps=[],
+                    completed=True,
+                    cleanup="confirmed",
+                    exit_code=0,
+                    category="static_passed",
                 ),
             )
 
         failures: list[str] = []
+        steps = []
         with tempfile.TemporaryDirectory(prefix="fixloop_static_") as out_dir:
             for cmd in command_builder(root, files, out_dir):
-                proc = subprocess.run(
-                    cmd,
-                    cwd=root,
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
-                if proc.returncode != 0:
-                    output = (proc.stderr or proc.stdout or "").strip()
-                    failures.append(output[:2000] or f"{tool} exited {proc.returncode}")
+                try:
+                    code, output = run_command(cmd, root, cancel_token=cancel_token, timeout_s=30)
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    return self._unsupported_static_language(root, language, start, str(exc))
+                if code != 0:
+                    failures.append(output.strip()[:2000] or f"{tool} exited {code}")
+                steps.append({"command": cmd, "exit_code": code, "output": output[-2000:]})
 
         elapsed_ms = int((time.time() - start) * 1000)
         ok = not failures
@@ -515,6 +538,13 @@ class StaticVerifyStrategy:
                 language=language,
                 checker=tool,
                 checked_files=len(files),
+                operation=tool,
+                command=[step["command"] for step in steps],
+                steps=steps,
+                completed=True,
+                cleanup="confirmed",
+                exit_code=0 if ok else 1,
+                category="static_passed" if ok else "static_failed",
             ),
             error=None if ok else "static_verify_failed",
         )
@@ -543,6 +573,10 @@ class StaticVerifyStrategy:
                 language=language,
                 unsupported_language=language,
                 root=str(root),
+                command=[],
+                completed=False,
+                cleanup="confirmed",
+                category="environment",
             ),
             error="static_verify_unsupported",
         )
@@ -628,7 +662,6 @@ class ProfileVerifyStrategy:
         *,
         language: str = "python",
     ) -> VerifyRun:
-        del cancel_token
         started = time.time()
         profile = select_verification_profile(repo_root, language)
         if profile is None:
@@ -639,10 +672,16 @@ class ProfileVerifyStrategy:
                     failure_logs=[f"no verification profile for {language}"],
                 ),
                 elapsed_ms=int((time.time() - started) * 1000),
-                internal={"language": language, "category": "verification_environment_failed"},
+                internal={
+                    "language": language,
+                    "category": "verification_environment_failed",
+                    "completed": False,
+                    "not_started": True,
+                    "cleanup": "confirmed",
+                },
                 error="verification_profile_missing",
             )
-        payload = run_profile(repo_root, profile, target=test_path)
+        payload = run_profile(repo_root, profile, target=test_path, cancel_token=cancel_token)
         passed = bool(payload.get("all_passed"))
         category = payload.get("category", "")
         logs = [
@@ -653,6 +692,8 @@ class ProfileVerifyStrategy:
         return VerifyRun(
             result=VerificationResult(
                 all_passed=passed,
+                total_tests=payload.get("total_tests", 0),
+                passed=payload.get("passed", 0),
                 failed=0 if passed else 1,
                 failure_logs=logs,
             ),
@@ -664,6 +705,10 @@ class ProfileVerifyStrategy:
                 "ecosystem": profile.ecosystem,
                 "category": category,
                 "steps": payload.get("steps", []),
+                "command": [step["command"] for step in payload.get("steps", [])],
+                "completed": payload.get("completed", False),
+                "exit_code": payload.get("exit_code"),
+                "cleanup": "confirmed",
             },
             error=None if passed else category,
         )
@@ -676,8 +721,16 @@ def record_verify_timings(state, run: VerifyRun, *, log_sandbox: bool = False) -
     set_phase_ms(state.node_timings, "verify", run.elapsed_ms, internal=run.internal)
     state.node_timings["plan_verification_receipt"] = {
         "command": run.internal.get("command", []),
+        "mode": run.internal.get("mode", "tests"),
+        "operation": run.internal.get("operation", ""),
+        "checked_files": run.internal.get("checked_files", 0),
+        "steps": run.internal.get("steps", []),
+        "cleanup": run.internal.get(
+            "cleanup", "confirmed" if run.internal.get("completed") else "unknown"
+        ),
         "completed": run.internal.get("completed", False),
-        "exit_code": run.internal.get("pytest_exit_code"),
+        "not_started": run.internal.get("not_started", False),
+        "exit_code": run.internal.get("exit_code", run.internal.get("pytest_exit_code")),
         "category": run.internal.get("category", run.error or "unknown"),
         "receipt_id": run.internal.get("receipt_id", ""),
         "verification_binding": run.internal.get("verification_binding", {}),

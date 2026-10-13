@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import subprocess
-
 
 def test_provider_finish_normalization():
     from agent_runtime.model_turn import (
@@ -46,9 +44,8 @@ def test_manifest_profile_runs_structured_steps(monkeypatch, tmp_path):
     assert profile is not None
     monkeypatch.setattr("shutil.which", lambda name: name)
     monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "ok", ""),
+        "src.repair.verification.verification_runner.run_command",
+        lambda *args, **kwargs: (0, '{"Test":"TestX","Action":"pass"}'),
     )
     result = run_profile(tmp_path, profile)
     assert result["all_passed"] is True

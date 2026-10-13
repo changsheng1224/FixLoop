@@ -61,7 +61,7 @@ _PROFILES = (
         "go",
         ("go.mod",),
         static_steps=(VerificationStep("go_vet", ("go", "vet", "./..."), "static"),),
-        test_steps=(VerificationStep("go_test", ("go", "test", "./..."), "target_tests"),),
+        test_steps=(VerificationStep("go_test", ("go", "test", "-json", "./..."), "target_tests"),),
     ),
     VerificationProfile(
         "rust",

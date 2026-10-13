@@ -201,11 +201,11 @@ def test_profile_launch_failure_is_an_environment_result(tmp_path, monkeypatch):
     resolved = str(tmp_path / "bin" / "runner")
     monkeypatch.setattr("shutil.which", lambda _: resolved)
 
-    def fail_launch(command, **kwargs):
+    def fail_launch(command, root, **kwargs):
         assert command[0] == resolved
         raise FileNotFoundError("executable disappeared after discovery")
 
-    monkeypatch.setattr("subprocess.run", fail_launch)
+    monkeypatch.setattr("src.repair.verification.verification_runner.run_command", fail_launch)
     profile = VerificationProfile(
         "example",
         "example",

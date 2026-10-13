@@ -29,6 +29,12 @@ def build_repair_tools(context) -> dict:
         工具注册表字典。
     """
     registry = {}
+    context.sandbox_trusted_handlers.update(
+        {
+            "stack_parse": stack_parse,
+            "java_stack_parse": java_stack_parse,
+        }
+    )
 
     # ---- grep (L2 visible) ----
     registry["grep"] = {

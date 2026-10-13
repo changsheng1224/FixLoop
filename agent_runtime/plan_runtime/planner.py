@@ -74,7 +74,13 @@ def grounded_plan(
             "Run the existing final verifier against the applied patch",
             depends_on=("edit",),
             side_effect="verify",
-            completion=(Completion("tests_passed"),),
+            completion=(
+                Completion(
+                    "static_checked"
+                    if getattr(session, "verification_mode", "tests") == "static"
+                    else "tests_passed"
+                ),
+            ),
         )
     )
     plan = Plan(plan_id or new_id("plan"), **session.identity, nodes=tuple(nodes)).seal()
@@ -176,6 +182,9 @@ def grounded_plan(
             if not conclusion:
                 raise ValueError("analysis_conclusion_required")
             by_kind = {n.kind: n for n in generated.nodes if n.kind != "explore"}
+            expected = plan.node("verify").completion
+            if by_kind["verify"].completion != expected:
+                raise ValueError("verification_mode_completion_mismatch")
 
             def ancestors(node):
                 result = set(node.depends_on)

@@ -66,7 +66,7 @@ def evidence_summary(record: dict, check: dict) -> dict:
             execution_stopped=record["execution_stopped"],
             supports="confirmed_patch_for_recorded_versions; not permission to replay",
         )
-    elif kind == "tests_passed":
+    elif kind in {"tests_passed", "static_checked"}:
         receipt = record["receipt"]
         summary.update(
             command_preview=preview("command", receipt["command"]),
@@ -74,7 +74,9 @@ def evidence_summary(record: dict, check: dict) -> dict:
                 key: receipt[key]
                 for key in ("run_id", "attempt_id", "completed", "all_passed", "total_tests")
             },
-            supports="recorded_test_result_for_recorded_versions; not exhaustive coverage",
+            supports="recorded_static_check_for_recorded_versions; tests not executed"
+            if kind == "static_checked"
+            else "recorded_test_result_for_recorded_versions; not exhaustive coverage",
         )
     # Full checksums remain in inspections/manifests and pin the version map.
     # This prefix is only a display label, never an integrity check.

@@ -169,7 +169,8 @@ def test_real_host_pipeline_cli_delivery_uses_candidate_checkout(
     args = arguments(temp_workspace, output, workspace_policy="worktree", execution_tier="host")
     orch = wire_orchestrator(
         client, str(temp_workspace), execution_tier="host",
-        runtime_overrides={"provider": "fake", "model": "fake-test", "approval": "auto"},
+        runtime_overrides={"provider": "fake", "model": "fake-test", "approval": "auto",
+                           "auto_context_extraction": False},
     )
 
     def execute(repo, token, workspace_ready):

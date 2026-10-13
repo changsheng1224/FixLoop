@@ -386,7 +386,7 @@ class PlanSession(ContextUpdates):
             if not attempt and node.status == "succeeded" and node.kind in {"edit", "verify"}:
                 effects = [ref for ref in node.output_evidence_refs if self.evidence.valid(ref)]
             if attempt and node.kind in {"edit", "verify"}:
-                wanted = "patch_applied" if node.kind == "edit" else "tests_passed"
+                wanted = "patch_applied" if node.kind == "edit" else node.completion[0].kind
                 effects = [
                     ref
                     for op in self.operations(attempt["attempt_id"])
@@ -1052,6 +1052,13 @@ class PlanSession(ContextUpdates):
         return {"status": "success", "evidence_refs": refs}
 
     def verify_result(self, attempt: dict, result: dict, receipt: dict) -> dict:
+        if receipt.get("category") == "interrupted" and receipt.get("cleanup") == "confirmed":
+            return {
+                "status": "cancelled",
+                "evidence_refs": [],
+                "verification_result": result,
+                "reason": "user_cancel",
+            }
         receipt = {
             **receipt,
             "run_id": self.identity["run_id"],
@@ -1060,7 +1067,7 @@ class PlanSession(ContextUpdates):
             "total_tests": result.get("total_tests", 0),
         }
         ref = self.evidence.add(
-            "tests_passed",
+            "static_checked" if receipt.get("mode") == "static" else "tests_passed",
             attempt_id=attempt["attempt_id"],
             status="success",
             file_versions=self.snapshot_workspace(),
@@ -1069,7 +1076,7 @@ class PlanSession(ContextUpdates):
             execution_stopped=receipt.get("completed") is True,
         )
         return {
-            "status": "uncertain"
+            "status": ("failed" if receipt.get("cleanup") == "confirmed" else "uncertain")
             if receipt.get("completed") is not True
             else "success"
             if result.get("all_passed")

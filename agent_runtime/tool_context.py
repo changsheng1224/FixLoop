@@ -68,6 +68,8 @@ class ToolContext:
     sandbox_versions_lock: object = field(default_factory=threading.RLock, repr=False)
     sandbox_dispatch_lock: object = field(default_factory=threading.Lock, repr=False)
     sandbox_permissions: object | None = None
+    # Trusted application registration, independent of model-visible registry callbacks.
+    sandbox_trusted_handlers: dict = field(default_factory=dict, repr=False)
     sandbox_initial_scope: object | None = None
     sandbox_approval_callback: Callable[[dict], bool | None] | None = None
     sandbox_approval_policy: str = "ask"

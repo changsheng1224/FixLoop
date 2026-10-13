@@ -20,6 +20,8 @@ class RepairConfig(BaseModel):
     progress_heartbeat: bool = True
     progress_heartbeat_s: float = Field(default=60, ge=5, allow_inf_nan=False)
     progress_heartbeat_text: bool = False
+    # File path -> qualified Python definition names (e.g. Service.run).
+    protected_interfaces: dict[str, list[str]] = Field(default_factory=dict)
     _provenance: dict[str, str] = PrivateAttr(default_factory=dict)
 
     def snapshot(self) -> dict:

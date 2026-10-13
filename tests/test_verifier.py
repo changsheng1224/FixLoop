@@ -132,7 +132,10 @@ class TestVerifyStrategyExecutionTier:
                 stderr="Bar.java:1: error: illegal start of expression",
             )
 
-        monkeypatch.setattr("subprocess.run", fake_run)
+        monkeypatch.setattr(
+            "src.repair.verification.verify.run_command",
+            lambda cmd, root, **kw: (1, "Bar.java:1: error: illegal start of expression"),
+        )
 
         run = StaticVerifyStrategy().run(str(tmp_path), language="java")
 
@@ -259,8 +262,10 @@ class TestVerifierFallbackPolicy:
         monkeypatch.setattr(
             "src.repair.verification.verification_runner.shutil.which", lambda _command: None
         )
-        monkeypatch.setattr("src.orchestrator.StaticVerifyStrategy.run", fake_static_run)
-        orch = Orchestrator(None, verifier=object(), use_pytest_verify=True)
+        monkeypatch.setattr(
+            "src.repair.verification.verify.StaticVerifyStrategy.run", fake_static_run
+        )
+        orch = Orchestrator(None, allow_static_verify_fallback=True)
         orch._repo_root = str(tmp_path)
         state = RepairState(
             issue_input="java.lang.NullPointerException at Bar.java:10",

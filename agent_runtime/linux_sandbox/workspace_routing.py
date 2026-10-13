@@ -124,8 +124,8 @@ def bind_workspace_tools(context, registry):
         elif sandbox_tool_access(name) is not SandboxToolAccess.DENIED:
             # A name or metadata flag is not authority to run an injected host function.
             spec["run"] = lambda args, name=name: execute_canonical_tool(context, name, args)
-            spec["run_with_context"] = (
-                lambda ctx, args, name=name: execute_canonical_tool(ctx, name, args)
+            spec["run_with_context"] = lambda ctx, args, name=name: execute_canonical_tool(
+                ctx, name, args
             )
             spec["parallel_run"] = spec["run"]
             spec["execution_mode"] = "thread"
@@ -147,9 +147,6 @@ def bind_workspace_tools(context, registry):
 
 def execute_canonical_tool(context, name, args):
     from agent_runtime.tools import tool_expand_observation, tool_quick_test, tool_run_shell
-    from src.tools.java_stack_parser import java_stack_parse
-    from src.tools.repair_control import tool_expand_lock, tool_finish_repair
-    from src.tools.stack_parser import stack_parse
 
     from .permissions import authorize_trusted, permission_service
 
@@ -157,19 +154,24 @@ def execute_canonical_tool(context, name, args):
         return tool_run_shell(context, args)
     if name == "quick_test":
         return tool_quick_test(context, args)
-    if name == "expand_lock":
-        return tool_expand_lock(context, args)
+    handler = context.sandbox_trusted_handlers.get(name)
+    if name == "expand_lock" and handler is not None:
+        return handler(context, args)  # The scope-expansion handler owns its permission receipt.
     rejection, permission = authorize_trusted(context, name, args)
     if rejection is not None:
         return rejection
     handlers = {
-        "finish_repair": lambda: tool_finish_repair(args),
         "expand_observation": lambda: tool_expand_observation(context, args),
-        "stack_parse": lambda: stack_parse(context, args),
-        "java_stack_parse": lambda: java_stack_parse(context, args),
     }
     try:
-        result = handlers[name]()
+        if name in handlers:
+            result = handlers[name]()
+        elif handler is not None:
+            result = handler(context, args)
+        else:
+            result = ToolResult.error(
+                "Error: trusted tool handler not registered", code="policy_denied", retryable=False
+            )
     except Exception:
         permission_service(context).outcome(permission, "error")
         raise

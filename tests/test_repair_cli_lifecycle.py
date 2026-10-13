@@ -67,7 +67,9 @@ def test_github_default_container_end_to_end(temp_workspace, tmp_path, monkeypat
         (Path(repo) / "new.py").write_text("value = 2\n")
         return patch_state(
             args.issue,
-            verification_result=VerificationResult(all_passed=True, total_tests=2, passed=2),
+            verification_result=VerificationResult(
+                all_passed=True, total_tests=2, passed=2, execution_status="completed"
+            ),
         )
 
     assert run_repair_cli(args, execute) == 0
@@ -209,7 +211,9 @@ def test_actual_verification_backend_is_reported(tmp_path):
     report = RepairReport(output, "test")
     state = patch_state(
         "fix",
-        verification_result=VerificationResult(all_passed=True, total_tests=2, passed=2),
+        verification_result=VerificationResult(
+            all_passed=True, total_tests=2, passed=2, execution_status="completed"
+        ),
     )
     state.node_timings["phases_internal"] = {"verify": {"actual_tier": "host"}}
     report.record_state(state, "auto")
@@ -230,7 +234,9 @@ def test_dry_run_does_not_claim_verified_repair(temp_workspace, tmp_path, monkey
     args = arguments(temp_workspace, output, dry_run=True)
     state = patch_state(
         "fix",
-        verification_result=VerificationResult(all_passed=True, total_tests=2, passed=2),
+        verification_result=VerificationResult(
+            all_passed=True, total_tests=2, passed=2, execution_status="completed"
+        ),
     )
     assert run_repair_cli(args, lambda *a: state) == 0
     assert result(output)["status"] == "pending_verify"

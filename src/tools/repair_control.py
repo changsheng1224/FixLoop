@@ -44,8 +44,13 @@ def tool_expand_lock(context, args: dict) -> ToolResult:
         rejection, permission = authorize_trusted(context, "expand_lock", args)
         if rejection is not None:
             return rejection
-        probe = execute_workspace_tool(context, "read_file", {"path": raw_path, "end": 1},
-                                       mark_read=False, record_versions=False)
+        probe = execute_workspace_tool(
+            context,
+            "read_file",
+            {"path": raw_path, "end": 1},
+            mark_read=False,
+            record_versions=False,
+        )
         if not probe.ok:
             permission_service(context).outcome(permission, str(probe.status))
             return probe
@@ -68,7 +73,7 @@ def tool_expand_lock(context, args: dict) -> ToolResult:
         receipt=dict(probe.receipt) if probe is not None else {},
         content=f"expand_lock ok: {reason}. "
         f"allowed_edit={sorted(lock.allowed_edit)[:12]}. "
-        "下一步: read_file 该路径后再 apply_patch/patch_file。"
+        "下一步: read_file 该路径后再 apply_patch/patch_file。",
     )
 
 
@@ -90,6 +95,12 @@ def tool_finish_repair(args: dict) -> ToolResult:
 
 
 def build_repair_control_tools(context):
+    context.sandbox_trusted_handlers.update(
+        {
+            "finish_repair": lambda ctx, args: tool_finish_repair(args),
+            "expand_lock": tool_expand_lock,
+        }
+    )
     registry = {}
     # ---- finish_repair ----
     registry["finish_repair"] = {

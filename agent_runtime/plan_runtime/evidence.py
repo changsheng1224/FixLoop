@@ -97,7 +97,10 @@ class EvidenceLedger:
                 current.get(p) != h for p, h in versions.items()
             ):
                 return finish("stale", "source_changed")
-            if record["kind"] == "tests_passed" and self.environment_provider is not None:
+            if (
+                record["kind"] in {"tests_passed", "static_checked"}
+                and self.environment_provider is not None
+            ):
                 expected = record.get("receipt", {}).get("verification_binding")
                 if not expected:
                     return finish("unknown", "verification_environment_binding_missing")
@@ -170,13 +173,18 @@ class EvidenceLedger:
             result["dependencies"] = [
                 self.inspect(ref, historical=True, seen=seen) for ref in record["observation_refs"]
             ]
-        elif kind == "tests_passed":
+        elif kind in {"tests_passed", "static_checked"}:
             receipt = record.get("receipt", {})
             if not (
-                receipt.get("command")
+                (receipt.get("operation") if kind == "static_checked" else receipt.get("command"))
                 and receipt.get("completed") is True
                 and receipt.get("all_passed") is True
-                and receipt.get("total_tests", 0) > 0
+                and (
+                    receipt.get("total_tests", 0) > 0 and receipt.get("mode", "tests") == "tests"
+                    if kind == "tests_passed"
+                    else receipt.get("mode") == "static"
+                    and receipt.get("category") == "static_passed"
+                )
                 and receipt.get("run_id") == self.store.identity["run_id"]
                 and receipt.get("attempt_id") == record["attempt_id"]
                 and record.get("execution_stopped") is True
