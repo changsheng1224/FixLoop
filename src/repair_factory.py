@@ -243,6 +243,7 @@ def wire_orchestrator(
         sandbox_task_spec=sandbox_task_spec,
         sandbox_backend_factory=sandbox_backend_factory,
         workspace_policy=workspace_policy,
+        execution_tier=normalized_tier,
         execution_profile=(
             f"{execution_backend}:{execution_tier}:{bool(require_sandbox)}:"
             f"skip_verify={bool(skip_verify)}:dry_run={bool(dry_run)}"

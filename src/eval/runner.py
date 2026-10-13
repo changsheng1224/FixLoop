@@ -7,7 +7,6 @@ import json
 import platform
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 import time
@@ -15,6 +14,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
+from agent_runtime.test_execution import run_pytest
 from src.eval.case_io import DEFAULT_CASES_DIR, build_case_issue, load_case_metadata
 from src.eval.contracts import (
     EVAL_CONTRACT_VERSION,
@@ -46,19 +46,6 @@ def should_include_in_eval_diff(rel_path: str) -> bool:
     if parts and parts[0].startswith("."):
         return False
     return True
-
-
-def run_pytest(repo: Path, test_files: list[str] | None = None) -> tuple[int, str]:
-    """在 repo 根目录运行 pytest，返回 (exit_code, combined_output)。"""
-    targets = [str(item) for item in (test_files or []) if str(item).strip()]
-    proc = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", *targets],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-    )
-    out = (proc.stdout or "") + (proc.stderr or "")
-    return proc.returncode, out
 
 
 def _environment_failure(output: str, returncode: int) -> bool:

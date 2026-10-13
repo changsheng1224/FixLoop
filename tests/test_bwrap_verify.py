@@ -6,7 +6,7 @@ import pytest
 
 from agent_runtime.linux_sandbox.models import SandboxResult
 from agent_runtime.tool_context import ToolContext
-from src.repair.pipeline import _record_pytest_exit
+from src.orchestrator import Orchestrator
 from src.repair.verification.verify import BwrapVerifyStrategy
 from src.state import RepairState
 
@@ -45,7 +45,9 @@ def test_verify_exit_categories(tmp_path, code, category, passed):
 
 
 def test_no_host_fallback_and_baseline_receipt(tmp_path, monkeypatch):
-    monkeypatch.setattr("src.repair.pipeline.run_pytest", lambda *_: pytest.fail("host bypass"))
+    monkeypatch.setattr(
+        "agent_runtime.test_execution.run_pytest", lambda *_: pytest.fail("host bypass")
+    )
     backend = Backend(
         SandboxResult(
             "completed",
@@ -57,12 +59,16 @@ def test_no_host_fallback_and_baseline_receipt(tmp_path, monkeypatch):
     )
     ctx = ToolContext(root=str(tmp_path), sandbox_backend=backend)
     state = RepairState(issue_input="failure")
-    _record_pytest_exit(state, str(tmp_path), "baseline_pytest_code", ctx)
+    orch = Orchestrator(SimpleNamespace(tool_context=ctx), sandbox_context=ctx)
+    orch._repo_root = str(tmp_path)
+    orch._record_validation_exit(state, "baseline_pytest_code")
     assert state.control.baseline_pytest_code == 1
     assert state.node_timings["baseline_pytest_code_receipt_id"] == "baseline"
     backend.result = SandboxResult("rejected", error_code="namespace_unavailable")
-    with pytest.raises(RuntimeError, match="sandbox pytest unavailable"):
-        _record_pytest_exit(state, str(tmp_path), "post_patch_pytest_code", ctx)
+    from agent_runtime.test_execution import ProcessCleanupUnconfirmedError
+
+    with pytest.raises(ProcessCleanupUnconfirmedError):
+        orch._record_validation_exit(state, "post_patch_pytest_code")
 
 
 def test_non_python_is_not_sent_to_backend(tmp_path):
@@ -157,6 +163,7 @@ def test_orchestrator_final_route_has_no_host_fallback(tmp_path, monkeypatch):
             exit_code=0,
             cleanup="confirmed",
             receipt_id="final",
+            stdout_excerpt="1 passed",
             actual_backend="linux_sandbox",
         )
     )
@@ -167,7 +174,7 @@ def test_orchestrator_final_route_has_no_host_fallback(tmp_path, monkeypatch):
         "src.repair.verification.verify.run_profile", lambda *_a, **_kw: pytest.fail("host bypass")
     )
     state = RepairState(issue_input="failure")
-    assert orch._run_verifier_python(state).all_passed
+    assert orch._run_verifier(state).all_passed
     assert backend.requests[0].operation == "pytest"
     assert state.node_timings["phases_internal"]["verify"]["receipt_id"] == "final"
     with pytest.raises(ValueError, match="P3"):

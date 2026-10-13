@@ -286,7 +286,7 @@ def test_confirmed_cancel_rolls_back_before_releasing_owner(tmp_path):
         token.cancel()
         assert orch._cancel_run_resources(state)
         orch._restore_repo_snapshot(before)
-        assert (tmp_path / "value.py").read_text() == before["value.py"]
+        assert (tmp_path / "value.py").read_bytes() == before.images["value.py"].content
         orch._end_repair_trace(state)
         snapshot = binding.coordinator.store.snapshot(state.repair_run_id)
         assert snapshot.status == "cancelled" and not snapshot.owner_token

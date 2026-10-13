@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import time
-from pathlib import Path
 
 from agent_runtime.logging_setup import get_logger
-from src.eval.runner import run_pytest
 from src.repair.blackboard_mixin import BlackboardMixin
 from src.repair.l2_ask_mixin import L2AskMixin
 from src.repair.phase_clock import PhaseTimeoutError, RepairPhaseClock
@@ -43,21 +41,6 @@ LOCALIZER_COMPLETE_ONCE_SYSTEM = """你是代码定位专家。
 不要调用工具，不要输出 tool call、XML、Markdown 或解释文字。
 只输出合法 JSON 数组；字段包括 file_path, start_line, end_line, function_name, reason, confidence。
 如果无法确定精确行号，使用最可能的文件并将 confidence 降低。"""
-
-
-def _record_pytest_exit(state: RepairState, repo_root: str, key: str, sandbox_context=None) -> None:
-    if sandbox_context is not None:
-        from src.repair.verification.verify import BwrapVerifyStrategy
-
-        run = BwrapVerifyStrategy(sandbox_context).run(repo_root)
-        setattr(state.control, key, run.internal.get("pytest_exit_code"))
-        state.node_timings[key + "_category"] = run.internal["category"]
-        state.node_timings[key + "_receipt_id"] = run.internal["receipt_id"]
-        if run.internal["category"] not in {"passed", "failed"}:
-            raise RuntimeError("sandbox pytest unavailable: " + run.internal["category"])
-        return
-    code, _ = run_pytest(Path(repo_root))
-    setattr(state.control, key, code)
 
 
 class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
@@ -415,8 +398,10 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         from agent_runtime.cancellation import CancelledError
         from agent_runtime.linux_sandbox.permissions import SandboxApprovalRequired
         from agent_runtime.run_coordination import OwnerConflictError
+        from agent_runtime.test_execution import ProcessCleanupUnconfirmedError
         from src.repair.plan_binding import ResumeRecoveryRequiredError
         from src.repair.recovery_outcome import publish_recovery_outcome
+        from src.repair.repo_snapshot import RollbackUnconfirmedError
 
         try:
             return self._repair_impl_with_plan(state, initial_snapshot)
@@ -435,6 +420,26 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 reason_code=exc.code,
                 emitter=self._progress_emitter(),
             )
+            return state
+        except RollbackUnconfirmedError as exc:
+            context = getattr(self.patcher, "tool_context", None)
+            if context is not None:
+                context.execution_uncertain = True
+            state.control.coordination_status = "recovery_required"
+            state.set_status("recovery_required", "rollback_outcome_unconfirmed")
+            state.agent_errors["rollback"] = str(exc)
+            publish_recovery_outcome(
+                state,
+                {"run_id": state.repair_run_id, "status": "recovery_required"},
+                stage="rollback",
+                reason_code="rollback_outcome_unconfirmed",
+                emitter=self._progress_emitter(),
+            )
+            self._end_repair_trace(state)
+            return state
+        except ProcessCleanupUnconfirmedError as exc:
+            self._block_unconfirmed_verification(state, str(exc))
+            self._end_repair_trace(state)
             return state
         except CancelledError:
             state.control.user_cancel = True
@@ -627,12 +632,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         self._seed_patcher_primary(state)
 
         if not self._abort_repair_if_cancelled(state) and self._verification_enabled():
-            _record_pytest_exit(
-                state,
-                self._repo_root,
-                "baseline_pytest_code",
-                getattr(self, "_sandbox_context", None),
-            )
+            self._record_validation_exit(state, "baseline_pytest_code")
 
     def _run_repair_attempts(
         self, state: RepairState, initial_snapshot: dict, phase_clock: RepairPhaseClock | None
@@ -694,12 +694,12 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 self._checkpoint_progress(state)
                 continue
 
+            if self._reject_protected_interface_changes(state, initial_snapshot):
+                continue
+
             if not self._verification_enabled():
                 mark_pending_verify(state)
                 break
-
-            if self._reject_semantic_drift(state, initial_snapshot):
-                continue
 
             log.info("Verifier 开始...")
             self._progress_emitter().emit(
@@ -737,7 +737,10 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
             log.info("Verifier 完成: %dms", ms)
 
             if state.verification_result.all_passed:
-                state.set_status(RepairTerminalStatus.FIXED, "verification_passed")
+                if state.verification_result.verification_mode == "static":
+                    state.set_status(RepairTerminalStatus.PENDING_VERIFY, "static_check_completed")
+                else:
+                    state.set_status(RepairTerminalStatus.FIXED, "verification_passed")
                 cooldown = getattr(self, "_verify_cooldown", None)
                 if cooldown is not None:
                     cooldown.record_success()
@@ -747,46 +750,22 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
                 break
         return False
 
-    def _reject_semantic_drift(self, state: RepairState, initial_snapshot: dict) -> bool:
-        """Apply the signature gate before verified attempts."""
-        ctx = self._active_repair_ctx()
-        # ── AST 语义等价检查（V1.5-Bonus9）──
-        # 仅检测函数/类签名变更（语法错误不算 drift）
-        semantic_drift = False
+    def _reject_protected_interface_changes(
+        self, state: RepairState, initial_snapshot: dict
+    ) -> bool:
+        """Enforce explicitly protected interfaces, not all AST definition sets."""
+        from src.repair.execution.interface_policy import protected_interface_changes
+
+        protected = self.repair_config.protected_interfaces
         for patch in state.candidate_patches:
-            try:
-                from src.tools.ast_parser import check_semantic_equivalence
-
-                result = check_semantic_equivalence(
-                    patch.original_lines,
-                    patch.patched_lines,
-                )
-                detail = result.get("detail", "")
-                # 跳过 syntax error（非签名级变更，由 verifier 最终裁决）
-                if result["status"] == "drift" and "syntax" not in detail:
-                    state.agent_errors["semantic_drift"] = detail
-                    semantic_drift = True
-                    tracer = ctx.repair_tracer
-                    if tracer:
-                        tracer.emit(
-                            "orchestrator",
-                            "semantic_check",
-                            {
-                                "status": "drift",
-                                "detail": detail,
-                                "file": patch.file_path,
-                            },
-                        )
-                    log.warning("[semantic] drift: %s → %s", patch.file_path, detail)
-                    break
-            except Exception:
-                pass
-
-        if semantic_drift:
-            state.feedback = (
-                f"AST 语义漂移检测拒绝补丁: {state.agent_errors['semantic_drift']}。"
-                "补丁不得删除或新增函数/类定义。"
+            changed = protected_interface_changes(
+                patch.original_lines, patch.patched_lines, protected.get(patch.file_path, ())
             )
+            if not changed:
+                continue
+            detail = f"{patch.file_path}: {', '.join(changed)}"
+            state.agent_errors["protected_interface"] = detail
+            state.feedback = f"受保护接口被修改: {detail}。请保留这些接口的签名和定义。"
             self._restore_repo_snapshot(initial_snapshot)
             state.candidate_patches = []
             state.retry_count += 1
@@ -798,12 +777,7 @@ class RepairPipelineMixin(L2AskMixin, BlackboardMixin):
         self, state: RepairState, initial_snapshot: dict, stop_loss: StopLossTracker
     ) -> bool:
         """Roll back, record current evidence, then decide whether to stop."""
-        _record_pytest_exit(
-            state,
-            self._repo_root,
-            "post_patch_pytest_code",
-            getattr(self, "_sandbox_context", None),
-        )
+        self._record_validation_exit(state, "post_patch_pytest_code")
 
         self._restore_repo_snapshot(initial_snapshot)
 

@@ -495,11 +495,19 @@ def _print_repair_result(state, verbose: bool, *, dry_run: bool = False) -> None
 
     if has_actionable_patch(state):
         vr = state.verification_result
-        verified = bool(vr and vr.all_passed and vr.total_tests > 0 and not dry_run)
+        verified = bool(
+            vr
+            and vr.all_passed
+            and vr.total_tests > 0
+            and vr.execution_status == "completed"
+            and not dry_run
+        )
         pending = state.status == "pending_verify" or not verified
         suffix = " (未验证)" if pending else ""
         emoji = "⚠" if pending else "✅"
         label = "补丁已生成，等待验证" if pending else "修复完成"
+        if vr and vr.verification_mode == "static" and vr.execution_status == "completed":
+            label = "静态检查通过，补丁等待测试验证"
         print(f"\n{emoji} {label}! 状态={state.status}{suffix}")
         for patch in state.candidate_patches:
             print(f"\n--- {patch.file_path} ---")
@@ -510,7 +518,9 @@ def _print_repair_result(state, verbose: bool, *, dry_run: bool = False) -> None
         if state.verification_result:
             vr = state.verification_result
             print(
-                f"\n验证: {vr.passed}/{vr.total_tests} 通过"
+                "\n验证: 静态检查通过（未运行测试）"
+                if vr.verification_mode == "static"
+                else f"\n验证: {vr.passed}/{vr.total_tests} 通过"
                 + (f", {vr.failed} 失败" if vr.failed else "")
             )
     else:

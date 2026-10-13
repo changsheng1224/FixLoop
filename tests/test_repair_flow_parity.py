@@ -29,7 +29,7 @@ def flow(request, tmp_path, monkeypatch):
     monkeypatch.setattr(orch, "_parse_issue", lambda _: RepairPlan())
     monkeypatch.setattr(orch, "_snapshot_repo", lambda: {"value.py": "value = 1\n"})
     monkeypatch.setattr(orch, "_restore_repo_snapshot", Mock())
-    monkeypatch.setattr("src.repair.pipeline._record_pytest_exit", lambda *a, **kw: None)
+    monkeypatch.setattr(orch, "_record_validation_exit", lambda *a, **kw: None)
     monkeypatch.setattr(
         orch,
         "_run_patcher",
@@ -138,9 +138,10 @@ def test_failure_evidence_is_current_before_feedback(flow, monkeypatch):
     assert len(seen) == 1
 
 
-def test_signature_gate_precedes_verifier(flow, monkeypatch):
+@pytest.mark.parametrize("verify_enabled", [True, False])
+def test_protected_signature_gate_precedes_verifier(flow, monkeypatch, verify_enabled):
     orch, run, _ = flow
-    monkeypatch.setattr(orch, "_verification_enabled", lambda: True)
+    monkeypatch.setattr(orch, "_verification_enabled", lambda: verify_enabled)
     monkeypatch.setattr(
         orch,
         "_run_patcher",
@@ -155,12 +156,13 @@ def test_signature_gate_precedes_verifier(flow, monkeypatch):
             {"total_ms": 1, "model_call_ms": 0, "parse_apply_ms": 1},
         ),
     )
-    verify = Mock(side_effect=AssertionError("signature drift reached verifier"))
+    orch.repair_config.protected_interfaces = {"value.py": ["value"]}
+    verify = Mock(side_effect=AssertionError("protected interface change reached verifier"))
     monkeypatch.setattr(orch, "_run_verifier", verify)
     result = run()
     verify.assert_not_called()
     assert result.retry_count == 1
-    assert "semantic_drift" in result.agent_errors
+    assert "protected_interface" in result.agent_errors
 
 
 def test_success_resets_cooldown(flow, monkeypatch):

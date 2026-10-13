@@ -45,7 +45,11 @@ def build_recovery_outcome(source, *, stage, plan_report=None, reason_code=""):
         "reconciling",
     }:
         action = "wait"
-    elif blocking or plan["uncertain"] or reason == "resume_untracked_execution_uncertain":
+    elif (
+        blocking
+        or plan["uncertain"]
+        or reason in {"resume_untracked_execution_uncertain", "verification_cleanup_unconfirmed"}
+    ):
         action = "verify_execution"
     elif status in {"cancelled", "failed"}:
         action = "new_run"
@@ -73,7 +77,12 @@ def build_recovery_outcome(source, *, stage, plan_report=None, reason_code=""):
             "cancel_requested": bool(source.get("cancel_request_id")),
             "cleanup_confirmed": stage not in {"checkpoint", "owner"}
             and status != "cancel_requested"
-            and reason != "repair_worker_unconfirmed"
+            and reason
+            not in {
+                "repair_worker_unconfirmed",
+                "verification_cleanup_unconfirmed",
+                "rollback_outcome_unconfirmed",
+            }
             and not blocking,
             # A stopped process alone says nothing about workspace postconditions.
             "effects_verified": effects_verified,

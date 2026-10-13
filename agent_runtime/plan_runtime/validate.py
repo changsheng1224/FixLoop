@@ -77,7 +77,10 @@ def validate_plan(plan: Plan, registry: dict, *, identity: dict | None = None) -
             raise ValueError(f"node_effect_mismatch: {node.node_id}")
         if not node.objective or not node.completion:
             raise ValueError(f"completion_required: {node.node_id}")
-        if any(c.kind != COMPLETIONS[node.kind] for c in node.completion):
+        allowed = {COMPLETIONS[node.kind]}
+        if node.kind == "verify":
+            allowed.add("static_checked")
+        if any(c.kind not in allowed for c in node.completion):
             raise ValueError(f"completion_type_invalid: {node.node_id}")
         if len(node.depends_on) > MAX_DEPENDENCIES:
             raise ValueError("dependency_budget_exceeded")

@@ -506,6 +506,7 @@ class RepairPlanBinding:
 
     def _initialize_plan(self):
         session = self.session
+        session.verification_mode = self.orchestrator._verification_service().mode
         if session.plan is not None:
             return
         refs = []
@@ -951,6 +952,8 @@ class RepairPlanBinding:
             return session.verify_result(attempt, result.to_dict(), receipt)
 
         session.run_node(verify.node_id, execute)
+        if not self.orchestrator._verification_service().cleanup_confirmed:
+            raise ResumeRecoveryRequiredError("verification_cleanup_unconfirmed")
         self.sync()
         if self._kind("verify").status == "uncertain":
             raise ValueError("plan_verification_execution_unconfirmed")
