@@ -186,34 +186,6 @@ class PatcherService:
         finally:
             pop_patcher_depth(self.session.patcher, depth_token)
 
-    def compact_patcher_history(self, state) -> None:
-        """CC 序 compact；thrash 时记停损标志。"""
-        if self.session.patcher is None:
-            return
-        from src.repair.context_compact import compact_tool_history
-
-        session = getattr(self.session.patcher, "session", None) or {}
-        hist = list(session.get("history") or [])
-        if not hist:
-            return
-        prior = int(state.node_timings.get("compact_count") or 0)
-        result = compact_tool_history(hist, prior_compacts=prior)
-        session["history"] = result.messages
-        state.node_timings["compact_count"] = result.compact_count
-        if result.dropped_chars:
-            state.node_timings["compact_dropped_chars"] = (
-                int(state.node_timings.get("compact_dropped_chars") or 0) + result.dropped_chars
-            )
-        if result.thrash:
-            n = (
-                int(state.node_timings.get("compact_thrash_count") or 0)
-                + result.compact_thrash_count
-            )
-            state.node_timings["compact_thrash_count"] = n
-            tip = "compact_thrash：上下文压缩后仍爆满，停止空转 compact，请缩小改动面。"
-            state.feedback = f"{state.feedback}\n{tip}".strip() if state.feedback else tip
-            log.warning("[compact] thrash stop-loss")
-
     def run_patcher_toolized(
         self, state: RepairState, prompt: str, tpl_meta: dict
     ) -> tuple[list[CandidatePatch], dict]:
@@ -253,9 +225,6 @@ class PatcherService:
         from src.repair.failure_tags import check_patch_faithfulness
 
         t_start = time.time()
-        compact_enabled = self.session.repair_config.patcher_compact
-        if compact_enabled:
-            self.compact_patcher_history(state)
         before = self.session.transaction.snapshot_repo()
         observation_start = len(
             (getattr(self.session.patcher, "session", {}) or {}).get("tool_observations", [])
