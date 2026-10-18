@@ -51,6 +51,11 @@ _ENV_FIELDS = {
     "temperature": float,
     "json_mode": parse_bool,
     "auto_context_extraction": parse_bool,
+    "web.enabled": parse_bool,
+    "web.timeout_s": float,
+    "web.max_attempts": int,
+    "web.preview_chars": int,
+    "web.summary_chars": int,
     "max_json_retries": int,
     "max_empty_attempts": int,
     "max_model_attempts": int,
@@ -65,6 +70,7 @@ _ENV_FIELDS = {
     "budget.max_read_calls": int,
     "budget.max_shell_calls": int,
     "budget.max_tool_calls": int,
+    "budget.max_web_requests": int,
     "budget.max_write_calls": int,
     "budget.max_verify_calls": int,
     "budget.max_recovery_attempts": int,
@@ -169,9 +175,13 @@ def load_config_values(
     merge_layer(PROFILE_PRESETS.get(profile, {}), "profile")
     merge_layer(user_values, "user_file")
     for workspace_value in workspace_values:
-        # Semantic server activation is a host/user decision, not a repository setting.
+        # External services/network activation is a host/user decision, not repository authority.
         merge_layer(
-            {key: value for key, value in workspace_value.items() if key != "code_exploration"},
+            {
+                key: value
+                for key, value in workspace_value.items()
+                if key not in {"code_exploration", "web"}
+            },
             "workspace_file",
         )
     merge_layer(_env_overrides(actual_env, env_fields), "environment")

@@ -51,10 +51,13 @@ def extract_evidence(
 def evidence_provenance(
     tool: str, args: dict[str, Any] | None, *, source_version: str = ""
 ) -> dict[str, Any]:
-    return {
+    provenance = {
         "extractor": f"tool:{str(tool or 'unknown')}",
         "extractor_version": "evidence-v1",
         "tool": str(tool or ""),
         "args": dict(args or {}),
         "source_version": str(source_version or ""),
     }
+    if tool in {"web_search", "web_fetch"}:
+        provenance.update(trust="untrusted_external", source_kind="web", verification=False)
+    return provenance

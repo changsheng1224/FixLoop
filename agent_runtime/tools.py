@@ -1074,7 +1074,9 @@ def build_tool_registry(context) -> dict:
         registry[name]["run_with_context"] = handler
         registry[name]["parallel_run"] = registry[name]["run"]
     from agent_runtime.linux_sandbox.workspace_routing import bind_workspace_tools
+    from agent_runtime.web_tools import build_web_tools
 
+    registry.update(build_web_tools(context))
     return bind_workspace_tools(context, registry)
 
 

@@ -53,6 +53,7 @@ class BudgetPolicy(BaseModel):
     max_read_calls: int = Field(default=0, ge=0, le=5_000)
     max_shell_calls: int = Field(default=0, ge=0, le=1_000)
     max_tool_calls: int = Field(default=0, ge=0, le=5_000)
+    max_web_requests: int = Field(default=8, ge=0, le=1_000)
     max_write_calls: int = Field(default=0, ge=0, le=1_000)
     max_verify_calls: int = Field(default=0, ge=0, le=1_000)
     max_recovery_attempts: int = Field(default=0, ge=0, le=500)
@@ -176,6 +177,7 @@ class RuntimePolicy(BaseModel):
             "turns": self.budget.max_turns,
             "llm_calls": self.budget.max_llm_calls,
             "tool_calls": self.budget.max_tool_calls,
+            "web_requests": self.budget.max_web_requests,
             "writes": self.budget.max_write_calls,
             "verifies": self.budget.max_verify_calls,
             "recoveries": self.budget.max_recovery_attempts,

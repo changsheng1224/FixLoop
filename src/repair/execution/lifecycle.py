@@ -17,6 +17,7 @@ log = get_logger("repair.lifecycle")
 # (its own busy timeout is 10s), short enough not to hang the owner thread.
 _CANCEL_JOIN_TIMEOUT_S = 10.0
 
+
 class ExecutionLifecycle:
     def __init__(self, session):
         self.session = session

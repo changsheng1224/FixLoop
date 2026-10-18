@@ -97,6 +97,7 @@ class Agent:
         )
         self.tool_context.exploration_mode = config.code_exploration.mode
         self.tool_context.lsp_argv = config.code_exploration.server_argv
+        self.tool_context.web_config = config.web
         self.tools = tools if tools is not None else build_tool_registry(self.tool_context)
         from agent_runtime.linux_sandbox.workspace_routing import bind_workspace_tools
 

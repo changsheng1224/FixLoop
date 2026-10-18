@@ -164,6 +164,11 @@ def execute_canonical_tool(context, name, args):
 
     from .permissions import authorize_trusted, permission_service
 
+    if name in {"web_search", "web_fetch"} and not (
+        context.web_config is not None and context.web_config.enabled
+    ):
+        return ToolResult.error("Web access is disabled.", code="policy_denied", retryable=False)
+
     if name == "run_shell":
         return tool_run_shell(context, args)
     if name == "quick_test":
@@ -177,6 +182,27 @@ def execute_canonical_tool(context, name, args):
     handlers = {
         "expand_observation": lambda: tool_expand_observation(context, args),
     }
+    if name in {"web_search", "web_fetch"}:
+        from agent_runtime.web import execute_web_tool
+
+        service = permission_service(context)
+        coordinator = context.run_coordinator
+
+        def check_network_authority():
+            if coordinator is not None:
+                coordinator.assert_can_dispatch()
+            try:
+                service.assert_current(permission)
+            except ValueError:
+                return ToolResult.error(
+                    "Network authorization was revoked.", code="policy_denied", retryable=False
+                )
+            return None
+
+        # Fixed host implementation wins over mutable registry/trusted-handler callbacks.
+        handlers[name] = lambda: execute_web_tool(
+            context, name, args, before_dispatch=check_network_authority
+        )
     try:
         if name in handlers:
             result = handlers[name]()

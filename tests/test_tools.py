@@ -159,6 +159,8 @@ class TestToolRegistry:
             "quick_test",
             "run_shell",
             "expand_observation",
+            "web_search",
+            "web_fetch",
         }
         assert names == expected
 

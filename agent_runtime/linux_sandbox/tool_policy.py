@@ -10,6 +10,7 @@ from .workspace_contract import WORKSPACE_READ_TOOLS, WORKSPACE_WRITE_TOOLS
 class SandboxToolAccess(StrEnum):
     TRUSTED_DATA = "trusted_data"
     TRUSTED_CONTROL = "trusted_control"
+    TRUSTED_NETWORK = "trusted_network"
     TRUSTED_WRITE = "trusted_write"
     SANDBOX_COMMAND = "sandbox_command"
     SANDBOX_READ = "sandbox_read"
@@ -18,6 +19,7 @@ class SandboxToolAccess(StrEnum):
 
 
 _ACCESS = {
+    **dict.fromkeys(("web_search", "web_fetch"), SandboxToolAccess.TRUSTED_NETWORK),
     **dict.fromkeys(WORKSPACE_READ_TOOLS, SandboxToolAccess.SANDBOX_READ),
     **dict.fromkeys(WORKSPACE_WRITE_TOOLS, SandboxToolAccess.SANDBOX_WRITE),
     **dict.fromkeys(

@@ -32,6 +32,10 @@ class ToolContext:
     cancel_token: CancellationToken | None = None
     deadline: object | None = None
     budget: object | None = None
+    runtime_budget: object | None = None
+    web_config: object | None = None
+    web_client: object | None = field(default=None, repr=False)
+    tool_timeout_s: float = 0
     idempotency_key: str = ""
     # Patcher-primary：可选 EditLockState（未读不可写 / allowed_edit）
     edit_lock: EditPolicy | None = None

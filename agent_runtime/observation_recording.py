@@ -80,6 +80,12 @@ class ToolObservationRecorder:
             }
         )
         store = ObservationStore(self.session, root=self.root, state_root=self.state_root)
+        provenance = evidence_provenance(call.name, call.arguments, source_version=source_version)
+        research = (
+            metadata.get("web_research") if call.name in {"web_search", "web_fetch"} else None
+        )
+        if research is not None:
+            provenance["web_research"] = research
         try:
             # Invalidate before publishing the new record, including non-patch writes.
             if observation.changed_files:
@@ -92,9 +98,7 @@ class ToolObservationRecorder:
                 summary=result_text[:500],
                 source_version=source_version,
                 structured_facts=facts,
-                provenance=evidence_provenance(
-                    call.name, call.arguments, source_version=source_version
-                ),
+                provenance=provenance,
                 dependencies=list(observation.changed_files),
                 error_code=observation.failure_class,
                 status=observation.status,
@@ -118,6 +122,18 @@ class ToolObservationRecorder:
         metadata["artifact_ref"] = stored.raw_ref
         result.metadata["observation_id"] = stored.observation_id
         result.metadata["artifact_ref"] = stored.raw_ref
+        if research is not None:
+            self.emit(
+                "web_research_observed",
+                {
+                    "tool": call.name,
+                    "observation_id": stored.observation_id,
+                    "web_research": stored.provenance.get("web_research", {}),
+                    "duration_ms": duration_ms,
+                    "web_requests": metadata.get("web_requests", 0),
+                    "estimated_cost_usd": metadata.get("estimated_cost_usd", 0),
+                },
+            )
         self.on_retrieval(
             call.name, call.arguments, metadata.get("retrieval_result"), stored.observation_id
         )

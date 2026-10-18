@@ -61,6 +61,8 @@ _READ_TOOLS = frozenset(
         "stack_parse",
         "java_stack_parse",
         "expand_observation",
+        "web_search",
+        "web_fetch",
     }
 )
 _WRITE_TOOLS = frozenset({"write_file", "patch_file", "apply_patch"})
