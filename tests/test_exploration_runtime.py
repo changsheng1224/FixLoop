@@ -589,12 +589,19 @@ def test_deadline_worker_receipt_and_no_new_dispatch_after_cancel(tmp_path):
     entered, release = threading.Event(), threading.Event()
     runtime = make_runtime(
         tmp_path,
-        limits=ExplorationLimits(deadline_s=0.15, cleanup_s=0.01),
+        limits=ExplorationLimits(deadline_s=30, cleanup_s=0.01),
         client_factory=lambda t: DiscoveryClient(t, entered=entered, release=release),
     )
     try:
         handle = runtime.delegate(REQUESTS[:1])[0]["handle"]
         assert entered.wait(2)
+        # Start the deadline scenario only once the provider is blocked. Child
+        # startup can exceed 150 ms on Windows and is not what this test measures.
+        runtime.store.mutate(
+            handle,
+            lambda task, conn: setattr(task, "deadline_at", time.time() - 1),
+            "test_deadline_expired",
+        )
         deadline = time.monotonic() + 2
         while runtime.store.get_task(handle).payload["exploration"]["status"] != "worker_lost":
             assert time.monotonic() < deadline
