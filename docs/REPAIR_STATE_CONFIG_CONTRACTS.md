@@ -6,6 +6,10 @@
 
 配置统一解析优先级：默认值 → profile → 用户文件 → 工作区文件 → 环境变量 → 显式参数。用户文件为 `~/.fixloop/config.json`；工作区依次读取 `.fixloop/config.json` 和 `.agent/config.json`。工作区不能激活外部代码探索服务。未知字段、非法值及旧标量配置均报错。
 
+工作区也不能配置外部网页服务：`web` 段仅接受宿主／用户／显式请求来源。
+`web.enabled` 默认 false，`budget.max_web_requests` 默认 8（含重试，0 表示不限额）；
+详见 [外部资料搜索与抓取](WEB_RESEARCH.md)。
+
 ```json
 {
   "schema_version": "2.0",

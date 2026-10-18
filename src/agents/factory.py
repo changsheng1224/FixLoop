@@ -75,6 +75,7 @@ def create_repair_agent(
         exploration_mode=code_exploration_mode,
         lsp_argv=code_exploration_server_argv,
     )
+    ctx.web_config = config.web
     tools = build_repair_agent_tools(ctx, role)
     delegation_tools = {}
     if role == "patcher":
@@ -90,6 +91,8 @@ def create_repair_agent(
 
     gw = gateway or build_repair_gateway(root, sandbox_mode=ctx.sandbox_backend is not None)
     system_prompt = load_system_prompt(role)
+    if config.web.enabled:
+        system_prompt += "\n\n" + load_system_prompt("patcher_web")
     agent_name = role
     gw.bind_tools(tools)
 

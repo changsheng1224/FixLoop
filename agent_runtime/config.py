@@ -10,6 +10,18 @@ from pydantic import BaseModel, Field
 from agent_runtime.policy import RuntimePolicy
 
 
+class WebConfig(BaseModel):
+    """Host-authorized external research; credentials never enter config snapshots."""
+
+    model_config = {"extra": "forbid", "validate_assignment": True}
+
+    enabled: bool = False
+    timeout_s: float = Field(default=20, gt=0, le=60)
+    max_attempts: int = Field(default=2, ge=1, le=3)
+    preview_chars: int = Field(default=12000, ge=1000, le=32000)
+    summary_chars: int = Field(default=700, ge=100, le=2000)
+
+
 class CodeExplorationConfig(BaseModel):
     mode: Literal["text", "lsp", "relations"] = "text"
     server_argv: tuple[str, ...] | None = None
@@ -21,6 +33,7 @@ class AgentConfig(RuntimePolicy):
     配置来源优先级：CLI args > .env > 默认值。
     """
 
+    web: WebConfig = Field(default_factory=WebConfig)
     code_exploration: CodeExplorationConfig = Field(default_factory=CodeExplorationConfig)
     auto_context_extraction: bool = Field(
         default=True, description="Plan repair 路径自动提取可信来源中的明确约束和节点决策"

@@ -83,6 +83,8 @@ def tool_schema_view(registry: dict) -> dict[str, dict]:
     """返回供 prompt / native API 使用的工具描述（仅 schema 相关字段）。"""
     view: dict[str, dict] = {}
     for name, spec in registry.items():
+        if spec.get("lifecycle") in {"disabled", "removed"}:
+            continue
         view[name] = {key: spec[key] for key in TOOL_SPEC_PUBLIC_KEYS if key in spec}
         view[name]["schema"] = schema_to_json(spec["schema"])
     return view

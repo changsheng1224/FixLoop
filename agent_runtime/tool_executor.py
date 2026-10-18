@@ -705,6 +705,8 @@ class ToolExecutor:
         prev_ctx_token = ctx.cancel_token
         prev_ctx_deadline = getattr(ctx, "deadline", None)
         prev_ctx_budget = getattr(ctx, "budget", None)
+        prev_runtime_budget = ctx.runtime_budget
+        prev_tool_timeout = ctx.tool_timeout_s
         prev_ctx_idempotency = getattr(ctx, "idempotency_key", "")
         # write/patch 必须等工具返回后再 restore；只读/shell 可协作式中断
         sandbox_command = tool_spec.get("execution_tier") == "linux_sandbox"
@@ -716,6 +718,15 @@ class ToolExecutor:
         ctx.cancel_token = token
         ctx.deadline = deadline
         ctx.budget = getattr(self.agent, "_repair_budget", None)
+        if (
+            name in {"web_search", "web_fetch"}
+            and getattr(self.agent, "budget_manager", None) is None
+        ):
+            from agent_runtime.budget_manager import BudgetManager
+
+            self.agent.budget_manager = BudgetManager.from_config(self.agent.config)
+        ctx.runtime_budget = getattr(self.agent, "budget_manager", None)
+        ctx.tool_timeout_s = timeout_s
         ctx.idempotency_key = str(tool_spec.get("idempotency_key", "") or "")
         try:
             from agent_runtime.cancellation import CancelledError
@@ -739,6 +750,12 @@ class ToolExecutor:
                     if name in WORKSPACE_TOOLS
                     else execute_canonical_tool(ctx, name, args)
                 )
+            elif name in {"web_search", "web_fetch"}:
+                from agent_runtime.web import execute_web_tool
+
+                # The web client owns its bounded wait. Do not detach the function
+                # that owns run accounting/context cleanup into a second thread.
+                result = execute_web_tool(ctx, name, args)
             elif tool_spec.get("isolated_read"):
                 # Audited pure filesystem readers run in the batch worker.
                 # The scheduler owns timeout/cleanup; no nested orphan thread.
@@ -804,6 +821,8 @@ class ToolExecutor:
             ctx.cancel_token = prev_ctx_token
             ctx.deadline = prev_ctx_deadline
             ctx.budget = prev_ctx_budget
+            ctx.runtime_budget = prev_runtime_budget
+            ctx.tool_timeout_s = prev_tool_timeout
             ctx.idempotency_key = prev_ctx_idempotency
 
     def _build_success_metadata(

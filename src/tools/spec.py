@@ -20,6 +20,9 @@ def default_repair_tool_registry(*, sandbox_mode: bool = False) -> tool_spec.Too
         _spec("code_lookup", _READERS, capabilities=frozenset({"code.lsp"})),
         _spec("code_relations", _READERS, capabilities=frozenset({"code.relations"})),
         _spec("list_files", _READERS, capabilities=frozenset({"filesystem.list"})),
+        _spec("expand_observation", _PATCHER),
+        _spec("web_search", _PATCHER, path_args=frozenset(), lifecycle="disabled"),
+        _spec("web_fetch", _PATCHER, path_args=frozenset(), lifecycle="disabled"),
         _spec("inspect_file", _PATCHER, capabilities=frozenset({"filesystem.read", "code.ast"})),
         _spec(
             "find_test",

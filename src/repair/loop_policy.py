@@ -172,7 +172,7 @@ class RepairLoopPolicy(LoopPolicy):
                 # Recovery directives are stricter than the normal convergence
                 # window.  In particular stale writes expose only the exact
                 # reread, while malformed writes expose apply_patch.
-                return set(context.state.recovery_allowed_tools)
+                return set(context.state.recovery_allowed_tools) - {"web_search", "web_fetch"}
             # Patcher owns localization.  Once convergence has requested a
             # write, retain a small bounded read window so a newly discovered
             # implementation path is not made unreachable by schema gating.
@@ -235,6 +235,16 @@ class RepairLoopPolicy(LoopPolicy):
         if remaining is not None and int(remaining) <= 2:
             if context.guard.enter_convergence("read_budget_low"):
                 self.enter_convergence(context, "read_budget_low", step=step)
+        if tool_name in {"web_search", "web_fetch"} and (
+            context.guard.phase == "converge" or context.state.action_required
+        ):
+            context.emit("web_research_blocked", {"tool": tool_name, "reason": "convergence"})
+            return ToolResult(
+                content="External research is closed; use existing evidence to patch or finish.",
+                status="rejected",
+                error_code="convergence_required",
+                retryable=False,
+            )
         phase_before = context.guard.phase
         read_reservation = context.matching_read_reservation(tool_name, tool_args)
         preflight = context.guard.preflight(

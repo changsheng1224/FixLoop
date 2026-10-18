@@ -185,7 +185,6 @@ def create_repair_service(
     )
     if state_root:
         ctx.state_root = state_root
-    tools = build_repair_canonical_tools(ctx)
     role_overrides = {
         "code_exploration": {
             "mode": code_exploration_mode,
@@ -197,6 +196,8 @@ def create_repair_service(
         role: load_repair_agent_config(role, repo, **role_overrides) for role in ("patcher",)
     }
     policy = policies["patcher"]
+    ctx.web_config = policy.web
+    tools = build_repair_canonical_tools(ctx)
     client = create_model_client(
         client,
         model=policy.model,

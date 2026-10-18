@@ -26,6 +26,7 @@ CAPABILITIES = frozenset(
         "offline_install",
         "trusted_data",
         "trusted_control",
+        "trusted_network",
     }
 )
 
@@ -653,11 +654,15 @@ def permission_rejection(decision):
 
 
 def authorize_trusted(context, name, args):
-    """Only canonical pure-data/control implementations may call this entry."""
+    """Only audited host data/control/network implementations may call this entry."""
     from .tool_policy import SandboxToolAccess, sandbox_tool_access
 
     access = sandbox_tool_access(name)
-    if access not in {SandboxToolAccess.TRUSTED_DATA, SandboxToolAccess.TRUSTED_CONTROL}:
+    if access not in {
+        SandboxToolAccess.TRUSTED_DATA,
+        SandboxToolAccess.TRUSTED_CONTROL,
+        SandboxToolAccess.TRUSTED_NETWORK,
+    }:
         raise ValueError("policy_denied: trusted tool not audited")
     service = permission_service(context)
     coordinator = getattr(context, "run_coordinator", None)

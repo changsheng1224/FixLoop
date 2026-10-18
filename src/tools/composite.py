@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from copy import deepcopy
 from typing import Literal
 
 from agent_runtime.tool_context import ToolContext
@@ -20,6 +21,7 @@ REPAIR_CANONICAL_TOOL_NAMES: tuple[str, ...] = (
     "code_lookup",
     "code_relations",
     "expand_lock",
+    "expand_observation",
     "find_test",
     "finish_repair",
     "git_blame",
@@ -37,6 +39,8 @@ REPAIR_CANONICAL_TOOL_NAMES: tuple[str, ...] = (
     "sandbox_test",
     "sandbox_verify",
     "stack_parse",
+    "web_fetch",
+    "web_search",
     "write_file",
 )
 
@@ -68,6 +72,10 @@ def build_repair_canonical_tools(ctx: ToolContext) -> dict:
     }
     # L1 owns generic file and process tools; L2 adds repair control.
     selected = {name: tools[name] for name in REPAIR_CANONICAL_TOOL_NAMES}
+    for name in ("web_search", "web_fetch"):
+        schema = deepcopy(selected[name]["schema"])
+        schema["required"].append("purpose")
+        selected[name]["schema"] = schema
     from agent_runtime.linux_sandbox.workspace_routing import bind_workspace_tools
     from agent_runtime.tool_spec import bind_execution_tools
     from src.tools.spec import default_repair_tool_registry

@@ -32,7 +32,7 @@ jobs:
         env:
           HF_HUB_OFFLINE: "1"
           TRANSFORMERS_OFFLINE: "1"
-        run: python -m pytest tests/test_patch_contract.py tests/test_patch_backends.py tests/test_execution_contract.py tests/test_retry_policy.py tests/test_repair_flow_parity.py tests/test_exploration_runtime.py tests/test_config_contracts.py -q -p no:cacheprovider
+        run: python -m pytest tests/test_patch_contract.py tests/test_patch_backends.py tests/test_execution_contract.py tests/test_retry_policy.py tests/test_repair_flow_parity.py tests/test_exploration_runtime.py tests/test_config_contracts.py tests/test_web.py tests/test_web_research.py tests/test_linux_test_execution.py -q -p no:cacheprovider
 
       - name: Clean wheel and installed offline evaluation
         run: python scripts/wheel_smoke.py
