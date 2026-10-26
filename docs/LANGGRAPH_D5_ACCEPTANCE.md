@@ -47,8 +47,10 @@ python -m ruff check agent_runtime src tests scripts/wheel_smoke.py
 python -m ruff format --check agent_runtime src tests scripts/wheel_smoke.py
 ```
 
-故障测试已加入 CI 的 Windows/Linux Python 3.11 轻量图测试步骤，使用短 basetemp
-避免 Windows 工作区深路径影响。远端 CI 尚未执行。
+故障测试已加入 CI 的 Windows/Linux Python 3.11 轻量图测试步骤，使用仓库根目录
+默认的 `.pytest-tmp`，避免深路径和未创建父目录。首次 PR 检查中，原指定的
+`.tmp/graph-tests` 缺少父目录，38 项图测试均在夹具初始化时报错；已据此修正配置。
+本节以上本地验收不包含后续 PR 检查的通过数，远端结果以 PR 状态为准。
 
 ## 安装与范围
 

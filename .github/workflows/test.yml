@@ -40,7 +40,7 @@ jobs:
           LANGCHAIN_TRACING_V2: "false"
           HF_HUB_OFFLINE: "1"
           TRANSFORMERS_OFFLINE: "1"
-        run: python -m pytest tests/test_langgraph_execution.py tests/test_repair_graph.py tests/test_repair_graph_entry.py tests/test_repair_graph_faults.py -q -p no:cacheprovider --basetemp=.tmp/graph-tests
+        run: python -m pytest tests/test_langgraph_execution.py tests/test_repair_graph.py tests/test_repair_graph_entry.py tests/test_repair_graph_faults.py -q -p no:cacheprovider
 
       - name: Clean wheel and installed offline evaluation
         run: python scripts/wheel_smoke.py
