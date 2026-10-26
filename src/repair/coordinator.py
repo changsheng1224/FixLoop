@@ -4,12 +4,7 @@ import time
 
 from agent_runtime.logging_setup import get_logger
 from src.repair.phase_clock import PhaseTimeoutError, RepairPhaseClock
-from src.repair.stop_loss import StopLossTracker
-from src.repair.timing_schema import set_phase_ms
-from src.repair.verification.termination import (
-    RepairTerminalStatus,
-    mark_pending_verify,
-)
+from src.repair.verification.termination import RepairTerminalStatus
 from src.state import RepairState, RepairStatus, RetrievedContext, SuspectLocation
 
 log = get_logger("repair.pipeline")
@@ -64,118 +59,6 @@ class RepairCoordinator:
                 },
             )
         log.warning("阶段超时: %s", exc)
-
-    def run_critic_gate(self, state: RepairState) -> bool:
-        """提交 Verifier 前 Critic。返回 True 表示 reject（应 retry / 停）。"""
-        from src.collaboration.isolation import role_projection
-        from src.repair.critic import review_patch
-
-        mode = self.session.critic_mode
-        allowed = set()
-        lock = getattr(self.session, "edit_lock", None)
-        if lock is not None:
-            allowed = set(lock.allowed_edit)
-        elif state.control.allowed_edit:
-            allowed = set(state.control.allowed_edit or [])
-        self.session.events.emit_repair_span("critic_started", {"summary": f"mode={mode}"})
-        state.node_timings["critic_input_projection"] = role_projection(state, "critic")
-        verdict = review_patch(state.candidate_patches, allowed_edit=allowed, mode=mode)
-        state.node_timings["critic_mode"] = verdict.mode
-        state.node_timings["critic_reason"] = verdict.reason
-        state.node_timings["critic_verdict"] = verdict.to_dict()
-        if verdict.skipped:
-            state.node_timings["critic_skipped"] = True
-            self.session.events.emit_repair_span(
-                "critic_finished", {"summary": "skipped", "skipped": True}
-            )
-            return False
-        em = self.session.events.progress_emitter()
-        if not verdict.accepted:
-            n = int(state.node_timings.get("critic_rejected_count") or 0) + 1
-            state.node_timings["critic_rejected_count"] = n
-            tip = (
-                f"Critic reject ({verdict.reason})：请生成非空、落在 allowed_edit 内、"
-                "语法合法的实现文件 diff；用 apply_patch（含原文上下文）。"
-            )
-            state.feedback = f"{state.feedback}\n{tip}".strip() if state.feedback else tip
-            try:
-                self.session.evidence.write_feedback_to_blackboard(state.feedback)
-            except RuntimeError:
-                pass
-            em.emit("critic_progress", summary=f"reject:{verdict.reason}")
-            self.session.events.emit_repair_span(
-                "critic_finished", {"summary": f"reject:{verdict.reason}", "accepted": False}
-            )
-            log.info("[critic] reject: %s", verdict.reason)
-            return True
-        em.emit("critic_progress", summary=f"accept:{verdict.reason}")
-        self.session.events.emit_repair_span(
-            "critic_finished", {"summary": f"accept:{verdict.reason}", "accepted": True}
-        )
-        return False
-
-    @staticmethod
-    def record_patcher_terminal(state: RepairState) -> str:
-        """规范空输出归因，避免把明确终态误报成 JSON 解析失败。"""
-        from src.repair.execution.patcher_contract import PATCHER_TERMINAL_STATUSES
-
-        terminal = str(state.control.patcher_terminal_status or "")
-        explicit = terminal in PATCHER_TERMINAL_STATUSES
-        if (
-            not state.candidate_patches
-            and (not state.agent_errors.get("patcher_apply"))
-            and (not explicit)
-        ):
-            state.control.patcher_parse_failed = True
-        elif explicit:
-            state.control.reset("patcher_parse_failed")
-            state.agent_errors.pop("patcher_parse", None)
-        return terminal
-
-    def handle_empty_patch(self, state: RepairState, stop_loss) -> bool:
-        """记录空补丁并决定是否重试；True 表示继续下一轮。"""
-        from src.repair.stop_loss import apply_stop_loss
-
-        if state.control.coordination_status == "recovery_required":
-            state.set_status("recovery_required", "cleanup_or_write_unconfirmed")
-            return False
-        if state.control.plan_blocked:
-            state.set_status(RepairTerminalStatus.FAILED, "plan_runtime_blocked")
-            self.session.events.checkpoint_progress(state)
-            return False
-        terminal = self.record_patcher_terminal(state)
-        if terminal in {"cannot_patch", "insufficient_evidence"}:
-            state.feedback = "Patcher 已给出明确终态：" + terminal
-            self.session.evidence.write_feedback_to_blackboard(state.feedback)
-            self.session.events.checkpoint_progress(state)
-            return False
-        apply_err = state.agent_errors.get("patcher_apply")
-        if apply_err:
-            state.control.patcher_apply_failed = True
-            state.feedback = (
-                f"补丁未能写入文件。原因: {apply_err}。请重新读取原文，"
-                "上下文与删除行必须逐字匹配；使用 apply_patch 工具应用补丁。"
-            )
-        elif terminal == "model_output_truncated":
-            state.feedback = (
-                "上一轮模型输出在执行写工具前被截断。请基于现有证据调用一次 apply_patch；"
-                "若证据不足，请用简短终态明确说明。"
-            )
-        else:
-            state.agent_errors.pop("patcher_apply", None)
-            state.control.reset("patcher_apply_failed")
-            state.feedback = "补丁生成失败；请基于现有证据直接生成并应用补丁。"
-        self.session.evidence.write_feedback_to_blackboard(state.feedback)
-        sl = stop_loss.record_empty_patch(apply_failed=bool(apply_err))
-        state.retry_count += 1
-        if sl.stop:
-            apply_stop_loss(state, sl)
-            self.session.evidence.write_feedback_to_blackboard(state.feedback)
-            self.session.events.checkpoint_progress(state)
-            log.warning("[stop_loss] %s", sl.reason)
-            return False
-        self.session.events.checkpoint_progress(state)
-        return True
 
     def repair_impl(self, state: RepairState, initial_snapshot: dict | None = None) -> RepairState:
         from agent_runtime.cancellation import CancelledError
@@ -318,12 +201,11 @@ class RepairCoordinator:
         phase_timed_out = False
         phase_clock = self.make_phase_clock()
         try:
-            if self.session.lifecycle.abort_repair_if_cancelled(state):
-                cancelled = True
-            else:
-                if checkpoint is None:
-                    self.session.exploration.prepare_repair(state)
-                cancelled = self.run_repair_attempts(state, initial_snapshot, phase_clock)
+            from src.repair.graph import run_repair_graph
+
+            cancelled = run_repair_graph(
+                self.session, state, initial_snapshot, phase_clock, resume=checkpoint is not None
+            )
         except PhaseTimeoutError as exc:
             self.apply_phase_timeout(state, initial_snapshot, exc)
             phase_timed_out = True
@@ -334,170 +216,6 @@ class RepairCoordinator:
                     self.session.transaction.restore_repo_snapshot(initial_snapshot)
                 self.session.lifecycle.emit_repair_cancelled(state)
         return self.session.events.finalize_repair_run(state, t_start)
-
-    def run_repair_attempts(
-        self, state: RepairState, initial_snapshot: dict, phase_clock: RepairPhaseClock | None
-    ) -> bool:
-        """Run shared policy gates; return whether execution was cancelled."""
-        stop_loss = getattr(self.session, "stop_loss", None)
-        if stop_loss is None:
-            stop_loss = StopLossTracker()
-            self.session.stop_loss = stop_loss
-        while state.retry_count < state.max_retries:
-            if self.session.lifecycle.abort_repair_if_cancelled(state):
-                return True
-            repo_snapshot = initial_snapshot
-            log.info("Patcher 开始 (retry=%d)...", state.retry_count)
-            self.session.events.progress_emitter().emit(
-                "patcher_turn", summary=f"retry={state.retry_count}"
-            )
-            self.session.coordination.on_collaboration_phase(state, "patch", "patch attempt")
-            if phase_clock is not None:
-                phase_clock.ensure("patch")
-            patch_started = time.time()
-            state.candidate_patches, patch_timing = self.session.patcher_execution.run_patcher(
-                state
-            )
-            patch_ms = patch_timing.get("total_ms")
-            if patch_ms is None:
-                patch_ms = int((time.time() - patch_started) * 1000)
-            if phase_clock is not None:
-                phase_clock.consume("patch", patch_ms)
-            if patch_timing.get("user_cancel") or self.session.lifecycle.abort_repair_if_cancelled(
-                state
-            ):
-                return True
-            set_phase_ms(
-                state.node_timings,
-                "patch",
-                patch_ms,
-                internal={
-                    "model_call_ms": patch_timing.get("model_call_ms", 0),
-                    "parse_apply_ms": patch_timing.get("parse_apply_ms", 0),
-                },
-            )
-            log.info("Patcher 完成: %dms, %d个补丁", patch_ms, len(state.candidate_patches))
-            if not state.candidate_patches:
-                if self.handle_empty_patch(state, stop_loss):
-                    continue
-                break
-            if self.run_critic_gate(state):
-                self.session.transaction.restore_repo_snapshot(repo_snapshot)
-                state.candidate_patches = []
-                state.retry_count += 1
-                self.session.events.checkpoint_progress(state)
-                continue
-            if self.session.transaction.reject_protected_interface_changes(state, initial_snapshot):
-                continue
-            if not self.session.verification.verification_enabled():
-                mark_pending_verify(state, "verification_disabled")
-                break
-            log.info("Verifier 开始...")
-            self.session.events.progress_emitter().emit(
-                "verify_progress", summary=f"start retry={state.retry_count}"
-            )
-            if self.session.lifecycle.abort_repair_if_cancelled(state):
-                return True
-            self.session.coordination.on_collaboration_phase(
-                state, "verify", "verification attempt"
-            )
-            if phase_clock is not None:
-                phase_clock.ensure("verify")
-            t0 = time.time()
-            state.verification_result = self.session.verification.run_verifier(state)
-            if self.session.lifecycle.abort_repair_if_cancelled(state):
-                return True
-            ms = int((time.time() - t0) * 1000)
-            if phase_clock is not None:
-                phase_clock.consume("verify", ms)
-            self.session.asks.record_l2_synthetic_ask(
-                state,
-                agent_name="verifier",
-                phase="verify",
-                attempt=state.retry_count,
-                elapsed_ms=ms,
-                stop_reason="verify_done",
-            )
-            set_phase_ms(state.node_timings, "verify", ms)
-            vr = state.verification_result
-            self.session.events.progress_emitter().emit(
-                "verify_progress",
-                summary=(
-                    f"done ms={ms} passed={getattr(vr, 'all_passed', None)} "
-                    f"failed={getattr(vr, 'failed', None)}"
-                ),
-            )
-            log.info("Verifier 完成: %dms", ms)
-            if state.verification_result.execution_status in {
-                "unverified",
-                "environment_unavailable",
-                "timed_out",
-                "cancelled",
-            }:
-                outcome = state.verification_result.execution_status
-                if outcome == "cancelled":
-                    state.control.user_cancel = True
-                    return True
-                if outcome == "timed_out":
-                    state.set_status(RepairTerminalStatus.TIMEOUT, "verification_timeout")
-                else:
-                    state.set_status(RepairTerminalStatus.PENDING_VERIFY, "verification_" + outcome)
-                break
-            if state.verification_result.all_passed:
-                if state.verification_result.verification_mode == "static":
-                    state.set_status(RepairTerminalStatus.PENDING_VERIFY, "static_check_completed")
-                else:
-                    state.set_status(RepairTerminalStatus.FIXED, "verification_passed")
-                break
-            if self.record_verification_failure(state, initial_snapshot, stop_loss):
-                break
-        return False
-
-    def record_verification_failure(
-        self, state: RepairState, initial_snapshot: dict, stop_loss: StopLossTracker
-    ) -> bool:
-        """Roll back, record current evidence, then decide whether to stop."""
-        self.session.verification.record_validation_exit(state, "post_patch_pytest_code")
-        self.session.transaction.restore_repo_snapshot(initial_snapshot)
-        from src.repair.failure_ledger import apply_ledger_to_state, record_verify_into_ledger
-        from src.repair.stop_loss import apply_stop_loss
-        from src.repair.verification.termination import introduced_regression
-        from src.repair.verification.verify_diagnose import (
-            diagnose_verification,
-            enrich_related_tests_from_diagnosis,
-        )
-
-        diag = diagnose_verification(state.verification_result)
-        enrich_related_tests_from_diagnosis(state, diag)
-        is_reg = introduced_regression(state)
-        ledger = record_verify_into_ledger(
-            state, result=state.verification_result, bucket=diag.bucket.value, is_regression=is_reg
-        )
-        apply_ledger_to_state(state, ledger)
-        state.feedback = self.session.patcher_execution.build_feedback(
-            state.verification_result, state=state
-        )
-        self.session.evidence.write_feedback_to_blackboard(state.feedback)
-        sl = stop_loss.record_verify_failure(state.verification_result, state.candidate_patches)
-        if sl.reason == "no_progress" and (not sl.stop):
-            state.control.no_progress_warning = dict(sl.meta or {})
-            state.agent_errors["no_progress"] = sl.hint
-            warning = f"[无进展]\n{sl.hint}"
-            state.feedback = f"{warning}\n\n{state.feedback}".strip() if state.feedback else warning
-            self.session.evidence.write_feedback_to_blackboard(state.feedback)
-        state.control.consecutive_env_fails = stop_loss.snapshot().get("env_streak", 0)
-        state.retry_count += 1
-        if sl.stop:
-            apply_stop_loss(state, sl)
-            if sl.reason == "env":
-                state.control.verify_env_early_stop = True
-                state.agent_errors["verify_env"] = sl.hint
-            self.session.evidence.write_feedback_to_blackboard(state.feedback)
-            self.session.events.checkpoint_progress(state)
-            log.warning("[stop_loss] %s", sl.reason)
-            return True
-        self.session.events.checkpoint_progress(state)
-        return False
 
     def restore_state_from_repair_checkpoint(self, state: RepairState, checkpoint: dict) -> None:
         """从 checkpoint 恢复长程可续跑字段（含 timings / 策略 / 失败面）。"""

@@ -4,6 +4,10 @@ FixLoop 将通用 Agent 运行时与代码修复业务分成两层。Layer 1 提
 
 当前 API、补丁格式、状态和资源所有权见 [修复契约](docs/REPAIR_CONTRACT.md)。普通 Agent 不需要修复角色或修复配置。
 
+修复阶段由 LangGraph 编排，状态、持久化和执行内核由 FixLoop 管理。参见
+[架构与技术讲解](docs/LANGGRAPH_GUIDE.md)、[离线演示](docs/LANGGRAPH_DEMO.md) 和
+[定向验收](docs/LANGGRAPH_D5_ACCEPTANCE.md)。
+
 ## 安装
 
 需要 Python 3.11 或更新版本。

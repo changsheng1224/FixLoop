@@ -68,7 +68,17 @@ from src.eval.case_io import DEFAULT_CASES_DIR, OFFLINE_SMOKE_CASES, read_expect
 from src.eval.fake_runner import fixture_repair_service_factory
 from src.eval.runner import EvalRunner
 import src.repair.service
-assert pathlib.Path(src.repair.service.__file__).is_relative_to(pathlib.Path(sys.argv[1]))
+import src.repair.graph
+import src.repair.graph_owner
+import src.repair.graph_stages
+import src.repair.attempt_policy
+from importlib.metadata import distribution, version
+for module in (src.repair.service, src.repair.graph, src.repair.graph_owner,
+               src.repair.graph_stages, src.repair.attempt_policy):
+    assert pathlib.Path(module.__file__).is_relative_to(pathlib.Path(sys.argv[1]))
+requirements = distribution('agent_runtime').requires or []
+assert any(r.replace(' ', '').lower() == 'langgraph==1.2.17' for r in requirements)
+assert version('langgraph') == '1.2.17'
 ids = list(OFFLINE_SMOKE_CASES)
 for case in ids:
     assert read_expected_patch(DEFAULT_CASES_DIR.joinpath(case))
@@ -76,7 +86,8 @@ runner = EvalRunner(fixture_repair_service_factory(DEFAULT_CASES_DIR),
                     cases_dir=DEFAULT_CASES_DIR, output_dir=sys.argv[2])
 report = runner.run_all(ids)
 assert all(case.fixed for case in report.cases), [(c.case_id, c.error) for c in report.cases]
-print(json.dumps({'wheel_offline_smoke': 'passed', 'cases': ids}))
+print(json.dumps({'wheel_offline_smoke': 'passed', 'cases': ids,
+                  'langgraph': version('langgraph'), 'graph_modules': 'installed wheel'}))
 """
         env = {
             **os.environ,
