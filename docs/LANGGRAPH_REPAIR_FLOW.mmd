@@ -1,0 +1,45 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	entry(entry)
+	prepare(prepare)
+	attempt(attempt)
+	patch(patch)
+	empty_patch(empty_patch)
+	critic(critic)
+	protected_interface(protected_interface)
+	verification_gate(verification_gate)
+	pending_verify(pending_verify)
+	verify(verify)
+	verification_failure(verification_failure)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> entry;
+	attempt -. &nbsp;done&nbsp; .-> __end__;
+	attempt -.-> patch;
+	critic -.-> attempt;
+	critic -.-> protected_interface;
+	empty_patch -. &nbsp;done&nbsp; .-> __end__;
+	empty_patch -.-> attempt;
+	entry -. &nbsp;done&nbsp; .-> __end__;
+	entry -.-> attempt;
+	entry -.-> prepare;
+	patch -. &nbsp;done&nbsp; .-> __end__;
+	patch -.-> critic;
+	patch -.-> empty_patch;
+	pending_verify -. &nbsp;done&nbsp; .-> __end__;
+	prepare -.-> attempt;
+	protected_interface -.-> attempt;
+	protected_interface -.-> verification_gate;
+	verification_failure -. &nbsp;done&nbsp; .-> __end__;
+	verification_failure -.-> attempt;
+	verification_gate -.-> pending_verify;
+	verification_gate -.-> verify;
+	verify -. &nbsp;done&nbsp; .-> __end__;
+	verify -.-> verification_failure;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc

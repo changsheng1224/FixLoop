@@ -15,7 +15,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
 
 from agent_runtime.cancellation import CancellationToken, CancelledError
-from tests.langgraph_execution_support import OwnerCalls
+from src.repair.graph_owner import OwnerCalls
 from tests.plan_l2_support import repair_fixture
 from tests.plan_support import session_for, simple_plan
 

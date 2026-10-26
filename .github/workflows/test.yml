@@ -37,13 +37,13 @@ jobs:
       - name: Install D2 orchestration probe dependencies
         run: python -m pip install -e ".[dev,orchestration]"
 
-      - name: LangGraph owner execution probe
+      - name: LangGraph stage graph and owner execution
         env:
           LANGSMITH_TRACING: "false"
           LANGCHAIN_TRACING_V2: "false"
           HF_HUB_OFFLINE: "1"
           TRANSFORMERS_OFFLINE: "1"
-        run: python -m pytest tests/test_langgraph_execution.py -q -p no:cacheprovider
+        run: python -m pytest tests/test_langgraph_execution.py tests/test_repair_graph.py -q -p no:cacheprovider
 
       - name: Clean wheel and installed offline evaluation
         run: python scripts/wheel_smoke.py
