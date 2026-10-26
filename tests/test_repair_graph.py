@@ -5,8 +5,6 @@ from unittest.mock import Mock
 
 import pytest
 
-pytest.importorskip("langgraph")
-
 from agent_runtime.cancellation import CancellationToken
 from src.repair.attempt_policy import RepairAttemptPolicy
 from src.repair.critic import CriticVerdict

@@ -10,7 +10,16 @@ Layer 1 不导入 Layer 2。普通 `Agent` 使用通用执行循环、上下文�
 
 ## 会话、服务和资源
 
-`ExecutionSession` 持有工作区、运行预算、截止时间、取消令牌、事件及本次请求。`RepairCoordinator` 协调阶段；探索服务、Patcher 服务、补丁事务和 `VerificationService` 按显式会话接口合作，不访问其他对象的私有字段。
+`ExecutionSession` 持有工作区、运行预算、截止时间、取消令牌、事件及本次请求。
+Layer 2 的 LangGraph 阶段图负责阶段路由和修复循环；`RepairCoordinator` 保留启动、
+恢复、异常映射、超时处理和清理边界。探索服务、Patcher 服务、补丁事务和
+`VerificationService` 按显式会话接口合作，不访问其他对象的私有字段。
+
+图只保存临时 `next_action`，通过运行上下文访问同一个会话与 `RepairState`。
+阶段服务经 owner 调用桥在原执行线程运行；条件边只读路由。业务策略、FSM 校验、
+Plan 收据、checkpoint 和恢复核查继续由 FixLoop 管理，不配置 LangGraph
+checkpointer、Store、interrupt、缓存或节点自动重试。图结束不等于修复成功。
+实际拓扑与接入记录见 [阶段图验收](LANGGRAPH_D3_D4_ACCEPTANCE.md)。
 
 执行会话禁止并发运行。拥有资源的服务负责关闭资源；正常、异常和取消均释放编辑锁、心跳、预算绑定、探索执行器与后台后端。超时先取消，再等待执行路径返回，避免脱离资源所有者继续写入。不能确认进程退出或回滚时返回 `recovery_required`，阻止下一次写入。
 

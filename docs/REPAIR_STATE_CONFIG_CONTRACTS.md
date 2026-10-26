@@ -4,6 +4,10 @@
 
 `RepairState.control` 保存取消、超时、编辑范围、验证和恢复控制；`execution` 保存执行身份、checkpoint 和收据；`node_timings` 只保存诊断、耗时和事件证据。`fixed` 要求达到请求规定的真实验证条件，`pending_verify` 代表已修改但未验证。资源清理／回滚未知时为 `recovery_required`。
 
+LangGraph 的阶段路由不引入新的业务 State 或持久化格式；图的临时 `next_action`
+不写入 checkpoint。恢复仍先核查既有状态、Plan 和收据，再从图入口继续；图节点名称
+不成为恢复游标。schema 版本、配置来源及原有审批协议保持不变。
+
 配置统一解析优先级：默认值 → profile → 用户文件 → 工作区文件 → 环境变量 → 显式参数。用户文件为 `~/.fixloop/config.json`；工作区依次读取 `.fixloop/config.json` 和 `.agent/config.json`。工作区不能激活外部代码探索服务。未知字段、非法值及旧标量配置均报错。
 
 工作区也不能配置外部网页服务：`web` 段仅接受宿主／用户／显式请求来源。

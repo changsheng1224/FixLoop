@@ -34,16 +34,13 @@ jobs:
           TRANSFORMERS_OFFLINE: "1"
         run: python -m pytest tests/test_patch_contract.py tests/test_patch_backends.py tests/test_execution_contract.py tests/test_retry_policy.py tests/test_repair_flow_parity.py tests/test_exploration_runtime.py tests/test_config_contracts.py tests/test_web.py tests/test_web_research.py tests/test_linux_test_execution.py -q -p no:cacheprovider
 
-      - name: Install D2 orchestration probe dependencies
-        run: python -m pip install -e ".[dev,orchestration]"
-
       - name: LangGraph stage graph and owner execution
         env:
           LANGSMITH_TRACING: "false"
           LANGCHAIN_TRACING_V2: "false"
           HF_HUB_OFFLINE: "1"
           TRANSFORMERS_OFFLINE: "1"
-        run: python -m pytest tests/test_langgraph_execution.py tests/test_repair_graph.py -q -p no:cacheprovider
+        run: python -m pytest tests/test_langgraph_execution.py tests/test_repair_graph.py tests/test_repair_graph_entry.py -q -p no:cacheprovider
 
       - name: Clean wheel and installed offline evaluation
         run: python scripts/wheel_smoke.py

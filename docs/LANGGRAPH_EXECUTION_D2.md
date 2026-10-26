@@ -1,7 +1,9 @@
 # LangGraph 依赖与执行方式验证（D2）
 
 日期：2026-10-26。前置：[D1 边界与行为矩阵](LANGGRAPH_ORCHESTRATION_BOUNDARY.md)。
-本交付只增加可选依赖、实验程序和定向 CI；未修改正式修复入口或执行内核。
+本文件保留 D2 当时的验证记录。后续 D3/D4 已把调用桥移至
+`src/repair/graph_owner.py`，将 LangGraph 提升为默认依赖并接入正式入口，见
+[阶段图验收](LANGGRAPH_D3_D4_ACCEPTANCE.md)。下文 extra 和实验文件路径描述 D2 当时状态。
 
 ## 决策
 

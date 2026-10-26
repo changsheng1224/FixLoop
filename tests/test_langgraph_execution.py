@@ -8,9 +8,6 @@ from dataclasses import dataclass
 from typing import TypedDict
 
 import pytest
-
-pytest.importorskip("langgraph", reason="install .[dev,orchestration] for the D2 probe")
-
 from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
 
