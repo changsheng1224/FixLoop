@@ -20,6 +20,8 @@ Layer 2 的 LangGraph 阶段图负责阶段路由和修复循环；`RepairCoordi
 Plan 收据、checkpoint 和恢复核查继续由 FixLoop 管理，不配置 LangGraph
 checkpointer、Store、interrupt、缓存或节点自动重试。图结束不等于修复成功。
 实际拓扑与接入记录见 [阶段图验收](LANGGRAPH_D3_D4_ACCEPTANCE.md)。
+职责与线程说明见 [编排设计](LANGGRAPH_GUIDE.md)，可复现案例见
+[离线演示](LANGGRAPH_DEMO.md)，故障与安装验证见 [D5 验收](LANGGRAPH_D5_ACCEPTANCE.md)。
 
 执行会话禁止并发运行。拥有资源的服务负责关闭资源；正常、异常和取消均释放编辑锁、心跳、预算绑定、探索执行器与后台后端。超时先取消，再等待执行路径返回，避免脱离资源所有者继续写入。不能确认进程退出或回滚时返回 `recovery_required`，阻止下一次写入。
 

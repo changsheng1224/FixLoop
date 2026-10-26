@@ -1,7 +1,8 @@
 # LangGraph 阶段图与正式接入（D3 / D4）
 
 日期：2026-10-26。边界见 [D1](LANGGRAPH_ORCHESTRATION_BOUNDARY.md)，调用方式见
-[D2](LANGGRAPH_EXECUTION_D2.md)。本文件记录本次实现与实际验证，不代替后续完整 D5 验收。
+[D2](LANGGRAPH_EXECUTION_D2.md)。本文件保留 D3/D4 当时的实现与验证记录；后续定向
+验收见 [D5](LANGGRAPH_D5_ACCEPTANCE.md)，架构讲解与演示见 [D6](LANGGRAPH_GUIDE.md)。
 
 ## D3：阶段图
 
